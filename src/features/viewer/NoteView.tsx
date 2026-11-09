@@ -131,7 +131,7 @@ export function NoteView({ refId, tabId }: { refId: string; tabId: string }) {
   return (
     <article className="note">
       <div className="note-head">
-        <h1>{n.title}</h1>
+        <h1 onDoubleClick={() => updateTab(tabId, { mode: "live" })} title="Double-click to edit">{n.title}</h1>
         {n.status === "active" && (
           <button onClick={() => still.mutate()} disabled={still.isPending} title="Confirm this note still holds (pushes its review date out)">
             Still true

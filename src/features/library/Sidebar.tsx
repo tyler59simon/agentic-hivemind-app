@@ -30,6 +30,7 @@ export function Sidebar() {
           <option key={d.name} value={d.name}>{d.name} ({d.active})</option>
         ))}
       </select>
+      <button className="primary" onClick={() => useWorkspace.getState().openTab({ kind: "new-note", init: { domain: domain ?? undefined } })} title="New note (Ctrl+N)">New note</button>
       <div className="segmented" role="tablist">
         {(["active", "archived"] as const).map((s) => (
           <button key={s} role="tab" aria-selected={shelf === s} className={shelf === s ? "on" : ""} onClick={() => setShelf(s)}>

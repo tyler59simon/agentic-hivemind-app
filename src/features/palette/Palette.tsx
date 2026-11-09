@@ -31,6 +31,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
     const close = () => app.setPalette(null);
     return [
       { key: "go", label: "Go to note…", detail: "Ctrl+O", run: () => app.setPalette("notes") },
+      { key: "new", label: "New note", detail: "Ctrl+N", run: () => { close(); ws.openTab({ kind: "new-note" }); } },
       ...EXTRA_COMMANDS.map((c) => ({ ...c, run: () => { close(); c.run(); } })),
       { key: "split", label: "Split pane", detail: "Ctrl+\\", run: () => { ws.split(); close(); } },
       { key: "panel", label: ws.panel ? "Hide the right sidebar" : "Show the right sidebar", run: () => { ws.setPanel(ws.panel ? null : "outline"); close(); } },

@@ -1,5 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Confirm } from "./ui/Modal";
 import { useCallback, useEffect, useState } from "react";
 import "./App.css";
 import { Sidebar } from "./features/library/Sidebar";
@@ -29,6 +31,23 @@ function useShortcuts() {
   }, [setPalette, setView]);
 }
 
+/** Closing the window with unsaved edits asks first (the drafts survive either way). */
+function useCloseGuard() {
+  const [asking, setAsking] = useState(false);
+  useEffect(() => {
+    const win = getCurrentWindow();
+    const stop = win.onCloseRequested((e) => {
+      if (Object.values(useWorkspace.getState().dirty).some(Boolean)) { e.preventDefault(); setAsking(true); }
+    });
+    return () => { stop.then((unlisten) => unlisten()); };
+  }, []);
+  return asking && (
+    <Confirm title="Quit with unsaved changes?" danger action="Quit"
+      message="Some tabs have edits that are not saved to Living Memory. They are kept as drafts and come back when you reopen those notes."
+      onAnswer={(yes) => { setAsking(false); if (yes) getCurrentWindow().destroy(); }} />
+  );
+}
+
 /** Refresh lists and open notes when the store's note files change (agents write while you read). */
 function useLiveRefresh(enabled: boolean) {
   const client = useQueryClient();
@@ -49,6 +68,7 @@ export default function App() {
   const setPanel = useWorkspace((s) => s.setPanel);
   useShortcuts();
   useLiveRefresh(link.isSuccess);
+  const closeGuard = useCloseGuard();
   useEffect(() => { if (link.data) useConnection.getState().set(link.data.version); }, [link.data]);
 
   // Start on the largest bound domain once domains are known.
@@ -93,6 +113,7 @@ export default function App() {
       </div>
       <Palette onSettings={() => setSettings(true)} onReconnect={reconnect} />
       <Toasts />
+      {closeGuard}
     </div>
   );
 }

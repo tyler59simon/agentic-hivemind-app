@@ -1,4 +1,5 @@
 mod bridge;
+mod drafts;
 mod settings;
 mod watcher;
 
@@ -13,6 +14,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 struct AppState {
     bridge: Arc<Bridge>,
     settings_path: PathBuf,
+    drafts_dir: PathBuf,
     watcher: Mutex<Option<notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>>,
 }
 
@@ -73,17 +75,38 @@ fn save_settings(state: State<'_, AppState>, value: Settings) -> Result<(), Stri
     Ok(())
 }
 
+#[tauri::command]
+fn draft_put(state: State<'_, AppState>, key: String, value: Value) -> Result<(), String> {
+    drafts::put(&state.drafts_dir, &key, &value)
+}
+
+#[tauri::command]
+fn draft_get(state: State<'_, AppState>, key: String) -> Result<Option<Value>, String> {
+    drafts::get(&state.drafts_dir, &key)
+}
+
+#[tauri::command]
+fn draft_delete(state: State<'_, AppState>, key: String) -> Result<(), String> {
+    drafts::delete(&state.drafts_dir, &key)
+}
+
+#[tauri::command]
+fn draft_list(state: State<'_, AppState>) -> Vec<Value> {
+    drafts::list(&state.drafts_dir)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let settings_path = app.path().app_config_dir()?.join("settings.json");
+            let drafts_dir = app.path().app_data_dir()?.join("drafts");
             let launch = settings::resolve(&settings::load(&settings_path), |k| std::env::var(k).ok());
-            app.manage(AppState { bridge: Arc::new(Bridge::new(launch)), settings_path, watcher: Mutex::new(None) });
+            app.manage(AppState { bridge: Arc::new(Bridge::new(launch)), settings_path, drafts_dir, watcher: Mutex::new(None) });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![lm, connect, get_settings, save_settings])
+        .invoke_handler(tauri::generate_handler![lm, connect, get_settings, save_settings, draft_put, draft_get, draft_delete, draft_list])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

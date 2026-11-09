@@ -1,11 +1,13 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { NoteView } from "../features/viewer/NoteView";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { NewNote } from "../features/editor/NewNote";
+import { NoteTab } from "../features/editor/NoteTab";
 import { Confirm } from "../ui/Modal";
 import { MAX_PANES, useWorkspace, type Pane, type Tab } from "./store";
 
 /** What a tab shows. Kinds register here as their phase lands. */
 export const TAB_VIEWS: Partial<Record<Tab["kind"], (tab: Tab) => ReactNode>> = {
-  note: (tab) => <NoteView refId={tab.ref!} tabId={tab.id} />,
+  note: (tab) => <NoteTab tab={tab} />,
+  "new-note": (tab) => <NewNote key={tab.id} tab={tab} />,
 };
 
 const KIND_LABEL: Record<Tab["kind"], string> = { note: "Note", "new-note": "New note", graph: "Graph", activity: "Activity", taxonomy: "Tags" };
@@ -33,9 +35,13 @@ function PaneView({ pane, focused, onClose }: { pane: Pane; focused: boolean; on
   const dirty = useWorkspace((s) => s.dirty);
   const active = pane.tabs.find((t) => t.id === pane.active) ?? pane.tabs[0];
   const view = active && TAB_VIEWS[active.kind];
+  const strip = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    strip.current?.querySelector(".tab.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [active?.id, pane.tabs.length]);
   return (
     <section className={`pane ${focused ? "focused" : ""}`} onMouseDown={() => !focused && focus(pane.id)}>
-      <div className="tabbar" role="tablist">
+      <div className="tabbar" role="tablist" ref={strip} onWheel={(e) => { if (e.deltaY) e.currentTarget.scrollLeft += e.deltaY; }}>
         {pane.tabs.map((t) => (
           <div key={t.id} role="tab" aria-selected={t.id === active?.id} className={`tab ${t.id === active?.id ? "on" : ""}`}
             onClick={() => activate(pane.id, t.id)} onAuxClick={(e) => { if (e.button === 1) onClose(pane.id, t.id); }} title={label(t)}>
@@ -68,6 +74,12 @@ export function Workspace() {
       if (e.key.toLowerCase() === "w") { e.preventDefault(); if (pane?.active) close.request(pane.id, pane.active); }
       else if (e.key === "Tab") { e.preventDefault(); ws.cycle(e.shiftKey ? -1 : 1); }
       else if (e.key === "\\") { e.preventDefault(); ws.split(); }
+      else if (e.key.toLowerCase() === "n" && !e.shiftKey) { e.preventDefault(); ws.openTab({ kind: "new-note" }); }
+      else if (e.key.toLowerCase() === "e") {
+        e.preventDefault();
+        const tab = pane?.tabs.find((t) => t.id === pane.active);
+        if (tab?.kind === "note") ws.updateTab(tab.id, { mode: tab.mode === "reading" || !tab.mode ? "live" : "reading" });
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

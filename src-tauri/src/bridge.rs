@@ -198,6 +198,63 @@ mod tests {
         std::fs::remove_dir_all(base).ok();
     }
 
+    /// The Phase 2 write paths Hivemind uses, end to end (same gating as the test above).
+    #[test]
+    fn live_phase2_writes_plans_links_and_history() {
+        let Ok(script) = std::env::var("HIVEMIND_TEST_LM_SCRIPT") else { return };
+        let base = std::env::temp_dir().join(format!("hivemind-bridge2-{}", std::process::id()));
+        let (store, project) = (base.join("store"), base.join("project"));
+        std::fs::create_dir_all(&project).unwrap();
+        let (program, args) = match std::env::var("HIVEMIND_TEST_PYTHON") {
+            Ok(p) => (p, vec![]),
+            Err(_) if cfg!(windows) => ("py".to_string(), vec!["-3".to_string()]),
+            Err(_) => ("python3".to_string(), vec![]),
+        };
+        let bridge = Bridge::new(Launch { program, args, script: script.into(), root: Some(store.clone()) });
+        let call = |argv: &[&str], stdin: Option<&str>| bridge.call(&argv.iter().map(|s| s.to_string()).collect::<Vec<_>>(), stdin).unwrap();
+        let ok = |r: Reply| { assert_eq!(r.exit_code, 0, "{:?}", r.error); r.result };
+
+        ok(call(&["bind", "demo", project.to_str().unwrap()], None));
+        std::fs::write(store.join("tag_taxonomy.json"), r#"{"tags":["subject/project","concern/architecture"]}"#).unwrap();
+        let tags = r#"["subject/project","concern/architecture"]"#;
+        let target = ok(call(&["capture", "--domain", "demo"], Some(&format!(
+            r#"{{"title":"Cache","body":"The cache is rebuildable.","tags":{tags},"type":"knowledge","origin":"hivemind:local"}}"#))));
+        let plan_note = ok(call(&["capture", "--domain", "demo"], Some(&format!(
+            r###"{{"title":"Rollout","body":"## 📌 Executive Summary\nShip it, see [[cache]].\n\n## 🟩 Action Items\n- [x] build\n- [ ] ship","tags":{tags},"type":"plan"}}"###))));
+        let (cache, rollout) = (format!("demo:{}", target["id"].as_str().unwrap()), format!("demo:{}", plan_note["id"].as_str().unwrap()));
+
+        let note = ok(call(&["read", &cache, "--actor", "viewer"], None));
+        assert_eq!(note["origin"], "hivemind:local");
+        // Payload update with only the changed field, guarded by the revision.
+        let payload = format!(r#"{{"body":"The cache is rebuilt nightly.","expected_revision":"{}"}}"#, note["revision"].as_str().unwrap());
+        let updated = ok(call(&["update", &cache, "--domain", "demo"], Some(&payload)));
+        assert_eq!(updated["status"], "update");
+        // check --index counts ticked items too: item 2 is "ship".
+        let ticked = ok(call(&["check", &rollout, "--index", "2", "--domain", "demo"], None));
+        assert_eq!((ticked["item"].as_str(), ticked["open"].as_i64()), (Some("ship"), Some(0)));
+
+        let links = ok(call(&["links", "--domain", "demo", "--actor", "viewer"], None));
+        assert_eq!(links["edges"][0]["from"], rollout.as_str());
+        assert_eq!(links["edges"][0]["to"], cache.as_str());
+
+        let plan = ok(call(&["plan", "archive", &rollout, "--domain", "demo"], None));
+        let inspected = ok(call(&["inspect-plan", plan["plan_id"].as_str().unwrap(), "--actor", "viewer"], None));
+        assert_eq!(inspected["effects"].as_array().unwrap().len(), 2);
+        let applied = ok(call(&["apply", plan["plan_id"].as_str().unwrap(), "--expected-plan-sha256", plan["digest"].as_str().unwrap()], None));
+        let archive_op = applied["operation_id"].as_str().unwrap().to_string();
+
+        let history = ok(call(&["history", "--note", plan_note["id"].as_str().unwrap(), "--actor", "viewer"], None));
+        assert_eq!(history[0]["operation_id"], archive_op.as_str());
+        let diff = ok(call(&["diff", &archive_op, "--actor", "viewer"], None));
+        assert!(!diff.as_array().unwrap().is_empty());
+        let undo = ok(call(&["undo", &archive_op], None));
+        ok(call(&["apply", undo["plan_id"].as_str().unwrap(), "--expected-plan-sha256", undo["digest"].as_str().unwrap()], None));
+        assert_eq!(ok(call(&["read", &rollout, "--actor", "viewer"], None))["status"], "active");
+        assert_eq!(ok(call(&["validate", "demo"], None))["issues"].as_array().unwrap().len(), 0);
+        drop(bridge);
+        std::fs::remove_dir_all(base).ok();
+    }
+
     #[test]
     fn version_check_names_missing_commands() {
         let old = reply(json!({"api": 1, "commands": ["serve", "version"]}));
