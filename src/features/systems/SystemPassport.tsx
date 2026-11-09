@@ -239,7 +239,8 @@ export function SystemPassport({ tab }: { tab: Tab }) {
 
   const all = registry.data?.systems ?? [];
   // An architecture card with nothing in it says why: nothing generated yet, or the model simply has none.
-  const archEmpty = (has: boolean, none: string) => (has ? undefined : arch?.error ? `${arch.error} Use “Generate with agent” above.` : none);
+  const archEmpty = (has: boolean, none: string) =>
+    (has ? undefined : !arch?.error ? none : `${arch.error} ${system.architecture ? "Use “Generate with agent” above." : "Edit the system to choose one."}`);
   const archProps = { loading: architecture.isLoading, error: architecture.error };
   const generated = arch?.generatedAt ? `Generated ${new Date(arch.generatedAt).toISOString().slice(0, 10)}${arch.toolVersion ? ` · Architecture Suite ${arch.toolVersion}` : ""}` : undefined;
   const newRunbook = () => useWorkspace.getState().openTab({ kind: "new-note", init: { type: "runbook", tags: [system.tag] } });

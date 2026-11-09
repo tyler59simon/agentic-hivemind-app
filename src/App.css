@@ -47,8 +47,9 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .ghost { border-color: transparent; }
 kbd { border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; font-size: 12px; background: var(--bg-alt); }
 
-.shell { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+.shell { display: grid; grid-template-rows: auto 1fr; grid-template-columns: minmax(0, 1fr); height: 100vh; }
 .topbar { display: flex; align-items: center; gap: 12px; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--bg-alt); }
+.topbar button { white-space: nowrap; }
 .topbar .small { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
 .tabs { display: flex; gap: 4px; }
 .tabs button { border-color: transparent; }
