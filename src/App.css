@@ -295,3 +295,66 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .work-item { display: flex; align-items: flex-start; gap: 8px; padding-left: 4px; }
 .work-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .work-day { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+
+/* ---- Projects ---- */
+.project-item { display: flex; align-items: center; gap: 6px; padding-left: 8px; }
+.project-item .project-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.overview .status-active { background: var(--accent-soft); color: var(--accent); }
+.chip.project { border-color: var(--accent); background: var(--accent-soft); }
+
+.project-dash { height: 100%; overflow: auto; padding: 16px 20px 48px; display: flex; flex-direction: column; gap: 14px; container-type: inline-size; }
+.project-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 14px; align-items: start; }
+.dash-card { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-alt); min-width: 0; display: flex; flex-direction: column; }
+.dash-card.wide { grid-column: 1 / -1; }
+.card-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.card-head h2 { margin: 0; font-size: 20px; }
+.card-head h3 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; }
+.card-head .disclosure { border: none; padding: 0; text-transform: inherit; letter-spacing: inherit; font: inherit; color: inherit; }
+.card-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.card-body { padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.card-body .work-list, .card-body .pad { padding: 0; }
+.card-sub { margin: 10px 0 0; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.overview-body { gap: 10px; }
+.project-desc { margin: 0; }
+.repo-list { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.repo-list code, .repo-name code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.latest-status { border-left: 3px solid var(--accent); padding-left: 10px; }
+.latest-status p { margin: 2px 0 0; }
+.briefing-text { width: 100%; min-height: 320px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); padding: 8px; }
+
+.card-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.card-list.compact { gap: 2px; }
+.card-list li { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.card-list li.retired { opacity: .6; }
+.card-list .link-row { width: auto; min-width: 0; flex: 0 1 auto; }
+.card-list p { margin: 0; }
+.row-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.card-list.adr li { flex-direction: row; gap: 10px; }
+.adr-date { flex: none; width: 76px; padding-top: 3px; font-variant-numeric: tabular-nums; }
+.adr-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.check { display: flex; align-items: center; gap: 4px; }
+
+.progress { display: block; flex: 1; min-width: 60px; height: 6px; border-radius: 999px; background: var(--bg-hover); overflow: hidden; }
+.progress > span { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+.progress-line { display: flex; align-items: center; gap: 8px; }
+
+.repo-activity { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.commit-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.commit-list li { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.commit-list .sha { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--accent); flex: none; }
+.commit-subject { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commit-list .muted { flex: none; }
+.pr-list { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip.pr { border: 1px solid var(--border); color: var(--fg); text-decoration: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip.pr-open { border-color: var(--accent); }
+.chip.pr-merged, .chip.pr-closed { color: var(--muted); }
+
+.triage-group { display: flex; flex-direction: column; gap: 6px; }
+.triage-label { text-transform: uppercase; letter-spacing: .04em; }
+.triage-row { display: flex; align-items: flex-start; gap: 10px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
+.triage-row input { margin-top: 4px; }
+.triage-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.triage-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.triage-title .link-row { width: auto; flex: 0 1 auto; }
+.reason-chip { border: 1px solid var(--border); background: var(--bg-alt); color: var(--muted); font-size: 11px; padding: 0 7px; }
