@@ -10,6 +10,7 @@ import { Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 import { useWorkspace, type Tab } from "../../workspace/store";
 import { PlanDialog } from "../plans/PlanDialog";
+import { mergeTags } from "../projects/wizard";
 import { MarkdownEditor } from "./MarkdownEditor";
 import { ProblemBanner } from "./NoteEditor";
 import { TagPicker } from "./PropertiesForm";
@@ -39,7 +40,7 @@ export function NewNote({ tab }: { tab: Tab }) {
 
   // Suggested tags follow the type until the user picks tags themselves.
   useEffect(() => {
-    if (tax.data && !touchedTags.current) setF((x) => ({ ...x, tags: defaultTags(x.type, tax.data.tags) }));
+    if (tax.data && !touchedTags.current) setF((x) => ({ ...x, tags: mergeTags(defaultTags(x.type, tax.data.tags), tab.init?.tags ?? []) }));
   }, [tax.data, f.type]);
   useEffect(() => { getDraft(draftKey(tab)).then((d) => { if (d) { setF(d.mine); if (d.domain) setDomain(d.domain); setVersion((v) => v + 1); } }).catch(() => {}); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const started = f.title.trim() !== (tab.init?.title ?? "") || f.body !== template(f.type);

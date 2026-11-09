@@ -9,4 +9,6 @@ export const prefs = {
   setDefaultMode: (mode: Mode) => set("hivemind.defaultMode", mode),
   captureDomain: () => get("hivemind.captureDomain"),
   setCaptureDomain: (domain: string) => set("hivemind.captureDomain", domain),
+  captureProject: () => get("hivemind.captureProject"),
+  setCaptureProject: (slug: string) => set("hivemind.captureProject", slug),
 };

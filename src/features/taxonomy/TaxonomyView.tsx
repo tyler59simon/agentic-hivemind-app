@@ -5,7 +5,7 @@ import { list, retagPlan, taxonomy, taxonomyPlan, type Plan } from "../../lib/lm
 import { Modal } from "../../ui/Modal";
 import { useWorkspace } from "../../workspace/store";
 import { PlanDialog } from "../plans/PlanDialog";
-import { FACETS, parseTags, tagUsage, type TagUsage } from "./taxonomy";
+import { facetsOf, parseTags, tagUsage, type TagUsage } from "./taxonomy";
 
 /** Rename a tag everywhere, or fold it into another existing tag (LM's retag-plan, across every domain). */
 function RenameTag({ from, taxonomyTags, onClose }: { from: TagUsage; taxonomyTags: string[]; onClose: () => void }) {
@@ -34,13 +34,14 @@ export function TaxonomyView() {
   const openTab = useWorkspace((s) => s.openTab);
   const tax = useQuery({ queryKey: ["taxonomy"], queryFn: taxonomy });
   const notes = useQuery({ queryKey: ["list", "*", "any"], queryFn: () => list({ allDomains: true, status: "any" }) });
-  const usage = useMemo(() => tagUsage(tax.data?.tags ?? [], notes.data?.notes ?? []), [tax.data, notes.data]);
+  const usage = useMemo(() => tagUsage(tax.data?.tags ?? [], notes.data?.notes ?? [], facetsOf(tax.data)), [tax.data, notes.data]);
   const [adding, setAdding] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [dialog, setDialog] = useState<ReactNode>(null);
   const [error, setError] = useState<string | null>(null);
   const close = () => setDialog(null);
-  const parsed = parseTags(adding);
+  const facets = facetsOf(tax.data);
+  const parsed = parseTags(adding, facets);
 
   /** Make the taxonomy plan first so LM's "close match" warnings can be shown before review. */
   const add = async (tags: string[]) => {
@@ -61,13 +62,14 @@ export function TaxonomyView() {
     } catch (e) { setError(classify(e).message); }
   };
 
+  const managed = (tag: string) => tag.startsWith("project/");
   const row = (t: TagUsage) => (
     <li key={t.tag} className={`tag-row ${selected === t.tag ? "on" : ""}`}>
       <button className="link-row" onClick={() => setSelected(selected === t.tag ? null : t.tag)}>
         <span className={`tag ${t.known ? "" : "unknown"}`}>{t.tag}</span> <span className="muted small">{t.count ? `${t.count} note${t.count === 1 ? "" : "s"}` : "unused"}</span>
       </button>
-      {!t.known && <button className="ghost small" onClick={() => add([t.tag])}>Register</button>}
-      <button className="ghost small" onClick={() => setDialog(<RenameTag from={t} taxonomyTags={tax.data?.tags ?? []} onClose={close} />)}>Rename…</button>
+      {!managed(t.tag) && !t.known && <button className="ghost small" onClick={() => add([t.tag])}>Register</button>}
+      {!managed(t.tag) && <button className="ghost small" onClick={() => setDialog(<RenameTag from={t} taxonomyTags={tax.data?.tags ?? []} onClose={close} />)}>Rename…</button>}
     </li>
   );
   const tagged = selected ? (notes.data?.notes ?? []).filter((n) => n.tags.includes(selected)) : [];
@@ -81,7 +83,8 @@ export function TaxonomyView() {
           onKeyDown={(e) => { if (e.key === "Enter" && parsed.tags.length && !parsed.invalid.length) add(parsed.tags); }} />
         <button className="primary" disabled={!parsed.tags.length || parsed.invalid.length > 0} onClick={() => add(parsed.tags)}>Add…</button>
       </div>
-      {parsed.invalid.length > 0 && <p className="error small">Not valid: {parsed.invalid.join(", ")}. Tags are facet/name, with facet one of {FACETS.join(", ")}.</p>}
+      {parsed.error && <p className="error small">{parsed.error}</p>}
+      {parsed.invalid.length > 0 && <p className="error small">Not valid: {parsed.invalid.join(", ")}. Tags are facet/name, with facet one of {facets.filter((f) => f !== "project").join(", ")}.</p>}
       {error && <p className="error">{error}</p>}
       {usage.unknown.length > 0 && (
         <section className="facet warn-box">
@@ -94,6 +97,7 @@ export function TaxonomyView() {
         {Object.entries(usage.byFacet).map(([facet, tags]) => (
           <section key={facet} className="facet">
             <h3>{facet} <span className="muted small">{tags.length}</span></h3>
+            {facet === "project" && <p className="muted small">Managed by projects.</p>}
             {tags.length ? <ul className="tag-list">{tags.map(row)}</ul> : <p className="muted small">No tags yet.</p>}
           </section>
         ))}

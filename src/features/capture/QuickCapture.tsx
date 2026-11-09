@@ -3,11 +3,12 @@ import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef, useState } from "react";
 import { classify, type Problem } from "../../lib/errors";
-import { capture, domains, NOTE_TYPES, showMain, taxonomy, type CapturePayload, type NoteType } from "../../lib/lm";
+import { capture, domains, NOTE_TYPES, projects, showMain, taxonomy, type CapturePayload, type NoteType } from "../../lib/lm";
 import { defaultTags, HEADINGS } from "../../lib/note";
 import { recordOperation } from "../../lib/oplog";
 import { prefs } from "../../lib/prefs";
 import { TagPicker } from "../editor/PropertiesForm";
+import { mergeTags } from "../projects/wizard";
 
 /** The note body from the quick form: a summary, plus details as bullets. */
 export function captureBody(summary: string, details: string): string {
@@ -28,6 +29,10 @@ async function openInMain(ref: string) {
 export function QuickCapture() {
   const known = useQuery({ queryKey: ["domains"], queryFn: domains });
   const tax = useQuery({ queryKey: ["taxonomy"], queryFn: taxonomy });
+  // The capture window has its own webview and no connection store, so the feature is detected by a successful projects() call.
+  const projs = useQuery({ queryKey: ["projects"], queryFn: () => projects(), retry: false });
+  const active = projs.data?.projects.filter((p) => p.status === "active") ?? [];
+  const [project, setProject] = useState(prefs.captureProject() ?? "");
   const [domain, setDomain] = useState(prefs.captureDomain() ?? "");
   const [type, setType] = useState<NoteType>("knowledge");
   const [title, setTitle] = useState("");
@@ -57,12 +62,14 @@ export function QuickCapture() {
       setProblem({ kind: "other", message: "A domain, a title and a summary are needed." });
       return;
     }
+    const chosen = active.find((p) => p.slug === project);
     setBusy(true);
     setProblem(null);
     try {
-      const r = await capture(domain, { title: title.trim(), body: captureBody(summary, details), tags, type, ...extra });
+      const r = await capture(domain, { title: title.trim(), body: captureBody(summary, details), tags: mergeTags(tags, chosen ? [chosen.tag] : []), type, ...extra });
       recordOperation(r.operation_id);
       prefs.setCaptureDomain(domain);
+      if (projs.isSuccess) prefs.setCaptureProject(project);
       setSaved(r.status === "created" ? `Saved “${title.trim()}”.` : "Living Memory already had this note.");
       reset();
       setTimeout(() => { setSaved(null); hide(); }, 900);
@@ -83,6 +90,12 @@ export function QuickCapture() {
           {NOTE_TYPES.map((t) => <option key={t}>{t}</option>)}
         </select>
       </div>
+      {projs.isSuccess && (
+        <select value={active.some((p) => p.slug === project) ? project : ""} onChange={(e) => setProject(e.target.value)} aria-label="Project">
+          <option value="">Project: none</option>
+          {active.map((p) => <option key={p.slug} value={p.slug}>{p.name}</option>)}
+        </select>
+      )}
       <input ref={titleRef} autoFocus className="title-input small-title" value={title} placeholder="Title" onChange={(e) => setTitle(e.target.value)} />
       <textarea rows={3} value={summary} placeholder="Executive Summary: one or two sentences" onChange={(e) => setSummary(e.target.value)} />
       <textarea rows={3} value={details} placeholder="Key details (optional, one per line)" onChange={(e) => setDetails(e.target.value)} />
