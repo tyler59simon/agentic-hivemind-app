@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NewNote } from "../features/editor/NewNote";
 import { GraphView } from "../features/graph/GraphView";
 import { ActivityView } from "../features/history/HistoryViews";
+import { TaxonomyView } from "../features/taxonomy/TaxonomyView";
 import { NoteTab } from "../features/editor/NoteTab";
 import { Confirm } from "../ui/Modal";
 import { MAX_PANES, useWorkspace, type Pane, type Tab } from "./store";
@@ -12,6 +13,7 @@ export const TAB_VIEWS: Partial<Record<Tab["kind"], (tab: Tab) => ReactNode>> = 
   "new-note": (tab) => <NewNote key={tab.id} tab={tab} />,
   graph: () => <GraphView />,
   activity: () => <ActivityView />,
+  taxonomy: () => <TaxonomyView />,
 };
 
 const KIND_LABEL: Record<Tab["kind"], string> = { note: "Note", "new-note": "New note", graph: "Graph", activity: "Activity", taxonomy: "Tags" };

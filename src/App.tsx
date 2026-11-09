@@ -104,6 +104,7 @@ export default function App() {
         </div>
         <button className="ghost" onClick={() => useWorkspace.getState().openTab({ kind: "graph" })} title="Graph of all notes (Ctrl+G)">Graph</button>
         <button className="ghost" onClick={() => useWorkspace.getState().openTab({ kind: "activity" })} title="Who changed what (Ctrl+Shift+A)">Activity</button>
+        <button className="ghost" onClick={() => useWorkspace.getState().openTab({ kind: "taxonomy" })} title="Manage tags">Tags</button>
         <button className="ghost" onClick={() => app.setPalette("commands")} title="Command palette (Ctrl+P)">Commands</button>
         <span className="muted small" title={link.data!.script}>{link.data!.root}</span>
         <button className={`ghost ${panel ? "on" : ""}`} onClick={() => setPanel(panel ? null : "outline")} title="Right sidebar">Panels</button>

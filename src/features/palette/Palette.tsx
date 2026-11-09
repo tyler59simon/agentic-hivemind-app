@@ -34,6 +34,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "new", label: "New note", detail: "Ctrl+N", run: () => { close(); ws.openTab({ kind: "new-note" }); } },
       { key: "graph", label: "Open the graph", detail: "Ctrl+G", run: () => { close(); ws.openTab({ kind: "graph" }); } },
       { key: "activity", label: "Recent activity (who changed what)", detail: "Ctrl+Shift+A", run: () => { close(); ws.openTab({ kind: "activity" }); } },
+      { key: "tags", label: "Manage tags", run: () => { close(); ws.openTab({ kind: "taxonomy" }); } },
       ...EXTRA_COMMANDS.map((c) => ({ ...c, run: () => { close(); c.run(); } })),
       { key: "split", label: "Split pane", detail: "Ctrl+\\", run: () => { ws.split(); close(); } },
       { key: "panel", label: ws.panel ? "Hide the right sidebar" : "Show the right sidebar", run: () => { ws.setPanel(ws.panel ? null : "outline"); close(); } },
