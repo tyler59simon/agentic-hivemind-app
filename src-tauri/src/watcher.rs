@@ -61,10 +61,6 @@ pub fn watch_all(
     Ok(debouncer)
 }
 
-pub fn watch(root: &Path, on_change: impl Fn(Vec<String>) + Send + 'static) -> Result<Debouncer<RecommendedWatcher>, String> {
-    watch_all(root, on_change, |_| {})
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

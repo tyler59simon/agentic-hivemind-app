@@ -42,6 +42,11 @@ struct NotesChanged {
     domains: Vec<String>,
 }
 
+#[derive(Serialize, Clone)]
+struct StoreChanged {
+    files: Vec<String>,
+}
+
 async fn blocking<T: Send + 'static>(work: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
     tauri::async_runtime::spawn_blocking(work).await.map_err(|e| e.to_string())?
 }
@@ -64,10 +69,16 @@ async fn connect(app: AppHandle, state: State<'_, AppState>) -> Result<ConnectIn
     })
     .await?;
     let root = doctor.result.get("root").and_then(Value::as_str).ok_or("Living Memory did not report its store root")?.to_string();
-    let handle = app.clone();
-    let debouncer = watcher::watch(&PathBuf::from(&root), move |domains| {
-        let _ = handle.emit("notes-changed", NotesChanged { domains });
-    })?;
+    let (notes, store) = (app.clone(), app.clone());
+    let debouncer = watcher::watch_all(
+        &PathBuf::from(&root),
+        move |domains| {
+            let _ = notes.emit("notes-changed", NotesChanged { domains });
+        },
+        move |files| {
+            let _ = store.emit("store-changed", StoreChanged { files });
+        },
+    )?;
     *state.watcher.lock().unwrap() = Some(debouncer);
     let launch = state.bridge.launch();
     Ok(ConnectInfo { version: version.result, root, program: launch.program, script: launch.script.display().to_string() })
