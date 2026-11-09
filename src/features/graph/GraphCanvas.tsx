@@ -8,8 +8,10 @@ const css = (name: string) => getComputedStyle(document.documentElement).getProp
 
 /** A sigma.js drawing of notes and their links. Hover highlights neighbours and previews the note;
  *  click opens it (Ctrl/Cmd+click in a split). */
-export function GraphCanvas({ data, focus, onOpen, compact }: {
+export function GraphCanvas({ data, focus, onOpen, compact, dim }: {
   data: LinkGraph; focus?: string; onOpen: (ref: string, title: string, split: boolean) => void; compact?: boolean;
+  /** Nodes drawn as context (greyed) unless hovered or next to the hovered node, e.g. a project's neighbours. */
+  dim?: Set<string>;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const [preview, setPreview] = useState<{ ref: string; x: number; y: number } | null>(null);
@@ -31,6 +33,7 @@ export function GraphCanvas({ data, focus, onOpen, compact }: {
         const out: Partial<typeof display> = { labelColor: fg };
         if (node === focus) { out.highlighted = true; out.labelVisibility = "visible"; }
         if (graph.getNodeAttribute(node, "status") !== "active") out.opacity = 0.5;
+        if (dim?.has(node) && !(hovered && (node === hovered || graph.areNeighbors(node, hovered)))) { out.color = border; out.labelColor = muted; }
         if (hovered && node !== hovered && !graph.areNeighbors(node, hovered)) { out.color = border; out.labelColor = muted; out.labelVisibility = "hidden"; }
         else if (hovered) out.labelVisibility = "visible";
         return out;
@@ -61,7 +64,7 @@ export function GraphCanvas({ data, focus, onOpen, compact }: {
     const resize = new ResizeObserver(() => { sigma.resize(); sigma.refresh(); });
     resize.observe(host.current);
     return () => { resize.disconnect(); if (timer) clearTimeout(timer); sigma.kill(); };
-  }, [data, focus, compact]);
+  }, [data, focus, compact, dim]);
 
   return (
     <div className={`graph-canvas ${compact ? "compact" : ""}`}>

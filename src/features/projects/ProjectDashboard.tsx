@@ -1,11 +1,11 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { classify } from "../../lib/errors";
 import type { RepoActivity } from "../../lib/git";
-import { domains, projectPlan, search, type NoteRow, type Project } from "../../lib/lm";
+import { diff, domains, projectPlan, search, type NoteRow, type Project } from "../../lib/lm";
 import { sections } from "../../lib/note";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
@@ -22,7 +22,7 @@ import { OpenWorkList } from "../work/OpenWorkList";
 import { ReviewQueue } from "../work/ReviewQueue";
 import { buildBriefing } from "./briefing";
 import { useProjectIntent } from "./intent";
-import { dashboardSections, progress, projectGraph, projectOps } from "./projects";
+import { changedSlugs, dashboardSections, progress, projectGraph, projectOps, touchesRegistry } from "./projects";
 import { ProjectWizard } from "./ProjectWizard";
 import { assignToProject, dismiss, dismissed, suggestTriage } from "./triage";
 import { useAllLinks, useGitActivity, useMemberIds, useProject, useRecentActivity, useTriageRows } from "./useProject";
@@ -283,9 +283,22 @@ export function ProjectDashboard({ tab }: { tab: Tab }) {
   const ops = useRecentActivity(!!project);
   const graph = useAllLinks(!!project);
   const notesById = useNotesById();
-  const shownOps = useMemo(() => projectOps((ops.data ?? []).filter(visible), memberIds).slice(0, 30), [ops.data, memberIds]);
+  // Registry-only operations name no note, so read their projects.json diff to see which project they changed.
+  const registryOps = useMemo(() => (ops.data ?? []).filter(visible).filter(touchesRegistry).slice(0, 20), [ops.data]);
+  const changed = useQueries({
+    queries: registryOps.map((op) => ({ queryKey: ["diff", op.operation_id], queryFn: () => diff(op.operation_id), staleTime: Infinity })),
+    combine: (results) => results.map((r) => r.data),
+  });
+  const changedKey = changed.map((d) => (d ? "1" : "0")).join("");
+  const changedBySlug = useMemo(() => new Map(registryOps.flatMap((op, i) => {
+    const file = changed[i]?.find((c) => c.path === "projects.json");
+    return file ? [[op.operation_id, changedSlugs(file.diff)] as const] : [];
+  })), [registryOps, changedKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const shownOps = useMemo(() => projectOps((ops.data ?? []).filter(visible), memberIds, slug, changedBySlug).slice(0, 30), [ops.data, memberIds, slug, changedBySlug]);
   const actorFor = useActors(shownOps, notesById);
-  const sub = useMemo(() => graph.data && projectGraph(graph.data, new Set(members.map((m) => m.ref))), [graph.data, members]);
+  const memberRefs = useMemo(() => new Set(members.map((m) => m.ref)), [members]);
+  const sub = useMemo(() => graph.data && projectGraph(graph.data, memberRefs), [graph.data, memberRefs]);
+  const neighbours = useMemo(() => new Set((sub?.nodes ?? []).map((n) => n.ref).filter((r) => !memberRefs.has(r))), [sub, memberRefs]);
   const git = useGitActivity(slug, !!project);
 
   if (!enabled) return <p className="muted pad">Projects need a newer Living Memory (API 2 with the <code>projects</code> command).</p>;
@@ -376,7 +389,7 @@ export function ProjectDashboard({ tab }: { tab: Tab }) {
         </Card>
         <Card title="Graph" className="wide" count={sub?.nodes.length} loading={graph.isLoading} error={graph.error}
           empty={sub && !sub.nodes.length ? "No linked notes yet" : undefined}>
-          {sub && <GraphCanvas data={sub} compact onOpen={(ref, title, split) => useWorkspace.getState().openNote(ref, { split, title })} />}
+          {sub && <GraphCanvas data={sub} dim={neighbours} compact onOpen={(ref, title, split) => useWorkspace.getState().openNote(ref, { split, title })} />}
         </Card>
       </div>
       <Triage project={project} rows={members} open={triageOpen} onToggle={() => setTriageOpen(!triageOpen)} />

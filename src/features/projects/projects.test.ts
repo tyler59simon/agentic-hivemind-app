@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LinkGraph, NoteRow, OpenItem, Project } from "../../lib/lm";
-import { dashboardSections, openCountsByProject, progress, projectGraph, projectOps } from "./projects";
+import { changedSlugs, dashboardSections, openCountsByProject, progress, projectGraph, projectOps } from "./projects";
 
 const row = (o: Partial<NoteRow> & { ref: string }): NoteRow => ({
   id: o.ref.split(":")[1] ?? "x", domain: "d", title: o.ref, type: "knowledge", status: "active", tags: ["project/x"],
@@ -58,9 +58,37 @@ describe("projectGraph", () => {
 
 describe("projectOps", () => {
   const op = (id: string, files: string[]) => ({ operation_id: id, kind: "update", state: "committed", created: "", files });
-  it("matches by id prefix or projects.json", () => {
-    const ops = [op("1", ["domains/d/knowledge/KNOWLEDGE - t-abcdef12.md"]), op("2", ["domains/d/knowledge/KNOWLEDGE - t-00000000.md"]), op("3", ["projects.json"])];
-    expect(projectOps(ops, new Set(["abcdef12-3456-7890"])).map((o) => o.operation_id)).toEqual(["1", "3"]);
+  const ops = [op("1", ["domains/d/knowledge/KNOWLEDGE - t-abcdef12.md"]), op("2", ["domains/d/knowledge/KNOWLEDGE - t-00000000.md"]),
+    op("3", ["projects.json"]), op("4", ["projects.json"]), op("5", ["projects.json"]), op("6", ["projects.json"])];
+  it("matches member notes, and registry ops only when they changed this project", () => {
+    const changed = new Map<string, string[] | null>([["3", ["x"]], ["4", ["other"]], ["5", null]]);
+    expect(projectOps(ops, new Set(["abcdef12-3456-7890"]), "x", changed).map((o) => o.operation_id)).toEqual(["1", "3", "5"]);
+  });
+  it("hides registry ops without a slug or before their diff loads", () => {
+    expect(projectOps(ops, new Set(["abcdef12"])).map((o) => o.operation_id)).toEqual(["1"]);
+  });
+});
+
+describe("changedSlugs", () => {
+  const reg = (...entries: object[]) => JSON.stringify({ projects: entries, version: 1 });
+  const a = { slug: "a", name: "A" }, b = { slug: "b", name: "B" }, b2 = { slug: "b", name: "B2" };
+  const diff = (body: string) => `--- \n+++ \n@@ -1 +1 @@\n${body}`;
+  it("reads old and new registry lines run together (no final newline)", () => {
+    expect(changedSlugs(diff(`-${reg(a, b)}+${reg(a, b2)}`))).toEqual(["b"]);
+    expect(changedSlugs(diff(`-${reg(a)}+${reg(a, b)}`))).toEqual(["b"]);
+  });
+  it("handles separate lines, a created file and a deleted file", () => {
+    expect(changedSlugs(diff(`-${reg(a)}\n+${reg(b)}\n`))).toEqual(["a", "b"]);
+    expect(changedSlugs("--- \n+++ \n@@ -0,0 +1 @@\n+" + reg(a))).toEqual(["a"]);
+    expect(changedSlugs("--- \n+++ \n@@ -1 +0,0 @@\n-" + reg(a, b))).toEqual(["a", "b"]);
+  });
+  it("finds the boundary even when a value contains }+{", () => {
+    const odd = { slug: "a", name: "A", description: "x}+{y" };
+    expect(changedSlugs(diff(`-${reg(odd)}+${reg(odd, b)}`))).toEqual(["b"]);
+  });
+  it("returns null for truncated or unknown diffs", () => {
+    expect(changedSlugs(diff(`-${reg(a)}+${reg(a, b)}`.slice(0, 40)))).toBeNull();
+    expect(changedSlugs("nothing")).toBeNull();
   });
 });
 
