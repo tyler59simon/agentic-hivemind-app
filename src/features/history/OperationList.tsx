@@ -44,7 +44,7 @@ export function OperationList({ ops, notes, actorFor, showNotes = true }: {
     <ol className="ops">
       {ops.map((op) => {
         const day = dayLabel(op.created);
-        const header = day !== lastDay ? <li className="ops-day">{(lastDay = day)}</li> : null;
+        const header = day !== lastDay ? <li key={`day-${day}`} className="ops-day">{(lastDay = day)}</li> : null;
         const actor = actorFor(op);
         const touched = noteIdsOf(op).map((id) => notes.get(id)).filter((n): n is NoteRow => !!n);
         return [
