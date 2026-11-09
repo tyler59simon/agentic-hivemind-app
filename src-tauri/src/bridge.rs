@@ -255,6 +255,72 @@ mod tests {
         std::fs::remove_dir_all(base).ok();
     }
 
+    /// Project command centers, end to end (same gating; needs an LM with api 2 and `projects`).
+    #[test]
+    fn live_projects_plan_and_cross_domain_reads() {
+        let Ok(script) = std::env::var("HIVEMIND_TEST_LM_SCRIPT") else { return };
+        let base = std::env::temp_dir().join(format!("hivemind-bridge3-{}", std::process::id()));
+        let (store, demo, other) = (base.join("store"), base.join("demo"), base.join("other"));
+        let repo = demo.join("app");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let (program, args) = match std::env::var("HIVEMIND_TEST_PYTHON") {
+            Ok(p) => (p, vec![]),
+            Err(_) if cfg!(windows) => ("py".to_string(), vec!["-3".to_string()]),
+            Err(_) => ("python3".to_string(), vec![]),
+        };
+        let bridge = Bridge::new(Launch { program, args, script: script.into(), root: Some(store.clone()) });
+        let call = |argv: &[&str], stdin: Option<&str>| bridge.call(&argv.iter().map(|s| s.to_string()).collect::<Vec<_>>(), stdin).unwrap();
+        let ok = |r: Reply| { assert_eq!(r.exit_code, 0, "{:?}", r.error); r.result };
+
+        let version = ok(call(&["version"], None));
+        if version["api"].as_i64().unwrap_or(0) < 2 { eprintln!("skipping: LM api < 2"); return; }
+        ok(call(&["bind", "demo", demo.to_str().unwrap()], None));
+        ok(call(&["bind", "other", other.to_str().unwrap()], None));
+        std::fs::write(store.join("tag_taxonomy.json"), r#"{"tags":["subject/project","concern/knowledge","concern/decision"]}"#).unwrap();
+
+        // One plan: taxonomy tag, registry entry and charter note.
+        let create = json!({"slug": "app", "name": "App", "repos": [repo.to_str().unwrap()],
+            "charter": {"body": "## 📌 Executive Summary\nBuild the app.\n\n---\n\n## 📝 Key Details\n* **Agent guidance:** run tests first."}});
+        let plan = ok(call(&["project-plan", "create"], Some(&create.to_string())));
+        let inspected = ok(call(&["inspect-plan", plan["plan_id"].as_str().unwrap(), "--actor", "viewer"], None));
+        assert_eq!(inspected["effects"].as_array().unwrap().len(), 3);
+        ok(call(&["apply", plan["plan_id"].as_str().unwrap(), "--expected-plan-sha256", plan["digest"].as_str().unwrap()], None));
+        let listed = ok(call(&["projects", "--actor", "viewer"], None));
+        assert_eq!((listed["projects"][0]["slug"].as_str(), listed["projects"][0]["tag_registered"].as_bool()), (Some("app"), Some(true)));
+        assert_eq!(call(&["project-plan", "archive", "--actor", "viewer"], Some(r#"{"slug":"app"}"#)).exit_code, 2);
+
+        // A tagged plan in another domain, and an untagged note to triage.
+        let rollout = ok(call(&["capture", "--domain", "other"], Some(
+            r###"{"title":"Rollout","body":"## 📌 Executive Summary\nShip it.\n\n## 🟩 Action Items\n- [x] build\n- [ ] ship","tags":["subject/project","concern/decision","project/app"],"type":"plan"}"###)));
+        let rollout = format!("other:{}", rollout["id"].as_str().unwrap());
+        let loose = ok(call(&["capture", "--domain", "demo"], Some(
+            r#"{"title":"App cache","body":"The app caches reads.","tags":["subject/project","concern/knowledge"]}"#)));
+        let loose = format!("demo:{}", loose["id"].as_str().unwrap());
+
+        let page = ok(call(&["list", "--all-domains", "--status", "any", "--tag", "project/app", "--with-summary", "--actor", "viewer"], None));
+        assert_eq!(page["total"], 2);
+        let plan_row = page["notes"].as_array().unwrap().iter().find(|n| n["ref"] == rollout.as_str()).unwrap();
+        assert_eq!((plan_row["actions"]["open"].as_i64(), plan_row["actions"]["done"].as_i64()), (Some(1), Some(1)));
+        assert_eq!(plan_row["summary"], "Ship it.");
+
+        let open = ok(call(&["open", "--all-domains", "--tag", "project/app", "--actor", "viewer"], None));
+        assert_eq!((open["domain"].is_null(), open["count"].as_i64()), (true, Some(1)));
+        ok(call(&["check", &rollout, "--index", "2"], None));
+        assert_eq!(ok(call(&["open", "--all-domains", "--tag", "project/app", "--actor", "viewer"], None))["count"], 0);
+        assert_eq!(ok(call(&["review", "--all-domains", "--tag", "project/app", "--actor", "viewer"], None))["domain"], Value::Null);
+
+        // Triage: a tag-only update joins the project without bumping `updated`.
+        let before = ok(call(&["read", &loose, "--actor", "viewer"], None));
+        let payload = json!({"tags": ["concern/knowledge", "project/app", "subject/project"], "expected_revision": before["revision"]});
+        ok(call(&["update", &loose], Some(&payload.to_string())));
+        let after = ok(call(&["read", &loose, "--actor", "viewer"], None));
+        assert_eq!(after["updated"], before["updated"]);
+        assert_eq!(ok(call(&["list", "--all-domains", "--tag", "project/app", "--actor", "viewer"], None))["total"], 3);
+        drop(bridge);
+        std::fs::remove_dir_all(base).ok();
+    }
+
     #[test]
     fn version_check_names_missing_commands() {
         let old = reply(json!({"api": 1, "commands": ["serve", "version"]}));
