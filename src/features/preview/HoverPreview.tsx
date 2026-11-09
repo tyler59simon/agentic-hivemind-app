@@ -8,7 +8,8 @@ import { sections } from "../../lib/note";
 
 const DELAY = 400;
 
-function Card({ refId, x, y }: { refId: string; x: number; y: number }) {
+/** The preview card itself, at a screen position (used by HoverPreview and the graph). */
+export function PreviewCard({ refId, x, y }: { refId: string; x: number; y: number }) {
   const note = useQuery({ queryKey: ["preview", refId], queryFn: () => read(refId, { maxChars: 2000 }), staleTime: 60_000 });
   const n = note.data;
   return createPortal(
@@ -52,7 +53,7 @@ export function HoverPreview({ refId, children }: { refId: string | null | undef
   return (
     <span ref={span} className="hover-anchor" onMouseEnter={show} onMouseLeave={hide} onMouseDown={hide}>
       {children}
-      {at && <Card refId={refId} x={at.x} y={at.y} />}
+      {at && <PreviewCard refId={refId} x={at.x} y={at.y} />}
     </span>
   );
 }

@@ -1,10 +1,13 @@
 import type { ReactNode } from "react";
+import { LinksPanel, LocalGraphPanel } from "../features/links/LinksPanel";
 import { Outline } from "../features/outline/Outline";
 import { activeTab, useWorkspace, type Panel, type Tab } from "./store";
 
 /** Panels about the focused note. Each is registered here as its phase lands. */
 export const PANELS: { id: Panel; label: string; render: (tab: Tab) => ReactNode }[] = [
   { id: "outline", label: "Outline", render: (tab) => <Outline tab={tab} /> },
+  { id: "backlinks", label: "Links", render: (tab) => <LinksPanel tab={tab} /> },
+  { id: "graph", label: "Graph", render: (tab) => <LocalGraphPanel key={tab.ref} tab={tab} /> },
 ];
 
 export function RightSidebar() {

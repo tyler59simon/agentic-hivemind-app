@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NewNote } from "../features/editor/NewNote";
+import { GraphView } from "../features/graph/GraphView";
 import { NoteTab } from "../features/editor/NoteTab";
 import { Confirm } from "../ui/Modal";
 import { MAX_PANES, useWorkspace, type Pane, type Tab } from "./store";
@@ -8,6 +9,7 @@ import { MAX_PANES, useWorkspace, type Pane, type Tab } from "./store";
 export const TAB_VIEWS: Partial<Record<Tab["kind"], (tab: Tab) => ReactNode>> = {
   note: (tab) => <NoteTab tab={tab} />,
   "new-note": (tab) => <NewNote key={tab.id} tab={tab} />,
+  graph: () => <GraphView />,
 };
 
 const KIND_LABEL: Record<Tab["kind"], string> = { note: "Note", "new-note": "New note", graph: "Graph", activity: "Activity", taxonomy: "Tags" };
@@ -75,6 +77,7 @@ export function Workspace() {
       else if (e.key === "Tab") { e.preventDefault(); ws.cycle(e.shiftKey ? -1 : 1); }
       else if (e.key === "\\") { e.preventDefault(); ws.split(); }
       else if (e.key.toLowerCase() === "n" && !e.shiftKey) { e.preventDefault(); ws.openTab({ kind: "new-note" }); }
+      else if (e.key.toLowerCase() === "g" && !e.shiftKey) { e.preventDefault(); ws.openTab({ kind: "graph" }); }
       else if (e.key.toLowerCase() === "e") {
         e.preventDefault();
         const tab = pane?.tabs.find((t) => t.id === pane.active);

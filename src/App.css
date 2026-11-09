@@ -169,6 +169,22 @@ button:disabled { opacity: .55; cursor: default; }
 .merge-host .cm-mergeView { font-size: 13px; }
 .field-conflicts { display: flex; flex-direction: column; gap: 8px; }
 .field-conflicts fieldset { border: 1px solid var(--border); border-radius: 6px; display: flex; flex-direction: column; gap: 4px; }
+/* Graph and links */
+.pane-body:has(> .graph-view) { overflow: hidden; display: flex; flex-direction: column; }
+.graph-view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.graph-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.graph-filters .chips { flex-basis: 100%; }
+.check { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+.swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.graph-canvas { position: relative; flex: 1; min-height: 0; }
+.graph-canvas.compact { height: 320px; flex: none; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+.graph-host { position: absolute; inset: 0; }
+.links-section h4 { margin: 10px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.link-row { display: block; width: 100%; text-align: left; border: none; padding: 3px 6px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.link-row.retired { opacity: .65; }
+.link-row.unresolved { color: var(--muted); }
+.local-graph { display: flex; flex-direction: column; gap: 8px; }
+
 .merge-body { min-height: 40vh; font-family: ui-monospace, Consolas, monospace; font-size: 13px; background: var(--bg); color: inherit; border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
 
 .domain-select { width: 100%; }
