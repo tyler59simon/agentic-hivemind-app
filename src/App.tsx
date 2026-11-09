@@ -9,7 +9,7 @@ import { Palette } from "./features/palette/Palette";
 import { SearchPanel } from "./features/search/SearchPanel";
 import { SettingsForm } from "./features/settings/SettingsForm";
 import { useConnection } from "./lib/connection";
-import { connect, domains } from "./lib/lm";
+import { captureStatus, connect, domains } from "./lib/lm";
 import { useApp } from "./store";
 import { Toasts } from "./ui/toast";
 import { RightSidebar } from "./workspace/RightSidebar";
@@ -31,12 +31,15 @@ function useShortcuts() {
   }, [setPalette, setView]);
 }
 
-/** Closing the window with unsaved edits asks first (the drafts survive either way). */
+/** Closing the window hides it to the tray when that is on (the quick-capture hotkey keeps working);
+ *  otherwise, with unsaved edits, it asks first (the drafts survive either way). */
 function useCloseGuard() {
   const [asking, setAsking] = useState(false);
   useEffect(() => {
     const win = getCurrentWindow();
-    const stop = win.onCloseRequested((e) => {
+    const stop = win.onCloseRequested(async (e) => {
+      const status = await captureStatus().catch(() => null);
+      if (status?.close_to_tray) { e.preventDefault(); await win.hide(); return; }
       if (Object.values(useWorkspace.getState().dirty).some(Boolean)) { e.preventDefault(); setAsking(true); }
     });
     return () => { stop.then((unlisten) => unlisten()); };
@@ -48,13 +51,17 @@ function useCloseGuard() {
   );
 }
 
-/** Refresh lists and open notes when the store's note files change (agents write while you read). */
+/** Refresh lists and open notes when the store's note files change (agents write while you read).
+ *  The quick-capture window asks the main window to open a note with an "open-note" event. */
 function useLiveRefresh(enabled: boolean) {
   const client = useQueryClient();
   useEffect(() => {
     if (!enabled) return;
-    const stop = listen("notes-changed", () => client.invalidateQueries());
-    return () => { stop.then((unlisten) => unlisten()); };
+    const stops = [
+      listen("notes-changed", () => client.invalidateQueries()),
+      listen<{ ref: string }>("open-note", (e) => useWorkspace.getState().openNote(e.payload.ref)),
+    ];
+    return () => { stops.forEach((stop) => stop.then((unlisten) => unlisten())); };
   }, [enabled, client]);
 }
 

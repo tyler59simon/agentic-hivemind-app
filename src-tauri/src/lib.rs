@@ -1,4 +1,5 @@
 mod bridge;
+mod capture;
 mod drafts;
 mod settings;
 mod watcher;
@@ -16,6 +17,15 @@ struct AppState {
     settings_path: PathBuf,
     drafts_dir: PathBuf,
     watcher: Mutex<Option<notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>>,
+    /// Why the quick-capture hotkey could not be registered, for the settings screen.
+    shortcut_error: Mutex<Option<String>>,
+}
+
+#[derive(Serialize)]
+struct CaptureStatus {
+    shortcut: Option<String>,
+    error: Option<String>,
+    close_to_tray: bool,
 }
 
 #[derive(Serialize)]
@@ -68,11 +78,31 @@ fn get_settings(state: State<'_, AppState>) -> Settings {
 }
 
 #[tauri::command]
-fn save_settings(state: State<'_, AppState>, value: Settings) -> Result<(), String> {
+fn save_settings(app: AppHandle, state: State<'_, AppState>, value: Settings) -> Result<(), String> {
+    let previous = settings::load(&state.settings_path);
     settings::save(&state.settings_path, &value)?;
-    *state.watcher.lock().unwrap() = None;
-    state.bridge.reconfigure(settings::resolve(&value, |k| std::env::var(k).ok()));
+    *state.shortcut_error.lock().unwrap() = capture::apply_shortcut(&app, value.capture_shortcut().as_deref()).err();
+    // Only a change of interpreter, script or store needs a new Living Memory process.
+    if (&previous.python, &previous.script, &previous.root) != (&value.python, &value.script, &value.root) {
+        *state.watcher.lock().unwrap() = None;
+        state.bridge.reconfigure(settings::resolve(&value, |k| std::env::var(k).ok()));
+    }
     Ok(())
+}
+
+#[tauri::command]
+fn capture_status(state: State<'_, AppState>) -> CaptureStatus {
+    let saved = settings::load(&state.settings_path);
+    CaptureStatus {
+        shortcut: saved.capture_shortcut(),
+        error: state.shortcut_error.lock().unwrap().clone(),
+        close_to_tray: saved.close_to_tray.unwrap_or(true),
+    }
+}
+
+#[tauri::command]
+fn show_main(app: AppHandle) {
+    capture::show_main(&app);
 }
 
 #[tauri::command]
@@ -99,14 +129,43 @@ fn draft_list(state: State<'_, AppState>) -> Vec<Value> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        let _ = capture::show_capture(app);
+                    }
+                })
+                .build(),
+        )
         .setup(|app| {
             let settings_path = app.path().app_config_dir()?.join("settings.json");
             let drafts_dir = app.path().app_data_dir()?.join("drafts");
-            let launch = settings::resolve(&settings::load(&settings_path), |k| std::env::var(k).ok());
-            app.manage(AppState { bridge: Arc::new(Bridge::new(launch)), settings_path, drafts_dir, watcher: Mutex::new(None) });
+            let saved = settings::load(&settings_path);
+            let launch = settings::resolve(&saved, |k| std::env::var(k).ok());
+            // A taken or invalid hotkey must not stop the app; the settings screen shows why.
+            let shortcut_error = capture::apply_shortcut(app.handle(), saved.capture_shortcut().as_deref()).err();
+            if let Err(e) = capture::tray(app.handle()) {
+                eprintln!("Hivemind: no tray icon ({e})");
+            }
+            app.manage(AppState {
+                bridge: Arc::new(Bridge::new(launch)),
+                settings_path,
+                drafts_dir,
+                watcher: Mutex::new(None),
+                shortcut_error: Mutex::new(shortcut_error),
+            });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![lm, connect, get_settings, save_settings, draft_put, draft_get, draft_delete, draft_list])
+        // The hidden capture window must not keep the app alive once the main window is really closed.
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                window.app_handle().exit(0);
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            lm, connect, get_settings, save_settings, capture_status, show_main, draft_put, draft_get, draft_delete, draft_list
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

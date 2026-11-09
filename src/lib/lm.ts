@@ -46,11 +46,17 @@ export interface ConnectInfo {
   program: string;
   script: string;
 }
-export interface Settings { python: string | null; script: string | null; root: string | null }
+export interface Settings {
+  python: string | null; script: string | null; root: string | null;
+  capture_shortcut?: string | null; close_to_tray?: boolean | null;
+}
+export interface CaptureStatus { shortcut: string | null; error: string | null; close_to_tray: boolean }
 
 export const connect = () => call("connect", {}) as Promise<ConnectInfo>;
 export const getSettings = () => call("get_settings", {}) as Promise<Settings>;
 export const saveSettings = (value: Settings) => call("save_settings", { value }) as Promise<void>;
+export const captureStatus = () => call("capture_status", {}) as Promise<CaptureStatus>;
+export const showMain = () => call("show_main", {}) as Promise<void>;
 
 export interface DomainInfo { name: string; bound: boolean; prefixes: string[]; active: number; archived: number }
 export interface Domains {

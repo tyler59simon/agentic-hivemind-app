@@ -11,6 +11,23 @@ pub struct Settings {
     pub script: Option<String>,
     /// Store root; None lets Living Memory resolve its own (config pointer, env).
     pub root: Option<String>,
+    /// Global hotkey for quick capture; None means the default, "" turns it off.
+    pub capture_shortcut: Option<String>,
+    /// Closing the main window hides it to the tray (default on) so the hotkey keeps working.
+    pub close_to_tray: Option<bool>,
+}
+
+pub const DEFAULT_CAPTURE_SHORTCUT: &str = "CommandOrControl+Alt+M";
+
+impl Settings {
+    /// The hotkey to register, or None when the user turned it off.
+    pub fn capture_shortcut(&self) -> Option<String> {
+        match self.capture_shortcut.as_deref().map(str::trim) {
+            None => Some(DEFAULT_CAPTURE_SHORTCUT.to_string()),
+            Some("") => None,
+            Some(s) => Some(s.to_string()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -74,7 +91,7 @@ mod tests {
 
     #[test]
     fn env_beats_saved_beats_default() {
-        let saved = Settings { python: Some("C:/py.exe".into()), script: Some("saved.py".into()), root: None };
+        let saved = Settings { python: Some("C:/py.exe".into()), script: Some("saved.py".into()), ..Default::default() };
         let launch = resolve(&saved, |k| (k == "HIVEMIND_LM_SCRIPT").then(|| "env.py".to_string()));
         assert_eq!(launch.program, "C:/py.exe");
         assert!(launch.args.is_empty());
@@ -91,10 +108,20 @@ mod tests {
     }
 
     #[test]
+    fn capture_shortcut_defaults_and_can_be_turned_off() {
+        assert_eq!(Settings::default().capture_shortcut().as_deref(), Some(DEFAULT_CAPTURE_SHORTCUT));
+        assert_eq!(Settings { capture_shortcut: Some(" ".into()), ..Default::default() }.capture_shortcut(), None);
+        assert_eq!(Settings { capture_shortcut: Some("Ctrl+Shift+K".into()), ..Default::default() }.capture_shortcut().as_deref(), Some("Ctrl+Shift+K"));
+        // Settings files from before these fields existed still load.
+        let old: Settings = serde_json::from_str(r#"{"python":null,"script":null,"root":null}"#).unwrap();
+        assert_eq!(old.close_to_tray, None);
+    }
+
+    #[test]
     fn save_then_load_round_trips() {
         let dir = std::env::temp_dir().join(format!("hivemind-settings-{}", std::process::id()));
         let path = dir.join("settings.json");
-        let value = Settings { python: Some("python3".into()), script: None, root: Some("/tmp/store".into()) };
+        let value = Settings { python: Some("python3".into()), script: None, root: Some("/tmp/store".into()), ..Default::default() };
         save(&path, &value).unwrap();
         assert_eq!(load(&path), value);
         std::fs::remove_dir_all(dir).ok();

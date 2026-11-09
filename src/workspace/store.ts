@@ -2,6 +2,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 import type { NoteType } from "../lib/lm";
+import { prefs } from "../lib/prefs";
 
 export type Mode = "reading" | "live" | "source";
 export type TabKind = "note" | "new-note" | "graph" | "activity" | "taxonomy";
@@ -87,7 +88,7 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
     },
 
     openNote: (ref, opts = {}) =>
-      get().openTab({ kind: "note", ref, mode: opts.mode ?? "reading", title: opts.title }, { split: opts.split }),
+      get().openTab({ kind: "note", ref, mode: opts.mode ?? prefs.defaultMode(), title: opts.title }, { split: opts.split }),
 
     activate: (paneId, tabId) => { set({ focused: paneId }); withPane(paneId, (p) => ({ ...p, active: tabId })); },
 
