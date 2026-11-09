@@ -1,6 +1,7 @@
 mod bridge;
 mod capture;
 mod drafts;
+mod git;
 mod settings;
 mod watcher;
 
@@ -70,6 +71,13 @@ async fn connect(app: AppHandle, state: State<'_, AppState>) -> Result<ConnectIn
     *state.watcher.lock().unwrap() = Some(debouncer);
     let launch = state.bridge.launch();
     Ok(ConnectInfo { version: version.result, root, program: launch.program, script: launch.script.display().to_string() })
+}
+
+/// Recent commits and pull requests for a project's repos (paths are looked up in Living Memory).
+#[tauri::command]
+async fn git_activity(state: State<'_, AppState>, slug: String) -> Result<Vec<git::RepoActivity>, String> {
+    let bridge = state.bridge.clone();
+    blocking(move || git::git_activity(&bridge, &slug)).await
 }
 
 #[tauri::command]
@@ -164,7 +172,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            lm, connect, get_settings, save_settings, capture_status, show_main, draft_put, draft_get, draft_delete, draft_list
+            lm, connect, git_activity, get_settings, save_settings, capture_status, show_main, draft_put, draft_get, draft_delete, draft_list
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
