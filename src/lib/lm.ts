@@ -93,6 +93,9 @@ export interface Note {
 export const read = (ref: string, opts: { domain?: string; maxChars?: number } = {}) =>
   run<Note>(view(["read", ref, "--max-chars", String(opts.maxChars ?? 64000), ...(opts.domain ? ["--domain", opts.domain] : [])]));
 
+/** Properties only (no body): cheap, for origins and titles. */
+export const meta = (ref: string) => run<Omit<Note, "body" | "truncated">>(view(["read", ref, "--metadata-only"]));
+
 export interface SearchHit {
   id: string; domain: string; title: string; type: NoteType; updated: string; tags: string[];
   status: Status; snippet: string; score: number; rank: number; engine: string; revision: string;

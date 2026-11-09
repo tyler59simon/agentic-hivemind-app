@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { HistoryPanel } from "../features/history/HistoryViews";
 import { LinksPanel, LocalGraphPanel } from "../features/links/LinksPanel";
 import { Outline } from "../features/outline/Outline";
 import { activeTab, useWorkspace, type Panel, type Tab } from "./store";
@@ -8,6 +9,7 @@ export const PANELS: { id: Panel; label: string; render: (tab: Tab) => ReactNode
   { id: "outline", label: "Outline", render: (tab) => <Outline tab={tab} /> },
   { id: "backlinks", label: "Links", render: (tab) => <LinksPanel tab={tab} /> },
   { id: "graph", label: "Graph", render: (tab) => <LocalGraphPanel key={tab.ref} tab={tab} /> },
+  { id: "history", label: "History", render: (tab) => <HistoryPanel key={tab.ref} tab={tab} /> },
 ];
 
 export function RightSidebar() {
