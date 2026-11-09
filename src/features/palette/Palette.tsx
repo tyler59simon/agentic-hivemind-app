@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { useProjectsEnabled } from "../../lib/connection";
+import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { domains, list } from "../../lib/lm";
 import { refreshStore } from "../../lib/refresh";
 import { fuzzy } from "../../lib/text";
@@ -8,6 +8,7 @@ import { useApp } from "../../store";
 import { useWorkspace } from "../../workspace/store";
 import { useProjectIntent } from "../projects/intent";
 import { projectsQuery } from "../projects/useProject";
+import { systemsQuery, useSystemIntent } from "../systems/useSystem";
 
 interface Entry { key: string; label: string; detail?: string; run: () => void }
 
@@ -25,6 +26,8 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
   const known = useQuery({ queryKey: ["domains"], queryFn: domains, enabled: app.palette === "commands" });
   const projectsOn = useProjectsEnabled();
   const registry = useQuery({ ...projectsQuery(), enabled: projectsOn && app.palette === "commands" });
+  const systemsOn = useSystemsEnabled();
+  const systems = useQuery({ ...systemsQuery(), enabled: systemsOn && app.palette === "commands" });
   useEffect(() => { setQuery(""); setIndex(0); }, [app.palette]);
 
   const entries = useMemo<Entry[]>(() => {
@@ -50,6 +53,14 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
           run: () => { close(); ws.openProject(p.slug, p.name); },
         })),
       ] : []),
+      ...(systemsOn ? [
+        { key: "new-system", label: "New system…", run: () => { close(); app.setView("systems"); useSystemIntent.getState().openWizard(); } },
+        { key: "sessions", label: "Agent sessions", run: () => { close(); ws.openTab({ kind: "sessions" }); } },
+        ...(systems.data?.systems ?? []).filter((s) => s.status !== "retired").map((s) => ({
+          key: "system:" + s.slug, label: `Open system: ${s.name}`, detail: s.tag,
+          run: () => { close(); ws.openSystem(s.slug, s.name); },
+        })),
+      ] : []),
       ...EXTRA_COMMANDS.map((c) => ({ ...c, run: () => { close(); c.run(); } })),
       { key: "split", label: "Split pane", detail: "Ctrl+\\", run: () => { ws.split(); close(); } },
       { key: "panel", label: ws.panel ? "Hide the right sidebar" : "Show the right sidebar", run: () => { ws.setPanel(ws.panel ? null : "outline"); close(); } },
@@ -64,7 +75,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
         run: () => { app.setDomain(d.name); close(); },
       })),
     ];
-  }, [app, ws, notes.data, known.data, registry.data, projectsOn, client, onSettings, onReconnect]);
+  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, client, onSettings, onReconnect]);
 
   const shown = useMemo(() => entries
     .map((e) => ({ e, score: fuzzy(query, e.label) }))

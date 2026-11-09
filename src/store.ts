@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type View = "notes" | "search" | "projects";
+export type View = "notes" | "search" | "projects" | "systems";
 export type Shelf = "active" | "archived";
 
 /** Left sidebar and palette state; open notes live in the workspace store (src/workspace/store.ts). */

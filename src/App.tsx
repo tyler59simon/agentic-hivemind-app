@@ -9,7 +9,9 @@ import { ProjectsNav } from "./features/projects/ProjectsNav";
 import { Palette } from "./features/palette/Palette";
 import { SearchPanel } from "./features/search/SearchPanel";
 import { SettingsForm } from "./features/settings/SettingsForm";
-import { useConnection, useProjectsEnabled } from "./lib/connection";
+import { SystemsNav } from "./features/systems/SystemsNav";
+import { sessionsQuery } from "./lib/agent";
+import { useConnection, useProjectsEnabled, useSystemsEnabled } from "./lib/connection";
 import { captureStatus, connect, domains } from "./lib/lm";
 import { refreshStore } from "./lib/refresh";
 import { useApp } from "./store";
@@ -63,8 +65,10 @@ function useLiveRefresh(enabled: boolean) {
       listen("notes-changed", () => refreshStore(client)),
       listen("store-changed", () => {
         client.invalidateQueries({ queryKey: ["projects"] });
+        client.invalidateQueries({ queryKey: ["systems"] });
         client.invalidateQueries({ queryKey: ["taxonomy"] });
       }),
+      listen("agent-sessions-changed", () => client.invalidateQueries({ queryKey: ["agent", "sessions"] })),
       listen<{ ref: string }>("open-note", (e) => useWorkspace.getState().openNote(e.payload.ref)),
     ];
     return () => { stops.forEach((stop) => stop.then((unlisten) => unlisten())); };
@@ -78,6 +82,9 @@ export default function App() {
   const link = useQuery({ queryKey: ["connect"], queryFn: connect, retry: false, staleTime: Infinity });
   const known = useQuery({ queryKey: ["domains"], queryFn: domains, enabled: link.isSuccess });
   const projectsOn = useProjectsEnabled();
+  const systemsOn = useSystemsEnabled();
+  const sessions = useQuery({ ...sessionsQuery(), enabled: link.isSuccess && systemsOn });
+  const running = sessions.data?.find((s) => s.status === "running");
   const panel = useWorkspace((s) => s.panel);
   const setPanel = useWorkspace((s) => s.setPanel);
   useShortcuts();
@@ -116,17 +123,21 @@ export default function App() {
           <button className={app.view === "notes" ? "on" : ""} onClick={() => app.setView("notes")}>Notes</button>
           <button className={app.view === "search" ? "on" : ""} onClick={() => app.setView("search")}>Search</button>
           {projectsOn && <button className={app.view === "projects" ? "on" : ""} onClick={() => app.setView("projects")}>Projects</button>}
+          {systemsOn && <button className={app.view === "systems" ? "on" : ""} onClick={() => app.setView("systems")}>Systems</button>}
         </div>
         <button className="ghost" onClick={() => useWorkspace.getState().openTab({ kind: "work" })} title="Open checklist items across notes">Open work</button>
         <button className="ghost" onClick={() => useWorkspace.getState().openTab({ kind: "graph" })} title="Graph of all notes (Ctrl+G)">Graph</button>
         <button className="ghost" onClick={() => useWorkspace.getState().openTab({ kind: "activity" })} title="Who changed what (Ctrl+Shift+A)">Activity</button>
         <button className="ghost" onClick={() => useWorkspace.getState().openTab({ kind: "taxonomy" })} title="Manage tags">Tags</button>
+        {systemsOn && (running
+          ? <button className="ghost on" onClick={() => useWorkspace.getState().openSession(running.id, running.title)} title={`An agent session is running: ${running.title}`}>● Agent running</button>
+          : <button className="ghost" onClick={() => useWorkspace.getState().openTab({ kind: "sessions" })} title="Agent sessions started from Hivemind">Sessions</button>)}
         <button className="ghost" onClick={() => app.setPalette("commands")} title="Command palette (Ctrl+P)">Commands</button>
         <span className="muted small" title={link.data!.script}>{link.data!.root}</span>
         <button className={`ghost ${panel ? "on" : ""}`} onClick={() => setPanel(panel ? null : "outline")} title="Right sidebar">Panels</button>
       </header>
       <div className={`layout ${panel ? "with-right" : ""}`}>
-        {app.view === "notes" ? <Sidebar /> : app.view === "projects" ? <ProjectsNav /> : <SearchPanel />}
+        {app.view === "notes" ? <Sidebar /> : app.view === "projects" ? <ProjectsNav /> : app.view === "systems" ? <SystemsNav /> : <SearchPanel />}
         <Workspace />
         {panel && <RightSidebar />}
       </div>

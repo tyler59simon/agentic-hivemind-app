@@ -4,7 +4,7 @@ import { prefs } from "../../lib/prefs";
 import type { Mode } from "../../workspace/store";
 
 const DEFAULT_SHORTCUT = "CommandOrControl+Alt+M";
-type PathKey = "python" | "script" | "root";
+type PathKey = "python" | "script" | "root" | "claude_path" | "architecture_suite_plugin";
 
 /** Where Hivemind finds Python, living_memory.py and the store; quick capture; editor default. */
 export function SettingsForm({ onSaved }: { onSaved: () => void }) {
@@ -49,6 +49,16 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
       <label className="check"><input type="checkbox" checked={value.close_to_tray ?? true}
         onChange={(e) => setValue({ ...value, close_to_tray: e.target.checked })} /> Closing the window keeps Hivemind in the tray</label>
       <p className="muted small">The tray icon also opens quick capture. Use “Quit Hivemind” in its menu to exit.</p>
+
+      <h3>Agents</h3>
+      {field("claude_path", "Claude Code", "default: the installed claude command")}
+      {field("architecture_suite_plugin", "Architecture Suite plugin folder", "only when the plugin is not installed in Claude Code")}
+      <label className="field">
+        <span>Spend cap per session (USD)</span>
+        <input type="number" min="0.5" step="0.5" value={value.agent_budget_usd ?? ""} placeholder="5"
+          onChange={(e) => setValue({ ...value, agent_budget_usd: e.target.value ? Number(e.target.value) : null })} />
+      </label>
+      <p className="muted small">Hivemind starts Claude Code in the background for tasks such as generating a system's architecture. A session may only read the system's repositories, run Architecture Suite and write to the system's architecture folder.</p>
 
       <h3>Editor</h3>
       <label className="field">

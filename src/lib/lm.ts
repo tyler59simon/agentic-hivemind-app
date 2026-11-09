@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 export const NOTE_TYPES = [
   "knowledge", "decision", "preference", "context", "status",
-  "bug", "plan", "risk", "research", "policy", "map",
+  "bug", "plan", "risk", "research", "policy", "map", "runbook",
 ] as const;
 export type NoteType = (typeof NOTE_TYPES)[number];
 export const STATUSES = ["active", "resolved", "archived", "superseded"] as const;
@@ -49,6 +49,7 @@ export interface ConnectInfo {
 export interface Settings {
   python: string | null; script: string | null; root: string | null;
   capture_shortcut?: string | null; close_to_tray?: boolean | null;
+  claude_path?: string | null; agent_budget_usd?: number | null; architecture_suite_plugin?: string | null;
 }
 export interface CaptureStatus { shortcut: string | null; error: string | null; close_to_tray: boolean }
 
@@ -263,3 +264,26 @@ export function timelineArgs(o: TimelineOptions): string[] {
   return view(argv);
 }
 export const timeline = (o: TimelineOptions) => run<TimelineResult>(timelineArgs(o));
+
+// ---- Systems (an LM that has the `systems` command). ----
+
+export type SystemStatus = "active" | "deprecated" | "retired";
+export interface System {
+  slug: string; name: string; status: SystemStatus; description: string; owners: string[]; capabilities: string[];
+  repos: string[]; depends_on: string[]; architecture: string | null; passport: string | null;
+  created: string; updated: string; tag: string; tag_registered: boolean; dependents: string[];
+}
+export interface SystemsResult { ok: boolean; systems: System[]; warnings: string[] }
+export const systemsArgs = (o: { status?: SystemStatus | "any" } = {}) => view(["systems", ...(o.status ? ["--status", o.status] : [])]);
+export const systems = (o: { status?: SystemStatus | "any" } = {}) => run<SystemsResult>(systemsArgs(o));
+
+export interface SystemCreate {
+  slug: string; name: string; description?: string; owners?: string[]; capabilities?: string[]; repos?: string[];
+  depends_on?: string[]; architecture?: string | null; passport: { domain?: string; title?: string; body: string };
+}
+export interface SystemUpdate {
+  slug: string; name?: string; description?: string; status?: SystemStatus; owners?: string[]; capabilities?: string[];
+  repos?: string[]; depends_on?: string[]; architecture?: string | null; passport?: string;
+}
+export const systemPlan = (action: "create" | "update" | "retire", payload: SystemCreate | SystemUpdate | { slug: string }) =>
+  run<Plan>(["system-plan", action], JSON.stringify(payload));

@@ -10,9 +10,10 @@ import { recordOperation } from "../../lib/oplog";
 import { shortDate } from "../../lib/text";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
-import { useProjectsEnabled } from "../../lib/connection";
+import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { useNoteLinks, type NoteLinks } from "../links/useLinks";
 import { projectsQuery } from "../projects/useProject";
+import { systemsQuery } from "../systems/useSystem";
 import { HoverPreview } from "../preview/HoverPreview";
 import { remarkWikilinks, WIKI_PREFIX } from "./remarkWikilinks";
 
@@ -22,8 +23,13 @@ function Properties({ note }: { note: Note }) {
   const enabled = useProjectsEnabled();
   const registry = useQuery({ ...projectsQuery(), enabled });
   const openProject = useWorkspace((s) => s.openProject);
+  const systemsOn = useSystemsEnabled();
+  const systems = useQuery({ ...systemsQuery(), enabled: systemsOn });
+  const openSystem = useWorkspace((s) => s.openSystem);
   const tagChip = (t: string) => {
     const project = t.startsWith("project/") ? registry.data?.projects.find((p) => p.tag === t) : undefined;
+    const system = t.startsWith("system/") ? systems.data?.systems.find((s) => s.tag === t) : undefined;
+    if (system) return <button key={t} className="chip project" title={`Open system ${system.name}`} onClick={() => openSystem(system.slug, system.name)}>{system.name}</button>;
     return project
       ? <button key={t} className="chip project" title={`Open project ${project.name}`} onClick={() => openProject(project.slug, project.name)}>{project.name}</button>
       : <span key={t} className="tag">{t}</span>;

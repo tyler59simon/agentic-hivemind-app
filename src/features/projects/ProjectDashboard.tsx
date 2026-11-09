@@ -28,7 +28,7 @@ import { assignToProject, dismiss, dismissed, suggestTriage } from "./triage";
 import { useAllLinks, useGitActivity, useMemberIds, useProject, useRecentActivity, useTriageRows } from "./useProject";
 
 /** A dashboard card: header (title, count, actions) and a body that shows its own loading, error and empty state. */
-function Card({ title, count, actions, className = "", loading, error, empty, children }: {
+export function Card({ title, count, actions, className = "", loading, error, empty, children }: {
   title: string; count?: number; actions?: ReactNode; className?: string;
   loading?: boolean; error?: unknown; empty?: string; children?: ReactNode;
 }) {
@@ -52,7 +52,7 @@ function Card({ title, count, actions, className = "", loading, error, empty, ch
 
 const openNote = (row: Pick<NoteRow, "ref" | "title">, split = false) => useWorkspace.getState().openNote(row.ref, { title: row.title, split });
 
-function NoteLink({ row }: { row: Pick<NoteRow, "ref" | "title"> }) {
+export function NoteLink({ row }: { row: Pick<NoteRow, "ref" | "title"> }) {
   return (
     <HoverPreview refId={row.ref}>
       <button className="link-row" onClick={(e) => openNote(row, e.ctrlKey || e.metaKey)}>{row.title}</button>

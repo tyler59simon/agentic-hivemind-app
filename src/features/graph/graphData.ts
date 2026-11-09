@@ -5,7 +5,7 @@ import type { LinkGraph, NoteType } from "../../lib/lm";
 
 export const TYPE_COLORS: Record<NoteType, string> = {
   knowledge: "#94a3b8", decision: "#3b82f6", preference: "#a855f7", context: "#64748b", status: "#14b8a6",
-  bug: "#ef4444", plan: "#22c55e", risk: "#f59e0b", research: "#06b6d4", policy: "#eab308", map: "#f97316",
+  bug: "#ef4444", plan: "#22c55e", risk: "#f59e0b", research: "#06b6d4", policy: "#eab308", map: "#f97316", runbook: "#ec4899",
 };
 
 export interface GraphFilter { domain?: string; types?: NoteType[]; tag?: string; includeRetired?: boolean }

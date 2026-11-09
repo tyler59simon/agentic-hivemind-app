@@ -71,4 +71,17 @@ describe("workspace", () => {
     ws().openTab({ kind: "work" });
     expect(ws().panes[0].tabs.map((t) => [t.kind, t.slug])).toEqual([["project", "a"], ["project", "b"], ["work", undefined]]);
   });
+
+  it("dedupes system tabs by slug and session tabs by id, apart from projects", () => {
+    ws().openProject("a");
+    ws().openSystem("a", "Alpha system");
+    ws().openSystem("a");
+    ws().openSession("s1", "Run one");
+    ws().openSession("s2");
+    ws().openSession("s1");
+    ws().openTab({ kind: "sessions" });
+    ws().openTab({ kind: "sessions" });
+    expect(ws().panes[0].tabs.map((t) => [t.kind, t.slug ?? t.session])).toEqual(
+      [["project", "a"], ["system", "a"], ["session", "s1"], ["session", "s2"], ["sessions", undefined]]);
+  });
 });

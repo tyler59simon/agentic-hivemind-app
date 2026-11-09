@@ -358,3 +358,27 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .triage-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .triage-title .link-row { width: auto; flex: 0 1 auto; }
 .reason-chip { border: 1px solid var(--border); background: var(--bg-alt); color: var(--muted); font-size: 11px; padding: 0 7px; }
+
+/* Systems: passport */
+.capabilities { margin: 0; padding-left: 18px; }
+.agent-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; }
+.dep-label { min-width: 76px; }
+.diagrams { display: grid; grid-template-columns: 220px 1fr; gap: 12px; align-items: start; }
+.diagram-list { display: flex; flex-direction: column; gap: 6px; max-height: 420px; overflow: auto; }
+.diagram-list .tree-item { width: 100%; text-align: left; }
+.diagram-frame { display: block; padding: 8px; background: #fff; border: 1px solid var(--border, #d0d7de); border-radius: 6px; cursor: zoom-in; min-height: 120px; }
+.diagram-frame img { display: block; max-width: 100%; max-height: 420px; margin: 0 auto; }
+.diagram-zoom { background: #fff; overflow: auto; max-height: 75vh; }
+.diagram-zoom img { display: block; max-width: none; }
+@media (max-width: 900px) { .diagrams { grid-template-columns: 1fr; } }
+
+/* Agent sessions */
+.session { padding: 16px 20px; overflow: auto; height: 100%; }
+.transcript { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.tool-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.tool-line code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-line p { flex-basis: 100%; margin: 0; }
+.tool-line.failed code { text-decoration: line-through; }
+.status-retired, .status-cancelled { background: var(--bg-hover); color: var(--muted); }
+.status-running { background: var(--accent-soft); color: var(--accent); }
+.status-failed { color: var(--error); }

@@ -62,7 +62,7 @@ export function TaxonomyView() {
     } catch (e) { setError(classify(e).message); }
   };
 
-  const managed = (tag: string) => tag.startsWith("project/");
+  const managed = (tag: string) => tag.startsWith("project/") || tag.startsWith("system/");
   const row = (t: TagUsage) => (
     <li key={t.tag} className={`tag-row ${selected === t.tag ? "on" : ""}`}>
       <button className="link-row" onClick={() => setSelected(selected === t.tag ? null : t.tag)}>
@@ -98,6 +98,7 @@ export function TaxonomyView() {
           <section key={facet} className="facet">
             <h3>{facet} <span className="muted small">{tags.length}</span></h3>
             {facet === "project" && <p className="muted small">Managed by projects.</p>}
+            {facet === "system" && <p className="muted small">Managed by systems.</p>}
             {tags.length ? <ul className="tag-list">{tags.map(row)}</ul> : <p className="muted small">No tags yet.</p>}
           </section>
         ))}
