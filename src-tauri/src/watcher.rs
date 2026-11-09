@@ -24,7 +24,7 @@ pub fn note_domain(domains_dir: &Path, path: &Path) -> Option<String> {
 /// Store-level config files the UI cares about, when a changed path is one of them directly under the store root.
 pub fn store_file(root: &Path, path: &Path) -> Option<String> {
     let name = path.file_name()?.to_str()?;
-    (path.parent()? == root && (name == "projects.json" || name == "tag_taxonomy.json")).then(|| name.to_string())
+    (path.parent()? == root && matches!(name, "projects.json" | "systems.json" | "tag_taxonomy.json")).then(|| name.to_string())
 }
 
 /// Watch note folders (recursively) and the store root (non-recursively, for config files).
@@ -81,6 +81,7 @@ mod tests {
     fn only_store_config_files_count() {
         let root = PathBuf::from("store");
         assert_eq!(store_file(&root, &root.join("projects.json")).as_deref(), Some("projects.json"));
+        assert_eq!(store_file(&root, &root.join("systems.json")).as_deref(), Some("systems.json"));
         assert_eq!(store_file(&root, &root.join("tag_taxonomy.json")).as_deref(), Some("tag_taxonomy.json"));
         assert_eq!(store_file(&root, &root.join(".projects.json.tmp")), None);
         assert_eq!(store_file(&root, &root.join(".tag_taxonomy.json")), None);

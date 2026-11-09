@@ -1,3 +1,4 @@
+mod architecture;
 mod bridge;
 mod capture;
 mod drafts;
@@ -89,6 +90,20 @@ async fn connect(app: AppHandle, state: State<'_, AppState>) -> Result<ConnectIn
 async fn git_activity(state: State<'_, AppState>, slug: String) -> Result<Vec<git::RepoActivity>, String> {
     let bridge = state.bridge.clone();
     blocking(move || git::git_activity(&bridge, &slug)).await
+}
+
+/// What a system's Architecture Suite output folder holds (the folder is looked up in Living Memory).
+#[tauri::command]
+async fn system_architecture(state: State<'_, AppState>, slug: String) -> Result<architecture::Architecture, String> {
+    let bridge = state.bridge.clone();
+    blocking(move || architecture::for_system(&bridge, &slug)).await
+}
+
+/// One diagram from that folder as a data URL; only files the suite's manifest lists are served.
+#[tauri::command]
+async fn system_diagram(state: State<'_, AppState>, slug: String, path: String) -> Result<String, String> {
+    let bridge = state.bridge.clone();
+    blocking(move || architecture::diagram_for_system(&bridge, &slug, &path)).await
 }
 
 #[tauri::command]
@@ -183,7 +198,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            lm, connect, git_activity, get_settings, save_settings, capture_status, show_main, draft_put, draft_get, draft_delete, draft_list
+            lm, connect, git_activity, system_architecture, system_diagram, get_settings, save_settings, capture_status, show_main, draft_put, draft_get, draft_delete, draft_list
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
