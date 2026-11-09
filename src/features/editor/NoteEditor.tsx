@@ -5,6 +5,7 @@ import { classify, type Problem } from "../../lib/errors";
 import { domainOf, read, taxonomy, taxonomyPlan, update } from "../../lib/lm";
 import { rewriteWikilinks } from "../../lib/note";
 import { recordOperation } from "../../lib/oplog";
+import { refreshStore } from "../../lib/refresh";
 import { toast } from "../../ui/toast";
 import { useWorkspace, type Tab } from "../../workspace/store";
 import { useNoteLinks } from "../links/useLinks";
@@ -120,7 +121,7 @@ export function NoteEditor({ tab, live }: { tab: Tab; live: boolean }) {
           done++;
         } catch (e) { failed.push(`${source.title}: ${classify(e).message}`); }
       }
-      client.invalidateQueries();
+      refreshStore(client);
       toast(`Updated links in ${done} note${done === 1 ? "" : "s"}.`);
       failed.forEach((f) => toast(f, "error"));
     };

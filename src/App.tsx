@@ -5,11 +5,13 @@ import { Confirm } from "./ui/Modal";
 import { useCallback, useEffect, useState } from "react";
 import "./App.css";
 import { Sidebar } from "./features/library/Sidebar";
+import { ProjectsNav } from "./features/projects/ProjectsNav";
 import { Palette } from "./features/palette/Palette";
 import { SearchPanel } from "./features/search/SearchPanel";
 import { SettingsForm } from "./features/settings/SettingsForm";
-import { useConnection } from "./lib/connection";
+import { useConnection, useProjectsEnabled } from "./lib/connection";
 import { captureStatus, connect, domains } from "./lib/lm";
+import { refreshStore } from "./lib/refresh";
 import { useApp } from "./store";
 import { Toasts } from "./ui/toast";
 import { RightSidebar } from "./workspace/RightSidebar";
@@ -58,7 +60,11 @@ function useLiveRefresh(enabled: boolean) {
   useEffect(() => {
     if (!enabled) return;
     const stops = [
-      listen("notes-changed", () => client.invalidateQueries()),
+      listen("notes-changed", () => refreshStore(client)),
+      listen("store-changed", () => {
+        client.invalidateQueries({ queryKey: ["projects"] });
+        client.invalidateQueries({ queryKey: ["taxonomy"] });
+      }),
       listen<{ ref: string }>("open-note", (e) => useWorkspace.getState().openNote(e.payload.ref)),
     ];
     return () => { stops.forEach((stop) => stop.then((unlisten) => unlisten())); };
@@ -71,6 +77,7 @@ export default function App() {
   const [settings, setSettings] = useState(false);
   const link = useQuery({ queryKey: ["connect"], queryFn: connect, retry: false, staleTime: Infinity });
   const known = useQuery({ queryKey: ["domains"], queryFn: domains, enabled: link.isSuccess });
+  const projectsOn = useProjectsEnabled();
   const panel = useWorkspace((s) => s.panel);
   const setPanel = useWorkspace((s) => s.setPanel);
   useShortcuts();
@@ -108,7 +115,9 @@ export default function App() {
         <div className="tabs">
           <button className={app.view === "notes" ? "on" : ""} onClick={() => app.setView("notes")}>Notes</button>
           <button className={app.view === "search" ? "on" : ""} onClick={() => app.setView("search")}>Search</button>
+          {projectsOn && <button className={app.view === "projects" ? "on" : ""} onClick={() => app.setView("projects")}>Projects</button>}
         </div>
+        <button className="ghost" onClick={() => useWorkspace.getState().openTab({ kind: "work" })} title="Open checklist items across notes">Open work</button>
         <button className="ghost" onClick={() => useWorkspace.getState().openTab({ kind: "graph" })} title="Graph of all notes (Ctrl+G)">Graph</button>
         <button className="ghost" onClick={() => useWorkspace.getState().openTab({ kind: "activity" })} title="Who changed what (Ctrl+Shift+A)">Activity</button>
         <button className="ghost" onClick={() => useWorkspace.getState().openTab({ kind: "taxonomy" })} title="Manage tags">Tags</button>
@@ -117,7 +126,7 @@ export default function App() {
         <button className={`ghost ${panel ? "on" : ""}`} onClick={() => setPanel(panel ? null : "outline")} title="Right sidebar">Panels</button>
       </header>
       <div className={`layout ${panel ? "with-right" : ""}`}>
-        {app.view === "notes" ? <Sidebar /> : <SearchPanel />}
+        {app.view === "notes" ? <Sidebar /> : app.view === "projects" ? <ProjectsNav /> : <SearchPanel />}
         <Workspace />
         {panel && <RightSidebar />}
       </div>

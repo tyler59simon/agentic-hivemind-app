@@ -62,4 +62,13 @@ describe("workspace", () => {
     ws().replaceRef("d:2", "d:9");
     expect(ws().panes[0].tabs.map((t) => t.ref)).toEqual(["d:1", "d:9"]);
   });
+
+  it("dedupes project tabs by slug and keeps work a singleton", () => {
+    ws().openProject("a", "Alpha");
+    ws().openProject("b");
+    ws().openProject("a");
+    ws().openTab({ kind: "work" });
+    ws().openTab({ kind: "work" });
+    expect(ws().panes[0].tabs.map((t) => [t.kind, t.slug])).toEqual([["project", "a"], ["project", "b"], ["work", undefined]]);
+  });
 });

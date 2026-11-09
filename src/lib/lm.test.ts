@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { LmError, list, listArgs, read, run, searchArgs, setTransport, type Invoke } from "./lm";
+import { LmError, list, listArgs, openArgs, projectPlan, projects, projectsArgs, read, reviewArgs, run, searchArgs, setTransport, timelineArgs, type Invoke } from "./lm";
 
 afterEach(() => setTransport(invoke as Invoke));
 
@@ -45,5 +45,31 @@ describe("run", () => {
     expect(error).toBeInstanceOf(LmError);
     expect(error.stale).toBe(true);
     expect(error.message).toBe("Stale revision");
+  });
+
+  it("list can ask for summaries", () => {
+    expect(listArgs({ domain: "d", summary: true })).toEqual(["list", "--domain", "d", "--limit", "1000", "--with-summary", "--actor", "viewer"]);
+  });
+
+  it("projects, open, review and timeline read as viewer", () => {
+    expect(projectsArgs()).toEqual(["projects", "--actor", "viewer"]);
+    expect(projectsArgs({ status: "any" })).toEqual(["projects", "--status", "any", "--actor", "viewer"]);
+    expect(openArgs({ domain: "d", tags: ["project/a", "concern/x"], limit: 5 }))
+      .toEqual(["open", "--domain", "d", "--tag", "project/a", "--tag", "concern/x", "--limit", "5", "--actor", "viewer"]);
+    expect(openArgs({ allDomains: true, domain: "ignored" })).toEqual(["open", "--all-domains", "--actor", "viewer"]);
+    expect(reviewArgs({ allDomains: true, tags: ["project/a"] })).toEqual(["review", "--all-domains", "--tag", "project/a", "--actor", "viewer"]);
+    expect(reviewArgs({ domain: "d" })).toEqual(["review", "--domain", "d", "--actor", "viewer"]);
+    expect(timelineArgs({ ref: "d:abc", domain: "d", date: "2026-01-02", before: 3, after: 0, type: "bug", by: "created", all: true }))
+      .toEqual(["timeline", "d:abc", "--domain", "d", "--date", "2026-01-02", "--before", "3", "--after", "0", "--type", "bug", "--by", "created", "--all", "--actor", "viewer"]);
+    expect(timelineArgs({})).toEqual(["timeline", "--actor", "viewer"]);
+  });
+
+  it("project-plan is a write: stdin payload, no viewer flag", async () => {
+    const calls = fake({ exit_code: 0, result: { ok: true }, error: null });
+    await projectPlan("archive", { slug: "hive" });
+    expect(calls[0]).toEqual(["lm", { argv: ["project-plan", "archive"], stdin: JSON.stringify({ slug: "hive" }) }]);
+    const read = fake({ exit_code: 0, result: { ok: true, projects: [], warnings: [] }, error: null });
+    await projects({ status: "active" });
+    expect((read[0] as [string, { argv: string[] }])[1].argv).toEqual(["projects", "--status", "active", "--actor", "viewer"]);
   });
 });

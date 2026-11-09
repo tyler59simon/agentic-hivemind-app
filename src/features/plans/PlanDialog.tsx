@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { classify } from "../../lib/errors";
 import { applyPlan, inspectPlan, type Plan, type PlanInspection } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
+import { refreshStore } from "../../lib/refresh";
 import { Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 
@@ -45,7 +46,7 @@ export function PlanDialog({ title, intro, make, applyLabel = "Apply", danger, o
       const done = await applyPlan(plan);
       recordOperation(done.operation_id);
       done.warnings?.forEach((w) => toast(w, "warn"));
-      await client.invalidateQueries();
+      await refreshStore(client);
       onApplied?.(done.operation_id);
       onClose();
     } catch (e) {

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NewNote } from "../features/editor/NewNote";
 import { GraphView } from "../features/graph/GraphView";
+import { ProjectDashboard } from "../features/projects/ProjectDashboard";
+import { WorkView } from "../features/work/WorkView";
 import { ActivityView } from "../features/history/HistoryViews";
 import { TaxonomyView } from "../features/taxonomy/TaxonomyView";
 import { NoteTab } from "../features/editor/NoteTab";
@@ -14,11 +16,13 @@ export const TAB_VIEWS: Partial<Record<Tab["kind"], (tab: Tab) => ReactNode>> = 
   graph: () => <GraphView />,
   activity: () => <ActivityView />,
   taxonomy: () => <TaxonomyView />,
+  project: (tab) => <ProjectDashboard tab={tab} />,
+  work: () => <WorkView />,
 };
 
-const KIND_LABEL: Record<Tab["kind"], string> = { note: "Note", "new-note": "New note", graph: "Graph", activity: "Activity", taxonomy: "Tags" };
+const KIND_LABEL: Record<Tab["kind"], string> = { note: "Note", "new-note": "New note", graph: "Graph", activity: "Activity", taxonomy: "Tags", project: "Project", work: "Open work" };
 const label = (tab: Tab) => (tab.kind === "note" ? tab.title || tab.ref?.split(":")[1]?.slice(0, 8) || "Note"
-  : tab.kind === "new-note" ? tab.title || "New note" : KIND_LABEL[tab.kind]);
+  : tab.kind === "new-note" ? tab.title || "New note" : tab.kind === "project" ? tab.title ?? tab.slug ?? KIND_LABEL.project : KIND_LABEL[tab.kind]);
 
 /** Close a tab, asking first when it holds unsaved edits. */
 export function useCloseTab() {

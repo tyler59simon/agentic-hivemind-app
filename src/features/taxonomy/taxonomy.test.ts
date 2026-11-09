@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseTags, tagUsage } from "./taxonomy";
+import { facetsOf, parseTags, tagUsage } from "./taxonomy";
 
 describe("taxonomy", () => {
   it("counts usage per facet and finds unregistered tags", () => {
@@ -16,5 +16,19 @@ describe("taxonomy", () => {
   it("parses new tags and rejects what LM would", () => {
     expect(parseTags("Platform/Linux, technology/rust  concern/x")).toEqual({ tags: ["platform/linux", "technology/rust", "concern/x"], invalid: [] });
     expect(parseTags("misc/thing, subject/, nofacet").invalid).toEqual(["misc/thing", "subject/", "nofacet"]);
+  });
+
+  it("takes facets from the taxonomy, falling back to the built-ins plus project", () => {
+    expect(facetsOf({ facets: ["subject", "area"] })).toEqual(["subject", "area"]);
+    expect(facetsOf({})).toEqual(["subject", "concern", "platform", "technology", "project"]);
+    expect(parseTags("area/x", ["area"]).tags).toEqual(["area/x"]);
+  });
+
+  it("refuses new project/ tags", () => {
+    const r = parseTags("project/foo, concern/x");
+    expect(r.tags).toEqual(["concern/x"]);
+    expect(r.invalid).toEqual(["project/foo"]);
+    expect(r.error).toBe("Create a project instead of adding project/ tags here");
+    expect(parseTags("concern/x").error).toBeUndefined();
   });
 });

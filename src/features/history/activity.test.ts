@@ -40,4 +40,11 @@ describe("activity", () => {
     expect(dayLabel(new Date("2026-11-08T23:00:00").toISOString(), now)).toBe("Yesterday");
     expect(dayLabel(new Date("2026-11-01T08:00:00").toISOString(), now)).not.toMatch(/Today|Yesterday/);
   });
+
+  it("knows project plan kinds", () => {
+    expect(verbOf("project_create")).toBe("created project");
+    expect(verbOf("project_update")).toBe("updated project");
+    expect(verbOf("project_archive")).toBe("archived project");
+    expect(actorOf({ operation_id: "x", kind: "project_create" }, new Set()).label).toBe("Approved plan");
+  });
 });

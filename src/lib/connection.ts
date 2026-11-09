@@ -6,3 +6,6 @@ export const useConnection = create<{ commands: string[]; api: number; set: (v: 
   api: 0,
   set: (v) => set(v),
 }));
+
+/** Project command centers need an LM that has the `projects` command (API 2+). */
+export const useProjectsEnabled = () => useConnection((s) => s.api >= 2 && s.commands.includes("projects"));

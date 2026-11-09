@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 export const NOTE_TYPES = [
   "knowledge", "decision", "preference", "context", "status",
-  "bug", "plan", "risk", "research", "policy",
+  "bug", "plan", "risk", "research", "policy", "map",
 ] as const;
 export type NoteType = (typeof NOTE_TYPES)[number];
 export const STATUSES = ["active", "resolved", "archived", "superseded"] as const;
@@ -70,11 +70,12 @@ export const domains = () => run<Domains>(view(["domains"]));
 export interface NoteRow {
   ref: string; id: string; domain: string; title: string; type: NoteType; status: Status;
   tags: string[]; created: string; updated: string; revision: string; path: string;
+  summary?: string; files?: string[]; actions?: { open: number; done: number };
 }
 export interface ListPage { domains: string[]; total: number; offset: number; notes: NoteRow[] }
 export interface ListOptions {
   domain?: string; allDomains?: boolean; status?: Status | "any";
-  types?: NoteType[]; tags?: string[]; offset?: number; limit?: number;
+  types?: NoteType[]; tags?: string[]; offset?: number; limit?: number; summary?: boolean;
 }
 export function listArgs(o: ListOptions): string[] {
   const argv = ["list"];
@@ -85,6 +86,7 @@ export function listArgs(o: ListOptions): string[] {
   for (const t of o.tags ?? []) argv.push("--tag", t);
   if (o.offset) argv.push("--offset", String(o.offset));
   argv.push("--limit", String(o.limit ?? 1000));
+  if (o.summary) argv.push("--with-summary");
   return view(argv);
 }
 export const list = (o: ListOptions) => run<ListPage>(listArgs(o));
@@ -196,3 +198,68 @@ export interface LinkEdge { from: string; to: string; kind: "link" | "supersedes
 export interface LinkGraph { domains: string[]; nodes: LinkNode[]; edges: LinkEdge[]; unresolved: { from: string; target: string }[] }
 export const links = (o: { domain?: string; allDomains?: boolean; status?: "active" | "any" }) =>
   run<LinkGraph>(view(["links", ...(o.allDomains ? ["--all-domains"] : ["--domain", o.domain ?? ""]), "--status", o.status ?? "any"]));
+
+// ---- Projects, open work, review and timeline (LM api 2). ----
+
+export type ProjectStatus = "active" | "paused" | "archived";
+export interface Project {
+  slug: string; name: string; status: ProjectStatus; repos: string[]; aliases: string[]; description: string;
+  charter: string | null; created: string; updated: string; tag: string; tag_registered: boolean;
+}
+export interface ProjectsResult { ok: boolean; projects: Project[]; warnings: string[] }
+export const projectsArgs = (o: { status?: ProjectStatus | "any" } = {}) => view(["projects", ...(o.status ? ["--status", o.status] : [])]);
+export const projects = (o: { status?: ProjectStatus | "any" } = {}) => run<ProjectsResult>(projectsArgs(o));
+
+export interface ProjectCreate {
+  slug: string; name: string; repos: string[]; description?: string; aliases?: string[];
+  charter: { domain?: string; title?: string; body: string };
+}
+export interface ProjectUpdate {
+  slug: string; name?: string; repos?: string[]; aliases?: string[]; description?: string;
+  status?: ProjectStatus; charter?: string;
+}
+export const projectPlan = (action: "create" | "update" | "archive", payload: ProjectCreate | ProjectUpdate | { slug: string }) =>
+  run<Plan>(["project-plan", action], JSON.stringify(payload));
+
+interface ScopeOptions { domain?: string; allDomains?: boolean; tags?: string[]; limit?: number }
+function scopeArgs(name: string, o: ScopeOptions): string[] {
+  const argv = [name];
+  if (o.allDomains) argv.push("--all-domains");
+  else if (o.domain) argv.push("--domain", o.domain);
+  for (const t of o.tags ?? []) argv.push("--tag", t);
+  if (o.limit) argv.push("--limit", String(o.limit));
+  return view(argv);
+}
+
+export interface OpenItem { ref: string; short_ref: string; title: string; type: NoteType; updated: string; index: number; item: string }
+export interface OpenWork { ok: boolean; domain: string | null; notes: number; count: number; items: OpenItem[]; hint?: string }
+export const openArgs = (o: ScopeOptions) => scopeArgs("open", o);
+export const openWork = (o: ScopeOptions) => run<OpenWork>(openArgs(o));
+
+export interface ReviewRow {
+  ref: string; title: string; type: NoteType; updated: string;
+  review_by?: string; confirmed?: string; revision?: string; domain?: string;
+}
+export interface ReviewResult { ok: boolean; domain: string | null; due: number; notes: ReviewRow[]; hint?: string }
+export const reviewArgs = (o: ScopeOptions) => scopeArgs("review", o);
+export const review = (o: ScopeOptions) => run<ReviewResult>(reviewArgs(o));
+
+export interface TimelineRow { ref: string; short_ref: string; date: string; type: NoteType; title: string; status: string; anchor?: boolean }
+export interface TimelineResult { ok: boolean; domain: string; by: "updated" | "created"; anchor: string | null; notes: TimelineRow[] }
+export interface TimelineOptions {
+  domain?: string; ref?: string; date?: string; before?: number; after?: number;
+  type?: NoteType; by?: "updated" | "created"; all?: boolean;
+}
+export function timelineArgs(o: TimelineOptions): string[] {
+  const argv = ["timeline"];
+  if (o.ref) argv.push(o.ref);
+  if (o.domain) argv.push("--domain", o.domain);
+  if (o.date) argv.push("--date", o.date);
+  if (o.before !== undefined) argv.push("--before", String(o.before));
+  if (o.after !== undefined) argv.push("--after", String(o.after));
+  if (o.type) argv.push("--type", o.type);
+  if (o.by) argv.push("--by", o.by);
+  if (o.all) argv.push("--all");
+  return view(argv);
+}
+export const timeline = (o: TimelineOptions) => run<TimelineResult>(timelineArgs(o));

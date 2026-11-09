@@ -5,14 +5,15 @@ import type { NoteType } from "../lib/lm";
 import { prefs } from "../lib/prefs";
 
 export type Mode = "reading" | "live" | "source";
-export type TabKind = "note" | "new-note" | "graph" | "activity" | "taxonomy";
+export type TabKind = "note" | "new-note" | "graph" | "activity" | "taxonomy" | "project" | "work";
 export interface Tab {
   id: string;
   kind: TabKind;
   ref?: string;           // note tabs: domain:id
+  slug?: string;          // project tabs
   mode?: Mode;            // note tabs
   title?: string;         // last known title, for the tab strip
-  init?: { title?: string; type?: NoteType; domain?: string }; // new-note tabs
+  init?: { title?: string; type?: NoteType; domain?: string; tags?: string[] }; // new-note tabs
 }
 export interface Pane { id: string; tabs: Tab[]; active: string | null }
 export type Panel = "outline" | "backlinks" | "graph" | "history";
@@ -24,6 +25,7 @@ interface WorkspaceState {
   dirty: Record<string, boolean>;          // tab id -> unsaved edits (not persisted)
   reveal: { tabId: string; line: number; at: number } | null; // outline -> scroll request
   openNote: (ref: string, opts?: { split?: boolean; mode?: Mode; title?: string }) => void;
+  openProject: (slug: string, title?: string, opts?: { split?: boolean }) => void;
   openTab: (tab: Omit<Tab, "id">, opts?: { split?: boolean }) => void;
   activate: (paneId: string, tabId: string) => void;
   closeTab: (paneId: string, tabId: string) => void;
@@ -48,8 +50,8 @@ const safeStorage: StateStorage = {
   removeItem: (k) => { try { localStorage.removeItem(k); } catch { /* ignore */ } },
 };
 
-const sameTab = (a: Omit<Tab, "id">, b: Tab) =>
-  a.kind === b.kind && (a.kind === "note" ? a.ref === b.ref : a.kind !== "new-note");
+export const sameTab = (a: Omit<Tab, "id">, b: Tab) =>
+  a.kind === b.kind && (a.kind === "note" ? a.ref === b.ref : a.kind === "project" ? a.slug === b.slug : a.kind !== "new-note");
 
 export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
   const initial = firstPane();
@@ -89,6 +91,8 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
 
     openNote: (ref, opts = {}) =>
       get().openTab({ kind: "note", ref, mode: opts.mode ?? prefs.defaultMode(), title: opts.title }, { split: opts.split }),
+
+    openProject: (slug, title, opts = {}) => get().openTab({ kind: "project", slug, title }, opts),
 
     activate: (paneId, tabId) => { set({ focused: paneId }); withPane(paneId, (p) => ({ ...p, active: tabId })); },
 

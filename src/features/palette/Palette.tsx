@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { domains, list } from "../../lib/lm";
+import { refreshStore } from "../../lib/refresh";
 import { fuzzy } from "../../lib/text";
 import { useApp } from "../../store";
 import { useWorkspace } from "../../workspace/store";
@@ -41,7 +42,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "search", label: "Search notes", detail: "Ctrl+Shift+F", run: () => { app.setView("search"); close(); } },
       { key: "active", label: "Show active notes", run: () => { app.setView("notes"); app.setShelf("active"); close(); } },
       { key: "archive", label: "Show the archive", run: () => { app.setView("notes"); app.setShelf("archived"); close(); } },
-      { key: "refresh", label: "Refresh", run: () => { client.invalidateQueries(); close(); } },
+      { key: "refresh", label: "Refresh", run: () => { refreshStore(client); close(); } },
       { key: "reconnect", label: "Reconnect to Living Memory", run: () => { onReconnect(); close(); } },
       { key: "settings", label: "Settings", run: () => { onSettings(); close(); } },
       ...(known.data?.domains ?? []).map((d) => ({
