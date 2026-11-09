@@ -284,3 +284,14 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .quick-capture .actions { align-items: center; margin-top: auto; }
 .small-title { font-size: 18px; flex: none; }
 .field { display: flex; flex-direction: column; gap: 4px; }
+
+/* ---- Work (open work, review, timeline) ---- */
+.work { overflow: auto; height: 100%; }
+.work-list { padding: 8px 12px; display: flex; flex-direction: column; gap: 10px; }
+.work-group { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; background: var(--bg-alt); display: flex; flex-direction: column; gap: 4px; }
+.work-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.work-head.retired { opacity: .6; }
+.work-head .link-row { width: auto; font-weight: 600; }
+.work-item { display: flex; align-items: flex-start; gap: 8px; padding-left: 4px; }
+.work-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.work-day { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
