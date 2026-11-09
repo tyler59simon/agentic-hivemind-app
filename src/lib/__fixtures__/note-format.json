@@ -1,0 +1,120 @@
+{
+  "source": "core/note_format.py",
+  "cases": [
+    {
+      "name": "plain",
+      "body": "## 📌 Executive Summary\nThe cache is rebuildable.",
+      "sections": {
+        "summary": "The cache is rebuildable."
+      },
+      "actions": []
+    },
+    {
+      "name": "full",
+      "body": "## 📌 Executive Summary\nShort summary.\n\n---\n\n## 📝 Key Details\n* **Why:** speed\n\n## 🗂️ Resource Links\n* [[Other note]]\n\n## 🟩 Action Items\n- [ ] first\n- [x] second\n  - [ ] nested\n* [X] star bullet\n\n> ℹ️ **Important Note:**\n> careful",
+      "sections": {
+        "summary": "Short summary.",
+        "details": "* **Why:** speed",
+        "links": "* [[Other note]]",
+        "actions": "- [ ] first\n- [x] second\n  - [ ] nested\n* [X] star bullet",
+        "important": "careful"
+      },
+      "actions": [
+        [
+          false,
+          "first"
+        ],
+        [
+          true,
+          "second"
+        ],
+        [
+          false,
+          "nested"
+        ],
+        [
+          true,
+          "star bullet"
+        ]
+      ]
+    },
+    {
+      "name": "callout_ends_actions",
+      "body": "## 📌 Executive Summary\nS\n\n---\n\n## 🟩 Action Items\n- [ ] one\n\n> ℹ️ **Important Note:**\n> two\n\n- [ ] after callout",
+      "sections": {
+        "summary": "S",
+        "actions": "- [ ] one",
+        "important": "two"
+      },
+      "actions": [
+        [
+          false,
+          "one"
+        ]
+      ]
+    },
+    {
+      "name": "custom_sections",
+      "body": "## 📌 Executive Summary\nLead text.\n\n---\n\n## Notes\n- [ ] not an action item\n\n## 🟩 Action Items\n- [ ] real one\n\n## Later\n- [ ] not either",
+      "sections": {
+        "summary": "Lead text.",
+        "actions": "- [ ] real one"
+      },
+      "actions": [
+        [
+          false,
+          "real one"
+        ]
+      ]
+    },
+    {
+      "name": "fence_heading",
+      "body": "## 📌 Executive Summary\nS\n\n```md\n## Action Items\n- [ ] in a fence\n```\n\n---\n\n## 🟩 Action Items\n- [ ] real",
+      "sections": {
+        "summary": "S\n\n```md\n## Action Items\n- [ ] in a fence\n```",
+        "actions": "- [ ] real"
+      },
+      "actions": [
+        [
+          false,
+          "in a fence"
+        ],
+        [
+          false,
+          "real"
+        ]
+      ]
+    },
+    {
+      "name": "empty_sections",
+      "body": "## 📌 Executive Summary\nS",
+      "sections": {
+        "summary": "S"
+      },
+      "actions": []
+    },
+    {
+      "name": "crlf_and_rules",
+      "body": "## 📌 Executive Summary\nSummary line.\n\n---\n\n## 📝 Key Details\n* a\n* b",
+      "sections": {
+        "summary": "Summary line.",
+        "details": "* a\n* b"
+      },
+      "actions": []
+    },
+    {
+      "name": "quote_not_callout",
+      "body": "## 📌 Executive Summary\nS\n\n> just a quote\n\n---\n\n## 🟩 Action Items\n- [ ] x",
+      "sections": {
+        "summary": "S\n\n> just a quote",
+        "actions": "- [ ] x"
+      },
+      "actions": [
+        [
+          false,
+          "x"
+        ]
+      ]
+    }
+  ]
+}

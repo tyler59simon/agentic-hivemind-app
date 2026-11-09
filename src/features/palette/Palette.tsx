@@ -3,12 +3,17 @@ import { useEffect, useMemo, useState } from "react";
 import { domains, list } from "../../lib/lm";
 import { fuzzy } from "../../lib/text";
 import { useApp } from "../../store";
+import { useWorkspace } from "../../workspace/store";
 
 interface Entry { key: string; label: string; detail?: string; run: () => void }
+
+/** Extra commands registered by features (new note, graph, activity, tags…). */
+export const EXTRA_COMMANDS: { key: string; label: string; detail?: string; run: () => void }[] = [];
 
 /** Ctrl+O: jump to a note by title. Ctrl+P: run a command. */
 export function Palette({ onSettings, onReconnect }: { onSettings: () => void; onReconnect: () => void }) {
   const app = useApp();
+  const ws = useWorkspace();
   const client = useQueryClient();
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
@@ -20,12 +25,15 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
     if (app.palette === "notes") {
       return (notes.data?.notes ?? []).map((n) => ({
         key: n.ref, label: n.title, detail: `${n.domain} · ${n.type}`,
-        run: () => { app.setDomain(n.domain); app.setView("notes"); app.open(n.ref); },
+        run: () => { app.setDomain(n.domain); app.setPalette(null); ws.openNote(n.ref, { title: n.title }); },
       }));
     }
     const close = () => app.setPalette(null);
     return [
       { key: "go", label: "Go to note…", detail: "Ctrl+O", run: () => app.setPalette("notes") },
+      ...EXTRA_COMMANDS.map((c) => ({ ...c, run: () => { close(); c.run(); } })),
+      { key: "split", label: "Split pane", detail: "Ctrl+\\", run: () => { ws.split(); close(); } },
+      { key: "panel", label: ws.panel ? "Hide the right sidebar" : "Show the right sidebar", run: () => { ws.setPanel(ws.panel ? null : "outline"); close(); } },
       { key: "search", label: "Search notes", detail: "Ctrl+Shift+F", run: () => { app.setView("search"); close(); } },
       { key: "active", label: "Show active notes", run: () => { app.setView("notes"); app.setShelf("active"); close(); } },
       { key: "archive", label: "Show the archive", run: () => { app.setView("notes"); app.setShelf("archived"); close(); } },
@@ -37,7 +45,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
         run: () => { app.setDomain(d.name); close(); },
       })),
     ];
-  }, [app, notes.data, known.data, client, onSettings, onReconnect]);
+  }, [app, ws, notes.data, known.data, client, onSettings, onReconnect]);
 
   const shown = useMemo(() => entries
     .map((e) => ({ e, score: fuzzy(query, e.label) }))

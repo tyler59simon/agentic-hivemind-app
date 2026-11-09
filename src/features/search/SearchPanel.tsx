@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { NOTE_TYPES, search, STATUSES, taxonomy, type NoteType, type SearchOptions, type Status } from "../../lib/lm";
 import { highlight, shortDate, terms } from "../../lib/text";
 import { useApp } from "../../store";
+import { activeTab, useWorkspace } from "../../workspace/store";
+import { HoverPreview } from "../preview/HoverPreview";
 
 function useDebounced<T>(value: T, ms: number): T {
   const [settled, setSettled] = useState(value);
@@ -15,7 +17,9 @@ function Marked({ text, words }: { text: string; words: string[] }) {
 }
 
 export function SearchPanel() {
-  const { domain, open, selected } = useApp();
+  const { domain } = useApp();
+  const openNote = useWorkspace((s) => s.openNote);
+  const selected = useWorkspace((s) => activeTab(s)?.ref);
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<SearchOptions["scope"]>("fallback");
   const [type, setType] = useState<NoteType | undefined>();
@@ -61,8 +65,10 @@ export function SearchPanel() {
           const ref = `${hit.domain}:${hit.id}`;
           return (
             <li key={ref}>
-              <button className={`result ${selected === ref ? "on" : ""}`} onClick={() => open(ref)}>
-                <span className="result-title"><Marked text={hit.title} words={words} /></span>
+              <button className={`result ${selected === ref ? "on" : ""}`}
+                onClick={(e) => openNote(ref, { split: e.ctrlKey || e.metaKey, title: hit.title })}
+                onAuxClick={(e) => { if (e.button === 1) openNote(ref, { split: true, title: hit.title }); }}>
+                <HoverPreview refId={ref}><span className="result-title"><Marked text={hit.title} words={words} /></span></HoverPreview>
                 <span className="result-meta">
                   <span className={`badge type-${hit.type}`}>{hit.type}</span>
                   {hit.domain !== domain && <span className="tag">{hit.domain}</span>}

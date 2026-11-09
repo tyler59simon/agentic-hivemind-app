@@ -2,9 +2,13 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { domains, list, NOTE_TYPES, type NoteRow } from "../../lib/lm";
 import { useApp } from "../../store";
+import { activeTab, useWorkspace } from "../../workspace/store";
+import { HoverPreview } from "../preview/HoverPreview";
 
 export function Sidebar() {
-  const { domain, shelf, selected, setDomain, setShelf, open } = useApp();
+  const { domain, shelf, setDomain, setShelf } = useApp();
+  const openNote = useWorkspace((s) => s.openNote);
+  const selected = useWorkspace((s) => activeTab(s)?.ref);
   const known = useQuery({ queryKey: ["domains"], queryFn: domains });
   const notes = useQuery({
     queryKey: ["list", domain, shelf],
@@ -41,10 +45,14 @@ export function Sidebar() {
           <details key={type} open>
             <summary><span className={`badge type-${type}`}>{type}</span> <span className="muted">{rows.length}</span></summary>
             {rows.map((n) => (
-              <button key={n.ref} className={`tree-item ${selected === n.ref ? "on" : ""}`} onClick={() => open(n.ref)} title={n.title}>
-                {n.title}
-                {n.status !== "active" && <span className="muted"> · {n.status}</span>}
-              </button>
+              <HoverPreview key={n.ref} refId={n.ref}>
+                <button className={`tree-item ${selected === n.ref ? "on" : ""}`}
+                  onClick={(e) => openNote(n.ref, { split: e.ctrlKey || e.metaKey, title: n.title })}
+                  onAuxClick={(e) => { if (e.button === 1) openNote(n.ref, { split: true, title: n.title }); }}>
+                  {n.title}
+                  {n.status !== "active" && <span className="muted"> · {n.status}</span>}
+                </button>
+              </HoverPreview>
             ))}
           </details>
         ))}

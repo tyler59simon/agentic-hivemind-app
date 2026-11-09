@@ -89,8 +89,9 @@ export interface Note {
   confirmed?: string[]; supersedes?: string[]; superseded_by?: string; origin?: string;
   revision: string; body: string; truncated: boolean;
 }
-export const read = (ref: string, domain?: string) =>
-  run<Note>(view(["read", ref, "--max-chars", "64000", ...(domain ? ["--domain", domain] : [])]));
+/** LM's own default is 16,000 characters; Hivemind asks for the most it allows (64,000). */
+export const read = (ref: string, opts: { domain?: string; maxChars?: number } = {}) =>
+  run<Note>(view(["read", ref, "--max-chars", String(opts.maxChars ?? 64000), ...(opts.domain ? ["--domain", opts.domain] : [])]));
 
 export interface SearchHit {
   id: string; domain: string; title: string; type: NoteType; updated: string; tags: string[];
@@ -115,4 +116,74 @@ export function searchArgs(o: SearchOptions): string[] {
 }
 export const search = (o: SearchOptions) => run<SearchResult>(searchArgs(o));
 
-export const taxonomy = () => run<{ tags: string[] }>(view(["taxonomy"]));
+export const taxonomy = () => run<{ tags: string[]; facets?: string[] }>(view(["taxonomy"]));
+
+/** The domain part of a `domain:id` ref. */
+export const domainOf = (ref: string) => ref.slice(0, ref.indexOf(":"));
+
+// ---- Writes (main actor). Every write is journaled by LM; Hivemind logs the operation IDs it caused. ----
+
+export interface WriteResult {
+  ok: true; operation_id?: string; state?: string; id: string; status: string; domain?: string; ref?: string;
+  quality_warnings?: string[]; similar?: { ref: string; title: string }[]; inferred_tags?: string[];
+  redacted?: { kind: string; field: string }[]; warning?: string; hint?: string;
+}
+
+/** Fields `update` accepts; send only the ones that changed. */
+export interface UpdatePayload {
+  title?: string; body?: string; tags?: string[]; type?: NoteType; context?: string;
+  review_by?: string | null; files?: string[]; expected_revision?: string;
+}
+export const update = (ref: string, payload: UpdatePayload, opts: { redact?: boolean } = {}) =>
+  run<WriteResult>(["update", ref, "--domain", domainOf(ref), ...(opts.redact ? ["--redact"] : [])], JSON.stringify(payload));
+
+export interface CapturePayload {
+  title: string; body: string; tags: string[]; type: NoteType; context?: string; review_by?: string;
+  files?: string[]; supersedes?: string[]; allow_similar?: boolean; origin?: string;
+}
+/** Hivemind's own captures carry this origin (LM sets `<harness>:<hash>` only for agent sessions). */
+export const ORIGIN = "hivemind:local";
+export const capture = (domain: string, payload: CapturePayload, opts: { redact?: boolean } = {}) =>
+  run<WriteResult>(["capture", "--domain", domain, ...(opts.redact ? ["--redact"] : [])], JSON.stringify({ origin: ORIGIN, ...payload }));
+
+export const check = (ref: string, index: number, done: boolean) =>
+  run<WriteResult & { item: string; index: number; done: boolean; open: number }>(
+    ["check", ref, "--index", String(index), "--domain", domainOf(ref), ...(done ? [] : ["--undo"])]);
+
+export const confirm = (ref: string) =>
+  run<WriteResult & { confirmed?: string[]; review_by?: string }>(["confirm", ref, "--domain", domainOf(ref)]);
+
+// ---- Plans: make, inspect (as a diff), apply with the digest. ----
+
+export interface Plan { ok: true; plan_id: string; digest: string; kind: string; summary: Record<string, unknown> }
+export interface PlanEffect { path: string; expected_revision: string | null; action: "write" | "delete"; diff: string; truncated: boolean }
+export interface PlanInspection extends Plan { effects: PlanEffect[] }
+export type PlanAction = "archive" | "delete" | "resolve" | "reopen" | "rename" | "retag" | "update" | "supersede";
+
+export function plan(action: PlanAction, ref: string, payload?: object): Promise<Plan> {
+  const argv = ["plan", action, ref, "--domain", domainOf(ref)];
+  return run<Plan>(argv, payload ? JSON.stringify(payload) : undefined);
+}
+export const mergePlan = (payload: { target: string; sources: string[]; body: string }) =>
+  run<Plan>(["merge-plan"], JSON.stringify(payload));
+export const retagPlan = (renames: Record<string, string>) => run<Plan>(["retag-plan"], JSON.stringify(renames));
+export const taxonomyPlan = (tags: string[]) =>
+  run<Plan & { summary: { added: string[]; alternatives: Record<string, string[]> } }>(["taxonomy-plan", ...tags]);
+export const undo = (operationId: string) => run<Plan>(["undo", operationId]);
+export const inspectPlan = (planId: string) => run<PlanInspection>(view(["inspect-plan", planId]));
+export const applyPlan = (p: Pick<Plan, "plan_id" | "digest">) =>
+  run<{ ok: true; operation_id: string; state: string; idempotent: boolean; warnings?: string[] }>(
+    ["apply", p.plan_id, "--expected-plan-sha256", p.digest]);
+
+// ---- History and links (read-only). ----
+
+export interface Operation { operation_id: string; kind: string; state: string; created: string; files: string[] }
+export const history = (o: { note?: string; limit?: number } = {}) =>
+  run<Operation[]>(view(["history", ...(o.note ? ["--note", o.note] : []), "--limit", String(o.limit ?? 50)]));
+export const diff = (operationId: string) => run<{ path: string; diff: string }[]>(view(["diff", operationId]));
+
+export interface LinkNode { ref: string; id: string; domain: string; title: string; type: NoteType; status: Status; tags: string[] }
+export interface LinkEdge { from: string; to: string; kind: "link" | "supersedes" }
+export interface LinkGraph { domains: string[]; nodes: LinkNode[]; edges: LinkEdge[]; unresolved: { from: string; target: string }[] }
+export const links = (o: { domain?: string; allDomains?: boolean; status?: "active" | "any" }) =>
+  run<LinkGraph>(view(["links", ...(o.allDomains ? ["--all-domains"] : ["--domain", o.domain ?? ""]), "--status", o.status ?? "any"]));

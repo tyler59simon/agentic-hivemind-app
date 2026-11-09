@@ -6,9 +6,13 @@ import { Sidebar } from "./features/library/Sidebar";
 import { Palette } from "./features/palette/Palette";
 import { SearchPanel } from "./features/search/SearchPanel";
 import { SettingsForm } from "./features/settings/SettingsForm";
-import { NoteView } from "./features/viewer/NoteView";
+import { useConnection } from "./lib/connection";
 import { connect, domains } from "./lib/lm";
 import { useApp } from "./store";
+import { Toasts } from "./ui/toast";
+import { RightSidebar } from "./workspace/RightSidebar";
+import { useWorkspace } from "./workspace/store";
+import { Workspace } from "./workspace/Workspace";
 
 function useShortcuts() {
   const { setPalette, setView } = useApp();
@@ -41,8 +45,11 @@ export default function App() {
   const [settings, setSettings] = useState(false);
   const link = useQuery({ queryKey: ["connect"], queryFn: connect, retry: false, staleTime: Infinity });
   const known = useQuery({ queryKey: ["domains"], queryFn: domains, enabled: link.isSuccess });
+  const panel = useWorkspace((s) => s.panel);
+  const setPanel = useWorkspace((s) => s.setPanel);
   useShortcuts();
   useLiveRefresh(link.isSuccess);
+  useEffect(() => { if (link.data) useConnection.getState().set(link.data.version); }, [link.data]);
 
   // Start on the largest bound domain once domains are known.
   useEffect(() => {
@@ -77,18 +84,15 @@ export default function App() {
         </div>
         <button className="ghost" onClick={() => app.setPalette("commands")} title="Command palette (Ctrl+P)">Commands</button>
         <span className="muted small" title={link.data!.script}>{link.data!.root}</span>
+        <button className={`ghost ${panel ? "on" : ""}`} onClick={() => setPanel(panel ? null : "outline")} title="Right sidebar">Panels</button>
       </header>
-      <div className="panes">
+      <div className={`layout ${panel ? "with-right" : ""}`}>
         {app.view === "notes" ? <Sidebar /> : <SearchPanel />}
-        <main className="content">
-          {app.selected ? <NoteView refId={app.selected} /> : (
-            <div className="center muted">
-              <p>Select a note, or press <kbd>Ctrl</kbd>+<kbd>O</kbd> to jump to one.</p>
-            </div>
-          )}
-        </main>
+        <Workspace />
+        {panel && <RightSidebar />}
       </div>
       <Palette onSettings={() => setSettings(true)} onReconnect={reconnect} />
+      <Toasts />
     </div>
   );
 }
