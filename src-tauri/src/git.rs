@@ -54,7 +54,7 @@ pub fn parse_log(text: &str) -> Vec<Commit> {
         .collect()
 }
 
-fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<String> {
+pub fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<String> {
     std::thread::spawn(move || {
         let mut buf = Vec::new();
         if let Some(mut p) = pipe {
@@ -65,7 +65,7 @@ fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<S
 }
 
 /// Run a command, returning stdout. Kills it after `timeout`; non-zero exit is an error.
-fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<String, String> {
+pub fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<String, String> {
     command
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null())

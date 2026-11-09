@@ -15,11 +15,23 @@ pub struct Settings {
     pub capture_shortcut: Option<String>,
     /// Closing the main window hides it to the tray (default on) so the hotkey keeps working.
     pub close_to_tray: Option<bool>,
+    /// The Claude Code program for agent sessions; None looks in the usual places.
+    pub claude_path: Option<String>,
+    /// Spending limit for one agent session, in US dollars; None means the default.
+    pub agent_budget_usd: Option<f64>,
+    /// Folder of the Architecture Suite plugin, for when Claude Code does not have it installed.
+    pub architecture_suite_plugin: Option<String>,
 }
 
 pub const DEFAULT_CAPTURE_SHORTCUT: &str = "CommandOrControl+Alt+M";
+pub const DEFAULT_AGENT_BUDGET_USD: f64 = 5.0;
 
 impl Settings {
+    /// The spending limit to give an agent session.
+    pub fn agent_budget_usd(&self) -> f64 {
+        self.agent_budget_usd.filter(|usd| usd.is_finite() && *usd > 0.0).unwrap_or(DEFAULT_AGENT_BUDGET_USD)
+    }
+
     /// The hotkey to register, or None when the user turned it off.
     pub fn capture_shortcut(&self) -> Option<String> {
         match self.capture_shortcut.as_deref().map(str::trim) {
@@ -115,6 +127,17 @@ mod tests {
         // Settings files from before these fields existed still load.
         let old: Settings = serde_json::from_str(r#"{"python":null,"script":null,"root":null}"#).unwrap();
         assert_eq!(old.close_to_tray, None);
+        assert_eq!((old.claude_path, old.agent_budget_usd, old.architecture_suite_plugin), (None, None, None));
+    }
+
+    #[test]
+    fn agent_budget_defaults_unless_positive() {
+        let with = |usd: Option<f64>| Settings { agent_budget_usd: usd, ..Default::default() }.agent_budget_usd();
+        assert_eq!(with(None), DEFAULT_AGENT_BUDGET_USD);
+        assert_eq!(with(Some(0.0)), DEFAULT_AGENT_BUDGET_USD);
+        assert_eq!(with(Some(-2.0)), DEFAULT_AGENT_BUDGET_USD);
+        assert_eq!(with(Some(f64::NAN)), DEFAULT_AGENT_BUDGET_USD);
+        assert_eq!(with(Some(12.5)), 12.5);
     }
 
     #[test]

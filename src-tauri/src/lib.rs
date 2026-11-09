@@ -1,3 +1,4 @@
+mod agent;
 mod architecture;
 mod bridge;
 mod capture;
@@ -18,6 +19,7 @@ struct AppState {
     bridge: Arc<Bridge>,
     settings_path: PathBuf,
     drafts_dir: PathBuf,
+    agents: agent::Manager,
     watcher: Mutex<Option<notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>>,
     /// Why the quick-capture hotkey could not be registered, for the settings screen.
     shortcut_error: Mutex<Option<String>>,
@@ -106,6 +108,39 @@ async fn system_diagram(state: State<'_, AppState>, slug: String, path: String) 
     blocking(move || architecture::diagram_for_system(&bridge, &slug, &path)).await
 }
 
+/// The coding-agent CLI a session would launch, or why there is none.
+#[tauri::command]
+async fn agent_available(state: State<'_, AppState>) -> Result<String, String> {
+    let path = state.settings_path.clone();
+    blocking(move || agent::claude::available(&settings::load(&path))).await
+}
+
+/// Start an agent session for a task; what it may touch is worked out here, not by the webview.
+#[tauri::command]
+async fn agent_start(state: State<'_, AppState>, task: agent::scope::AgentTask, prompt: String) -> Result<agent::SessionInfo, String> {
+    let (agents, bridge, path) = (state.agents.clone(), state.bridge.clone(), state.settings_path.clone());
+    blocking(move || agent::start_task(&agents, &bridge, &settings::load(&path), task, &prompt)).await
+}
+
+#[tauri::command]
+async fn agent_cancel(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    let agents = state.agents.clone();
+    blocking(move || agents.cancel(&session_id)).await
+}
+
+/// Every agent session, newest first.
+#[tauri::command]
+fn agent_sessions(state: State<'_, AppState>) -> Result<Vec<agent::SessionInfo>, String> {
+    Ok(state.agents.sessions())
+}
+
+/// One session and its events from `from_seq` on, rebuilt from its stored log.
+#[tauri::command]
+async fn agent_session(state: State<'_, AppState>, session_id: String, from_seq: u64) -> Result<agent::SessionLog, String> {
+    let agents = state.agents.clone();
+    blocking(move || agents.session(&session_id, from_seq)).await
+}
+
 #[tauri::command]
 fn get_settings(state: State<'_, AppState>) -> Settings {
     settings::load(&state.settings_path)
@@ -175,6 +210,7 @@ pub fn run() {
         .setup(|app| {
             let settings_path = app.path().app_config_dir()?.join("settings.json");
             let drafts_dir = app.path().app_data_dir()?.join("drafts");
+            let sessions_dir = app.path().app_data_dir()?.join("agent-sessions");
             let saved = settings::load(&settings_path);
             let launch = settings::resolve(&saved, |k| std::env::var(k).ok());
             // A taken or invalid hotkey must not stop the app; the settings screen shows why.
@@ -182,10 +218,22 @@ pub fn run() {
             if let Err(e) = capture::tray(app.handle()) {
                 eprintln!("Hivemind: no tray icon ({e})");
             }
+            let events = app.handle().clone();
+            let agents = agent::Manager::new(
+                sessions_dir,
+                Arc::new(agent::claude::ClaudeCode),
+                Arc::new(move |emit| {
+                    let _ = match emit {
+                        agent::Emit::Event(event) => events.emit("agent-event", event),
+                        agent::Emit::SessionsChanged => events.emit("agent-sessions-changed", ()),
+                    };
+                }),
+            );
             app.manage(AppState {
                 bridge: Arc::new(Bridge::new(launch)),
                 settings_path,
                 drafts_dir,
+                agents,
                 watcher: Mutex::new(None),
                 shortcut_error: Mutex::new(shortcut_error),
             });
@@ -198,8 +246,17 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            lm, connect, git_activity, system_architecture, system_diagram, get_settings, save_settings, capture_status, show_main, draft_put, draft_get, draft_delete, draft_list
+            lm, connect, git_activity, system_architecture, system_diagram, get_settings, save_settings, capture_status, show_main, draft_put, draft_get, draft_delete, draft_list,
+            agent_available, agent_start, agent_cancel, agent_sessions, agent_session
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            // An agent session must not outlive the app that started it.
+            if let tauri::RunEvent::Exit = event
+                && let Some(state) = app.try_state::<AppState>()
+            {
+                state.agents.stop_all();
+            }
+        });
 }
