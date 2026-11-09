@@ -1,10 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
+import { useProjectsEnabled } from "../../lib/connection";
 import { domains, list } from "../../lib/lm";
 import { refreshStore } from "../../lib/refresh";
 import { fuzzy } from "../../lib/text";
 import { useApp } from "../../store";
 import { useWorkspace } from "../../workspace/store";
+import { useProjectIntent } from "../projects/intent";
+import { projectsQuery } from "../projects/useProject";
 
 interface Entry { key: string; label: string; detail?: string; run: () => void }
 
@@ -20,6 +23,8 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
   const [index, setIndex] = useState(0);
   const notes = useQuery({ queryKey: ["list", "*"], queryFn: () => list({ allDomains: true }), enabled: app.palette === "notes" });
   const known = useQuery({ queryKey: ["domains"], queryFn: domains, enabled: app.palette === "commands" });
+  const projectsOn = useProjectsEnabled();
+  const registry = useQuery({ ...projectsQuery(), enabled: projectsOn && app.palette === "commands" });
   useEffect(() => { setQuery(""); setIndex(0); }, [app.palette]);
 
   const entries = useMemo<Entry[]>(() => {
@@ -36,6 +41,15 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "graph", label: "Open the graph", detail: "Ctrl+G", run: () => { close(); ws.openTab({ kind: "graph" }); } },
       { key: "activity", label: "Recent activity (who changed what)", detail: "Ctrl+Shift+A", run: () => { close(); ws.openTab({ kind: "activity" }); } },
       { key: "tags", label: "Manage tags", run: () => { close(); ws.openTab({ kind: "taxonomy" }); } },
+      { key: "work", label: "Open work", run: () => { close(); ws.openTab({ kind: "work" }); } },
+      { key: "review", label: "Review due", run: () => { close(); ws.openTab({ kind: "work" }); } },
+      ...(projectsOn ? [
+        { key: "new-project", label: "New project…", run: () => { close(); app.setView("projects"); useProjectIntent.getState().openWizard(); } },
+        ...(registry.data?.projects ?? []).filter((p) => p.status === "active").map((p) => ({
+          key: "project:" + p.slug, label: `Open project: ${p.name}`, detail: p.tag,
+          run: () => { close(); ws.openProject(p.slug, p.name); },
+        })),
+      ] : []),
       ...EXTRA_COMMANDS.map((c) => ({ ...c, run: () => { close(); c.run(); } })),
       { key: "split", label: "Split pane", detail: "Ctrl+\\", run: () => { ws.split(); close(); } },
       { key: "panel", label: ws.panel ? "Hide the right sidebar" : "Show the right sidebar", run: () => { ws.setPanel(ws.panel ? null : "outline"); close(); } },
@@ -50,7 +64,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
         run: () => { app.setDomain(d.name); close(); },
       })),
     ];
-  }, [app, ws, notes.data, known.data, client, onSettings, onReconnect]);
+  }, [app, ws, notes.data, known.data, registry.data, projectsOn, client, onSettings, onReconnect]);
 
   const shown = useMemo(() => entries
     .map((e) => ({ e, score: fuzzy(query, e.label) }))

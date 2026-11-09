@@ -10,17 +10,28 @@ import { recordOperation } from "../../lib/oplog";
 import { shortDate } from "../../lib/text";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
+import { useProjectsEnabled } from "../../lib/connection";
 import { useNoteLinks, type NoteLinks } from "../links/useLinks";
+import { projectsQuery } from "../projects/useProject";
 import { HoverPreview } from "../preview/HoverPreview";
 import { remarkWikilinks, WIKI_PREFIX } from "./remarkWikilinks";
 
 export const noteQuery = (ref: string) => ({ queryKey: ["note", ref], queryFn: () => read(ref) });
 
 function Properties({ note }: { note: Note }) {
+  const enabled = useProjectsEnabled();
+  const registry = useQuery({ ...projectsQuery(), enabled });
+  const openProject = useWorkspace((s) => s.openProject);
+  const tagChip = (t: string) => {
+    const project = t.startsWith("project/") ? registry.data?.projects.find((p) => p.tag === t) : undefined;
+    return project
+      ? <button key={t} className="chip project" title={`Open project ${project.name}`} onClick={() => openProject(project.slug, project.name)}>{project.name}</button>
+      : <span key={t} className="tag">{t}</span>;
+  };
   const rows: [string, ReactNode][] = [
     ["Type", <span className={`badge type-${note.type}`}>{note.type}</span>],
     ["Status", <span className={`badge status-${note.status}`}>{note.status}</span>],
-    ["Tags", <span className="tags">{note.tags.map((t) => <span key={t} className="tag">{t}</span>)}</span>],
+    ["Tags", <span className="tags">{note.tags.map(tagChip)}</span>],
     ["Domain", note.domain],
     ["Created", shortDate(note.created)],
     ["Updated", shortDate(note.updated)],
