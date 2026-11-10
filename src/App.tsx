@@ -5,35 +5,34 @@ import { Confirm } from "./ui/Modal";
 import { useCallback, useEffect, useState } from "react";
 import "./App.css";
 import logo from "./assets/logo.png";
-import { Sidebar } from "./features/library/Sidebar";
-import { ProjectsNav } from "./features/projects/ProjectsNav";
 import { Palette } from "./features/palette/Palette";
-import { SearchPanel } from "./features/search/SearchPanel";
 import { SettingsForm } from "./features/settings/SettingsForm";
-import { SystemsNav } from "./features/systems/SystemsNav";
-import { sessionsQuery } from "./lib/agent";
-import { useConnection, useProjectsEnabled, useSystemsEnabled } from "./lib/connection";
 import { captureStatus, connect, domains } from "./lib/lm";
+import { useConnection } from "./lib/connection";
 import { refreshStore } from "./lib/refresh";
+import { Shell } from "./shell/Shell";
 import { useApp } from "./store";
 import { Toasts } from "./ui/toast";
-import { RightSidebar } from "./workspace/RightSidebar";
 import { useWorkspace } from "./workspace/store";
-import { Workspace } from "./workspace/Workspace";
 
+/** Shortcuts that work on every page. Ctrl+K and Ctrl+Shift+F belong to the top bar's search; tab ones to the open notes. */
 function useShortcuts() {
-  const { setPalette, setView } = useApp();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const { setPalette, go, goBack } = useApp.getState();
+      if (e.altKey && e.key === "ArrowLeft") { e.preventDefault(); goBack(); return; }
       if (!(e.ctrlKey || e.metaKey)) return;
       const key = e.key.toLowerCase();
       if (key === "p" && !e.shiftKey) { e.preventDefault(); setPalette("commands"); }
       else if (key === "o") { e.preventDefault(); setPalette("notes"); }
-      else if (key === "f" && e.shiftKey) { e.preventDefault(); setView("search"); }
+      else if (key === "n" && !e.shiftKey) { e.preventDefault(); useWorkspace.getState().openTab({ kind: "new-note" }); }
+      else if (key === "g" && !e.shiftKey) { e.preventDefault(); go({ page: "memory", view: "graph" }); }
+      else if (key === "a" && e.shiftKey) { e.preventDefault(); go({ page: "memory", view: "activity" }); }
+      else if (key === "w") e.preventDefault(); // closes a note tab when notes are shown; never the window
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [setPalette, setView]);
+  }, []);
 }
 
 /** Closing the window hides it to the tray when that is on (the quick-capture hotkey keeps working);
@@ -82,12 +81,6 @@ export default function App() {
   const [settings, setSettings] = useState(false);
   const link = useQuery({ queryKey: ["connect"], queryFn: connect, retry: false, staleTime: Infinity });
   const known = useQuery({ queryKey: ["domains"], queryFn: domains, enabled: link.isSuccess });
-  const projectsOn = useProjectsEnabled();
-  const systemsOn = useSystemsEnabled();
-  const sessions = useQuery({ ...sessionsQuery(), enabled: link.isSuccess && systemsOn });
-  const running = sessions.data?.find((s) => s.status === "running");
-  const panel = useWorkspace((s) => s.panel);
-  const setPanel = useWorkspace((s) => s.setPanel);
   useShortcuts();
   useLiveRefresh(link.isSuccess);
   const closeGuard = useCloseGuard();
@@ -117,34 +110,11 @@ export default function App() {
   }
 
   return (
-    <div className="shell">
-      <header className="topbar">
-        <strong>Hivemind</strong>
-        <div className="tabs">
-          <button className={app.view === "notes" ? "on" : ""} onClick={() => app.setView("notes")}>Notes</button>
-          <button className={app.view === "search" ? "on" : ""} onClick={() => app.setView("search")}>Search</button>
-          {projectsOn && <button className={app.view === "projects" ? "on" : ""} onClick={() => app.setView("projects")}>Projects</button>}
-          {systemsOn && <button className={app.view === "systems" ? "on" : ""} onClick={() => app.setView("systems")}>Systems</button>}
-        </div>
-        <button className="ghost" onClick={() => useWorkspace.getState().openTab({ kind: "work" })} title="Open checklist items across notes">Open work</button>
-        <button className="ghost" onClick={() => useWorkspace.getState().openTab({ kind: "graph" })} title="Graph of all notes (Ctrl+G)">Graph</button>
-        <button className="ghost" onClick={() => useWorkspace.getState().openTab({ kind: "activity" })} title="Who changed what (Ctrl+Shift+A)">Activity</button>
-        <button className="ghost" onClick={() => useWorkspace.getState().openTab({ kind: "taxonomy" })} title="Manage tags">Tags</button>
-        {systemsOn && (running
-          ? <button className="ghost on" onClick={() => useWorkspace.getState().openSession(running.id, running.title)} title={`An agent session is running: ${running.title}`}>● Agent running</button>
-          : <button className="ghost" onClick={() => useWorkspace.getState().openTab({ kind: "sessions" })} title="Agent sessions started from Hivemind">Sessions</button>)}
-        <button className="ghost" onClick={() => app.setPalette("commands")} title="Command palette (Ctrl+P)">Commands</button>
-        <span className="muted small" title={link.data!.script}>{link.data!.root}</span>
-        <button className={`ghost ${panel ? "on" : ""}`} onClick={() => setPanel(panel ? null : "outline")} title="Right sidebar">Panels</button>
-      </header>
-      <div className={`layout ${panel ? "with-right" : ""}`}>
-        {app.view === "notes" ? <Sidebar /> : app.view === "projects" ? <ProjectsNav /> : app.view === "systems" ? <SystemsNav /> : <SearchPanel />}
-        <Workspace />
-        {panel && <RightSidebar />}
-      </div>
+    <>
+      <Shell info={link.data!} onSettings={() => setSettings(true)} onReconnect={reconnect} />
       <Palette onSettings={() => setSettings(true)} onReconnect={reconnect} />
       <Toasts />
       {closeGuard}
-    </div>
+    </>
   );
 }

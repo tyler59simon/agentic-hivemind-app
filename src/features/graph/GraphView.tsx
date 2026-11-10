@@ -6,13 +6,13 @@ import { useWorkspace } from "../../workspace/store";
 import { GraphCanvas } from "./GraphCanvas";
 import { filterGraph, TYPE_COLORS } from "./graphData";
 
-/** The whole store as a graph: [[links]] and supersedes between notes, coloured by type. */
-export function GraphView() {
+/** The whole store as a graph: [[links]] and supersedes between notes, coloured by type. `tag` starts the tag filter (the picked project). */
+export function GraphView({ tag: initialTag = "" }: { tag?: string }) {
   const supported = useConnection((c) => c.commands.includes("links"));
   const openNote = useWorkspace((s) => s.openNote);
   const [domain, setDomain] = useState("");
   const [types, setTypes] = useState<NoteType[]>([]);
-  const [tag, setTag] = useState("");
+  const [tag, setTag] = useState(initialTag);
   const [retired, setRetired] = useState(false);
   const known = useQuery({ queryKey: ["domains"], queryFn: domains });
   const tags = useQuery({ queryKey: ["taxonomy"], queryFn: taxonomy });

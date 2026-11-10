@@ -1,29 +1,32 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Ellipsis, MessageCircle, Plus } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { agentAvailable, agentStart, sessionsQuery, type SessionInfo } from "../../lib/agent";
+import { agentAvailable, agentStart } from "../../lib/agent";
+import { useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { systemPlan, type NoteRow, type System } from "../../lib/lm";
 import { sections } from "../../lib/note";
 import { refreshStore } from "../../lib/refresh";
 import { shortDate } from "../../lib/text";
+import { openSession, openSystem, useApp } from "../../store";
+import { Menu } from "../../ui/Menu";
 import { Modal } from "../../ui/Modal";
+import { PageHeader, Section, Split } from "../../ui/Page";
 import { toast } from "../../ui/toast";
-import { useWorkspace, type Tab } from "../../workspace/store";
+import { useWorkspace } from "../../workspace/store";
 import { PlanDialog } from "../plans/PlanDialog";
-import { Card, NoteLink } from "../projects/ProjectDashboard";
+import { NoteLink } from "../preview/NoteLink";
+import { systemsForProject } from "../projects/scope";
+import { useCurrentProject } from "../projects/useProject";
 import { buildBrief } from "./brief";
-import { cloudResources, diagramList, externalSystems, interfaces, passportSections, proposalOf, proposedUpdate, techStack, type DiagramEntry } from "./passport";
+import { cloudResources, diagramList, externalSystems, interfaces, passportSections, techStack, type DiagramEntry } from "./passport";
 import { SystemWizard } from "./SystemWizard";
-import { useDiagram, useSystem } from "./useSystem";
+import { systemsQuery, useDiagram, useSystem, useSystemIntent, useSystemProposal } from "./useSystem";
 
 const oneLine = (text?: string) => (text ?? "").replace(/\s+/g, " ").trim();
 const MAX_ROWS = 40;
-const DISMISSED = "hivemind.system-proposals-dismissed";
-
-const dismissedProposals = (): string[] => { try { return JSON.parse(localStorage.getItem(DISMISSED) ?? "[]"); } catch { return []; } };
-const dismissProposal = (sessionId: string) => { try { localStorage.setItem(DISMISSED, JSON.stringify([...dismissedProposals(), sessionId].slice(-50))); } catch { /* not persisted */ } };
 
 function NoteList({ rows, badge }: { rows: NoteRow[]; badge?: boolean }) {
   return (
@@ -48,14 +51,11 @@ function NoteList({ rows, badge }: { rows: NoteRow[]; badge?: boolean }) {
 function AgentActions({ system, all }: { system: System; all: System[] }) {
   const client = useQueryClient();
   const available = useQuery({ queryKey: ["agent", "available"], queryFn: agentAvailable, retry: false, staleTime: 60_000 });
-  const sessions = useQuery(sessionsQuery());
-  const mine = (sessions.data ?? []).filter((s) => s.task.kind === "system_passport" && s.task.slug === system.slug);
-  const latest: SessionInfo | undefined = mine[0];
+  const { latest, update, fields, dismiss } = useSystemProposal(system, all);
   const running = latest?.status === "running";
   const [starting, setStarting] = useState(false);
   const [fallback, setFallback] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState(false);
-  const [dismissed, setDismissed] = useState(dismissedProposals);
 
   // When a session for this system ends, its folder and notes have changed.
   const was = useRef(latest?.status);
@@ -66,12 +66,6 @@ function AgentActions({ system, all }: { system: System; all: System[] }) {
     }
     was.current = latest?.status;
   }, [latest?.status, latest, client, system.slug]);
-
-  const proposer = mine.find((s) => s.status === "succeeded");
-  const update = useMemo(
-    () => (proposer && !dismissed.includes(proposer.id) ? proposedUpdate(system, proposalOf(proposer.structured), all.map((s) => s.slug)) : null),
-    [proposer, dismissed, system, all],
-  );
 
   const blocked = !system.repos.length ? "Add a repository to this system first."
     : !system.architecture ? "Set an architecture folder for this system first."
@@ -85,7 +79,7 @@ function AgentActions({ system, all }: { system: System; all: System[] }) {
     try {
       const info = await agentStart({ kind: "system_passport", slug: system.slug }, brief());
       client.invalidateQueries({ queryKey: ["agent", "sessions"] });
-      useWorkspace.getState().openSession(info.id, info.title);
+      openSession(info.id);
     } catch (e) {
       toast(String(e), "error");
     } finally { setStarting(false); }
@@ -98,22 +92,23 @@ function AgentActions({ system, all }: { system: System; all: System[] }) {
     <>
       <div className="agent-line">
         <button className="primary" disabled={!!blocked || starting} title={blocked ?? "Run Claude Code in the background to generate the architecture output"} onClick={start}>
-          {starting ? "Starting…" : "Generate with agent"}
+          <MessageCircle size="1.15em" aria-hidden />{starting ? "Starting…" : "Generate with agent"}
         </button>
         <button onClick={copy} title="Copy the same instructions to paste into an agent yourself">Copy agent brief</button>
         {latest && (
-          <button className="link" onClick={() => useWorkspace.getState().openSession(latest.id, latest.title)}>
+          <button className="link" onClick={() => openSession(latest.id)}>
             Last session: {latest.status} · {new Date(latest.startedAt).toISOString().slice(0, 10)}
           </button>
         )}
         {blocked && !running && <span className="muted small">{blocked}</span>}
       </div>
-      {update && proposer && (
+      {update && (
         <div className="banner">
-          The last agent session proposed changes to {Object.keys(update).filter((k) => k !== "slug").join(", ").replace(/_/g, " ")}.
-          <span className="tabbar-fill" />
-          <button className="primary" onClick={() => setReviewing(true)}>Review…</button>
-          <button className="ghost" onClick={() => { dismissProposal(proposer.id); setDismissed(dismissedProposals()); }}>Dismiss</button>
+          The last agent session proposed changes to {fields}.
+          <div className="actions">
+            <button className="primary" onClick={() => setReviewing(true)}>Review…</button>
+            <button className="ghost" onClick={dismiss}>Dismiss</button>
+          </div>
         </div>
       )}
       {reviewing && update && (
@@ -133,44 +128,6 @@ function AgentActions({ system, all }: { system: System; all: System[] }) {
   );
 }
 
-function Overview({ system, all, summary }: { system: System; all: System[]; summary?: string }) {
-  const [editing, setEditing] = useState(false);
-  const [retiring, setRetiring] = useState(false);
-  return (
-    <section className="dash-card overview">
-      <header className="card-head">
-        <h2>{system.name}</h2>
-        <span className={`badge status-${system.status}`}>{system.status}</span>
-        <span className="tabbar-fill" />
-        <div className="card-actions">
-          {system.passport && <button onClick={() => useWorkspace.getState().openNote(system.passport!, { title: `${system.name} passport` })}>Open passport note</button>}
-          <button onClick={() => useWorkspace.getState().openTab({ kind: "new-note", init: { tags: [system.tag] } })}>New note</button>
-          <button onClick={() => setEditing(true)}>Edit</button>
-          {system.status !== "retired" && <button onClick={() => setRetiring(true)}>Retire…</button>}
-        </div>
-      </header>
-      <div className="card-body overview-body">
-        {system.description ? <p className="project-desc">{system.description}</p> : <p className="muted small">No purpose recorded yet.</p>}
-        {!!system.capabilities.length && <ul className="capabilities">{system.capabilities.map((c) => <li key={c}>{c}</li>)}</ul>}
-        <div className="row-line">
-          <span className="muted small">Owners</span>
-          {system.owners.length ? <span className="chips">{system.owners.map((o) => <span key={o} className="chip">{o}</span>)}</span> : <span className="muted small">none recorded</span>}
-        </div>
-        {!!system.repos.length && <div className="repo-list">{system.repos.map((r) => <code key={r}>{r}</code>)}</div>}
-        {summary && summary.trim() !== system.description.trim() && <div className="markdown small"><Markdown remarkPlugins={[remarkGfm]}>{summary}</Markdown></div>}
-        <AgentActions system={system} all={all} />
-      </div>
-      {editing && <SystemWizard mode="edit" system={system} onClose={() => setEditing(false)} />}
-      {retiring && (
-        <PlanDialog title={`Retire ${system.name}`} applyLabel="Retire" danger
-          intro={<p>The system is marked retired. Its notes, tag and architecture folder stay in place.</p>}
-          make={() => systemPlan("retire", { slug: system.slug })}
-          onApplied={() => { toast(`Retired ${system.name}`); setRetiring(false); }} onClose={() => setRetiring(false)} />
-      )}
-    </section>
-  );
-}
-
 function SystemChips({ slugs, all, empty }: { slugs: string[]; all: System[]; empty: string }) {
   if (!slugs.length) return <span className="muted small">{empty}</span>;
   return (
@@ -178,7 +135,7 @@ function SystemChips({ slugs, all, empty }: { slugs: string[]; all: System[]; em
       {slugs.map((slug) => {
         const found = all.find((s) => s.slug === slug);
         return (
-          <button key={slug} className="chip project" title={found?.description || slug} onClick={() => useWorkspace.getState().openSystem(slug, found?.name)}>
+          <button key={slug} className="chip project" title={found?.description || slug} onClick={() => openSystem(slug)}>
             {found?.name ?? slug}{found && found.status !== "active" ? ` (${found.status})` : ""}
           </button>
         );
@@ -216,14 +173,12 @@ function Diagrams({ slug, entries, version }: { slug: string; entries: DiagramEn
   );
 }
 
-export function SystemPassport({ tab }: { tab: Tab }) {
-  const slug = tab.slug;
-  const { enabled, registry, system, rows, passport, architecture, loading } = useSystem(slug);
-  const updateTab = useWorkspace((s) => s.updateTab);
-  useEffect(() => { if (system && tab.title !== system.name) updateTab(tab.id, { title: system.name }); }, [system?.name, tab.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
+function SystemView({ system, all }: { system: System; all: System[] }) {
+  const { rows, passport, architecture } = useSystem(system.slug);
+  const [editing, setEditing] = useState(false);
+  const [retiring, setRetiring] = useState(false);
   const members = rows.data?.notes ?? [];
-  const parts = useMemo(() => passportSections(members, system?.passport ?? null), [members, system?.passport]);
+  const parts = useMemo(() => passportSections(members, system.passport), [members, system.passport]);
   const arch = architecture.data;
   const model = arch?.model ?? null;
   const stack = useMemo(() => techStack(model), [model]);
@@ -231,25 +186,59 @@ export function SystemPassport({ tab }: { tab: Tab }) {
   const io = useMemo(() => interfaces(model, arch?.inventory ?? null), [model, arch?.inventory]);
   const cloud = useMemo(() => cloudResources(model, arch?.topology ?? null), [model, arch?.topology]);
   const diagrams = useMemo(() => diagramList(arch?.diagrams ?? [], model), [arch?.diagrams, model]);
+  const summary = passport.data ? sections(passport.data.body).summary : undefined;
 
-  if (!enabled) return <p className="muted pad">Systems need a newer Living Memory (one with the <code>systems</code> command).</p>;
-  if (loading) return <p className="muted pad">Loading…</p>;
-  if (registry.error) return <p className="error pad">{classify(registry.error).message}</p>;
-  if (!system) return <p className="muted pad">There is no system named <code>{slug}</code>. It may have been removed; pick another from the Systems list.</p>;
-
-  const all = registry.data?.systems ?? [];
-  // An architecture card with nothing in it says why: nothing generated yet, or the model simply has none.
+  // An architecture section with nothing in it says why: nothing generated yet, or the model simply has none.
   const archEmpty = (has: boolean, none: string) =>
     (has ? undefined : !arch?.error ? none : `${arch.error} ${system.architecture ? "Use “Generate with agent” above." : "Edit the system to choose one."}`);
   const archProps = { loading: architecture.isLoading, error: architecture.error };
   const generated = arch?.generatedAt ? `Generated ${new Date(arch.generatedAt).toISOString().slice(0, 10)}${arch.toolVersion ? ` · Architecture Suite ${arch.toolVersion}` : ""}` : undefined;
-  const newRunbook = () => useWorkspace.getState().openTab({ kind: "new-note", init: { type: "runbook", tags: [system.tag] } });
+  const newNote = (type?: "runbook") => useWorkspace.getState().openTab({ kind: "new-note", init: { type, tags: [system.tag] } });
 
   return (
-    <div className="project-dash">
-      <Overview system={system} all={all} summary={passport.data ? sections(passport.data.body).summary : undefined} />
-      <div className="project-grid">
-        <Card title="Dependencies">
+    <>
+      <Split rail={<>
+        <Section title={system.name} actions={
+          <Menu label="System actions" align="right" button={<Ellipsis size="1.3em" aria-hidden />} className="icon-menu">
+            {(close) => (
+              <>
+                {system.passport && <li role="none"><button role="menuitem" onClick={() => { close(); useWorkspace.getState().openNote(system.passport!, { title: `${system.name} passport` }); }}>Open passport note</button></li>}
+                <li role="none"><button role="menuitem" onClick={() => { close(); newNote(); }}>New note for this system</button></li>
+                <li role="none"><button role="menuitem" onClick={() => { close(); setEditing(true); }}>Edit system…</button></li>
+                {system.status !== "retired" && <li role="none"><button role="menuitem" className="danger-text" onClick={() => { close(); setRetiring(true); }}>Retire…</button></li>}
+              </>
+            )}
+          </Menu>}>
+          <p className="muted"><span className={`status-chip ${system.status}`}>{system.status}</span> {system.repos.length ? "System" : "External system"}</p>
+          {system.description ? <p>{system.description}</p> : <p className="muted">No purpose recorded yet.</p>}
+          {!!system.capabilities.length && <ul className="capabilities">{system.capabilities.map((c) => <li key={c}>{c}</li>)}</ul>}
+          <div className="row-line"><span className="muted small dep-label">Owners</span>
+            {system.owners.length ? <span className="chips">{system.owners.map((o) => <span key={o} className="chip">{o}</span>)}</span> : <span className="muted small">none recorded</span>}
+          </div>
+          {!!system.repos.length && <div className="repo-list">{system.repos.map((r) => <code key={r}>{r}</code>)}</div>}
+          {summary && summary.trim() !== system.description.trim() && <div className="markdown small"><Markdown remarkPlugins={[remarkGfm]}>{summary}</Markdown></div>}
+        </Section>
+        <Section title="Decisions" count={parts.decisions.length} loading={rows.isLoading} error={rows.error}
+          empty={!parts.decisions.length ? "No decisions recorded for this system." : undefined}>
+          <NoteList rows={parts.decisions} />
+        </Section>
+        <Section title="Runbooks" count={parts.runbooks.length} loading={rows.isLoading} error={rows.error}
+          actions={<button className="text" onClick={() => newNote("runbook")}><Plus size="1.1em" aria-hidden />New</button>}
+          empty={!parts.runbooks.length ? "No runbooks yet. A runbook is a note of type runbook tagged with this system." : undefined}>
+          <NoteList rows={parts.runbooks} />
+        </Section>
+        <Section title="Weaknesses and tech debt" count={parts.weaknesses.length} loading={rows.isLoading} error={rows.error}
+          empty={!parts.weaknesses.length ? "No risks or bugs recorded for this system." : undefined}>
+          <NoteList rows={parts.weaknesses} badge />
+        </Section>
+      </>}>
+        <AgentActions system={system} all={all} />
+        <Section title="Diagrams" count={diagrams.length || undefined} {...archProps}
+          actions={generated && <span className="muted small">{generated}</span>}
+          empty={archEmpty(!!diagrams.length, "The folder has a model but no SVG or PNG diagrams.")}>
+          <Diagrams slug={system.slug} entries={diagrams} version={arch?.generatedAt ?? null} />
+        </Section>
+        <Section title="Dependencies">
           <div className="row-line"><span className="muted small dep-label">Depends on</span><SystemChips slugs={system.depends_on} all={all} empty="nothing registered" /></div>
           <div className="row-line"><span className="muted small dep-label">Used by</span><SystemChips slugs={system.dependents} all={all} empty="nothing registered" /></div>
           {!!outside.length && (
@@ -268,15 +257,15 @@ export function SystemPassport({ tab }: { tab: Tab }) {
               </ul>
             </>
           )}
-        </Card>
-        <Card title="Technology stack" count={stack.length || undefined} {...archProps} empty={archEmpty(!!stack.length, "The model names no technologies.")}>
+        </Section>
+        <Section title="Technology stack" count={stack.length || undefined} {...archProps} empty={archEmpty(!!stack.length, "The model names no technologies.")}>
           <ul className="card-list compact">
             {stack.map((t) => (
               <li key={t.technology}><div className="row-line"><strong>{t.technology}</strong><span className="muted small clamp">{t.elements.join(", ")}</span></div></li>
             ))}
           </ul>
-        </Card>
-        <Card title="APIs and events" count={io.flows.length + io.routes.length || undefined} {...archProps}
+        </Section>
+        <Section title="APIs and events" count={io.flows.length + io.routes.length || undefined} {...archProps}
           empty={archEmpty(!!(io.flows.length + io.routes.length), "The model shows no interactions across the system boundary, and no route inventory was generated.")}>
           {!!io.flows.length && (
             <ul className="card-list compact">
@@ -299,8 +288,8 @@ export function SystemPassport({ tab }: { tab: Tab }) {
               {io.routes.length > MAX_ROWS && <p className="muted small">and {io.routes.length - MAX_ROWS} more</p>}
             </>
           )}
-        </Card>
-        <Card title="Cloud resources" count={cloud.elements.length + cloud.resources.length || undefined} {...archProps}
+        </Section>
+        <Section title="Cloud resources" count={cloud.elements.length + cloud.resources.length || undefined} {...archProps}
           empty={archEmpty(!!(cloud.elements.length + cloud.resources.length), "The model names no cloud services, and no infrastructure was imported.")}>
           <ul className="card-list compact">
             {cloud.elements.map((e) => (
@@ -310,26 +299,65 @@ export function SystemPassport({ tab }: { tab: Tab }) {
               <li key={r.type}><div className="row-line"><code>{r.type}</code><span className="muted small">{r.count}</span><span className="muted small clamp">{r.ids.join(", ")}</span></div></li>
             ))}
           </ul>
-        </Card>
-        <Card title="Architecture diagrams" className="wide" count={diagrams.length || undefined} {...archProps}
-          actions={generated && <span className="muted small">{generated}</span>}
-          empty={archEmpty(!!diagrams.length, "The folder has a model but no SVG or PNG diagrams.")}>
-          <Diagrams slug={system.slug} entries={diagrams} version={arch?.generatedAt ?? null} />
-        </Card>
-        <Card title="Operational runbooks" count={parts.runbooks.length} loading={rows.isLoading} error={rows.error}
-          actions={<button className="ghost small" onClick={newRunbook}>New runbook</button>}
-          empty={!parts.runbooks.length ? "No runbooks yet. A runbook is a note of type runbook tagged with this system." : undefined}>
-          <NoteList rows={parts.runbooks} />
-        </Card>
-        <Card title="Architectural decisions" count={parts.decisions.length} loading={rows.isLoading} error={rows.error}
-          empty={!parts.decisions.length ? "No decisions recorded for this system." : undefined}>
-          <NoteList rows={parts.decisions} />
-        </Card>
-        <Card title="Weaknesses and tech debt" count={parts.weaknesses.length} loading={rows.isLoading} error={rows.error}
-          empty={!parts.weaknesses.length ? "No risks or bugs recorded for this system." : undefined}>
-          <NoteList rows={parts.weaknesses} badge />
-        </Card>
-      </div>
+        </Section>
+      </Split>
+      {editing && <SystemWizard mode="edit" system={system} onClose={() => setEditing(false)} />}
+      {retiring && (
+        <PlanDialog title={`Retire ${system.name}`} applyLabel="Retire" danger
+          intro={<p>The system is marked retired. Its notes, tag and architecture folder stay in place.</p>}
+          make={() => systemPlan("retire", { slug: system.slug })}
+          onApplied={() => { toast(`Retired ${system.name}`); setRetiring(false); }} onClose={() => setRetiring(false)} />
+      )}
+    </>
+  );
+}
+
+/** Architecture: the system behind the picked project (or any system from the list), its diagrams and what is known about it. */
+export function ArchitecturePage() {
+  const enabled = useSystemsEnabled();
+  const routed = useApp((s) => (s.route.page === "architecture" ? s.route.system : undefined));
+  const registry = useQuery({ ...systemsQuery(), enabled });
+  const { project } = useCurrentProject();
+  const { wizard, openWizard, closeWizard } = useSystemIntent();
+  const all = registry.data?.systems ?? [];
+  const live = all.filter((s) => s.status !== "retired");
+  const matched = useMemo(() => (project ? systemsForProject(project, live) : []), [project, live]);
+  const system = all.find((s) => s.slug === routed) ?? matched[0] ?? (project ? undefined : live[0]);
+  const warnings = registry.data?.warnings ?? [];
+
+  return (
+    <div className="page">
+      <PageHeader title="Architecture" subtitle="Explore the system and the decisions behind it."
+        actions={enabled && <>
+          {!!all.length && (
+            <select value={system?.slug ?? ""} onChange={(e) => openSystem(e.target.value)} aria-label="System">
+              {!system && <option value="">Choose a system…</option>}
+              {!!matched.length && <optgroup label="This project">{matched.map((s) => <option key={s.slug} value={s.slug}>{s.name}</option>)}</optgroup>}
+              <optgroup label={matched.length ? "Other systems" : "Systems"}>
+                {all.filter((s) => !matched.includes(s)).map((s) => <option key={s.slug} value={s.slug}>{s.name}{s.status !== "active" ? ` (${s.status})` : ""}</option>)}
+              </optgroup>
+            </select>
+          )}
+          <button className="text" onClick={openWizard}><Plus size="1.1em" aria-hidden />New system</button>
+        </>} />
+      {!enabled ? <p className="muted">Systems need a newer Living Memory (one with the <code>systems</code> command).</p>
+        : registry.isLoading ? <p className="muted">Loading…</p>
+        : registry.error ? <p className="error">{classify(registry.error).message}</p>
+        : (
+          <>
+            {!!warnings.length && <div className="banner warn"><ul>{warnings.map((w) => <li key={w}>{w}</li>)}</ul></div>}
+            {system ? <SystemView key={system.slug} system={system} all={all} />
+              : (
+                <div className="empty-state">
+                  <p className="muted">{project && all.length
+                    ? `No system is registered for the repositories of ${project.name}. Pick one from the list, or register one.`
+                    : "No systems yet. A system is something you run or depend on: a service, an app, a platform."}</p>
+                  <button className="primary" onClick={openWizard}><Plus size="1.15em" aria-hidden />New system</button>
+                </div>
+              )}
+          </>
+        )}
+      {wizard && <SystemWizard mode="create" onClose={closeWizard} onDone={(slug) => openSystem(slug)} />}
     </div>
   );
 }

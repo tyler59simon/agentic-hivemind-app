@@ -45,6 +45,8 @@ export interface ConnectInfo {
   root: string;
   program: string;
   script: string;
+  /** The signed-in OS user, when the system reports one. */
+  user?: string | null;
 }
 export interface Settings {
   python: string | null; script: string | null; root: string | null;

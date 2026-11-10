@@ -1,11 +1,14 @@
 // Data for one system's passport. The registry and member notes load together; the architecture folder is a
 // separate query so its cards load and fail on their own, and the file watcher never refetches it.
 import { useQuery } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
 import { create } from "zustand";
 import { systemArchitecture, systemDiagram } from "../../lib/architecture";
 import { useSystemsEnabled } from "../../lib/connection";
-import { list, systems } from "../../lib/lm";
+import { sessionsQuery } from "../../lib/agent";
+import { list, systems, type System } from "../../lib/lm";
 import { noteQuery } from "../viewer/NoteView";
+import { proposalOf, proposedUpdate } from "./passport";
 
 export const systemsQuery = () => ({ queryKey: ["systems"], queryFn: () => systems() });
 
@@ -44,4 +47,28 @@ export function useDiagram(slug: string, path: string, version: number | null, e
     queryFn: () => systemDiagram(slug, path),
     enabled, staleTime: Infinity, retry: false,
   });
+}
+
+const DISMISSED = "hivemind.system-proposals-dismissed";
+const dismissedProposals = (): string[] => { try { return JSON.parse(localStorage.getItem(DISMISSED) ?? "[]"); } catch { return []; } };
+
+/** The agent sessions run for a system, and the registry update the newest successful one proposed (until dismissed). */
+export function useSystemProposal(system: System, all: System[]) {
+  const sessions = useQuery(sessionsQuery());
+  const [dismissed, setDismissed] = useState(dismissedProposals);
+  const mine = useMemo(() => (sessions.data ?? []).filter((s) => s.task.kind === "system_passport" && s.task.slug === system.slug), [sessions.data, system.slug]);
+  const proposer = mine.find((s) => s.status === "succeeded");
+  const update = useMemo(
+    () => (proposer && !dismissed.includes(proposer.id) ? proposedUpdate(system, proposalOf(proposer.structured), all.map((s) => s.slug)) : null),
+    [proposer, dismissed, system, all],
+  );
+  const dismiss = () => {
+    if (!proposer) return;
+    const next = [...dismissedProposals(), proposer.id].slice(-50);
+    try { localStorage.setItem(DISMISSED, JSON.stringify(next)); } catch { /* not persisted */ }
+    setDismissed(next);
+  };
+  /** The proposed fields, in words: "description, depends on". */
+  const fields = update ? Object.keys(update).filter((k) => k !== "slug").join(", ").replace(/_/g, " ") : "";
+  return { mine, latest: mine[0], update, fields, dismiss };
 }

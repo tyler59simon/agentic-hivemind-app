@@ -3,6 +3,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { classify } from "../../lib/errors";
 import { list, retagPlan, taxonomy, taxonomyPlan, type Plan } from "../../lib/lm";
 import { Modal } from "../../ui/Modal";
+import { useApp } from "../../store";
 import { useWorkspace } from "../../workspace/store";
 import { PlanDialog } from "../plans/PlanDialog";
 import { facetsOf, parseTags, tagUsage, type TagUsage } from "./taxonomy";
@@ -31,7 +32,6 @@ function RenameTag({ from, taxonomyTags, onClose }: { from: TagUsage; taxonomyTa
 
 /** Tag tree with usage, adding tags, renaming/merging, and tags notes use that the taxonomy lacks. */
 export function TaxonomyView() {
-  const openTab = useWorkspace((s) => s.openTab);
   const tax = useQuery({ queryKey: ["taxonomy"], queryFn: taxonomy });
   const notes = useQuery({ queryKey: ["list", "*", "any"], queryFn: () => list({ allDomains: true, status: "any" }) });
   const usage = useMemo(() => tagUsage(tax.data?.tags ?? [], notes.data?.notes ?? [], facetsOf(tax.data)), [tax.data, notes.data]);
@@ -115,7 +115,7 @@ export function TaxonomyView() {
         </section>
       )}
       {dialog}
-      <p className="muted small">Tip: <button className="link" onClick={() => openTab({ kind: "activity" })}>Activity</button> shows past tag changes, each with Undo.</p>
+      <p className="muted small">Tip: <button className="link" onClick={() => useApp.getState().go({ page: "memory", view: "activity" })}>Activity</button> shows past tag changes, each with Undo.</p>
     </div>
   );
 }

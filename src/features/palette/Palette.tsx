@@ -4,7 +4,7 @@ import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { domains, list } from "../../lib/lm";
 import { refreshStore } from "../../lib/refresh";
 import { fuzzy } from "../../lib/text";
-import { useApp } from "../../store";
+import { openProject, openSystem, useApp, type Route } from "../../store";
 import { useWorkspace } from "../../workspace/store";
 import { useProjectIntent } from "../projects/intent";
 import { projectsQuery } from "../projects/useProject";
@@ -38,35 +38,41 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       }));
     }
     const close = () => app.setPalette(null);
+    const page = (route: Route) => () => { close(); app.go(route); };
     return [
       { key: "go", label: "Go to note…", detail: "Ctrl+O", run: () => app.setPalette("notes") },
       { key: "new", label: "New note", detail: "Ctrl+N", run: () => { close(); ws.openTab({ kind: "new-note" }); } },
-      { key: "graph", label: "Open the graph", detail: "Ctrl+G", run: () => { close(); ws.openTab({ kind: "graph" }); } },
-      { key: "activity", label: "Recent activity (who changed what)", detail: "Ctrl+Shift+A", run: () => { close(); ws.openTab({ kind: "activity" }); } },
-      { key: "tags", label: "Manage tags", run: () => { close(); ws.openTab({ kind: "taxonomy" }); } },
-      { key: "work", label: "Open work", run: () => { close(); ws.openTab({ kind: "work" }); } },
-      { key: "review", label: "Review due", run: () => { close(); ws.openTab({ kind: "work" }); } },
+      { key: "overview", label: "Overview", run: page({ page: "overview" }) },
+      { key: "memory", label: "Memory library", run: page({ page: "memory" }) },
+      { key: "graph", label: "Open the graph", detail: "Ctrl+G", run: page({ page: "memory", view: "graph" }) },
+      { key: "activity", label: "Recent activity (who changed what)", detail: "Ctrl+Shift+A", run: page({ page: "memory", view: "activity" }) },
+      { key: "tags", label: "Manage tags", run: page({ page: "memory", view: "tags" }) },
+      { key: "work", label: "Open work", run: page({ page: "overview", view: "work" }) },
+      { key: "review", label: "Review due", run: page({ page: "overview", view: "work" }) },
       ...(projectsOn ? [
-        { key: "new-project", label: "New project…", run: () => { close(); app.setView("projects"); useProjectIntent.getState().openWizard(); } },
+        { key: "new-project", label: "New project…", run: () => { close(); useProjectIntent.getState().openWizard(); } },
+        { key: "project:*", label: "Switch project: All memory", run: () => { close(); openProject(null); } },
         ...(registry.data?.projects ?? []).filter((p) => p.status === "active").map((p) => ({
-          key: "project:" + p.slug, label: `Open project: ${p.name}`, detail: p.tag,
-          run: () => { close(); ws.openProject(p.slug, p.name); },
+          key: "project:" + p.slug, label: `Switch project: ${p.name}`, detail: p.tag,
+          run: () => { close(); openProject(p.slug); },
         })),
       ] : []),
       ...(systemsOn ? [
-        { key: "new-system", label: "New system…", run: () => { close(); app.setView("systems"); useSystemIntent.getState().openWizard(); } },
-        { key: "sessions", label: "Agent sessions", run: () => { close(); ws.openTab({ kind: "sessions" }); } },
+        { key: "architecture", label: "Architecture", run: page({ page: "architecture" }) },
+        { key: "new-system", label: "New system…", run: () => { close(); app.go({ page: "architecture" }); useSystemIntent.getState().openWizard(); } },
+        { key: "sessions", label: "Agent Workspace (sessions)", run: page({ page: "agents" }) },
         ...(systems.data?.systems ?? []).filter((s) => s.status !== "retired").map((s) => ({
           key: "system:" + s.slug, label: `Open system: ${s.name}`, detail: s.tag,
-          run: () => { close(); ws.openSystem(s.slug, s.name); },
+          run: () => { close(); openSystem(s.slug); },
         })),
       ] : []),
       ...EXTRA_COMMANDS.map((c) => ({ ...c, run: () => { close(); c.run(); } })),
-      { key: "split", label: "Split pane", detail: "Ctrl+\\", run: () => { ws.split(); close(); } },
-      { key: "panel", label: ws.panel ? "Hide the right sidebar" : "Show the right sidebar", run: () => { ws.setPanel(ws.panel ? null : "outline"); close(); } },
-      { key: "search", label: "Search notes", detail: "Ctrl+Shift+F", run: () => { app.setView("search"); close(); } },
-      { key: "active", label: "Show active notes", run: () => { app.setView("notes"); app.setShelf("active"); close(); } },
-      { key: "archive", label: "Show the archive", run: () => { app.setView("notes"); app.setShelf("archived"); close(); } },
+      { key: "split", label: "Open the note side by side", detail: "Ctrl+\\", run: () => { ws.split(); close(); } },
+      { key: "rail", label: ws.rail ? "Hide the note's context rail" : "Show the note's context rail", run: () => { ws.setRail(!ws.rail); close(); } },
+      { key: "search", label: "Search notes", detail: "Ctrl+K", run: page({ page: "memory" }) },
+      { key: "active", label: "Show active notes", run: () => { app.setShelf("active"); close(); app.go({ page: "memory" }); } },
+      { key: "archive", label: "Show the archive", run: () => { app.setShelf("archived"); close(); app.go({ page: "memory" }); } },
+      { key: "back", label: "Back", detail: "Alt+Left", run: () => { close(); app.goBack(); } },
       { key: "refresh", label: "Refresh", run: () => { refreshStore(client); close(); } },
       { key: "reconnect", label: "Reconnect to Living Memory", run: () => { onReconnect(); close(); } },
       { key: "settings", label: "Settings", run: () => { onSettings(); close(); } },

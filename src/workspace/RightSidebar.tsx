@@ -1,34 +1,30 @@
-import type { ReactNode } from "react";
-import { HistoryPanel } from "../features/history/HistoryViews";
+import { useQuery } from "@tanstack/react-query";
+import { SourceHistory } from "../features/history/HistoryViews";
 import { LinksPanel, LocalGraphPanel } from "../features/links/LinksPanel";
 import { Outline } from "../features/outline/Outline";
-import { activeTab, useWorkspace, type Panel, type Tab } from "./store";
+import { NoteDetails, noteQuery } from "../features/viewer/NoteView";
+import { ArrowLink, Section } from "../ui/Page";
+import { activeTab, useWorkspace } from "./store";
 
-/** Panels about the focused note. Each is registered here as its phase lands. */
-export const PANELS: { id: Panel; label: string; render: (tab: Tab) => ReactNode }[] = [
-  { id: "outline", label: "Outline", render: (tab) => <Outline tab={tab} /> },
-  { id: "backlinks", label: "Links", render: (tab) => <LinksPanel tab={tab} /> },
-  { id: "graph", label: "Graph", render: (tab) => <LocalGraphPanel key={tab.ref} tab={tab} /> },
-  { id: "history", label: "History", render: (tab) => <HistoryPanel key={tab.ref} tab={tab} /> },
-];
-
-export function RightSidebar() {
-  const panel = useWorkspace((s) => s.panel);
-  const setPanel = useWorkspace((s) => s.setPanel);
+/** The context rail beside the focused note: what it connects to, how it changed, and where to jump inside it. */
+export function NoteRail() {
   const tab = useWorkspace(activeTab);
-  const current = PANELS.find((p) => p.id === panel) ?? PANELS[0];
+  const updateTab = useWorkspace((s) => s.updateTab);
+  const ref = tab?.kind === "note" ? tab.ref : undefined;
+  const note = useQuery({ ...noteQuery(ref ?? ""), enabled: !!ref });
+  if (!tab || !ref) return <aside className="note-rail"><p className="muted">Open a saved note to see its connections and history.</p></aside>;
   return (
-    <aside className="right-sidebar">
-      <div className="segmented small-tabs" role="tablist">
-        {PANELS.map((p) => (
-          <button key={p.id} role="tab" aria-selected={current.id === p.id} className={current.id === p.id ? "on" : ""} onClick={() => setPanel(p.id)}>
-            {p.label}
-          </button>
-        ))}
-      </div>
-      <div className="panel-body">
-        {tab?.kind === "note" && tab.ref ? current.render(tab) : <p className="muted pad">Open a note to see its {current.label.toLowerCase()}.</p>}
-      </div>
+    <aside className="note-rail">
+      <Section title="Connections"><LinksPanel tab={tab} /></Section>
+      <Section title="Source history" actions={<ArrowLink onClick={() => updateTab(tab.id, { mode: "history" })}>All</ArrowLink>}>
+        <SourceHistory key={ref} refId={ref} />
+      </Section>
+      <Section title="On this page"><Outline tab={tab} /></Section>
+      {note.data && <Section title="Details"><NoteDetails note={note.data} /></Section>}
+      <details className="rail-more">
+        <summary>Local graph</summary>
+        <LocalGraphPanel key={ref} tab={tab} />
+      </details>
     </aside>
   );
 }

@@ -38,6 +38,8 @@ struct ConnectInfo {
     root: String,
     program: String,
     script: String,
+    /// The signed-in OS user, for the sidebar footer.
+    user: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -84,7 +86,8 @@ async fn connect(app: AppHandle, state: State<'_, AppState>) -> Result<ConnectIn
     )?;
     *state.watcher.lock().unwrap() = Some(debouncer);
     let launch = state.bridge.launch();
-    Ok(ConnectInfo { version: version.result, root, program: launch.program, script: launch.script.display().to_string() })
+    let user = std::env::var("USERNAME").or_else(|_| std::env::var("USER")).ok().filter(|name| !name.is_empty());
+    Ok(ConnectInfo { version: version.result, root, program: launch.program, script: launch.script.display().to_string(), user })
 }
 
 /// Recent commits and pull requests for a project's repos (paths are looked up in Living Memory).
