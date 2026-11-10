@@ -56,6 +56,7 @@ export function searchFilters(f: { group: Group; shelf: Shelf; tag: string; proj
     status: f.shelf === "active" ? "active" : undefined,
     // The picked tag is the narrower one; the project's tag is then checked here.
     tag: f.tag || f.projectTag || undefined,
-    limit: filteredHere ? 200 : 60,
+    // 100 is the most Living Memory returns for one domain, so asking for more would hide that results were cut.
+    limit: filteredHere ? 100 : 60,
   };
 }

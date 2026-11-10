@@ -38,11 +38,11 @@ describe("library", () => {
     expect(searchFilters({ ...base, group: "decisions" })).toMatchObject({ type: "decision", limit: 60 });
     expect(searchFilters({ ...base, group: "plans" })).toMatchObject({ type: "plan", limit: 60 });
     // Several types, the archive, or a second tag are filtered here: ask for more.
-    expect(searchFilters({ ...base, group: "risks" })).toMatchObject({ type: undefined, limit: 200 });
-    expect(searchFilters({ ...base, shelf: "archived" })).toMatchObject({ status: undefined, limit: 200 });
+    expect(searchFilters({ ...base, group: "risks" })).toMatchObject({ type: undefined, limit: 100 });
+    expect(searchFilters({ ...base, shelf: "archived" })).toMatchObject({ status: undefined, limit: 100 });
     expect(searchFilters({ ...base, shelf: "any" })).toMatchObject({ status: undefined, limit: 60 });
     expect(searchFilters({ ...base, projectTag: "project/pay" })).toMatchObject({ tag: "project/pay", limit: 60 });
-    expect(searchFilters({ ...base, tag: "subject/x", projectTag: "project/pay" })).toMatchObject({ tag: "subject/x", limit: 200 });
+    expect(searchFilters({ ...base, tag: "subject/x", projectTag: "project/pay" })).toMatchObject({ tag: "subject/x", limit: 100 });
     expect(searchFilters({ ...base, tag: "subject/x" })).toMatchObject({ tag: "subject/x", limit: 60 });
   });
 
