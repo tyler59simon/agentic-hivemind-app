@@ -17,7 +17,7 @@ const style = HighlightStyle.define([
   { tag: t.strong, fontWeight: "700" },
   { tag: t.emphasis, fontStyle: "italic" },
   { tag: t.strikethrough, textDecoration: "line-through" },
-  { tag: t.monospace, fontFamily: "ui-monospace, Consolas, monospace", fontSize: "0.92em" },
+  { tag: t.monospace, fontFamily: "var(--font-mono)", fontSize: "0.92em" },
   { tag: t.link, color: "var(--accent)" },
   { tag: t.url, color: "var(--muted)" },
   { tag: [t.processingInstruction, t.contentSeparator, t.quote], color: "var(--muted)" },
