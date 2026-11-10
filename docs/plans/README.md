@@ -187,9 +187,9 @@ type AgentTask =
 | `mode` | `"unattended" \| "interactive"` | 2 | Unattended is today's one-prompt run. Default `unattended`. |
 | `policy` | `"pre_approved" \| "ask" \| "accept_edits"` | 2 | How gated actions are decided. Default `pre_approved`. |
 | `project` | `string \| null` | 2 | The project the session was started in. |
-| `worktree` | `{ repo, path, branch, baseBranch, baseSha } \| null` | 2 | The git worktree an interactive work session runs in. |
+| `worktree` | `{ repo, path, branch, baseBranch, baseSha, reviewedSha? } \| null` | 2 (`reviewedSha`: 4) | The git worktree an interactive work session runs in. `baseSha` is where the branch started and never changes. `reviewedSha` is the commit of the last approval. |
 | `turns` | `number` | 2 | Completed turns. |
-| `filesChanged` | `{ files, added, removed } \| null` | 2 | The worktree's diff against `baseSha` after the last turn. |
+| `filesChanged` | `{ files, added, removed } \| null` | 2 | The worktree's diff after the last turn, against the review base: `reviewedSha` when there is one (from Phase 4 on), else `baseSha`. |
 | `review` | `{ state, commit, at } \| null` | 4 | `state` is `"pending" \| "approved" \| "changes_requested" \| "dismissed"`. |
 | `sourceSha` | `string \| null` | 4 | For a passport session: the repository's HEAD when it succeeded. |
 | `interface` | `"chat" \| "terminal"` | 5 | Default `chat`. |
@@ -218,7 +218,7 @@ A session belongs to a change through `task.change`. A change's sessions are the
 
 ### 7.3 Review (introduced by Phase 4)
 
-Commands: `review_files(sessionId)` (the changed files with added and removed counts), `review_file(sessionId, path)` (`{ base, head, binary }`, text contents or null), `review_approve(sessionId, message)` (commits on the worktree branch; returns the commit hash), `review_request_changes(sessionId, text)` (sends a follow-up message to the session, resuming it if needed), `review_dismiss(sessionId)`, `review_discard(sessionId)` (resets the worktree to `baseSha`; destructive, behind a confirmation). `SessionInfo.review` records the outcome.
+Commands: `review_files(sessionId)` (the changed files with added and removed counts), `review_file(sessionId, path)` (`{ base, head, binary }`, text contents or null), `review_approve(sessionId, message)` (commits on the worktree branch; returns the commit hash), `review_request_changes(sessionId, text)` (sends a follow-up message to the session, resuming it if needed), `review_dismiss(sessionId)`, `review_discard(sessionId)` (resets the worktree to the review base, so approved commits are kept; destructive, behind a confirmation). `SessionInfo.review` records the outcome. Phase 4 also adds `review_tool_output`, `system_staleness`, `system_snapshots` and `system_snapshot`, and exports `openReview(session?, file?)` from `src/store.ts` for links from other pages; the Review route is `{ page: "review"; session?: string; file?: string }`.
 
 A session is "waiting for review" when it has `filesChanged.files > 0`, is neither running nor waiting on a permission prompt, and `review` is null or `pending`. There is one function for this, `waitingForReview` in `src/features/agents/session.ts`: Phase 2 writes it without the `review` part, Phase 4 extends that same function, and every other phase calls it rather than defining its own. Phases 3 and 5 show the state with the yellow chip (`status-chip waiting`).
 
