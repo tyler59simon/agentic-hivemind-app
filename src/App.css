@@ -50,6 +50,8 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .center { display: grid; place-items: center; min-height: 100%; height: 100vh; padding: 16px; }
 .content .center { height: 100%; }
 .card { width: min(560px, 100%); border: 1px solid var(--border); border-radius: 10px; padding: 20px; background: var(--bg-alt); }
+.brand { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; }
+.brand img { width: 40px; height: 40px; }
 .link { border: none; color: var(--accent); padding: 0; margin-top: 8px; }
 .ghost { border-color: transparent; }
 kbd { border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; font-size: 12px; background: var(--bg-alt); }

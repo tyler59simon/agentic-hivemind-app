@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Confirm } from "./ui/Modal";
 import { useCallback, useEffect, useState } from "react";
 import "./App.css";
+import logo from "./assets/logo.png";
 import { Sidebar } from "./features/library/Sidebar";
 import { ProjectsNav } from "./features/projects/ProjectsNav";
 import { Palette } from "./features/palette/Palette";
@@ -106,7 +107,7 @@ export default function App() {
     return (
       <main className="center">
         <div className="card">
-          <h1>Hivemind</h1>
+          <h1 className="brand"><img src={logo} alt="" />Hivemind</h1>
           {link.error && <p className="error">{String(link.error)}</p>}
           <SettingsForm onSaved={reconnect} />
           {link.isSuccess && <button className="link" onClick={() => setSettings(false)}>Back</button>}
