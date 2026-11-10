@@ -153,12 +153,15 @@ cd src-tauri && cargo test && cargo clippy
 
 ```powershell
 $env:HIVEMIND_LM_ROOT = "<scratch>\store"; $env:HIVEMIND_LM_SCRIPT = "<path>\living_memory.py"; $env:HIVEMIND_PYTHON = "<python.exe>"
+$env:LIVING_MEMORY_ROOT = "<scratch>\store"                    # the store Living Memory's own hooks use inside agent sessions
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
 $env:WEBVIEW2_USER_DATA_FOLDER = "<scratch>\webview-profile"   # keeps the real app's saved state untouched
 npm run tauri dev
 ```
 
 Then `python scripts/drive_ui.py --out <folder> nav:Memory wait:1 shot:memory` (needs a Python with Playwright) clicks through the app over the debugging port and saves page screenshots. Use it to compare each screen with its mock and to prove a flow works. The dev port 1420 is fixed, so only one dev instance can run.
+
+**Why `LIVING_MEMORY_ROOT` too.** `HIVEMIND_LM_ROOT` only tells the app's bridge which store to read and write. A real agent session (Claude Code or Codex started by the app) loads the user's own Living Memory hooks, and those choose their store from `LIVING_MEMORY_ROOT`. Without it, a real session in a dev run writes hook state into the user's real store. Set both before any run that starts a real agent CLI, and check afterwards that nothing under the real store changed.
 
 Agent sessions, drafts and settings are stored in the app's real data folder even in a dev run. A phase that changes their format must test against copies, and must not leave test sessions behind.
 
@@ -201,6 +204,14 @@ type AgentTask =
 `RunEvent` gains (tagged by `type`, camelCase): `userMessage { text }`, `approvalRequest { requestId, tool, summary, input, canAlways }`, `approvalResolved { requestId, decision }` with `decision` one of `"allow" | "allow_always" | "deny" | "withdrawn"`, `turnFinished { ok, reason, costUsd, durationMs, result, denials }`, and `filesChanged { files: [{ path, status, added, removed }] }`. `Finished` stays the single last event of a session.
 
 Commands added by Phase 2: `agent_send(sessionId, text)`, `agent_answer(sessionId, requestId, decision)`, `agent_interrupt(sessionId)`, `agent_end(sessionId)`, `agent_files(sessionId)`. `agent_start` takes the task, the prompt and an options object (`{ policy, context }`, where `context` is a list of note refs to include in the briefing). `agent_cancel` keeps its meaning: kill the process now.
+
+Three safety rules hold for every session, whatever its mode or interface:
+
+- **Same store.** Every agent CLI the app starts gets the environment variable `LIVING_MEMORY_ROOT` set to the store the app is connected to (`Spec.memory_root`, Phase 2), so the hooks inside the session and the app use one store.
+- **Governed commands are denied by rule.** Living Memory's plan, apply and undo commands belong to the user's reviewed dialogs. A Claude Code session is started with deny rules for them (`scope::governed_rules()`, passed with `--disallowedTools`; Phase 2), because a prompt that the user's own settings already allow never reaches the app. Refusing them when a prompt does arrive stays as the second check. Codex has no equivalent; Phase 5 says so on screen.
+- **A review action reserves its session.** While Approve, Request changes or Discard runs (Phase 4, `Manager::reserve`), sending a message, removing the worktree, and starting or attaching a terminal for that session fail with `A review action is running for this session`.
+
+**Terminal sessions (Phase 5) are an exception to the event rules above.** A terminal session has no structured events: it writes no `RunEvent`s and no `Finished`. Its status is `running` while its program runs and `ended` or `failed` after it exits, and starting its program again returns it to `running`.
 
 Worktrees live under the app data folder, in `worktrees/<repo folder name>-<8 hex of a hash of the repo path>/<first 8 of the session id>`, on a branch named `hivemind/<first 8 of the session id>` created from the start branch. Rust module: `src-tauri/src/worktree.rs`.
 
