@@ -194,7 +194,7 @@ type AgentTask =
 | `sourceSha` | `string \| null` | 4 | For a passport session: the repository's HEAD when it succeeded. |
 | `interface` | `"chat" \| "terminal"` | 5 | Default `chat`. |
 
-`adapter` (exists today) is the engine: `"claude"` today, `"codex"` from Phase 5.
+`adapter` (exists today) is the engine: `"claude-code"` today (what `fn name` in `agent/claude.rs` returns), `"codex"` from Phase 5.
 
 `Status` (Rust `agent/events.rs`, lowercase in JSON) becomes: `running` (a turn is in progress), `waiting` (a permission prompt awaits the user), `idle` (the last turn finished and the session can take another message, whether or not its process is still alive), and the end states `succeeded`, `failed`, `cancelled`, `ended` (the user ended an interactive session). Unattended sessions never use `waiting`, `idle` or `ended`.
 
@@ -204,7 +204,7 @@ Commands added by Phase 2: `agent_send(sessionId, text)`, `agent_answer(sessionI
 
 Worktrees live under the app data folder, in `worktrees/<repo folder name>-<8 hex of a hash of the repo path>/<first 8 of the session id>`, on a branch named `hivemind/<first 8 of the session id>` created from the start branch. Rust module: `src-tauri/src/worktree.rs`.
 
-Frontend additions other phases build on: the route `{ page: "agents"; session?: string; view?: "new" }`; a session-draft store `src/features/agents/draft.ts` exporting `useSessionDraft` with `task`, `context: string[]` (note refs), `change: number | null`, and `addContext(ref)`, `removeContext(ref)`, `reset()`; the buttons "Use in agent session" (note page) and "Add to agent context" (library preview) call `addContext`.
+Frontend additions other phases build on: the route `{ page: "agents"; session?: string; view?: "new" }`; a session-draft store `src/features/agents/draft.ts` exporting `useSessionDraft` with `task` (the task text the user typed, a string), `context: string[]` (note refs), `change: number | null`, and `addContext(ref)`, `removeContext(ref)`, `reset()` (the repository, branch and permissions are the Start screen's own state, not the draft's); the buttons "Use in agent session" (note page) and "Add to agent context" (library preview) call `addContext`.
 
 ### 7.2 Changes (introduced by Phase 3)
 
@@ -220,7 +220,7 @@ A session belongs to a change through `task.change`. A change's sessions are the
 
 Commands: `review_files(sessionId)` (the changed files with added and removed counts), `review_file(sessionId, path)` (`{ base, head, binary }`, text contents or null), `review_approve(sessionId, message)` (commits on the worktree branch; returns the commit hash), `review_request_changes(sessionId, text)` (sends a follow-up message to the session, resuming it if needed), `review_dismiss(sessionId)`, `review_discard(sessionId)` (resets the worktree to `baseSha`; destructive, behind a confirmation). `SessionInfo.review` records the outcome.
 
-A session is "waiting for review" when it has `filesChanged.files > 0`, is not running, and `review` is null or `pending`. Phases 3 and 5 show that state with the yellow chip (`status-chip waiting`).
+A session is "waiting for review" when it has `filesChanged.files > 0`, is neither running nor waiting on a permission prompt, and `review` is null or `pending`. There is one function for this, `waitingForReview` in `src/features/agents/session.ts`: Phase 2 writes it without the `review` part, Phase 4 extends that same function, and every other phase calls it rather than defining its own. Phases 3 and 5 show the state with the yellow chip (`status-chip waiting`).
 
 ### 7.4 Terminal (introduced by Phase 5)
 
