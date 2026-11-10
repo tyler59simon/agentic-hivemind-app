@@ -48,7 +48,8 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "activity", label: "Recent activity (who changed what)", detail: "Ctrl+Shift+A", run: page({ page: "memory", view: "activity" }) },
       { key: "tags", label: "Manage tags", run: page({ page: "memory", view: "tags" }) },
       { key: "work", label: "Open work", run: page({ page: "overview", view: "work" }) },
-      { key: "review", label: "Review due", run: page({ page: "overview", view: "work" }) },
+      { key: "review", label: "Review", run: page({ page: "review" }) },
+      { key: "changes", label: "Changes", run: page({ page: "changes" }) },
       ...(projectsOn ? [
         { key: "new-project", label: "New project…", run: () => { close(); useProjectIntent.getState().openWizard(); } },
         { key: "project:*", label: "Switch project: All memory", run: () => { close(); openProject(null); } },

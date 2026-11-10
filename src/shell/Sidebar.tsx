@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Database, House, Network, Terminal, type LucideIcon } from "lucide-react";
+import { ChevronDown, Database, GitBranch, House, Network, SquareCheck, Terminal, type LucideIcon } from "lucide-react";
 import logo from "../assets/logo.png";
 import { ProjectSwitcher } from "../features/projects/ProjectSwitcher";
 import { sessionsQuery } from "../lib/agent";
@@ -14,8 +14,10 @@ import { useWorkspace } from "../workspace/store";
 export const SECTIONS: { page: Page; label: string; icon: LucideIcon }[] = [
   { page: "overview", label: "Overview", icon: House },
   { page: "agents", label: "Agent Workspace", icon: Terminal },
+  { page: "changes", label: "Changes", icon: GitBranch },
   { page: "architecture", label: "Architecture", icon: Network },
   { page: "memory", label: "Memory", icon: Database },
+  { page: "review", label: "Review", icon: SquareCheck },
 ];
 
 export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; onSettings: () => void; onReconnect: () => void }) {

@@ -52,23 +52,29 @@ export function useDiagram(slug: string, path: string, version: number | null, e
 const DISMISSED = "hivemind.system-proposals-dismissed";
 const dismissedProposals = (): string[] => { try { return JSON.parse(localStorage.getItem(DISMISSED) ?? "[]"); } catch { return []; } };
 
-/** The agent sessions run for a system, and the registry update the newest successful one proposed (until dismissed). */
-export function useSystemProposal(system: System, all: System[]) {
+/** For each system: the agent sessions run for it, and the registry update the newest successful one proposed (until dismissed). */
+export function useSystemProposals(systems: System[], all: System[]) {
   const sessions = useQuery(sessionsQuery());
   const [dismissed, setDismissed] = useState(dismissedProposals);
-  const mine = useMemo(() => (sessions.data ?? []).filter((s) => s.task.kind === "system_passport" && s.task.slug === system.slug), [sessions.data, system.slug]);
-  const proposer = mine.find((s) => s.status === "succeeded");
-  const update = useMemo(
-    () => (proposer && !dismissed.includes(proposer.id) ? proposedUpdate(system, proposalOf(proposer.structured), all.map((s) => s.slug)) : null),
-    [proposer, dismissed, system, all],
-  );
-  const dismiss = () => {
-    if (!proposer) return;
-    const next = [...dismissedProposals(), proposer.id].slice(-50);
+  const items = useMemo(() => systems.map((system) => {
+    const mine = (sessions.data ?? []).filter((s) => s.task.kind === "system_passport" && s.task.slug === system.slug);
+    const proposer = mine.find((s) => s.status === "succeeded");
+    const update = proposer && !dismissed.includes(proposer.id) ? proposedUpdate(system, proposalOf(proposer.structured), all.map((s) => s.slug)) : null;
+    /** The proposed fields, in words: "description, depends on". */
+    const fields = update ? Object.keys(update).filter((k) => k !== "slug").join(", ").replace(/_/g, " ") : "";
+    return { system, latest: mine[0], proposer, update, fields };
+  }), [systems, all, sessions.data, dismissed]);
+  const dismiss = (sessionId: string) => {
+    const next = [...dismissedProposals(), sessionId].slice(-50);
     try { localStorage.setItem(DISMISSED, JSON.stringify(next)); } catch { /* not persisted */ }
     setDismissed(next);
   };
-  /** The proposed fields, in words: "description, depends on". */
-  const fields = update ? Object.keys(update).filter((k) => k !== "slug").join(", ").replace(/_/g, " ") : "";
-  return { mine, latest: mine[0], update, fields, dismiss };
+  return { items, dismiss };
+}
+
+export function useSystemProposal(system: System, all: System[]) {
+  const one = useMemo(() => [system], [system]);
+  const { items, dismiss } = useSystemProposals(one, all);
+  const item = items[0];
+  return { ...item, dismiss: () => { if (item.proposer) dismiss(item.proposer.id); } };
 }

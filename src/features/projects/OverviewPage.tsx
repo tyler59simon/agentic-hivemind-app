@@ -160,7 +160,7 @@ function ProjectOverview({ project }: { project: Project }) {
         <SystemContext project={project} commits={commits} />
         <Section title="Needs your review" loading={due.isLoading} error={due.error}
           empty={due.data && !due.data.notes.length ? "Nothing is waiting for you." : undefined}>
-          <Row icon={<Clock size="1.3em" aria-hidden />} onClick={() => go({ page: "overview", view: "work" })}>
+          <Row icon={<Clock size="1.3em" aria-hidden />} onClick={() => go({ page: "review" })}>
             {due.data?.due} note{due.data?.due === 1 ? "" : "s"} due for review
           </Row>
         </Section>
@@ -179,6 +179,7 @@ function ProjectOverview({ project }: { project: Project }) {
               <p className="focus-meta"><LinkIcon size="1.1em" aria-hidden /><span className="cap">{focus.type}</span><span>Updated {dayMonth(focus.updated)}</span>{!!parts.decisions.length && <span>{parts.decisions.length} decision{parts.decisions.length === 1 ? "" : "s"}</span>}</p>
               <div className="focus-actions">
                 <button className="outline" onClick={() => openNote(focus)}>{plan ? "Open plan" : "Open note"}</button>
+                {plan && <ArrowLink onClick={() => go({ page: "changes", ref: plan.ref })}>Open change</ArrowLink>}
               </div>
             </div>
           )}
@@ -260,7 +261,7 @@ function StoreOverview({ projectsOn }: { projectsOn: boolean }) {
       {!projectsOn && <div className="banner warn">Projects, open work and review need a newer Living Memory (API 2 with the <code>projects</code> command). Notes, search, the graph and activity work as they are.</div>}
       <Split rail={projectsOn && (
         <Section title="Needs your review" loading={due.isLoading} error={due.error} empty={due.data && !due.data.notes.length ? "Nothing is waiting for you." : undefined}>
-          <Row icon={<Clock size="1.3em" aria-hidden />} onClick={() => go({ page: "overview", view: "work" })}>{due.data?.due} note{due.data?.due === 1 ? "" : "s"} due for review</Row>
+          <Row icon={<Clock size="1.3em" aria-hidden />} onClick={() => go({ page: "review" })}>{due.data?.due} note{due.data?.due === 1 ? "" : "s"} due for review</Row>
         </Section>
       )}>
         {projectsOn && (
