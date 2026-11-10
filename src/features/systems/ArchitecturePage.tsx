@@ -1,8 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Ellipsis, MessageCircle, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { agentAvailable, agentStart } from "../../lib/agent";
 import type { ArchModel } from "../../lib/architecture";
 import { useSystemsEnabled } from "../../lib/connection";
@@ -14,6 +12,7 @@ import { shortDate } from "../../lib/text";
 import { openSession, openSystem, useApp } from "../../store";
 import { Menu } from "../../ui/Menu";
 import { Modal } from "../../ui/Modal";
+import { Markdown } from "../../ui/Markdown";
 import { PageHeader, Section, Split } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
@@ -254,7 +253,7 @@ function SystemView({ system, all }: { system: System; all: System[] }) {
             {system.owners.length ? <span className="chips">{system.owners.map((o) => <span key={o} className="chip">{o}</span>)}</span> : <span className="muted small">none recorded</span>}
           </div>
           {!!system.repos.length && <div className="repo-list">{system.repos.map((r) => <code key={r}>{r}</code>)}</div>}
-          {summary && summary.trim() !== system.description.trim() && <div className="markdown small"><Markdown remarkPlugins={[remarkGfm]}>{summary}</Markdown></div>}
+          {summary && summary.trim() !== system.description.trim() && <div className="markdown small"><Markdown>{summary}</Markdown></div>}
         </Section>
         <Section title="Decisions" count={parts.decisions.length} loading={rows.isLoading} error={rows.error}
           empty={!parts.decisions.length ? "No decisions recorded for this system." : undefined}>

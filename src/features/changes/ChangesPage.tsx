@@ -1,13 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { Circle, CircleCheck, FileText, Plus, Search } from "lucide-react";
 import { useMemo, useState } from "react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { useProjectsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { list, review, type NoteRow } from "../../lib/lm";
 import { actionItems, sections } from "../../lib/note";
 import { useApp } from "../../store";
+import { Markdown } from "../../ui/Markdown";
 import { ArrowLink, dayMonth, PageHeader, Row, Section, Tabs } from "../../ui/Page";
 import { useWorkspace } from "../../workspace/store";
 import { useNoteLinks } from "../links/useLinks";
@@ -38,7 +37,7 @@ function Detail({ row, chip }: { row: NoteRow; chip: { label: string; tone: stri
     <>
       <Section>
         <h2 className="detail-title">{row.title}</h2>
-        {summary && <div className="markdown"><Markdown remarkPlugins={[remarkGfm]}>{summary}</Markdown></div>}
+        {summary && <div className="markdown"><Markdown>{summary}</Markdown></div>}
         <div className="page-meta"><span className={`status-chip ${chip.tone}`}>{chip.label}</span><span className="muted">Updated {dayMonth(row.updated)}</span></div>
       </Section>
       <Section title="Implementation plan" loading={note.isLoading} error={note.error}

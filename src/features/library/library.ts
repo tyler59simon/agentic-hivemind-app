@@ -1,5 +1,5 @@
 // Pure helpers for the Memory library: the type tabs, and one row shape for listed notes and search hits.
-import type { NoteRow, NoteType, SearchHit, Status } from "../../lib/lm";
+import type { NoteRow, NoteType, SearchHit, SearchOptions, Status } from "../../lib/lm";
 import type { Shelf } from "../../store";
 
 export type Group = "decisions" | "knowledge" | "plans" | "risks" | "all";
@@ -44,3 +44,18 @@ export function filterItems(items: Item[], f: Filter): Item[] {
 
 /** Newest first. */
 export const byUpdated = (items: Item[]) => [...items].sort((a, b) => b.updated.localeCompare(a.updated));
+
+/** What a search asks Living Memory for. It filters by one type, one status and one tag, and cuts the result
+ *  at `limit`; whatever must still be filtered here (several types, the archive, a second tag) gets a wider net,
+ *  so matches are not cut off before the filter sees them. */
+export function searchFilters(f: { group: Group; shelf: Shelf; tag: string; projectTag?: string }): Required<Pick<SearchOptions, "limit">> & Pick<SearchOptions, "type" | "status" | "tag"> {
+  const types = GROUPS.find((g) => g.id === f.group)?.types ?? null;
+  const filteredHere = (types !== null && types.length > 1) || f.shelf === "archived" || (!!f.tag && !!f.projectTag);
+  return {
+    type: types?.length === 1 ? types[0] : undefined,
+    status: f.shelf === "active" ? "active" : undefined,
+    // The picked tag is the narrower one; the project's tag is then checked here.
+    tag: f.tag || f.projectTag || undefined,
+    limit: filteredHere ? 200 : 60,
+  };
+}

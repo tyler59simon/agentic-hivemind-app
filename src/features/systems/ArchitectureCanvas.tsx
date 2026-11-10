@@ -42,9 +42,10 @@ function Picture({ slug, entry, version }: { slug: string; entry: DiagramEntry; 
   return <div className="canvas-picture"><img src={image.data} alt={entry.title} /></div>;
 }
 
-function Source({ slug, entry }: { slug: string; entry: DiagramEntry }) {
+function Source({ slug, entry, version }: { slug: string; entry: DiagramEntry; version: number | null }) {
   const file = entry.path.replace(/\.[^./]+$/, ".mmd");
-  const text = useQuery({ queryKey: ["architecture", slug, "source", file], queryFn: () => systemDiagramSource(slug, file), staleTime: Infinity, retry: false });
+  // Kept until the folder is regenerated, like the diagram pictures.
+  const text = useQuery({ queryKey: ["architecture", slug, "source", file, version], queryFn: () => systemDiagramSource(slug, file), staleTime: Infinity, retry: false });
   if (text.isLoading) return <p className="muted pad">Loading…</p>;
   if (text.error) return <p className="muted pad">No Mermaid source was generated for this diagram.</p>;
   return <pre className="canvas-source">{text.data}</pre>;
@@ -115,7 +116,7 @@ export function ArchitectureCanvas({ slug, model, diagrams, version, caption, se
           setView((v) => ({ ...v, x: v.x + dx, y: v.y + dy }));
         }}
         onPointerUp={() => { const d = drag.current; drag.current = null; if (d && !d.moved) onSelect(null); }}>
-        {source && levelEntry ? <Source slug={slug} entry={levelEntry} />
+        {source && levelEntry ? <Source slug={slug} entry={levelEntry} version={version} />
           : picture ? <Picture slug={slug} entry={picture} version={version} />
           : level === "deployment" ? <p className="muted pad">No deployment diagram was generated for this system.</p>
           : !laid ? <p className="muted pad">The model has nothing to draw at this level.</p>

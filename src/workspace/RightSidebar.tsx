@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { SourceHistory } from "../features/history/HistoryViews";
 import { LinksPanel, LocalGraphPanel } from "../features/links/LinksPanel";
 import { Outline } from "../features/outline/Outline";
@@ -12,6 +13,8 @@ export function NoteRail() {
   const updateTab = useWorkspace((s) => s.updateTab);
   const ref = tab?.kind === "note" ? tab.ref : undefined;
   const note = useQuery({ ...noteQuery(ref ?? ""), enabled: !!ref });
+  // The graph draws into its container, so it is mounted only while the disclosure is open and has a size.
+  const [graph, setGraph] = useState(false);
   if (!tab || !ref) return <aside className="note-rail"><p className="muted">Open a saved note to see its connections and history.</p></aside>;
   return (
     <aside className="note-rail">
@@ -21,9 +24,9 @@ export function NoteRail() {
       </Section>
       <Section title="On this page"><Outline tab={tab} /></Section>
       {note.data && <Section title="Details"><NoteDetails note={note.data} /></Section>}
-      <details className="rail-more">
+      <details className="rail-more" open={graph} onToggle={(e) => setGraph(e.currentTarget.open)}>
         <summary>Local graph</summary>
-        <LocalGraphPanel key={ref} tab={tab} />
+        {graph && <LocalGraphPanel key={ref} tab={tab} />}
       </details>
     </aside>
   );

@@ -1,13 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, FileText, Link as LinkIcon, Plus, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { classify } from "../../lib/errors";
 import { domains, list, search, taxonomy, type SearchOptions } from "../../lib/lm";
 import { sections } from "../../lib/note";
 import { highlight, terms } from "../../lib/text";
 import { useApp, type Shelf } from "../../store";
+import { Markdown } from "../../ui/Markdown";
 import { ArrowLink, dayMonth, PageHeader, Tabs } from "../../ui/Page";
 import { NoteRail } from "../../workspace/RightSidebar";
 import { hasTabs, railShown, useWorkspace } from "../../workspace/store";
@@ -20,7 +19,7 @@ import { Triage } from "../projects/TriageDialog";
 import { useCurrentProject, useProject } from "../projects/useProject";
 import { TaxonomyView } from "../taxonomy/TaxonomyView";
 import { noteQuery } from "../viewer/NoteView";
-import { byUpdated, filterItems, fromHit, fromRow, GROUPS, type Group, type Item, type Scope } from "./library";
+import { byUpdated, filterItems, fromHit, fromRow, GROUPS, searchFilters, type Group, type Item, type Scope } from "./library";
 
 function useDebounced<T>(value: T, ms: number): T {
   const [settled, setSettled] = useState(value);
@@ -53,7 +52,7 @@ function Preview({ item }: { item: Item }) {
       </div>
       {note.isLoading && <p className="muted">Loading…</p>}
       {note.error && <p className="error">{classify(note.error).message}</p>}
-      {summary && <><h3>Summary</h3><div className="markdown"><Markdown remarkPlugins={[remarkGfm]}>{summary}</Markdown></div></>}
+      {summary && <><h3>Summary</h3><div className="markdown"><Markdown>{summary}</Markdown></div></>}
       {!!linked.length && (
         <>
           <h3>Connections</h3>
@@ -105,12 +104,10 @@ function Library() {
     queryKey: ["list", domain, "any", "summary"], queryFn: () => list({ domain: domain!, status: "any", summary: true }),
     enabled: !settled && scope === "active" && !!domain,
   });
+  const asked = searchFilters({ group, shelf, tag, projectTag: inProject ? project.tag : undefined });
   const hits = useQuery({
-    queryKey: ["search", domain, settled, scope, inProject ? project.tag : tag, shelf],
-    queryFn: () => search({
-      query: settled, domain: domain!, limit: 60, scope: inProject ? "all" : (scope as SearchOptions["scope"]),
-      tag: inProject ? project.tag : tag || undefined, status: shelf === "active" ? "active" : undefined,
-    }),
+    queryKey: ["search", domain, settled, inProject ? "all" : scope, asked],
+    queryFn: () => search({ query: settled, domain: domain!, scope: inProject ? "all" : (scope as SearchOptions["scope"]), ...asked }),
     enabled: !!settled && !!domain,
   });
   const source = settled ? hits : inProject ? members : scope === "active" ? inDomain : everything;
@@ -168,6 +165,9 @@ function Library() {
           {source.isLoading && <p className="muted">Loading…</p>}
           {source.error && <p className="error">{classify(source.error).message}</p>}
           {settled && hits.data?.fallback && <p className="muted small">Nothing matched in this domain; these are from other domains.</p>}
+          {settled && (hits.data?.results.length ?? 0) >= asked.limit && (
+            <p className="muted small">Only the best {asked.limit} matches are shown or filtered. Add a word to the search if a note is missing.</p>
+          )}
           {!source.isLoading && !source.error && !items.length && (
             <p className="muted">
               {settled ? "No notes match this search and these filters." : inProject ? <>No notes are tagged with <code>{project.tag}</code> here yet.</> : "No notes here."}

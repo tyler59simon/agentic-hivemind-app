@@ -54,7 +54,8 @@ const PROJECT = "@project";
 /** What agents and people changed recently, newest first; scoped to the picked project unless a domain is chosen. */
 export function ActivityView() {
   const { project } = useCurrentProject();
-  const [domain, setDomain] = useState(project ? PROJECT : "");
+  const [picked, setDomain] = useState<string | null>(null);
+  const domain = picked ?? (project ? PROJECT : "");
   const [who, setWho] = useState<ActorKind | "">("");
   const [limit, setLimit] = useState(100);
   const inProject = domain === PROJECT && !!project;

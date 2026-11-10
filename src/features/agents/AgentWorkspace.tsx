@@ -2,12 +2,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import { ChevronDown, CircleCheck, CircleX, CodeXml, Layers, LoaderCircle, MessageSquare, Network, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import logo from "../../assets/logo.png";
 import { agentCancel, agentSession, sessionsQuery, type SeqEvent, type SessionInfo } from "../../lib/agent";
 import { useSystemsEnabled } from "../../lib/connection";
 import { openSession, openSystem, useApp } from "../../store";
+import { Markdown } from "../../ui/Markdown";
 import { ArrowLink, PageHeader, Row, Section } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { dayLabel } from "../history/activity";
@@ -23,7 +22,7 @@ function Entry({ item }: { item: Item }) {
     case "started":
       return <p className="muted small">Claude Code {item.cliVersion ?? ""}{item.model ? ` · ${item.model}` : ""}{item.plugins.length ? ` · plugins: ${item.plugins.join(", ")}` : ""}</p>;
     case "text":
-      return <div className="chat-message"><img className="chat-avatar" src={logo} alt="" /><div className="markdown"><Markdown remarkPlugins={[remarkGfm]}>{item.text}</Markdown></div></div>;
+      return <div className="chat-message"><img className="chat-avatar" src={logo} alt="" /><div className="markdown"><Markdown>{item.text}</Markdown></div></div>;
     case "tool": {
       const failed = item.result && !item.result.ok;
       return (
@@ -54,7 +53,7 @@ function Outcome({ finished }: { finished: Finished }) {
       {facts && <span className="small">{facts}</span>}
       {finished.reason && <p className="small">{finished.reason}</p>}
       {structured?.summary ? <p>{structured.summary}</p>
-        : finished.result && <div className="markdown small"><Markdown remarkPlugins={[remarkGfm]}>{finished.result}</Markdown></div>}
+        : finished.result && <div className="markdown small"><Markdown>{finished.result}</Markdown></div>}
       {!!structured?.notes?.length && <><h4 className="card-sub">Notes captured</h4><ul>{structured.notes.map((n) => <li key={n}>{n}</li>)}</ul></>}
       {!!structured?.gaps?.length && <><h4 className="card-sub">Gaps</h4><ul>{structured.gaps.map((g) => <li key={g}>{g}</li>)}</ul></>}
     </div>
