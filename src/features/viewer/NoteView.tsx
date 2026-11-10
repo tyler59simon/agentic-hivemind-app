@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { Layers, Network } from "lucide-react";
 import { Children, isValidElement, useEffect, useMemo, type ReactNode } from "react";
 import Markdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -32,9 +33,9 @@ export function NoteTags({ note }: { note: Pick<Note, "tags"> }) {
       {note.tags.map((t) => {
         const project = t.startsWith("project/") ? registry.data?.projects.find((p) => p.tag === t) : undefined;
         const system = t.startsWith("system/") ? systems.data?.systems.find((s) => s.tag === t) : undefined;
-        if (system) return <button key={t} className="chip project" title={`Open system ${system.name}`} onClick={() => openSystem(system.slug)}>{system.name}</button>;
+        if (system) return <button key={t} className="chip project" title={`Open system ${system.name}`} onClick={() => openSystem(system.slug)}><Network size="1em" aria-hidden />{system.name}</button>;
         return project
-          ? <button key={t} className="chip project" title={`Open project ${project.name}`} onClick={() => openProject(project.slug)}>{project.name}</button>
+          ? <button key={t} className="chip project" title={`Open project ${project.name}`} onClick={() => openProject(project.slug)}><Layers size="1em" aria-hidden />{project.name}</button>
           : <span key={t} className="tag">{t}</span>;
       })}
     </span>

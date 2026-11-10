@@ -59,7 +59,7 @@ export function NoteTab({ tab }: { tab: Tab }) {
           <>
             <h1 onDoubleClick={() => updateTab(tab.id, { mode: "live" })} title="Double-click to edit">{n.title}</h1>
             <div className="page-meta">
-              <span className={`status-chip ${n.status}`}>{n.status === "active" && <CircleCheck size="1.1em" aria-hidden />}{n.status}</span>
+              <span className={`status-chip cap ${n.status}`}>{n.status === "active" && <CircleCheck size="1.1em" aria-hidden />}{n.status}</span>
               <span className="muted">{confirmed ? `Confirmed ${dayMonth(confirmed)}` : `Updated ${dayMonth(n.updated)}`}</span>
               <NoteTags note={n} />
             </div>

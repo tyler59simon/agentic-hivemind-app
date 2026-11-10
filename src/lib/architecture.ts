@@ -8,7 +8,8 @@ export interface ArchElement {
   cloud?: { provider: string; service: string };
 }
 export interface ArchRelationship { id: string; source_id: string; destination_id: string; description?: string; technology?: string }
-export interface ArchView { id: string; type: string; title: string }
+/** A drawn view: which elements and relationships it shows, and the element whose inside it opens up. */
+export interface ArchView { id: string; type: string; title: string; element_ids?: string[]; relationship_ids?: string[]; boundary_id?: string }
 export interface ArchModel {
   system?: { name?: string; description?: string };
   elements?: ArchElement[]; relationships?: ArchRelationship[]; views?: ArchView[];
@@ -34,3 +35,5 @@ export interface Architecture {
 export const systemArchitecture = (slug: string) => invoke<Architecture>("system_architecture", { slug });
 /** One listed diagram as a data URL. */
 export const systemDiagram = (slug: string, path: string) => invoke<string>("system_diagram", { slug, path });
+/** The Mermaid source the suite wrote beside a diagram (`path` ends in .mmd), as text. */
+export const systemDiagramSource = (slug: string, path: string) => invoke<string>("system_diagram_source", { slug, path });

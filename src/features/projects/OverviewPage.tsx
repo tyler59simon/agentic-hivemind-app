@@ -141,7 +141,7 @@ function ProjectOverview({ project }: { project: Project }) {
   return (
     <div className="page">
       <PageHeader title={project.name} subtitle={project.description || oneLine(summary).slice(0, 160) || "No description yet."}
-        meta={project.status !== "active" && <span className={`status-chip ${project.status}`}>{project.status}</span>}
+        meta={project.status !== "active" && <span className={`status-chip cap ${project.status}`}>{project.status}</span>}
         actions={<>
           <button className="text underline" onClick={copy} title="Copy a Markdown context pack for an agent">Copy briefing</button>
           <Menu label="Project actions" align="right" button={<Ellipsis size="1.3em" aria-hidden />} className="icon-menu">
@@ -194,7 +194,7 @@ function ProjectOverview({ project }: { project: Project }) {
                   <button className="item-row" onClick={(e) => openNote(g, e.ctrlKey || e.metaKey)}>
                     {dueRefs.has(g.ref) ? <Clock size="1.6em" aria-hidden /> : <CircleEllipsis size="1.6em" aria-hidden />}
                     <span className="item-main"><strong>{g.title}</strong><span className="muted">{oneLine(g.items[0].item)}{g.items.length > 1 ? ` (+${g.items.length - 1} more)` : ""}</span></span>
-                    <span className={`status-chip ${dueRefs.has(g.ref) ? "neutral" : "progress"}`}>{dueRefs.has(g.ref) ? "Needs review" : "In progress"}</span>
+                    <span className={`status-chip ${dueRefs.has(g.ref) ? "neutral" : "busy"}`}>{dueRefs.has(g.ref) ? "Needs review" : "In progress"}</span>
                   </button>
                 </HoverPreview>
               </li>

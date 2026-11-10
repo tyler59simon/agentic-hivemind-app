@@ -5,7 +5,7 @@ import { domains, list } from "../../lib/lm";
 import { refreshStore } from "../../lib/refresh";
 import { fuzzy } from "../../lib/text";
 import { openProject, openSystem, useApp, type Route } from "../../store";
-import { useWorkspace } from "../../workspace/store";
+import { railShown, useWorkspace } from "../../workspace/store";
 import { useProjectIntent } from "../projects/intent";
 import { projectsQuery } from "../projects/useProject";
 import { systemsQuery, useSystemIntent } from "../systems/useSystem";
@@ -69,7 +69,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       ] : []),
       ...EXTRA_COMMANDS.map((c) => ({ ...c, run: () => { close(); c.run(); } })),
       { key: "split", label: "Open the note side by side", detail: "Ctrl+\\", run: () => { ws.split(); close(); } },
-      { key: "rail", label: ws.rail ? "Hide the note's context rail" : "Show the note's context rail", run: () => { ws.setRail(!ws.rail); close(); } },
+      { key: "rail", label: railShown(ws) ? "Hide the note's context rail" : "Show the note's context rail", run: () => { ws.setRail(!railShown(ws)); close(); } },
       { key: "search", label: "Search notes", detail: "Ctrl+K", run: page({ page: "memory" }) },
       { key: "active", label: "Show active notes", run: () => { app.setShelf("active"); close(); app.go({ page: "memory" }); } },
       { key: "archive", label: "Show the archive", run: () => { app.setShelf("archived"); close(); app.go({ page: "memory" }); } },

@@ -4,7 +4,7 @@ import { NewNote } from "../features/editor/NewNote";
 import { NoteTab } from "../features/editor/NoteTab";
 import { useApp } from "../store";
 import { Confirm } from "../ui/Modal";
-import { MAX_PANES, useWorkspace, type Pane, type Tab } from "./store";
+import { MAX_PANES, railShown, useWorkspace, type Pane, type Tab } from "./store";
 
 /** What a tab shows. */
 export const TAB_VIEWS: Record<Tab["kind"], (tab: Tab) => ReactNode> = {
@@ -57,7 +57,8 @@ const newNote = () => useWorkspace.getState().openTab({ kind: "new-note" });
 function PaneView({ pane, focused, first, last, onClose }: {
   pane: Pane; focused: boolean; first: boolean; last: boolean; onClose: (paneId: string, tabId: string) => void;
 }) {
-  const { activate, focus, split, panes, rail, setRail } = useWorkspace();
+  const { activate, focus, split, panes, setRail } = useWorkspace();
+  const rail = useWorkspace(railShown);
   const active = pane.tabs.find((t) => t.id === pane.active) ?? pane.tabs[0];
   const strip = useRef<HTMLDivElement>(null);
   useEffect(() => {

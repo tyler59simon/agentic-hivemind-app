@@ -102,7 +102,7 @@ function Session({ id }: { id: string }) {
       <div className="chat-thread">
         <header className="chat-head">
           <h2>{info.title}</h2>
-          <span className={`status-chip ${status}`}>{status}</span>
+          <span className={`status-chip cap ${status}`}>{status}</span>
         </header>
         <Transcript state={state} running={running} />
       </div>

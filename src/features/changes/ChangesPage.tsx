@@ -21,9 +21,9 @@ const openNote = (row: Pick<NoteRow, "ref" | "title">, split = false) => useWork
 /** What a plan's state means as a change: done, waiting on a review, or under way. */
 function chipOf(row: NoteRow, due: Set<string>): { label: string; tone: string } {
   if (row.status === "resolved") return { label: "Done", tone: "active" };
-  if (row.status !== "active") return { label: row.status, tone: "" };
+  if (row.status !== "active") return { label: row.status[0].toUpperCase() + row.status.slice(1), tone: "" };
   if (due.has(row.ref)) return { label: "Needs review", tone: "waiting" };
-  return progress(row).done ? { label: "In progress", tone: "progress" } : { label: "Not started", tone: "" };
+  return progress(row).done ? { label: "In progress", tone: "busy" } : { label: "Not started", tone: "" };
 }
 
 /** The selected plan: its outcome, its steps, and the notes it links to. */

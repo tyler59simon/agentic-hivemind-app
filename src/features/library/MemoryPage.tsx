@@ -10,7 +10,7 @@ import { highlight, terms } from "../../lib/text";
 import { useApp, type Shelf } from "../../store";
 import { ArrowLink, dayMonth, PageHeader, Tabs } from "../../ui/Page";
 import { NoteRail } from "../../workspace/RightSidebar";
-import { hasTabs, useWorkspace } from "../../workspace/store";
+import { hasTabs, railShown, useWorkspace } from "../../workspace/store";
 import { OpenTabs, Workspace } from "../../workspace/Workspace";
 import { GraphView } from "../graph/GraphView";
 import { ActivityView } from "../history/HistoryViews";
@@ -48,7 +48,7 @@ function Preview({ item }: { item: Item }) {
       <span className={`badge type-${item.type}`}>{item.type}</span>
       <h2>{item.title}</h2>
       <div className="page-meta">
-        <span className={`status-chip ${item.status}`}>{item.status}</span>
+        <span className={`status-chip cap ${item.status}`}>{item.status}</span>
         <span className="muted">{confirmed ? `Last confirmed ${dayMonth(confirmed)}` : `Updated ${dayMonth(item.updated)}`}</span>
       </div>
       {note.isLoading && <p className="muted">Loading…</p>}
@@ -214,7 +214,7 @@ export function MemoryPage() {
   const route = useApp((s) => s.route);
   const go = useApp((s) => s.go);
   const open = useWorkspace(hasTabs);
-  const rail = useWorkspace((s) => s.rail);
+  const rail = useWorkspace(railShown);
   const { project } = useCurrentProject();
   const view = route.page === "memory" ? route.view : undefined;
 

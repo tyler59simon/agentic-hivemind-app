@@ -20,8 +20,9 @@ export interface Pane { id: string; tabs: Tab[]; active: string | null }
 interface WorkspaceState {
   panes: Pane[];
   focused: string;
-  /** Whether the context rail beside the focused note is shown. */
+  /** Whether the context rail beside the focused note is shown: with one pane, and with several (off at first, to make room). */
   rail: boolean;
+  railSplit: boolean;
   dirty: Record<string, boolean>;          // tab id -> unsaved edits (not persisted)
   reveal: { tabId: string; line: number; at: number } | null; // outline -> scroll request
   openNote: (ref: string, opts?: { split?: boolean; mode?: Mode; title?: string }) => void;
@@ -58,6 +59,7 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
     panes: [initial],
     focused: initial.id,
     rail: true,
+    railSplit: false,
     dirty: {},
     reveal: null,
 
@@ -130,7 +132,7 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
     updateTab: (tabId, patch) =>
       set((s) => ({ panes: s.panes.map((p) => ({ ...p, tabs: p.tabs.map((t) => (t.id === tabId ? { ...t, ...patch } : t)) })) })),
     setDirty: (tabId, dirty) => set((s) => (Boolean(s.dirty[tabId]) === dirty ? s : { dirty: { ...s.dirty, [tabId]: dirty } })),
-    setRail: (rail) => set({ rail }),
+    setRail: (shown) => set((s) => (s.panes.length > 1 ? { railSplit: shown } : { rail: shown })),
     revealLine: (tabId, line) => set({ reveal: { tabId, line, at: Date.now() } }),
     // After a new note is captured, its tab becomes a note tab.
     replaceRef: (from, to) =>
@@ -147,6 +149,7 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
     panes: s.panes.map((p) => ({ ...p, tabs: p.tabs.filter((t) => t.kind !== "new-note") })),
     focused: s.focused,
     rail: s.rail,
+    railSplit: s.railSplit,
   }),
 }));
 
@@ -166,6 +169,9 @@ export function activeTab(s: Pick<WorkspaceState, "panes" | "focused">): Tab | u
   const pane = s.panes.find((p) => p.id === s.focused) ?? s.panes[0];
   return pane?.tabs.find((t) => t.id === pane.active);
 }
+
+/** Whether the context rail is shown for the current number of panes. */
+export const railShown = (s: Pick<WorkspaceState, "panes" | "rail" | "railSplit">) => (s.panes.length > 1 ? s.railSplit : s.rail);
 
 /** Whether any note is open. */
 export const hasTabs = (s: Pick<WorkspaceState, "panes">) => s.panes.some((p) => p.tabs.length > 0);

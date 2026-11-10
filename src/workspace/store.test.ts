@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useApp } from "../store";
-import { activeTab, MAX_PANES, notesOnly, useWorkspace } from "./store";
+import { activeTab, MAX_PANES, notesOnly, railShown, useWorkspace } from "./store";
 
 const ws = () => useWorkspace.getState();
 const reset = () => {
   const pane = { id: "p0", tabs: [], active: null };
-  useWorkspace.setState({ panes: [pane], focused: "p0", dirty: {}, rail: true, reveal: null });
+  useWorkspace.setState({ panes: [pane], focused: "p0", dirty: {}, rail: true, railSplit: false, reveal: null });
   useApp.setState({ route: { page: "overview" }, back: [] });
 };
 
@@ -71,6 +71,19 @@ describe("workspace", () => {
     useApp.getState().go({ page: "overview" });
     ws().openNote("d:1"); // already open: still brought into view
     expect(useApp.getState().route).toEqual({ page: "memory", view: "notes" });
+  });
+
+  it("the context rail steps aside when notes are side by side, and each layout remembers its own choice", () => {
+    ws().openNote("d:1");
+    expect(railShown(ws())).toBe(true);
+    ws().openNote("d:2", { split: true });
+    expect(railShown(ws())).toBe(false);
+    ws().setRail(true);
+    expect([ws().rail, ws().railSplit, railShown(ws())]).toEqual([true, true, true]);
+    const second = ws().panes[1];
+    ws().closeTab(second.id, second.tabs[0].id);
+    ws().setRail(false);
+    expect([ws().rail, ws().railSplit, railShown(ws())]).toEqual([false, true, false]);
   });
 
   it("a new note is always its own tab", () => {

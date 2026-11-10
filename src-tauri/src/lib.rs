@@ -111,6 +111,13 @@ async fn system_diagram(state: State<'_, AppState>, slug: String, path: String) 
     blocking(move || architecture::diagram_for_system(&bridge, &slug, &path)).await
 }
 
+/// The Mermaid source of a diagram in that folder, as text; only `.mmd` files the manifest lists are served.
+#[tauri::command]
+async fn system_diagram_source(state: State<'_, AppState>, slug: String, path: String) -> Result<String, String> {
+    let bridge = state.bridge.clone();
+    blocking(move || architecture::source_for_system(&bridge, &slug, &path)).await
+}
+
 /// The coding-agent CLI a session would launch, or why there is none.
 #[tauri::command]
 async fn agent_available(state: State<'_, AppState>) -> Result<String, String> {
@@ -249,7 +256,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            lm, connect, git_activity, system_architecture, system_diagram, get_settings, save_settings, capture_status, show_main, draft_put, draft_get, draft_delete, draft_list,
+            lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_start, agent_cancel, agent_sessions, agent_session
         ])
         .build(tauri::generate_context!())

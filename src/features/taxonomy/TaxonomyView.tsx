@@ -76,7 +76,6 @@ export function TaxonomyView() {
 
   return (
     <div className="taxonomy pad">
-      <h2>Tags</h2>
       <p className="muted">Living Memory only accepts registered tags. Every change here is a reviewed plan, journaled and undoable.</p>
       <div className="row add-tags">
         <input value={adding} placeholder="Add tags, e.g. platform/linux, technology/rust" onChange={(e) => setAdding(e.target.value)}

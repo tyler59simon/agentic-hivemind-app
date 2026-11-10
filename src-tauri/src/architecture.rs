@@ -142,6 +142,33 @@ pub fn read_diagram(folder: &Path, relative: &str) -> Result<String, String> {
     Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
 }
 
+/// The Mermaid source the suite wrote beside a diagram (a `.mmd` file its manifest lists), as text.
+pub fn read_source(folder: &Path, relative: &str) -> Result<String, String> {
+    if !relative.to_ascii_lowercase().ends_with(".mmd") {
+        return Err("Only a diagram's Mermaid source can be shown".into());
+    }
+    let manifest = read_json(&folder.join(MANIFEST)).ok_or("This folder has no Architecture Suite manifest")?;
+    let listed = manifest
+        .get("owners")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|owners| owners.values())
+        .filter_map(|owner| owner.get("files").and_then(Value::as_object))
+        .any(|files| files.contains_key(relative));
+    if !listed {
+        return Err("That file is not in this folder's manifest".into());
+    }
+    let root = folder.canonicalize().map_err(|e| e.to_string())?;
+    let path = folder.join(relative).canonicalize().map_err(|e| format!("Cannot open {relative}: {e}"))?;
+    if !path.starts_with(&root) {
+        return Err("That file is outside the architecture folder".into());
+    }
+    if std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > MAX_JSON {
+        return Err(format!("{relative} is too large to show"));
+    }
+    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
 pub fn for_system(bridge: &Bridge, slug: &str) -> Result<Architecture, String> {
     Ok(match folder_of(&system_entry(bridge, slug)?) {
         Some(folder) => read_folder(&folder),
@@ -152,6 +179,11 @@ pub fn for_system(bridge: &Bridge, slug: &str) -> Result<Architecture, String> {
 pub fn diagram_for_system(bridge: &Bridge, slug: &str, relative: &str) -> Result<String, String> {
     let folder = folder_of(&system_entry(bridge, slug)?).ok_or("No architecture folder is set for this system")?;
     read_diagram(&folder, relative)
+}
+
+pub fn source_for_system(bridge: &Bridge, slug: &str, relative: &str) -> Result<String, String> {
+    let folder = folder_of(&system_entry(bridge, slug)?).ok_or("No architecture folder is set for this system")?;
+    read_source(&folder, relative)
 }
 
 #[cfg(test)]
@@ -212,6 +244,21 @@ mod tests {
         let outside = read_diagram(&dir, "../outside.svg");
         std::fs::remove_file(dir.parent().unwrap().join("outside.svg")).ok();
         assert_eq!(outside.unwrap_err(), "That file is outside the architecture folder");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn serves_only_listed_mermaid_sources() {
+        let dir = fixture("source");
+        std::fs::write(dir.join("02-containers/containers.mmd"), "flowchart LR\n  a --> b\n").unwrap();
+        assert_eq!(read_source(&dir, "02-containers/containers.mmd").unwrap(), "flowchart LR\n  a --> b\n");
+        // Not Mermaid, listed but missing on disk, and present on disk but not listed.
+        assert!(read_source(&dir, "02-containers/containers.svg").is_err());
+        assert!(read_source(&dir, MODEL).is_err());
+        std::fs::remove_file(dir.join("02-containers/containers.mmd")).unwrap();
+        assert!(read_source(&dir, "02-containers/containers.mmd").is_err());
+        std::fs::write(dir.join("loose.mmd"), "flowchart LR").unwrap();
+        assert_eq!(read_source(&dir, "loose.mmd").unwrap_err(), "That file is not in this folder's manifest");
         std::fs::remove_dir_all(dir).ok();
     }
 

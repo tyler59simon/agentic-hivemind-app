@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ellipsis, MessageCircle, Plus } from "lucide-react";
+import { ArrowRight, Ellipsis, MessageCircle, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { agentAvailable, agentStart } from "../../lib/agent";
+import type { ArchModel } from "../../lib/architecture";
 import { useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { systemPlan, type NoteRow, type System } from "../../lib/lm";
@@ -20,7 +21,9 @@ import { PlanDialog } from "../plans/PlanDialog";
 import { NoteLink } from "../preview/NoteLink";
 import { systemsForProject } from "../projects/scope";
 import { useCurrentProject } from "../projects/useProject";
+import { ArchitectureCanvas, kindLine } from "./ArchitectureCanvas";
 import { buildBrief } from "./brief";
+import type { CanvasNode } from "./canvas";
 import { cloudResources, diagramList, externalSystems, interfaces, passportSections, techStack, type DiagramEntry } from "./passport";
 import { SystemWizard } from "./SystemWizard";
 import { systemsQuery, useDiagram, useSystem, useSystemIntent, useSystemProposal } from "./useSystem";
@@ -173,10 +176,44 @@ function Diagrams({ slug, entries, version }: { slug: string; entries: DiagramEn
   );
 }
 
+/** What is known about the box selected on the canvas: what it is, what it talks to, and the decisions that mention it. */
+function Inspector({ node, model, decisions, onClose }: { node: CanvasNode; model: ArchModel; decisions: NoteRow[]; onClose: () => void }) {
+  const names = useMemo(() => new Map((model.elements ?? []).map((e) => [e.id, e.name])), [model]);
+  const flows = (model.relationships ?? []).filter((r) => r.source_id === node.id || r.destination_id === node.id);
+  const name = node.name.toLowerCase();
+  const mentions = decisions.filter((d) => `${d.title} ${d.summary ?? ""}`.toLowerCase().includes(name));
+  return (
+    <Section title={node.name} actions={<button className="icon-button" aria-label="Close" title="Back to the system" onClick={onClose}><X size="1.1em" aria-hidden /></button>}>
+      <p className="muted">{kindLine(node)}</p>
+      {node.description && <p>{node.description}</p>}
+      <h4 className="card-sub">Decisions that mention it</h4>
+      {mentions.length ? <NoteList rows={mentions} /> : <p className="muted small">None of this system's decisions mention {node.name} by name.</p>}
+      {!!flows.length && (
+        <>
+          <h4 className="card-sub">Talks to</h4>
+          <ul className="card-list compact">
+            {flows.slice(0, 12).map((r) => (
+              <li key={r.id}>
+                <div className="row-line">
+                  <span>{r.source_id === node.id ? node.name : names.get(r.source_id) ?? r.source_id}</span><ArrowRight size="1em" aria-hidden />
+                  <span>{r.destination_id === node.id ? node.name : names.get(r.destination_id) ?? r.destination_id}</span>
+                  {r.technology && <code>{r.technology}</code>}
+                </div>
+                {r.description && <p className="muted small clamp">{r.description}</p>}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </Section>
+  );
+}
+
 function SystemView({ system, all }: { system: System; all: System[] }) {
   const { rows, passport, architecture } = useSystem(system.slug);
   const [editing, setEditing] = useState(false);
   const [retiring, setRetiring] = useState(false);
+  const [picked, setPicked] = useState<CanvasNode | null>(null);
   const members = rows.data?.notes ?? [];
   const parts = useMemo(() => passportSections(members, system.passport), [members, system.passport]);
   const arch = architecture.data;
@@ -198,6 +235,7 @@ function SystemView({ system, all }: { system: System; all: System[] }) {
   return (
     <>
       <Split rail={<>
+        {picked && model && <Inspector node={picked} model={model} decisions={parts.decisions} onClose={() => setPicked(null)} />}
         <Section title={system.name} actions={
           <Menu label="System actions" align="right" button={<Ellipsis size="1.3em" aria-hidden />} className="icon-menu">
             {(close) => (
@@ -209,7 +247,7 @@ function SystemView({ system, all }: { system: System; all: System[] }) {
               </>
             )}
           </Menu>}>
-          <p className="muted"><span className={`status-chip ${system.status}`}>{system.status}</span> {system.repos.length ? "System" : "External system"}</p>
+          <p className="muted"><span className={`status-chip cap ${system.status}`}>{system.status}</span> {system.repos.length ? "System" : "External system"}</p>
           {system.description ? <p>{system.description}</p> : <p className="muted">No purpose recorded yet.</p>}
           {!!system.capabilities.length && <ul className="capabilities">{system.capabilities.map((c) => <li key={c}>{c}</li>)}</ul>}
           <div className="row-line"><span className="muted small dep-label">Owners</span>
@@ -233,11 +271,24 @@ function SystemView({ system, all }: { system: System; all: System[] }) {
         </Section>
       </>}>
         <AgentActions system={system} all={all} />
-        <Section title="Diagrams" count={diagrams.length || undefined} {...archProps}
-          actions={generated && <span className="muted small">{generated}</span>}
-          empty={archEmpty(!!diagrams.length, "The folder has a model but no SVG or PNG diagrams.")}>
-          <Diagrams slug={system.slug} entries={diagrams} version={arch?.generatedAt ?? null} />
-        </Section>
+        {model?.elements?.length ? (
+          <>
+            <ArchitectureCanvas slug={system.slug} model={model} diagrams={diagrams} version={arch?.generatedAt ?? null} caption={generated}
+              selected={picked?.id ?? null} onSelect={setPicked} />
+            {!!diagrams.length && (
+              <details className="rail-more">
+                <summary>All generated diagrams ({diagrams.length})</summary>
+                <Diagrams slug={system.slug} entries={diagrams} version={arch?.generatedAt ?? null} />
+              </details>
+            )}
+          </>
+        ) : (
+          <Section title="Diagrams" count={diagrams.length || undefined} {...archProps}
+            actions={generated && <span className="muted small">{generated}</span>}
+            empty={archEmpty(!!diagrams.length, "The folder has a model but no SVG or PNG diagrams.")}>
+            <Diagrams slug={system.slug} entries={diagrams} version={arch?.generatedAt ?? null} />
+          </Section>
+        )}
         <Section title="Dependencies">
           <div className="row-line"><span className="muted small dep-label">Depends on</span><SystemChips slugs={system.depends_on} all={all} empty="nothing registered" /></div>
           <div className="row-line"><span className="muted small dep-label">Used by</span><SystemChips slugs={system.dependents} all={all} empty="nothing registered" /></div>
