@@ -121,7 +121,8 @@ export function viewOf(change: Change, ctx: ViewContext): ChangeView {
     updated: brief > change.updated ? brief : change.updated,
     decisions: linked.filter((n) => n.type === "decision"),
     questions: linked.filter((n) => n.type === "risk" && n.status === "active"),
-    checkpoints: linked.filter((n) => n.type === "status").sort((a, b) => (a.title < b.title ? 1 : a.title > b.title ? -1 : 0)),
+    // Only the app's own checkpoint notes: other status notes may link to the brief too, and titles are all there is to sort by.
+    checkpoints: linked.filter((n) => n.type === "status" && n.title.startsWith(`${change.display} checkpoint `)).sort((a, b) => (a.title < b.title ? 1 : a.title > b.title ? -1 : 0)),
     hasDiagram: !!system?.architecture,
   };
 }

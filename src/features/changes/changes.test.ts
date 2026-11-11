@@ -141,7 +141,8 @@ describe("change view model", () => {
     const g = graph([
       node("demo:brief", "plan"), node("demo:d1", "decision"), node("demo:q1", "risk", "active"), node("demo:q2", "risk", "resolved"),
       node("demo:c1", "status", "active", "CHG-014 checkpoint 2026-11-08 10:00"), node("demo:c2", "status", "active", "CHG-014 checkpoint 2026-11-09 10:00"),
-    ], ["demo:d1", "demo:q1", "demo:q2", "demo:c1", "demo:c2"].map((to) => ({ from: "demo:brief", to, kind: "link" as const })));
+      node("demo:s1", "status", "active", "PayStream status: week of Nov 9"),
+    ], ["demo:d1", "demo:q1", "demo:q2", "demo:c1", "demo:c2", "demo:s1"].map((to) => ({ from: "demo:brief", to, kind: "link" as const })));
     return g;
   };
 

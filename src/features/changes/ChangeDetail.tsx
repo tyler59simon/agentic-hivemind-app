@@ -70,7 +70,7 @@ function AddLine({ label, aria, placeholder, onAdd }: { label: string; aria: str
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
-  if (!open) return <button className="link" onClick={() => setOpen(true)}>{label}</button>;
+  if (!open) return <button className="link add-link" onClick={() => setOpen(true)}>{label}</button>;
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!text.trim() || busy) return;

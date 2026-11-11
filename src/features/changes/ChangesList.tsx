@@ -97,7 +97,7 @@ export function ChangesList() {
           items={[{ id: "active", label: "Active", count: active.length }, { id: "completed", label: "Completed" }, { id: "all", label: "All changes" }]} />
         <label className="lib-search inline"><Search size="1.2em" aria-hidden /><input value={search} placeholder="Find a change" aria-label="Find a change" onChange={(e) => setSearch(e.target.value)} /></label>
       </div>
-      <div className="split wide-rail lib-split">
+      <div className="split wide-rail lib-split changes-split">
         <div className="split-main">
           {query.isLoading && <p className="muted">Loading…</p>}
           {query.error && <p className="error">{classify(query.error).message}</p>}
