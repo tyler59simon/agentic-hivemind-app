@@ -9,13 +9,14 @@ import { systemPlan, type NoteRow, type System } from "../../lib/lm";
 import { sections } from "../../lib/note";
 import { refreshStore } from "../../lib/refresh";
 import { shortDate } from "../../lib/text";
-import { openSession, openSystem, useApp } from "../../store";
+import { openSession, openSystem, startSession, useApp } from "../../store";
 import { Menu } from "../../ui/Menu";
 import { Modal } from "../../ui/Modal";
 import { Markdown } from "../../ui/Markdown";
-import { PageHeader, Section, Split } from "../../ui/Page";
+import { ArrowLink, PageHeader, Section, Split } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
+import { useSessionDraft } from "../agents/draft";
 import { PlanDialog } from "../plans/PlanDialog";
 import { NoteLink } from "../preview/NoteLink";
 import { systemsForProject } from "../projects/scope";
@@ -93,7 +94,7 @@ function AgentActions({ system, all }: { system: System; all: System[] }) {
   return (
     <>
       <div className="agent-line">
-        <button className="primary" disabled={!!blocked || starting} title={blocked ?? "Run Claude Code in the background to generate the architecture output"} onClick={start}>
+        <button className="outline" disabled={!!blocked || starting} title={blocked ?? "Run Claude Code in the background to generate the architecture output"} onClick={start}>
           <MessageCircle size="1.15em" aria-hidden />{starting ? "Starting…" : "Generate with agent"}
         </button>
         <button onClick={copy} title="Copy the same instructions to paste into an agent yourself">Copy agent brief</button>
@@ -176,7 +177,7 @@ function Diagrams({ slug, entries, version }: { slug: string; entries: DiagramEn
 }
 
 /** What is known about the box selected on the canvas: what it is, what it talks to, and the decisions that mention it. */
-function Inspector({ node, model, decisions, onClose }: { node: CanvasNode; model: ArchModel; decisions: NoteRow[]; onClose: () => void }) {
+function Inspector({ slug, node, model, decisions, onClose }: { slug: string; node: CanvasNode; model: ArchModel; decisions: NoteRow[]; onClose: () => void }) {
   const names = useMemo(() => new Map((model.elements ?? []).map((e) => [e.id, e.name])), [model]);
   const flows = (model.relationships ?? []).filter((r) => r.source_id === node.id || r.destination_id === node.id);
   const name = node.name.toLowerCase();
@@ -204,6 +205,7 @@ function Inspector({ node, model, decisions, onClose }: { node: CanvasNode; mode
           </ul>
         </>
       )}
+      <ArrowLink onClick={() => { useSessionDraft.getState().setSystem(slug, node.name); toast("Attached " + node.name + " to the next session's context"); }}>Attach to agent context</ArrowLink>
     </Section>
   );
 }
@@ -234,7 +236,7 @@ function SystemView({ system, all }: { system: System; all: System[] }) {
   return (
     <>
       <Split rail={<>
-        {picked && model && <Inspector node={picked} model={model} decisions={parts.decisions} onClose={() => setPicked(null)} />}
+        {picked && model && <Inspector slug={system.slug} node={picked} model={model} decisions={parts.decisions} onClose={() => setPicked(null)} />}
         <Section title={system.name} actions={
           <Menu label="System actions" align="right" button={<Ellipsis size="1.3em" aria-hidden />} className="icon-menu">
             {(close) => (
@@ -374,6 +376,7 @@ export function ArchitecturePage() {
   const matched = useMemo(() => (project ? systemsForProject(project, live) : []), [project, live]);
   const system = all.find((s) => s.slug === routed) ?? matched[0] ?? (project ? undefined : live[0]);
   const warnings = registry.data?.warnings ?? [];
+  const discuss = () => { if (!system) return; useSessionDraft.getState().setSystem(system.slug); startSession(); };
 
   return (
     <div className="page">
@@ -389,6 +392,7 @@ export function ArchitecturePage() {
             </select>
           )}
           <button className="text" onClick={openWizard}><Plus size="1.1em" aria-hidden />New system</button>
+          {system && <button className="primary big" onClick={discuss}><MessageCircle size="1.2em" aria-hidden />Discuss with agent</button>}
         </>} />
       {!enabled ? <p className="muted">Systems need a newer Living Memory (one with the <code>systems</code> command).</p>
         : registry.isLoading ? <p className="muted">Loading…</p>

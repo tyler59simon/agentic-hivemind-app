@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, FileText, Link as LinkIcon, Plus, Search } from "lucide-react";
+import { ArrowLeft, FileText, Link as LinkIcon, Minus, Plus, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { classify } from "../../lib/errors";
 import { domains, list, search, taxonomy, type SearchOptions } from "../../lib/lm";
@@ -8,9 +8,11 @@ import { highlight, terms } from "../../lib/text";
 import { useApp, type Shelf } from "../../store";
 import { Markdown } from "../../ui/Markdown";
 import { ArrowLink, dayMonth, PageHeader, Tabs } from "../../ui/Page";
+import { toast } from "../../ui/toast";
 import { NoteRail } from "../../workspace/RightSidebar";
 import { hasTabs, railShown, useWorkspace } from "../../workspace/store";
 import { OpenTabs, Workspace } from "../../workspace/Workspace";
+import { useSessionDraft } from "../agents/draft";
 import { GraphView } from "../graph/GraphView";
 import { ActivityView } from "../history/HistoryViews";
 import { useNoteLinks } from "../links/useLinks";
@@ -42,6 +44,12 @@ function Preview({ item }: { item: Item }) {
   const summary = n ? sections(n.body).summary : undefined;
   const linked = [...(links?.outgoing ?? []), ...(links?.incoming ?? [])].filter((e, i, all) => all.findIndex((x) => x.node.ref === e.node.ref) === i).slice(0, 6);
   const confirmed = n?.confirmed?.length ? n.confirmed[n.confirmed.length - 1] : undefined;
+  const added = useSessionDraft((s) => s.context.includes(item.ref));
+  const toggle = () => {
+    if (added) return useSessionDraft.getState().removeContext(item.ref);
+    useSessionDraft.getState().addContext(item.ref);
+    toast("Added to the next session's context");
+  };
   return (
     <div className="lib-preview">
       <span className={`badge type-${item.type}`}>{item.type}</span>
@@ -65,7 +73,9 @@ function Preview({ item }: { item: Item }) {
       )}
       {!!item.tags.length && <div className="tags">{item.tags.map((t) => <span key={t} className="tag">{t}</span>)}</div>}
       <div className="lib-preview-actions">
-        <button className="outline" onClick={() => openNote(item, true)} title="Open beside the note you have open (Ctrl+click)">Open to the side</button>
+        <button className="outline" onClick={toggle}>
+          {added ? <Minus size="1.15em" aria-hidden /> : <Plus size="1.15em" aria-hidden />}{added ? "Remove from agent context" : "Add to agent context"}
+        </button>
         <ArrowLink onClick={() => openNote(item)}>Open full note</ArrowLink>
       </div>
       <p className="lib-source muted small">Source: Living Memory · {item.domain}</p>

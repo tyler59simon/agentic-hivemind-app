@@ -54,11 +54,11 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
       {field("claude_path", "Claude Code", "default: the installed claude command")}
       {field("architecture_suite_plugin", "Architecture Suite plugin folder", "only when the plugin is not installed in Claude Code")}
       <label className="field">
-        <span>Spend cap per session (USD)</span>
+        <span>Spend cap per agent run (USD)</span>
         <input type="number" min="0.5" step="0.5" value={value.agent_budget_usd ?? ""} placeholder="5"
           onChange={(e) => setValue({ ...value, agent_budget_usd: e.target.value ? Number(e.target.value) : null })} />
       </label>
-      <p className="muted small">Hivemind starts Claude Code in the background for tasks such as generating a system's architecture. A session may only read the system's repositories, run Architecture Suite and write to the system's architecture folder.</p>
+      <p className="muted small">Hivemind starts Claude Code for you. A background task, such as generating a system's architecture, may only read the system's repositories, run Architecture Suite and write to the system's architecture folder. An interactive session works in its own git worktree. It asks before it edits files or runs commands, except where you chose “Accept edits” or your own Claude Code settings already allow the action. The cap applies to each run of the agent; continuing a session after the cap starts a new run.</p>
 
       <h3>Editor</h3>
       <label className="field">
