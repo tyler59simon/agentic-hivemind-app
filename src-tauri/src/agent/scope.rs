@@ -210,7 +210,6 @@ pub fn project_repo(entry: &Value, repo: &str) -> Result<PathBuf, String> {
 }
 
 /// What a work session may touch: its worktree, and nothing without asking beyond reading it.
-#[allow(dead_code)] // used from commit 4
 pub fn work(tree: Worktree, policy: PolicyMode, prompt: &str) -> Result<Scope, String> {
     let policy = match policy {
         PolicyMode::Ask => Policy::Ask { allow: vec![] },
@@ -233,7 +232,6 @@ pub fn work(tree: Worktree, policy: PolicyMode, prompt: &str) -> Result<Scope, S
 }
 
 /// The scope of a stored work session, checked against the registry again before a process is started for it.
-#[allow(dead_code)] // used from commit 4
 pub fn for_session(bridge: &Bridge, info: &SessionInfo) -> Result<Scope, String> {
     let AgentTask::Work { project, repo, .. } = &info.task else { return Err("This session does not take messages".into()) };
     project_repo(&crate::git::project_entry(bridge, project)?, repo)?;

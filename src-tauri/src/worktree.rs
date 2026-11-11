@@ -63,6 +63,8 @@ pub struct ChangedFiles {
     pub truncated: bool,
 }
 
+/// Phase 4's review is the first caller of `list`; until then only the tests use it and its type.
+#[cfg(test)]
 #[derive(Debug, PartialEq)]
 pub struct Listed {
     pub path: String,
@@ -96,7 +98,6 @@ fn resolve(repo: &Path, rev: &str) -> Option<String> {
 }
 
 /// `worktrees/<name>-<hash>`, both from the repository path with slashes turned to `/`, no trailing `/`, lowercased.
-#[allow(dead_code)] // used from commit 4
 pub fn folder_for(worktrees: &Path, repo: &Path) -> PathBuf {
     let normal = repo.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_lowercase();
     let last = normal.rsplit('/').next().unwrap_or("");
@@ -108,7 +109,6 @@ pub fn folder_for(worktrees: &Path, repo: &Path) -> PathBuf {
     worktrees.join(format!("{name}-{hash:08x}"))
 }
 
-#[allow(dead_code)] // used from commit 4
 pub fn create(worktrees: &Path, repo: &Path, branch: Option<&str>, session_id: &str) -> Result<Worktree, String> {
     if !repo.is_dir() {
         return Err(format!("The repository folder does not exist: {}", repo.display()));
@@ -211,7 +211,6 @@ pub fn changes(tree: &Worktree) -> Result<Vec<FileChange>, String> {
     Ok(files)
 }
 
-#[allow(dead_code)] // used from commit 4
 pub fn totals(files: &[FileChange]) -> Totals {
     Totals { files: files.len() as u64, added: files.iter().map(|f| f.added).sum(), removed: files.iter().map(|f| f.removed).sum() }
 }
@@ -254,7 +253,6 @@ pub fn patch(tree: &Worktree, file: &FileChange) -> Result<(String, bool), Strin
     }
 }
 
-#[allow(dead_code)] // used from commit 4
 pub fn changed_files(tree: &Worktree) -> Result<ChangedFiles, String> {
     let all = changes(tree)?;
     let truncated = all.len() > MAX_FILES;
@@ -273,7 +271,7 @@ pub fn ahead(tree: &Worktree) -> Result<u64, String> {
     text.trim().parse().map_err(|_| format!("Unreadable git output: {}", text.trim()))
 }
 
-#[allow(dead_code)] // used from commit 4
+#[cfg(test)]
 pub fn list(repo: &Path) -> Result<Vec<Listed>, String> {
     let text = run(repo, &["worktree", "list", "--porcelain"])?;
     let mut all: Vec<Listed> = Vec::new();
@@ -292,7 +290,6 @@ pub fn list(repo: &Path) -> Result<Vec<Listed>, String> {
 }
 
 /// Removing a worktree that is already gone is fine. The branch goes too, but only when the session made no commits on it.
-#[allow(dead_code)] // used from commit 4
 pub fn remove(tree: &Worktree) -> Result<(), String> {
     let (repo, path) = (Path::new(&tree.repo), Path::new(&tree.path));
     let mut command = git(repo);

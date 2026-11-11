@@ -12,7 +12,6 @@ const TOOL_SUMMARY: usize = 300;
 const RESULT_SUMMARY: usize = 500;
 const APPROVAL_INPUT: usize = 4000;
 const GOVERNED: &str = "Hivemind does not let agent sessions run Living Memory plan, apply or undo commands. Describe the change and let the user apply it.";
-#[allow(dead_code)] // used from commit 4
 const DECLINED: &str = "The user declined this action in Hivemind.";
 /// What the CLI's accept-edits mode allows, as the label of an always-allow that has no rule to show.
 const EDITS_LABEL: &str = "file edits and simple file commands in the worktree";
@@ -118,13 +117,11 @@ fn governed(request: &Value) -> bool {
 }
 
 /// A stdin line that answers the CLI's request `request_id`.
-#[allow(dead_code)] // used from commit 4
 fn envelope(request_id: &str, response: Value) -> String {
     json!({"type": "control_response", "response": {"subtype": "success", "request_id": request_id, "response": response}}).to_string()
 }
 
 /// A stdin line that asks the CLI for something, under an id of our own.
-#[allow(dead_code)] // used from commit 4
 fn control_request(request: Value) -> String {
     json!({"type": "control_request", "request_id": format!("hivemind-{}", uuid::Uuid::new_v4()), "request": request}).to_string()
 }

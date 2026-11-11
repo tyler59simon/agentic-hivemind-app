@@ -162,7 +162,6 @@ pub struct Branches {
 }
 
 /// The local branches of a repository and the one checked out (None on a detached HEAD).
-#[allow(dead_code)] // used from commit 4
 pub fn branches(repo: &Path) -> Result<Branches, String> {
     let run = |args: &[&str]| {
         let mut command = Command::new("git");
