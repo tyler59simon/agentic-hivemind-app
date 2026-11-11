@@ -8,7 +8,7 @@ export type Shelf = "active" | "archived" | "any";
 /** One page per sidebar section. Memory also holds the open notes (`view: "notes"`) and its sub-views. */
 export type Route =
   | { page: "overview"; view?: "work" }
-  | { page: "agents"; session?: string }
+  | { page: "agents"; session?: string; view?: "new" }
   | { page: "changes"; ref?: string }
   | { page: "architecture"; system?: string }
   | { page: "memory"; view?: "notes" | "graph" | "activity" | "tags"; q?: string }
@@ -68,3 +68,4 @@ const app = () => useApp.getState();
 export const openProject = (slug: string | null) => { app().setProject(slug); app().go({ page: "overview" }); };
 export const openSystem = (slug: string) => app().go({ page: "architecture", system: slug });
 export const openSession = (session: string) => app().go({ page: "agents", session });
+export const startSession = () => app().go({ page: "agents", view: "new" });

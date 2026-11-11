@@ -52,6 +52,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "changes", label: "Changes", run: page({ page: "changes" }) },
       ...(projectsOn ? [
         { key: "new-project", label: "New project…", run: () => { close(); useProjectIntent.getState().openWizard(); } },
+        { key: "new-session", label: "Start an agent session", run: page({ page: "agents", view: "new" }) },
         { key: "project:*", label: "Switch project: All memory", run: () => { close(); openProject(null); } },
         ...(registry.data?.projects ?? []).filter((p) => p.status === "active").map((p) => ({
           key: "project:" + p.slug, label: `Switch project: ${p.name}`, detail: p.tag,

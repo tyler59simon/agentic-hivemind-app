@@ -12,6 +12,7 @@ import { toast } from "../../ui/toast";
 import { dayLabel } from "../history/activity";
 import { systemsQuery } from "../systems/useSystem";
 import { apply, build, cost, duration, EMPTY, merge, type Finished, type Item, type Transcript as State } from "./events";
+import { StartSession } from "./StartSession";
 
 const when = (ms: number) => new Date(ms).toLocaleString();
 const elapsed = (s: SessionInfo) => duration((s.endedAt ?? Date.now()) - s.startedAt);
@@ -134,6 +135,7 @@ function Session({ id }: { id: string }) {
 export function AgentWorkspace() {
   const systemsOn = useSystemsEnabled();
   const picked = useApp((s) => (s.route.page === "agents" ? s.route.session : undefined));
+  const view = useApp((s) => (s.route.page === "agents" ? s.route.view : undefined));
   const go = useApp((s) => s.go);
   const sessions = useQuery({ ...sessionsQuery(), enabled: systemsOn });
   const all = sessions.data ?? [];
@@ -148,6 +150,7 @@ export function AgentWorkspace() {
     return groups;
   }, [all]);
 
+  if (view === "new") return <StartSession />;
   return (
     <div className="page fill-page">
       <PageHeader title="Agent Workspace" subtitle="Sessions Hivemind runs for you in the background, with what each was allowed to do." />
