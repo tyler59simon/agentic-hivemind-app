@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { setTransport } from './lm';
-import { learningList, learningRead, learningPlan, learningWrite, learningSetEnabled, scopeLearning, type LearningRecord } from './learning';
+import { learningList, learningRead, learningPlan, learningWrite, learningSetEnabled, proposalPayload, scopeLearning, type LearningRecord } from './learning';
 
 const record: LearningRecord = { id: '12345678', domain: 'demo', revision: 'revision-1', project: 'alm' };
 describe('learning bridge', () => {
@@ -23,6 +23,13 @@ describe('learning bridge', () => {
     await learningSetEnabled(false); await learningSetEnabled(true, 'demo');
     expect(JSON.parse(transport.mock.calls[0][1].stdin)).toEqual({ enabled: false, global: true });
     expect(JSON.parse(transport.mock.calls[1][1].stdin)).toEqual({ enabled: true, global: false });
+  });
+  it('keeps the approved version\'s tags when a procedure is edited as a proposal', () => {
+    const content = { title: 'T', body: 'B', use_when: ['u'], do_not_use_when: ['', 'x'], steps: ['s1', 's2'], done_when: ['d'], fallback: 'f' };
+    const version: LearningRecord = { ...record, id: '12345678.2', content, evidence_ids: ['e1'], tags: ['technology/git'] };
+    const payload = proposalPayload({ ...record, current_version: 2 }, version, content, [['e1']], true);
+    expect(payload).toMatchObject({ tags: ['technology/git'], procedure_id: record.id, project: 'alm', evidence_ids: ['e1'], step_evidence: [['e1'], []] });
+    expect(payload.content.do_not_use_when).toEqual(['x']);
   });
   it('never mixes another project into a selected project queue', () => {
     expect(scopeLearning([record, { ...record, id: 'other', project: 'other' }], 'alm')).toEqual([record]);
