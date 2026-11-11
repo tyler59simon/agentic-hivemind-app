@@ -8,7 +8,7 @@ export interface LearningContent {
 export interface LearningRecord {
   id: string; domain: string; revision: string; project?: string | null; state?: string;
   title?: string;
-  content?: LearningContent; evidence_ids?: string[]; step_evidence?: string[][];
+  content?: LearningContent; evidence_ids?: string[]; step_evidence?: string[][]; tags?: string[];
   contradictions?: string[]; procedure_id?: string | null; current_version?: number;
   version?: number; note_id?: string; outcome?: string; usage?: string;
   contribution?: string; excerpt?: string; criterion?: string; result?: string;
@@ -31,7 +31,16 @@ export const learningEvaluate = (record: LearningRecord) =>
 export const learningWrite = (entity: string, action: string, record: LearningRecord, payload: Record<string, unknown> = {}) =>
   run<{ record: LearningRecord; candidate_id?: string }>(args(entity, action, record.domain, record.id),
     JSON.stringify({ expected_revision: record.revision, ...payload }));
-export const learningPlan = (record: LearningRecord, rollbackVersion?: number) =>
+/** What "Save proposal" sends for `current`, whose shown content is `item` (the approved version for a procedure).
+ *  Editing a procedure creates a new candidate, which gets no tags unless they are sent, so the version's tags go along. */
+export const proposalPayload = (current: LearningRecord, item: LearningRecord | undefined, content: LearningContent,
+  stepEvidence: string[][], procedure: boolean) => ({
+  content: { ...content, do_not_use_when: content.do_not_use_when.filter(s => s.trim()) }, evidence_ids: item?.evidence_ids,
+  step_evidence: content.steps.map((_, i) => stepEvidence[i] ?? []),
+  project: current.project, procedure_id: procedure ? current.id : current.procedure_id, contradictions: current.contradictions ?? [],
+  tags: item?.tags,
+});
+export const learningPlan =(record: LearningRecord, rollbackVersion?: number) =>
   run<Plan>(args(rollbackVersion ? 'procedure' : 'candidate', rollbackVersion ? 'rollback-plan' : 'promote-plan', record.domain, record.id),
     JSON.stringify({ expected_revision: record.revision, ...(rollbackVersion ? { version: rollbackVersion } : {}) }));
 /** Archives the runbook and retires the procedure once the plan is applied. */

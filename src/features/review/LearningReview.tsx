@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useConnection } from '../../lib/connection';
 import { domains as listDomains } from '../../lib/lm';
-import { learningConfig, learningEvaluate, learningList, learningPlan, learningRead, learningRetirePlan, learningSetEnabled, learningWrite, scopeLearning,
+import { learningConfig, learningEvaluate, learningList, learningPlan, learningRead, learningRetirePlan, learningSetEnabled, learningWrite, proposalPayload, scopeLearning,
   type LearningContent, type LearningRecord } from '../../lib/learning';
 import { useCurrentProject } from '../projects/useProject';
 import { Section } from '../../ui/Page';
@@ -93,12 +93,8 @@ function LearningDetail({ record, procedure, onClose }: { record: LearningRecord
     setBusy(true);
     try {
       if (!draft) return;
-      const content = draft;
-      const result = await learningWrite('candidate', procedure ? 'create' : 'update', current, {
-        content: { ...content, do_not_use_when: content.do_not_use_when.filter(s => s.trim()) }, evidence_ids: item?.evidence_ids,
-        step_evidence: content.steps.map((_, i) => stepEvidence[i] ?? []),
-        project: current.project, procedure_id: procedure ? current.id : current.procedure_id, contradictions: current.contradictions ?? [],
-      });
+      const result = await learningWrite('candidate', procedure ? 'create' : 'update', current,
+        proposalPayload(current, item, draft, stepEvidence, procedure));
       if (procedure) onClose(); else { setCurrent(result.record); setEditing(false); setError(null); }
     } catch (e) { setError(message(e)); } finally { setBusy(false); }
   };
