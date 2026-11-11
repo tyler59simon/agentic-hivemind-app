@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useConnection } from '../../lib/connection';
 import { domains as listDomains } from '../../lib/lm';
-import { learningConfig, learningEvaluate, learningList, learningPlan, learningRead, learningSetEnabled, learningWrite, scopeLearning,
+import { learningConfig, learningEvaluate, learningList, learningPlan, learningRead, learningRetirePlan, learningSetEnabled, learningWrite, scopeLearning,
   type LearningContent, type LearningRecord } from '../../lib/learning';
 import { useCurrentProject } from '../projects/useProject';
 import { Section } from '../../ui/Page';
@@ -39,11 +39,14 @@ export function LearningReview() {
     {!enabled && <p className="muted">The connected backend does not advertise learning capability 1.</p>}
     {enabled && <>
       <label><input type="checkbox" checked={settings.data?.config.enabled ?? true}
-        disabled={!settings.data} onChange={e => toggle(e.target.checked)} /> Enable agent-led learning across domains</label>
-      <p className="muted small">Agents explicitly submit evidence and proposals. New procedures require your review. No transcript collection or background model runs.</p>
+        disabled={!settings.data} onChange={e => toggle(e.target.checked)} /> Collect new learning in all domains</label>
+      <p className="muted small">Agents explicitly submit evidence and proposals, and new procedures require your review. Turning collection off
+        stops new evidence and proposals; approved procedures stay published (suspend or retire one to unpublish it). No transcript collection or background model runs.</p>
       {domains.map(domain => <label key={domain} className="learning-field"><input type="checkbox"
         checked={settings.data?.config.domains[domain] ?? true} disabled={!settings.data}
-        onChange={e => toggle(e.target.checked, domain)} /> Allow learning in {domain}</label>)}
+        onChange={e => toggle(e.target.checked, domain)} /> Collect new learning in {domain}</label>)}
+      {[...(candidates.data?.problems ?? []), ...(procedures.data?.problems ?? [])].map(p =>
+        <p key={p.path} role="alert">Unreadable learning record {p.path}: {p.problem}. Run doctor, or restore it from a backup.</p>)}
       {!list.length && <p className="muted">No learned procedures are waiting for review.</p>}
       {list.map(c => <div className="work-group" key={c.id}>
         <div className="work-head"><span className="badge">{c.state}</span><strong>{c.content?.title}</strong></div>
@@ -64,7 +67,7 @@ export function LearningReview() {
 function LearningDetail({ record, procedure, onClose }: { record: LearningRecord; procedure: boolean; onClose: () => void }) {
   const [current, setCurrent] = useState(record);
   const [error, setError] = useState<string | null>(null);
-  const [plan, setPlan] = useState<number | 'promote' | null>(null);
+  const [plan, setPlan] = useState<number | 'promote' | 'retire' | null>(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<LearningContent | null>(null);
   const [stepEvidence, setStepEvidence] = useState<string[][]>([]);
@@ -140,19 +143,25 @@ function LearningDetail({ record, procedure, onClose }: { record: LearningRecord
             })} /> {e.criterion}: {e.result}</label>)}
         </fieldset>)}
         <button disabled={busy} onClick={save}>Save proposal</button><button onClick={() => setEditing(false)}>Cancel edit</button></div>
-        : item?.content && <button onClick={() => { setDraft(item.content!); setStepEvidence(item.step_evidence ?? []); setEditing(true); }}>Edit as proposal…</button>}
+        : item?.content && !(procedure && current.state === 'retired') && <button onClick={() => { setDraft(item.content!); setStepEvidence(item.step_evidence ?? []); setEditing(true); }}>Edit as proposal…</button>}
       <div className="actions">
         {!procedure && <><button disabled={busy || !evaluation.data?.eligible || editing} onClick={() => setPlan('promote')}>Review approval…</button>
           <button disabled={busy} onClick={() => act('reject')}>Reject</button><button disabled={busy} onClick={() => act('defer')}>Defer</button></>}
-        {procedure && <button disabled={busy} onClick={() => act(current.state === 'active' ? 'suspend' : 'resume')}>{current.state === 'active' ? 'Suspend' : 'Resume'}</button>}
+        {procedure && current.state !== 'retired' && <>
+          <button disabled={busy} onClick={() => act(current.state === 'active' ? 'suspend' : 'resume')}>{current.state === 'active' ? 'Suspend' : 'Resume'}</button>
+          <button disabled={busy} onClick={() => setPlan('retire')}>Retire…</button></>}
         <button onClick={onClose}>Close</button>
       </div>
       {procedure && <><h3>Versions</h3>{versions.data?.records.filter(v => v.procedure_id === current.id && v.domain === current.domain).map(v =>
-        <p key={v.id}>Version {v.version}: {v.content?.title} {v.version !== current.current_version && <button onClick={() => setPlan(v.version!)}>Review rollback…</button>}</p>)}
+        <p key={v.id}>Version {v.version}: {v.content?.title} {v.version !== current.current_version && current.state !== 'retired' && <button onClick={() => setPlan(v.version!)}>Review rollback…</button>}</p>)}
         <h3>Reported uses</h3>{uses.data?.records.filter(u => u.procedure_id === current.id && u.domain === current.domain).map(u =>
           <p key={u.id}>Version {u.version}: {u.usage}. {feedback.data?.records.filter(f => f.use_id === u.id && f.domain === u.domain).map(f => `${f.outcome}; contribution ${f.contribution}`).join(' · ') || 'No outcome reported.'}</p>)}</>}
     </Modal>
-    {plan !== null && <PlanDialog title={plan === 'promote' ? 'Approve learned procedure' : 'Review procedure rollback'}
+    {plan === 'retire' && <PlanDialog title="Retire learned procedure"
+      intro={<p>The runbook is archived and leaves search and context. Its versions, evidence and reported uses stay readable. A retired procedure cannot be revised; propose a new one instead.</p>}
+      make={() => learningRetirePlan(current)} applyLabel="Retire procedure"
+      onApplied={onClose} onClose={() => setPlan(null)} />}
+    {plan !== null && plan !== 'retire' && <PlanDialog title={plan === 'promote' ? 'Approve learned procedure' : 'Review procedure rollback'}
       intro={<p>Approval applies only to this exact proposal and evidence revision. It does not grant permission for future external actions.</p>}
       make={() => learningPlan(current, plan === 'promote' ? undefined : plan)} applyLabel="Approve procedure"
       onApplied={onClose} onClose={() => setPlan(null)} />}

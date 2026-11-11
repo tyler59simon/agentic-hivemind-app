@@ -20,7 +20,10 @@ export interface LearningEvaluation {
 }
 const args = (entity: string, action: string, domain?: string, id?: string) =>
   ['learn', entity, action, ...(id ? [id] : []), ...(domain ? ['--domain', domain] : [])];
-export const learningList = (entity: string) => run<{ records: LearningRecord[] }>([...args(entity, 'list'), '--all-domains', '--actor', 'viewer']);
+export interface LearningProblem { path: string; problem: string }
+/** Malformed records are reported in `problems` and never hide the readable ones. */
+export const learningList = (entity: string) =>
+  run<{ records: LearningRecord[]; problems?: LearningProblem[] }>([...args(entity, 'list'), '--all-domains', '--actor', 'viewer']);
 export const learningRead = (entity: string, record: Pick<LearningRecord, 'id' | 'domain'>) =>
   run<{ record: LearningRecord }>([...args(entity, 'read', record.domain, record.id), '--actor', 'viewer']);
 export const learningEvaluate = (record: LearningRecord) =>
@@ -31,6 +34,9 @@ export const learningWrite = (entity: string, action: string, record: LearningRe
 export const learningPlan = (record: LearningRecord, rollbackVersion?: number) =>
   run<Plan>(args(rollbackVersion ? 'procedure' : 'candidate', rollbackVersion ? 'rollback-plan' : 'promote-plan', record.domain, record.id),
     JSON.stringify({ expected_revision: record.revision, ...(rollbackVersion ? { version: rollbackVersion } : {}) }));
+/** Archives the runbook and retires the procedure once the plan is applied. */
+export const learningRetirePlan = (record: LearningRecord) =>
+  run<Plan>(args('procedure', 'retire-plan', record.domain, record.id), JSON.stringify({ expected_revision: record.revision }));
 export const learningConfig = (domain?: string) =>
   run<{ config: { enabled: boolean; effective: boolean; domains: Record<string, boolean> } }>([...args('config', 'status', domain), '--actor', 'viewer']);
 export const learningSetEnabled = (enabled: boolean, domain?: string) =>
