@@ -209,6 +209,37 @@ pub fn project_repo(entry: &Value, repo: &str) -> Result<PathBuf, String> {
     found.next().map(PathBuf::from).ok_or_else(|| "That repository is not registered for this project".into())
 }
 
+/// A change's registry entry, by number.
+pub fn change_entry(bridge: &Bridge, id: u64) -> Result<Value, String> {
+    let reply = bridge.call(&["changes".into(), "--actor".into(), "viewer".into()], None)?;
+    if reply.exit_code != 0 {
+        return Err(format!("Living Memory could not list changes (is it up to date?): {}", reply.error));
+    }
+    reply
+        .result
+        .get("changes")
+        .and_then(Value::as_array)
+        .and_then(|all| all.iter().find(|c| c.get("id").and_then(Value::as_u64) == Some(id)))
+        .cloned()
+        .ok_or_else(|| format!("Unknown change: CHG-{id:03}"))
+}
+
+/// A session may carry a change only if the change is active, in the task's project and not tied to another repository.
+pub fn check_change(entry: &Value, project: &str, repo: &str) -> Result<(), String> {
+    let text = |key: &str| entry.get(key).and_then(Value::as_str).unwrap_or_default();
+    let display = format!("CHG-{:03}", entry.get("id").and_then(Value::as_u64).unwrap_or_default());
+    if text("project") != project {
+        return Err(format!("{display} belongs to project {}, not {project}", text("project")));
+    }
+    if text("status") != "active" {
+        return Err(format!("{display} is {}; reopen it before starting a session", text("status")));
+    }
+    if !text("repo").is_empty() && !same_path(text("repo"), repo) {
+        return Err(format!("{display} is tied to another repository: {}", text("repo")));
+    }
+    Ok(())
+}
+
 /// What a work session may touch: its worktree, and nothing without asking beyond reading it.
 pub fn work(tree: Worktree, policy: PolicyMode, prompt: &str) -> Result<Scope, String> {
     let policy = match policy {
@@ -274,6 +305,18 @@ pub fn governed_rules() -> Vec<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn change_must_fit_the_task() {
+        let entry = json!({"id": 14, "project": "paystream", "status": "active", "repo": "C:/work/paystream"});
+        assert!(check_change(&entry, "paystream", r"c:\work\paystream\").is_ok());
+        assert_eq!(check_change(&entry, "ledger", "C:/work/paystream").unwrap_err(), "CHG-014 belongs to project paystream, not ledger");
+        let done = json!({"id": 14, "project": "paystream", "status": "done", "repo": "C:/work/paystream"});
+        assert_eq!(check_change(&done, "paystream", "C:/work/paystream").unwrap_err(), "CHG-014 is done; reopen it before starting a session");
+        assert_eq!(check_change(&entry, "paystream", "C:/work/other").unwrap_err(), "CHG-014 is tied to another repository: C:/work/paystream");
+        let free = json!({"id": 14, "project": "paystream", "status": "active", "repo": null});
+        assert!(check_change(&free, "paystream", "C:/anything").is_ok());
+    }
 
     /// A temp folder with a repo and an installed suite runtime; the caller removes it.
     fn fixture(name: &str) -> (PathBuf, PathBuf) {

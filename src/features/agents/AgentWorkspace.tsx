@@ -6,12 +6,13 @@ import logo from "../../assets/logo.png";
 import { agentCancel, agentEnd, agentRemoveWorktree, agentSession, agentSetPolicy, sessionsQuery, type Policy, type SeqEvent, type SessionInfo } from "../../lib/agent";
 import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { connect } from "../../lib/lm";
-import { openProject, openSession, openSystem, startSession, useApp } from "../../store";
+import { openChange, openProject, openSession, openSystem, startSession, useApp } from "../../store";
 import { Markdown } from "../../ui/Markdown";
 import { Confirm } from "../../ui/Modal";
 import { ArrowLink, PageHeader, Row, Section } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
+import { displayId } from "../changes/changes";
 import { dayLabel } from "../history/activity";
 import { projectsQuery } from "../projects/useProject";
 import { systemsQuery } from "../systems/useSystem";
@@ -230,6 +231,7 @@ function Session({ id }: { id: string }) {
   const resume = `claude --resume ${info.id}`;
   const passport = info.task.kind === "system_passport" ? info.task : null;
   const system = passport ? systems.data?.systems.find((s) => s.slug === passport.slug) : undefined;
+  const work = info.task.kind === "work" ? info.task : null;
   const interactive = info.mode === "interactive";
   const live = { ...info, status };
   const review = info.worktree ? () => setReviewing(true) : undefined;
@@ -239,6 +241,11 @@ function Session({ id }: { id: string }) {
         <header className="chat-head">
           <h2>{info.title}</h2>
           <span className={`status-chip cap ${status === "idle" ? "active" : status === "ended" ? "" : status}`}>{status === "idle" ? "ready" : status}</span>
+          {work?.change != null && (
+            <button className="linked-chip" style={{ flexBasis: "100%" }} title="Open the change" onClick={() => openChange(work.change!)}>
+              <LinkIcon size="1.1em" aria-hidden />{displayId(work.change)}
+            </button>
+          )}
         </header>
         <div className="chat-scroll">
           <Transcript state={state} running={running} chat={interactive ? { sessionId: info.id, onReview: review } : undefined} />
