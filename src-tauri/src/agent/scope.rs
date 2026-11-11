@@ -239,9 +239,13 @@ pub fn for_session(bridge: &Bridge, info: &SessionInfo) -> Result<Scope, String>
     work(tree.ok_or("This session's worktree no longer exists; end the session")?, info.policy, &info.title)
 }
 
-/// The Living Memory commands only the user may run, through Hivemind's reviewed dialogs.
-const GOVERNED_COMMANDS: [&str; 11] =
-    ["apply", "undo", "recover", "plan", "merge-plan", "retag-plan", "taxonomy-plan", "project-plan", "system-plan", "promote-plan", "change-plan"];
+/// The Living Memory commands only the user may run, through Hivemind's reviewed dialogs: every plan command Living
+/// Memory has (including `learn`'s), since a user allow rule would let any one missing here run without a question.
+const GOVERNED_COMMANDS: [&str; 22] = [
+    "apply", "undo", "recover", "plan", "merge-plan", "retag-plan", "taxonomy-plan", "project-plan", "system-plan", "promote-plan", "change-plan",
+    "delete-plan", "import-plan", "ingest-plan", "migration-plan", "note-type-plan", "overlay-teardown-plan", "prune-plan", "remap-plan",
+    "restore-plan", "retire-plan", "rollback-plan",
+];
 
 /// A shell command that would change the Living Memory store through a plan. Its hook lets read and capture commands
 /// through before Hivemind is asked; these must never run from a session, whatever the user clicks.
@@ -345,8 +349,12 @@ mod tests {
     #[test]
     fn governed_rules_cover_every_command_for_both_shells() {
         let rules = governed_rules();
-        assert_eq!(rules.len(), 44);
-        assert_eq!(rules.iter().collect::<std::collections::HashSet<_>>().len(), 44, "all different");
+        assert_eq!(rules.len(), 88);
+        assert_eq!(rules.iter().collect::<std::collections::HashSet<_>>().len(), 88, "all different");
+        // The learning plans an allow rule for Living Memory would otherwise let through (review finding).
+        for rule in ["Bash(*living_memory.py* rollback-plan *)", "PowerShell(*living_memory.py* retire-plan *)"] {
+            assert!(rules.iter().any(|r| r == rule), "{rule}");
+        }
         for rule in [
             "Bash(*living_memory.py* apply *)",
             "Bash(*living_memory.py* apply)",

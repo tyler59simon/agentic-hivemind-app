@@ -2,6 +2,7 @@
 use crate::git::run_with_timeout;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -148,7 +149,8 @@ pub fn create(worktrees: &Path, repo: &Path, branch: Option<&str>, session_id: &
 fn untracked(tree: &Worktree, path: &str) -> Option<Untracked> {
     let root = Path::new(&tree.path);
     let full = root.join(path);
-    let kind = std::fs::symlink_metadata(&full).ok()?.file_type();
+    let meta = std::fs::symlink_metadata(&full).ok()?;
+    let kind = meta.file_type();
     if kind.is_symlink() {
         return Some(match std::fs::read_link(&full) {
             Ok(target) => Untracked::Link(target.display().to_string()),
@@ -162,7 +164,14 @@ fn untracked(tree: &Worktree, path: &str) -> Option<Untracked> {
         (Ok(file), Ok(root)) if file.starts_with(&root) => {}
         _ => return Some(Untracked::Unread),
     }
-    let Ok(bytes) = std::fs::read(&full) else { return Some(Untracked::Unread) };
+    // Never more than MAX_COUNTED + 1 bytes in memory, even for a file that grows while it is read.
+    if meta.len() > MAX_COUNTED {
+        return Some(Untracked::Unread);
+    }
+    let mut bytes = Vec::new();
+    let Ok(_) = std::fs::File::open(&full).and_then(|file| file.take(MAX_COUNTED + 1).read_to_end(&mut bytes)) else {
+        return Some(Untracked::Unread);
+    };
     if bytes.len() as u64 > MAX_COUNTED || bytes.iter().take(8000).any(|b| *b == 0) {
         return Some(Untracked::Unread);
     }
@@ -555,6 +564,20 @@ mod tests {
         }
         assert!(!serde_json::to_string(&changed_files(&tree).unwrap()).unwrap().contains("TOP-SECRET-LINE"));
         std::fs::remove_dir(&vendor).unwrap();
+    }
+
+    #[test]
+    fn untracked_files_over_the_limit_are_listed_but_not_read() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let tree = create(&rig.worktrees, &rig.repo, None, "abcdefgh").unwrap();
+        std::fs::write(Path::new(&tree.path).join("big.log"), "line\n".repeat(MAX_COUNTED as usize / 5 + 1)).unwrap();
+        let files = changes(&tree).unwrap();
+        let big = files.iter().find(|f| f.path == "big.log").unwrap();
+        assert_eq!((big.added, big.binary), (0, true));
+        assert_eq!(patch(&tree, big).unwrap(), (String::new(), false));
     }
 
     #[test]
