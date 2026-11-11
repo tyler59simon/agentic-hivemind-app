@@ -209,7 +209,9 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
 /** One session: its log from disk, kept current by live events; and the rail that says what it may touch. */
 function Session({ id }: { id: string }) {
   const client = useQueryClient();
-  const log = useQuery({ queryKey: ["agent", "session", id], queryFn: () => agentSession(id, 0), staleTime: Infinity, retry: false });
+  // Read again whenever the view opens: events that arrived while it was closed are only in the log, and a session
+  // waiting on a prompt sends nothing that would reveal the gap.
+  const log = useQuery({ queryKey: ["agent", "session", id], queryFn: () => agentSession(id, 0), staleTime: Infinity, refetchOnMount: "always", retry: false });
   const sessions = useQuery(sessionsQuery());
   const systems = useQuery(systemsQuery());
   const [state, setState] = useState<State>(EMPTY);
