@@ -8,8 +8,9 @@ pub mod store;
 
 use crate::bridge::Bridge;
 use crate::settings::Settings;
-use events::{Outcome, RunEvent, SeqEvent, Status};
-use scope::{AgentTask, Scope, Spec};
+use crate::worktree::{Totals, Worktree};
+use events::{Mode, Outcome, RunEvent, SeqEvent, Status};
+use scope::{AgentTask, PolicyMode, Scope, Spec};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -25,6 +26,7 @@ use store::Record;
 pub const MAX_RUNNING: usize = 1;
 const NO_PLUGIN: &str = "The Architecture Suite plugin is not loaded in Claude Code; install it or set its folder in Settings.";
 const STDERR_LINES: usize = 5;
+const TITLE: usize = 60;
 
 /// One coding-agent CLI: how to start it and how to read what it prints.
 pub trait Adapter: Send + Sync {
@@ -55,6 +57,29 @@ pub struct SessionInfo {
     pub cost_usd: Option<f64>,
     pub error: Option<String>,
     pub structured: Option<Value>,
+    // README 7.1, Phase 2
+    #[serde(default)]
+    pub mode: Mode,
+    #[serde(default)]
+    pub policy: PolicyMode,
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub worktree: Option<Worktree>,
+    #[serde(default)]
+    pub turns: u64,
+    #[serde(default)]
+    pub files_changed: Option<Totals>,
+    // Added by the Phase 2 document
+    /// Note refs included in the briefing or added later with a message.
+    #[serde(default)]
+    pub context: Vec<String>,
+    /// The model alias the session was started with.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// The system whose architecture line was in the briefing (a slug, for display only).
+    #[serde(default)]
+    pub system: Option<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -175,11 +200,15 @@ impl Manager {
             session_id: id.clone(),
             cwd: scope.cwd,
             add_dirs: scope.add_dirs,
-            policy: scope.policy,
+            policy: scope.policy.clone(),
             plugin_dirs: scope.plugin_dirs,
             budget_usd,
             schema: scope.schema,
             program,
+            resume: false,
+            model: None,
+            deny: scope.deny.clone(),
+            memory_root: None,
         };
         let mut command = inner.adapter.command(&spec);
         command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -202,6 +231,15 @@ impl Manager {
             cost_usd: None,
             error: None,
             structured: None,
+            mode: scope.mode,
+            policy: scope.policy.mode(),
+            project: None,
+            worktree: scope.worktree.clone(),
+            turns: 0,
+            files_changed: None,
+            context: vec![],
+            model: None,
+            system: None,
         };
 
         // Without its folder a session could not be logged or replayed, so find that out first.
@@ -479,6 +517,9 @@ mod tests {
                 schema: None,
                 plugin_dirs: vec![],
                 required_plugin: required_plugin.map(str::to_string),
+                mode: Mode::Unattended,
+                worktree: None,
+                deny: scope::governed_rules(),
             };
             self.manager.start(AgentTask::SystemPassport { slug: "billing".into() }, scope, "unused".into(), 5.0, "Describe the system.")
         }

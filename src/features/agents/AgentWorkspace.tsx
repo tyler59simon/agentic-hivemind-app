@@ -95,7 +95,8 @@ function Session({ id }: { id: string }) {
   const running = info.status === "running" && !state.finished;
   const status = state.finished?.status ?? info.status;
   const resume = `claude --resume ${info.id}`;
-  const system = info.task.kind === "system_passport" ? systems.data?.systems.find((s) => s.slug === info.task.slug) : undefined;
+  const passport = info.task.kind === "system_passport" ? info.task : null;
+  const system = passport ? systems.data?.systems.find((s) => s.slug === passport.slug) : undefined;
   return (
     <>
       <div className="chat-thread">
@@ -107,8 +108,8 @@ function Session({ id }: { id: string }) {
       </div>
       <aside className="split-rail agents-rail">
         <Section title="Session context">
-          {info.task.kind === "system_passport" && (
-            <Row icon={<Network size="1.3em" aria-hidden />} meta={system?.name ?? info.task.slug} onClick={() => openSystem(info.task.slug)}>System</Row>
+          {passport && (
+            <Row icon={<Network size="1.3em" aria-hidden />} meta={system?.name ?? passport.slug} onClick={() => openSystem(passport.slug)}>System</Row>
           )}
           <Row icon={<CodeXml size="1.3em" aria-hidden />} meta={<code title={info.workspace[0]}>{info.workspace[0]?.split(/[\\/]/).filter(Boolean).pop()}</code>}>Working in</Row>
           {info.workspace.slice(1).map((w) => <Row key={w} icon={<Layers size="1.3em" aria-hidden />} meta={<code title={w}>{w.split(/[\\/]/).filter(Boolean).pop()}</code>}>Can also read</Row>)}

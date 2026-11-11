@@ -61,20 +61,37 @@ impl Adapter for ClaudeCode {
     fn command(&self, spec: &Spec) -> Command {
         let mut command = Command::new(&spec.program);
         command.current_dir(&spec.cwd).args(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]);
-        let Policy::PreApproved { allow } = &spec.policy;
-        command.args(["--permission-mode", "dontAsk", "--permission-prompts", "none"]);
-        command.args(["--session-id", &spec.session_id, "--max-budget-usd", &spec.budget_usd.to_string()]);
+        match &spec.policy {
+            Policy::PreApproved { .. } => command.args(["--permission-mode", "dontAsk", "--permission-prompts", "none"]),
+            Policy::Ask { .. } => {
+                command.args(["--permission-mode", "manual", "--permission-prompts", "host", "--permission-prompt-tool", "stdio"])
+            }
+            Policy::AcceptEdits { .. } => {
+                command.args(["--permission-mode", "acceptEdits", "--permission-prompts", "host", "--permission-prompt-tool", "stdio"])
+            }
+        };
+        command.args([if spec.resume { "--resume" } else { "--session-id" }, &spec.session_id]);
+        command.args(["--max-budget-usd", &spec.budget_usd.to_string()]);
+        if let Some(model) = &spec.model {
+            command.args(["--model", model]);
+        }
         if let Some(schema) = &spec.schema {
             command.arg("--json-schema").arg(schema.to_string());
         }
-        if !allow.is_empty() {
-            command.arg("--allowedTools").args(allow);
+        if !spec.policy.allow().is_empty() {
+            command.arg("--allowedTools").args(spec.policy.allow());
+        }
+        if !spec.deny.is_empty() {
+            command.arg("--disallowedTools").args(&spec.deny);
         }
         if !spec.add_dirs.is_empty() {
             command.arg("--add-dir").args(&spec.add_dirs);
         }
         for dir in &spec.plugin_dirs {
             command.arg("--plugin-dir").arg(dir);
+        }
+        if let Some(root) = &spec.memory_root {
+            command.env("LIVING_MEMORY_ROOT", root);
         }
         command
     }
@@ -132,16 +149,18 @@ impl Adapter for ClaudeCode {
         }
         let subtype = text_of(&value, "subtype").unwrap_or_default();
         let result = text_of(&value, "result");
+        let error = value.get("errors").and_then(Value::as_array).and_then(|all| all.first()).and_then(Value::as_str);
         let ok = subtype == "success" && value.get("is_error").and_then(Value::as_bool) != Some(true);
         Some(Outcome {
             ok,
-            reason: (!ok).then(|| failure(subtype, result)),
+            reason: (!ok).then(|| failure(subtype, result.or(error))),
             cost_usd: value.get("total_cost_usd").and_then(Value::as_f64),
             duration_ms: value.get("duration_ms").and_then(Value::as_u64),
             turns: value.get("num_turns").and_then(Value::as_u64),
             result: result.map(str::to_string),
             structured: value.get("structured_output").filter(|s| !s.is_null()).cloned(),
             denials: value.get("permission_denials").and_then(Value::as_array).map_or(0, |all| all.len() as u64),
+            budget: subtype == "error_max_budget_usd",
         })
     }
 }
@@ -322,6 +341,7 @@ mod tests {
                 result: Some("All done.".into()),
                 structured: Some(json!({"summary": "Billing takes payments."})),
                 denials: 1,
+                budget: false,
             }
         );
         let over = ClaudeCode
@@ -331,7 +351,22 @@ mod tests {
             .unwrap();
         assert!(!over.ok);
         assert_eq!(over.reason.as_deref(), Some("Claude Code reached the budget limit for this session"));
-        assert_eq!((over.cost_usd, over.structured, over.denials), (Some(5.02), None, 0));
+        assert_eq!((over.cost_usd, over.structured, over.denials, over.budget), (Some(5.02), None, 0, true));
+        let capped = ClaudeCode
+            .outcome(
+                r#"{"type":"result","subtype":"error_max_budget_usd","is_error":true,"num_turns":1,"total_cost_usd":0.0092,
+                "errors":["Reached maximum budget ($0.004)"],"terminal_reason":"budget_exhausted"}"#,
+            )
+            .unwrap();
+        assert!(!capped.ok && capped.budget && capped.result.is_none());
+        assert!(capped.reason.as_deref().is_some_and(|reason| reason.contains("Reached maximum budget")), "{:?}", capped.reason);
+        let unknown = ClaudeCode
+            .outcome(
+                r#"{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":0,"errors":["No conversation found with session ID: 0f9e8d7c"]}"#,
+            )
+            .unwrap();
+        assert!(unknown.reason.as_deref().is_some_and(|reason| reason.contains("No conversation found")), "{:?}", unknown.reason);
+        assert!(!unknown.budget);
         let flagged =
             ClaudeCode.outcome(r#"{"type":"result","subtype":"success","is_error":true,"result":"Credit balance is too low"}"#).unwrap();
         assert_eq!(flagged.reason.as_deref(), Some("Claude Code reported an error: Credit balance is too low"));
@@ -339,20 +374,32 @@ mod tests {
         assert_eq!(new.reason.as_deref(), Some("Claude Code stopped (error something new)"));
     }
 
-    #[test]
-    fn command_carries_the_spec() {
-        let spec = Spec {
+    fn spec(policy: Policy) -> Spec {
+        Spec {
             session_id: "00000000-0000-4000-8000-000000000001".into(),
             cwd: PathBuf::from("/work/app"),
             add_dirs: vec![PathBuf::from("/work/api"), PathBuf::from("/work/arch")],
-            policy: Policy::PreApproved { allow: vec!["Edit(//work/arch/**)".into(), "Bash(*architecture-suite.py *)".into()] },
+            policy,
             plugin_dirs: vec![PathBuf::from("/plugins/suite")],
             budget_usd: 5.0,
             schema: Some(json!({"type": "object"})),
             program: "claude".into(),
-        };
-        let command = ClaudeCode.command(&spec);
-        let args: Vec<String> = command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
+            resume: false,
+            model: None,
+            deny: vec![],
+            memory_root: None,
+        }
+    }
+
+    fn args_of(command: &Command) -> Vec<String> {
+        command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn command_carries_the_spec() {
+        let allow = vec!["Edit(//work/arch/**)".to_string(), "Bash(*architecture-suite.py *)".to_string()];
+        let mut passport = spec(Policy::PreApproved { allow });
+        let command = ClaudeCode.command(&passport);
         #[rustfmt::skip]
         let expected = [
             "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
@@ -361,15 +408,64 @@ mod tests {
             "--allowedTools", "Edit(//work/arch/**)", "Bash(*architecture-suite.py *)",
             "--add-dir", "/work/api", "/work/arch", "--plugin-dir", "/plugins/suite",
         ];
-        assert_eq!(args, expected);
+        assert_eq!(args_of(&command), expected);
         assert_eq!(command.get_program(), "claude");
         assert_eq!(command.get_current_dir(), Some(Path::new("/work/app")));
+
+        // The deny rules go between the allow rules and --add-dir, each as its own argument.
+        passport.deny = vec!["Bash(*living_memory.py* apply *)".into(), "Bash(*living_memory.py* apply)".into()];
+        #[rustfmt::skip]
+        let expected = [
+            "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+            "--permission-mode", "dontAsk", "--permission-prompts", "none",
+            "--session-id", "00000000-0000-4000-8000-000000000001", "--max-budget-usd", "5", "--json-schema", r#"{"type":"object"}"#,
+            "--allowedTools", "Edit(//work/arch/**)", "Bash(*architecture-suite.py *)",
+            "--disallowedTools", "Bash(*living_memory.py* apply *)", "Bash(*living_memory.py* apply)",
+            "--add-dir", "/work/api", "/work/arch", "--plugin-dir", "/plugins/suite",
+        ];
+        assert_eq!(args_of(&ClaudeCode.command(&passport)), expected);
+
+        let ask = args_of(&ClaudeCode.command(&spec(Policy::Ask { allow: vec![] })));
+        #[rustfmt::skip]
+        let head = [
+            "--verbose", "--permission-mode", "manual", "--permission-prompts", "host", "--permission-prompt-tool", "stdio",
+            "--session-id", "00000000-0000-4000-8000-000000000001", "--max-budget-usd", "5",
+        ];
+        assert_eq!(ask[5..5 + head.len()], head);
+        assert!(!ask.contains(&"--allowedTools".to_string()) && !ask.contains(&"--disallowedTools".to_string()));
+
+        let mut resumed = spec(Policy::AcceptEdits { allow: vec![] });
+        resumed.resume = true;
+        resumed.model = Some("haiku".into());
+        let resumed = args_of(&ClaudeCode.command(&resumed));
+        #[rustfmt::skip]
+        let head = [
+            "--verbose", "--permission-mode", "acceptEdits", "--permission-prompts", "host", "--permission-prompt-tool", "stdio",
+            "--resume", "00000000-0000-4000-8000-000000000001", "--max-budget-usd", "5", "--model", "haiku",
+        ];
+        assert_eq!(resumed[5..5 + head.len()], head);
+        assert!(!resumed.contains(&"--session-id".to_string()));
+
         let line = ClaudeCode.first_message("Say \"hi\"\nthen stop");
         assert!(!line.contains('\n'), "one line on stdin");
         assert_eq!(
             serde_json::from_str::<Value>(&line).unwrap(),
             json!({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Say \"hi\"\nthen stop"}]}})
         );
+    }
+
+    #[test]
+    fn command_points_living_memory_at_the_apps_store() {
+        let stored = |command: &Command| {
+            command.get_envs().find(|(name, _)| *name == "LIVING_MEMORY_ROOT").map(|(_, value)| value.map(|v| v.to_string_lossy().into_owned()))
+        };
+        for policy in [Policy::PreApproved { allow: vec![] }, Policy::Ask { allow: vec![] }] {
+            let mut with_root = spec(policy.clone());
+            with_root.memory_root = Some(PathBuf::from("/stores/demo"));
+            assert_eq!(stored(&ClaudeCode.command(&with_root)), Some(Some("/stores/demo".to_string())));
+            // No root: the variable is neither set nor removed, so the CLI inherits the app's own.
+            assert_eq!(stored(&ClaudeCode.command(&spec(policy))), None);
+        }
     }
 
     #[test]
