@@ -6,6 +6,7 @@ mod drafts;
 mod git;
 mod settings;
 mod watcher;
+mod worktree;
 
 use bridge::{Bridge, Reply};
 use serde::Serialize;
