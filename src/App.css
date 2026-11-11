@@ -257,6 +257,7 @@ input[type="checkbox"] { accent-color: var(--success); }
 .toast { text-align: left; justify-content: flex-start; background: var(--bg-alt); border: 1px solid var(--border-strong); border-left: 4px solid var(--accent); padding: .55rem .85rem; }
 .toast.warn { border-left-color: var(--warn); }
 .toast.error { border-left-color: var(--error); }
+.toast.with-action { display: flex; align-items: center; gap: 1rem; border-radius: .45rem; }
 
 .overlay { position: fixed; inset: 0; background: rgba(10, 2, 16, .6); display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh; z-index: 40; }
 .center-overlay { align-items: center; padding-top: 0; }
@@ -615,6 +616,31 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .step-list li svg { flex: none; margin-top: .1rem; color: var(--muted); }
 .step-list li.done svg { color: var(--teal); }
 .step-list li.done span { color: var(--muted); }
+.stepper { list-style: none; margin: 0; padding: .2rem 0 1.3rem; display: flex; border-bottom: 1px solid var(--border); }
+.stepper li { flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column; align-items: center; gap: .5rem; }
+.stepper li + li::before { content: ""; position: absolute; top: .72rem; left: calc(-50% + 1.4rem); right: calc(50% + 1.4rem); border-top: 2px solid var(--border-strong); }
+.step-dot { width: 1.55rem; height: 1.55rem; padding: 0; border-radius: 50%; border: 2px solid var(--border-strong); background: var(--bg); display: grid; place-items: center; }
+.stepper .done .step-dot { border-color: var(--teal); color: var(--teal); }
+.stepper .current .step-dot { border-color: var(--accent); }
+.stepper .current .step-name { color: var(--accent); font-weight: 600; }
+.stepper button.step-dot:hover { border-color: var(--accent); background: var(--accent-soft); }
+.plan-steps, .evidence-list { list-style: none; margin: 0; padding: 0; }
+.plan-step { display: flex; align-items: center; gap: 1rem; padding: .7rem .6rem; border-bottom: 1px solid var(--border); }
+.plan-step.current { background: #361a45; border-radius: .5rem; }
+.step-box { border: none; padding: 0; flex: none; color: var(--muted); }
+.step-box:hover { background: none; color: var(--fg); }
+.plan-step.done .step-box { color: var(--teal); }
+.plan-step.current .step-box { color: var(--accent); }
+.plan-step-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.plan-step-main strong { font-size: 1.15rem; }
+.evidence-list li { display: flex; align-items: center; gap: 1rem; padding: .75rem .3rem; border-bottom: 1px solid var(--border); }
+.evidence-list label { flex: 1; min-width: 0; display: flex; align-items: center; gap: 1rem; font-weight: 600; }
+.evidence-list input { width: 1.2rem; height: 1.2rem; flex: none; }
+.add-line { display: flex; gap: .5rem; }
+.add-line input { flex: 1; min-width: 0; }
+.checkpoint-line { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; padding-top: 1rem; }
+.question-row { border: none; padding: .5rem 0; gap: .8rem; justify-content: flex-start; text-align: left; color: var(--warn-fg); }
+.question-row:hover { background: none; text-decoration: underline; }
 
 /* ---- Architecture canvas ---- */
 .canvas { display: flex; flex-direction: column; height: clamp(20rem, 52vh, 38rem); border: 1px solid #4c3861; border-radius: .6rem; background-color: #1c0a27; background-image: radial-gradient(#3a224c 1px, transparent 1px); background-size: 22px 22px; overflow: hidden; }
