@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { activeTab, MAX_PANES, useWorkspace } from "./store";
+import { useApp } from "../store";
+import { activeTab, MAX_PANES, notesOnly, railShown, useWorkspace } from "./store";
 
 const ws = () => useWorkspace.getState();
 const reset = () => {
   const pane = { id: "p0", tabs: [], active: null };
-  useWorkspace.setState({ panes: [pane], focused: "p0", dirty: {}, panel: "outline", reveal: null });
+  useWorkspace.setState({ panes: [pane], focused: "p0", dirty: {}, rail: true, railSplit: false, reveal: null });
+  useApp.setState({ route: { page: "overview" }, back: [] });
 };
 
 describe("workspace", () => {
@@ -63,12 +65,44 @@ describe("workspace", () => {
     expect(ws().panes[0].tabs.map((t) => t.ref)).toEqual(["d:1", "d:9"]);
   });
 
-  it("dedupes project tabs by slug and keeps work a singleton", () => {
-    ws().openProject("a", "Alpha");
-    ws().openProject("b");
-    ws().openProject("a");
-    ws().openTab({ kind: "work" });
-    ws().openTab({ kind: "work" });
-    expect(ws().panes[0].tabs.map((t) => [t.kind, t.slug])).toEqual([["project", "a"], ["project", "b"], ["work", undefined]]);
+  it("opening a note or a new note shows the Memory page's notes", () => {
+    ws().openNote("d:1");
+    expect(useApp.getState().route).toEqual({ page: "memory", view: "notes" });
+    useApp.getState().go({ page: "overview" });
+    ws().openNote("d:1"); // already open: still brought into view
+    expect(useApp.getState().route).toEqual({ page: "memory", view: "notes" });
+  });
+
+  it("the context rail steps aside when notes are side by side, and each layout remembers its own choice", () => {
+    ws().openNote("d:1");
+    expect(railShown(ws())).toBe(true);
+    ws().openNote("d:2", { split: true });
+    expect(railShown(ws())).toBe(false);
+    ws().setRail(true);
+    expect([ws().rail, ws().railSplit, railShown(ws())]).toEqual([true, true, true]);
+    const second = ws().panes[1];
+    ws().closeTab(second.id, second.tabs[0].id);
+    ws().setRail(false);
+    expect([ws().rail, ws().railSplit, railShown(ws())]).toEqual([false, true, false]);
+  });
+
+  it("a new note is always its own tab", () => {
+    ws().openTab({ kind: "new-note" });
+    ws().openTab({ kind: "new-note" });
+    expect(ws().panes[0].tabs.map((t) => t.kind)).toEqual(["new-note", "new-note"]);
+  });
+
+  it("an older stored layout keeps only its note tabs", () => {
+    const stored = {
+      focused: "b", panel: null,
+      panes: [
+        { id: "a", active: "t2", tabs: [{ id: "t1", kind: "note", ref: "d:1" }, { id: "t2", kind: "graph" }] },
+        { id: "b", active: "t3", tabs: [{ id: "t3", kind: "project", slug: "x" }] },
+      ],
+    } as unknown as Parameters<typeof notesOnly>[0];
+    const next = notesOnly(stored);
+    expect(next.panes.map((p) => [p.id, p.active, p.tabs.map((t) => t.id)])).toEqual([["a", "t1", ["t1"]]]);
+    expect([next.focused, next.rail]).toEqual(["a", false]);
+    expect(notesOnly({}).panes).toHaveLength(1);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { facetsOf, parseTags, tagUsage } from "./taxonomy";
+import { facetsOf, parseTags, SYSTEM_TAG_MESSAGE, tagUsage } from "./taxonomy";
 
 describe("taxonomy", () => {
   it("counts usage per facet and finds unregistered tags", () => {
@@ -18,9 +18,10 @@ describe("taxonomy", () => {
     expect(parseTags("misc/thing, subject/, nofacet").invalid).toEqual(["misc/thing", "subject/", "nofacet"]);
   });
 
-  it("takes facets from the taxonomy, falling back to the built-ins plus project", () => {
+  it("takes facets from the taxonomy, falling back to the built-ins plus project and system", () => {
     expect(facetsOf({ facets: ["subject", "area"] })).toEqual(["subject", "area"]);
-    expect(facetsOf({})).toEqual(["subject", "concern", "platform", "technology", "project"]);
+    expect(facetsOf({})).toEqual(["subject", "concern", "platform", "technology", "project", "system"]);
+    expect(parseTags("system/billing concern/x")).toEqual({ tags: ["concern/x"], invalid: ["system/billing"], error: SYSTEM_TAG_MESSAGE });
     expect(parseTags("area/x", ["area"]).tags).toEqual(["area/x"]);
   });
 

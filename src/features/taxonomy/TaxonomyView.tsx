@@ -3,6 +3,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { classify } from "../../lib/errors";
 import { list, retagPlan, taxonomy, taxonomyPlan, type Plan } from "../../lib/lm";
 import { Modal } from "../../ui/Modal";
+import { useApp } from "../../store";
 import { useWorkspace } from "../../workspace/store";
 import { PlanDialog } from "../plans/PlanDialog";
 import { facetsOf, parseTags, tagUsage, type TagUsage } from "./taxonomy";
@@ -31,7 +32,6 @@ function RenameTag({ from, taxonomyTags, onClose }: { from: TagUsage; taxonomyTa
 
 /** Tag tree with usage, adding tags, renaming/merging, and tags notes use that the taxonomy lacks. */
 export function TaxonomyView() {
-  const openTab = useWorkspace((s) => s.openTab);
   const tax = useQuery({ queryKey: ["taxonomy"], queryFn: taxonomy });
   const notes = useQuery({ queryKey: ["list", "*", "any"], queryFn: () => list({ allDomains: true, status: "any" }) });
   const usage = useMemo(() => tagUsage(tax.data?.tags ?? [], notes.data?.notes ?? [], facetsOf(tax.data)), [tax.data, notes.data]);
@@ -62,7 +62,7 @@ export function TaxonomyView() {
     } catch (e) { setError(classify(e).message); }
   };
 
-  const managed = (tag: string) => tag.startsWith("project/");
+  const managed = (tag: string) => tag.startsWith("project/") || tag.startsWith("system/");
   const row = (t: TagUsage) => (
     <li key={t.tag} className={`tag-row ${selected === t.tag ? "on" : ""}`}>
       <button className="link-row" onClick={() => setSelected(selected === t.tag ? null : t.tag)}>
@@ -76,7 +76,6 @@ export function TaxonomyView() {
 
   return (
     <div className="taxonomy pad">
-      <h2>Tags</h2>
       <p className="muted">Living Memory only accepts registered tags. Every change here is a reviewed plan, journaled and undoable.</p>
       <div className="row add-tags">
         <input value={adding} placeholder="Add tags, e.g. platform/linux, technology/rust" onChange={(e) => setAdding(e.target.value)}
@@ -98,6 +97,7 @@ export function TaxonomyView() {
           <section key={facet} className="facet">
             <h3>{facet} <span className="muted small">{tags.length}</span></h3>
             {facet === "project" && <p className="muted small">Managed by projects.</p>}
+            {facet === "system" && <p className="muted small">Managed by systems.</p>}
             {tags.length ? <ul className="tag-list">{tags.map(row)}</ul> : <p className="muted small">No tags yet.</p>}
           </section>
         ))}
@@ -114,7 +114,7 @@ export function TaxonomyView() {
         </section>
       )}
       {dialog}
-      <p className="muted small">Tip: <button className="link" onClick={() => openTab({ kind: "activity" })}>Activity</button> shows past tag changes, each with Undo.</p>
+      <p className="muted small">Tip: <button className="link" onClick={() => useApp.getState().go({ page: "memory", view: "activity" })}>Activity</button> shows past tag changes, each with Undo.</p>
     </div>
   );
 }

@@ -5,7 +5,7 @@ import type { Operation } from "../../lib/lm";
 export const BOOKKEEPING = new Set(["overlay_state", "overlay_sync", "overlay_views", "bind_domain"]);
 const PLAN_KINDS = new Set(["rename", "retag", "archive", "resolve", "reopen", "delete", "merge", "bulk_retag",
   "reference_remap", "taxonomy_expansion", "ingest", "import", "restore", "schema_migration", "note_type_migration", "overlay_delete",
-  "project_create", "project_update", "project_archive"]);
+  "project_create", "project_update", "project_archive", "system_create", "system_update", "system_retire"]);
 
 const VERBS: Record<string, string> = {
   capture: "captured", capture_supersede: "captured a replacement", capture_promote: "captured (promoted to global)", promote: "promoted to global",
@@ -14,6 +14,7 @@ const VERBS: Record<string, string> = {
   taxonomy_expansion: "added tags to the taxonomy", reference_remap: "moved notes between domains", ingest: "imported auto-memory",
   import: "imported a bundle", restore: "restored a backup", schema_migration: "migrated note files", note_type_migration: "migrated note types",
   project_create: "created project", project_update: "updated project", project_archive: "archived project",
+  system_create: "created system", system_update: "updated system", system_retire: "retired system",
   overlay_auto_update: "edited in Obsidian", overlay_capture: "captured in Obsidian", overlay_delete: "deleted in Obsidian",
 };
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { LmError, list, listArgs, openArgs, projectPlan, projects, projectsArgs, read, reviewArgs, run, searchArgs, setTransport, timelineArgs, type Invoke } from "./lm";
+import { LmError, list, listArgs, openArgs, projectPlan, projects, projectsArgs, read, reviewArgs, run, searchArgs, setTransport, systemPlan, systemsArgs, timelineArgs, type Invoke } from "./lm";
 
 afterEach(() => setTransport(invoke as Invoke));
 
@@ -71,5 +71,13 @@ describe("run", () => {
     const read = fake({ exit_code: 0, result: { ok: true, projects: [], warnings: [] }, error: null });
     await projects({ status: "active" });
     expect((read[0] as [string, { argv: string[] }])[1].argv).toEqual(["projects", "--status", "active", "--actor", "viewer"]);
+  });
+
+  it("system-plan is a write and systems is a viewer read", async () => {
+    const calls = fake({ exit_code: 0, result: { ok: true }, error: null });
+    await systemPlan("retire", { slug: "billing" });
+    expect(calls[0]).toEqual(["lm", { argv: ["system-plan", "retire"], stdin: JSON.stringify({ slug: "billing" }) }]);
+    expect(systemsArgs({ status: "active" })).toEqual(["systems", "--status", "active", "--actor", "viewer"]);
+    expect(systemsArgs()).toEqual(["systems", "--actor", "viewer"]);
   });
 });

@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { deleteDraft, getDraft, putDraft } from "../../lib/drafts";
 import { classify, type Problem } from "../../lib/errors";
 import { domainOf, read, taxonomy, taxonomyPlan, update } from "../../lib/lm";
@@ -41,7 +42,8 @@ export function ProblemBanner({ problem, onRedact, onAddTags }: { problem: Probl
   return <div className="banner error">{problem.message}</div>;
 }
 
-export function NoteEditor({ tab, live }: { tab: Tab; live: boolean }) {
+/** `head` is where the title field and Save button are drawn (the note page's header). */
+export function NoteEditor({ tab, live, head }: { tab: Tab; live: boolean; head: HTMLElement }) {
   const ref = tab.ref!;
   const client = useQueryClient();
   const note = useQuery(noteQuery(ref));
@@ -180,12 +182,15 @@ export function NoteEditor({ tab, live }: { tab: Tab; live: boolean }) {
   const n = note.data!;
   return (
     <article className="note editing">
-      <div className="note-head">
-        <input className="title-input" value={st.mine.title} aria-label="Title" onChange={(e) => edit({ title: e.target.value })}
-          onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); } }} />
-        <span className={`save-state ${dirty ? "dirty" : ""}`}>{saving ? "Saving…" : dirty ? "Unsaved" : "Saved"}</span>
-        <button className="primary" disabled={!dirty || saving} onClick={() => save()} title="Save (Ctrl+S)">Save</button>
-      </div>
+      {createPortal(
+        <div className="note-head">
+          <input className="title-input" value={st.mine.title} aria-label="Title" onChange={(e) => edit({ title: e.target.value })}
+            onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); } }} />
+          <span className={`save-state ${dirty ? "dirty" : ""}`}>{saving ? "Saving…" : dirty ? "Unsaved" : "Saved"}</span>
+          <button className="primary" disabled={!dirty || saving} onClick={() => save()} title="Save (Ctrl+S)">Save</button>
+        </div>,
+        head,
+      )}
       {banner?.kind === "restored" && (
         <div className="banner">Restored unsaved edits from {new Date(banner.at).toLocaleString()}.
           <div className="actions"><button onClick={() => { const f = fieldsOf(n); setSt({ base: f, rev: n.revision, mine: f, version: st.version + 1 }); setBanner(null); }}>Discard them</button></div>

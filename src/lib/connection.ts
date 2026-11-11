@@ -9,3 +9,6 @@ export const useConnection = create<{ commands: string[]; api: number; set: (v: 
 
 /** Project command centers need an LM that has the `projects` command (API 2+). */
 export const useProjectsEnabled = () => useConnection((s) => s.api >= 2 && s.commands.includes("projects"));
+
+/** The systems registry needs an LM that has the `systems` command. */
+export const useSystemsEnabled = () => useConnection((s) => s.commands.includes("systems"));

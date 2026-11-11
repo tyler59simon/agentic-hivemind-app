@@ -1,43 +1,55 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { Layers, Network } from "lucide-react";
 import { Children, isValidElement, useEffect, useMemo, type ReactNode } from "react";
 import Markdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { classify } from "../../lib/errors";
-import { check, confirm, read, type Note } from "../../lib/lm";
+import { check, read, type Note } from "../../lib/lm";
 import { ACTION_TYPES, actionItems } from "../../lib/note";
 import { recordOperation } from "../../lib/oplog";
 import { shortDate } from "../../lib/text";
 import { toast } from "../../ui/toast";
+import { openProject, openSystem } from "../../store";
 import { useWorkspace } from "../../workspace/store";
-import { useProjectsEnabled } from "../../lib/connection";
+import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { useNoteLinks, type NoteLinks } from "../links/useLinks";
 import { projectsQuery } from "../projects/useProject";
+import { systemsQuery } from "../systems/useSystem";
 import { HoverPreview } from "../preview/HoverPreview";
 import { remarkWikilinks, WIKI_PREFIX } from "./remarkWikilinks";
 
 export const noteQuery = (ref: string) => ({ queryKey: ["note", ref], queryFn: () => read(ref) });
 
-function Properties({ note }: { note: Note }) {
+/** A note's tags; a project or system tag opens that project or system. */
+export function NoteTags({ note }: { note: Pick<Note, "tags"> }) {
   const enabled = useProjectsEnabled();
   const registry = useQuery({ ...projectsQuery(), enabled });
-  const openProject = useWorkspace((s) => s.openProject);
-  const tagChip = (t: string) => {
-    const project = t.startsWith("project/") ? registry.data?.projects.find((p) => p.tag === t) : undefined;
-    return project
-      ? <button key={t} className="chip project" title={`Open project ${project.name}`} onClick={() => openProject(project.slug, project.name)}>{project.name}</button>
-      : <span key={t} className="tag">{t}</span>;
-  };
+  const systemsOn = useSystemsEnabled();
+  const systems = useQuery({ ...systemsQuery(), enabled: systemsOn });
+  if (!note.tags.length) return null;
+  return (
+    <span className="tags">
+      {note.tags.map((t) => {
+        const project = t.startsWith("project/") ? registry.data?.projects.find((p) => p.tag === t) : undefined;
+        const system = t.startsWith("system/") ? systems.data?.systems.find((s) => s.tag === t) : undefined;
+        if (system) return <button key={t} className="chip project" title={`Open system ${system.name}`} onClick={() => openSystem(system.slug)}><Network size="1em" aria-hidden />{system.name}</button>;
+        return project
+          ? <button key={t} className="chip project" title={`Open project ${project.name}`} onClick={() => openProject(project.slug)}><Layers size="1em" aria-hidden />{project.name}</button>
+          : <span key={t} className="tag">{t}</span>;
+      })}
+    </span>
+  );
+}
+
+/** The properties that are not in the note's header: where it lives, its dates, files and origin. */
+export function NoteDetails({ note }: { note: Note }) {
   const rows: [string, ReactNode][] = [
-    ["Type", <span className={`badge type-${note.type}`}>{note.type}</span>],
-    ["Status", <span className={`badge status-${note.status}`}>{note.status}</span>],
-    ["Tags", <span className="tags">{note.tags.map(tagChip)}</span>],
     ["Domain", note.domain],
     ["Created", shortDate(note.created)],
     ["Updated", shortDate(note.updated)],
   ];
   if (note.review_by) rows.push(["Review by", note.review_by]);
-  if (note.confirmed?.length) rows.push(["Confirmed", shortDate(note.confirmed[note.confirmed.length - 1])]);
   if (note.context) rows.push(["Context", note.context]);
   if (note.files?.length) rows.push(["Files", <span className="files">{note.files.map((f) => <code key={f}>{f}</code>)}</span>]);
   if (note.origin) rows.push(["Origin", <code>{note.origin}</code>]);
@@ -89,7 +101,6 @@ function ActionBox({ note, index, done }: { note: Note; index: number; done: boo
 }
 
 export function NoteView({ refId, tabId }: { refId: string; tabId: string }) {
-  const client = useQueryClient();
   const note = useQuery(noteQuery(refId));
   const { note: links } = useNoteLinks(refId);
   const updateTab = useWorkspace((s) => s.updateTab);
@@ -99,16 +110,6 @@ export function NoteView({ refId, tabId }: { refId: string; tabId: string }) {
   useEffect(() => {
     if (reveal?.tabId === tabId) document.getElementById(`${tabId}-l${reveal.line}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [reveal, tabId]);
-  const still = useMutation({
-    mutationFn: () => confirm(refId),
-    onSuccess: (r) => {
-      recordOperation(r.operation_id);
-      client.invalidateQueries({ queryKey: ["note", refId] });
-      toast(r.status === "unchanged" ? "Already confirmed today." : `Confirmed. Next review ${r.review_by ?? "later"}.`);
-    },
-    onError: (e) => toast(classify(e).message, "error"),
-  });
-
   const components = useMemo<Components>(() => {
     if (!n) return {};
     const tickable = ACTION_TYPES.has(n.type) && n.status === "active";
@@ -141,15 +142,6 @@ export function NoteView({ refId, tabId }: { refId: string; tabId: string }) {
   if (!n) return null;
   return (
     <article className="note">
-      <div className="note-head">
-        <h1 onDoubleClick={() => updateTab(tabId, { mode: "live" })} title="Double-click to edit">{n.title}</h1>
-        {n.status === "active" && (
-          <button onClick={() => still.mutate()} disabled={still.isPending} title="Confirm this note still holds (pushes its review date out)">
-            Still true
-          </button>
-        )}
-      </div>
-      <Properties note={n} />
       <div className="markdown">
         <Markdown remarkPlugins={[remarkGfm, remarkWikilinks]} components={components}
           urlTransform={(url) => (url.startsWith(WIKI_PREFIX) ? url : defaultUrlTransform(url))}>

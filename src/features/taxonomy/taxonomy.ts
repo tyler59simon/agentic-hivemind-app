@@ -1,7 +1,7 @@
 // Tag usage for the taxonomy manager. LM validates tags against tag_taxonomy.json; the four facets are fixed.
 import type { NoteRow } from "../../lib/lm";
 
-export const FACETS = ["subject", "concern", "platform", "technology", "project"] as const;
+export const FACETS = ["subject", "concern", "platform", "technology", "project", "system"] as const;
 
 /** Facets from LM's taxonomy when it reports them, else the built-in list. */
 export const facetsOf = (taxonomy?: { facets?: string[] }): string[] =>
@@ -25,14 +25,16 @@ export function tagUsage(taxonomy: string[], notes: Pick<NoteRow, "tags">[], fac
 
 /** Normalised tags from free text (comma or space separated), and the ones LM would refuse. */
 export const PROJECT_TAG_MESSAGE = "Create a project instead of adding project/ tags here";
+export const SYSTEM_TAG_MESSAGE = "Create a system instead of adding system/ tags here";
 
 export function parseTags(text: string, facets: readonly string[] = FACETS): { tags: string[]; invalid: string[]; error?: string } {
   const words = text.split(/[,\s]+/).map((w) => w.trim().toLowerCase()).filter(Boolean);
   const isProject = (t: string) => t.split("/")[0] === "project";
-  const valid = (t: string) => !isProject(t) && facets.includes(t.split("/")[0]) && /^[a-z]+\/[a-z0-9][a-z0-9._/-]*$/.test(t);
+  const isSystem = (t: string) => t.split("/")[0] === "system";
+  const valid = (t: string) => !isProject(t) && !isSystem(t) && facets.includes(t.split("/")[0]) && /^[a-z]+\/[a-z0-9][a-z0-9._/-]*$/.test(t);
   return {
     tags: [...new Set(words.filter(valid))],
     invalid: words.filter((w) => !valid(w)),
-    ...(words.some(isProject) ? { error: PROJECT_TAG_MESSAGE } : {}),
+    ...(words.some(isProject) ? { error: PROJECT_TAG_MESSAGE } : words.some(isSystem) ? { error: SYSTEM_TAG_MESSAGE } : {}),
   };
 }
