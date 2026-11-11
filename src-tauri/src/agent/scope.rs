@@ -247,7 +247,6 @@ const GOVERNED_COMMANDS: [&str; 11] =
 
 /// A shell command that would change the Living Memory store through a plan. Its hook lets read and capture commands
 /// through before Hivemind is asked; these must never run from a session, whatever the user clicks.
-#[allow(dead_code)] // used from commit 4
 pub fn governed_memory_command(command: &str) -> bool {
     let text = command.to_lowercase();
     text.contains("living_memory")

@@ -9,7 +9,7 @@ pub mod store;
 use crate::bridge::Bridge;
 use crate::settings::Settings;
 use crate::worktree::{Totals, Worktree};
-use events::{Mode, Outcome, RunEvent, SeqEvent, Status};
+use events::{Decision, Mode, Outcome, RunEvent, SeqEvent, Status};
 use scope::{AgentTask, PolicyMode, Scope, Spec};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -33,12 +33,27 @@ pub trait Adapter: Send + Sync {
     fn name(&self) -> &'static str;
     /// Program, arguments and working directory; the manager sets up the pipes.
     fn command(&self, spec: &Spec) -> Command;
-    /// The line that carries a prompt on stdin (without the newline).
-    fn first_message(&self, prompt: &str) -> String;
-    /// The events in one stdout line. Unknown and malformed lines give none; never `Finished`.
+    /// The stdin line that carries one user message (without the newline).
+    fn user_line(&self, text: &str) -> String;
+    /// The events in one stdout line. Unknown and malformed lines give none; never `Finished` or `TurnFinished`.
     fn parse_line(&self, line: &str) -> Vec<RunEvent>;
-    /// The CLI's closing report, when the line is one.
+    /// The CLI's closing report of a turn, when the line is one.
     fn outcome(&self, line: &str) -> Option<Outcome>;
+    /// The stdin line that answers the permission request in `request` (a stdout line as printed).
+    #[allow(dead_code)] // used from commit 4
+    fn answer_line(&self, request: &str, decision: Decision) -> Option<String>;
+    /// The answer to write at once, without asking the user, when `line` asks for something Hivemind always refuses.
+    #[allow(dead_code)] // used from commit 4
+    fn refusal(&self, line: &str) -> Option<String>;
+    /// The stdin line that stops the running turn.
+    #[allow(dead_code)] // used from commit 4
+    fn interrupt_line(&self) -> String;
+    /// The stdin line that changes the permission mode of a running CLI.
+    #[allow(dead_code)] // used from commit 4
+    fn mode_line(&self, mode: PolicyMode) -> String;
+    /// The permission mode the CLI says it is in now, when the line reports one.
+    #[allow(dead_code)] // used from commit 4
+    fn mode_of(&self, line: &str) -> Option<PolicyMode>;
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -261,7 +276,7 @@ impl Manager {
         std::thread::spawn(move || pump.pump(&id, stdout, stderr, &child, required.as_deref()));
         if let Some(mut stdin) = stdin {
             // A CLI that has already died shows up as a failed session, not as an error here.
-            let _ = stdin.write_all(format!("{}\n", inner.adapter.first_message(prompt)).as_bytes());
+            let _ = stdin.write_all(format!("{}\n", inner.adapter.user_line(prompt)).as_bytes());
             // Closing stdin is what makes this a one-prompt session: the CLI exits when the work
             // is done. Follow-up prompts need this handle kept open instead.
             drop(stdin);
@@ -455,14 +470,29 @@ mod tests {
             command.args(&self.args).current_dir(&spec.cwd);
             command
         }
-        fn first_message(&self, prompt: &str) -> String {
-            ClaudeCode.first_message(prompt)
+        fn user_line(&self, text: &str) -> String {
+            ClaudeCode.user_line(text)
         }
         fn parse_line(&self, line: &str) -> Vec<RunEvent> {
             ClaudeCode.parse_line(line)
         }
         fn outcome(&self, line: &str) -> Option<Outcome> {
             ClaudeCode.outcome(line)
+        }
+        fn answer_line(&self, request: &str, decision: Decision) -> Option<String> {
+            ClaudeCode.answer_line(request, decision)
+        }
+        fn refusal(&self, line: &str) -> Option<String> {
+            ClaudeCode.refusal(line)
+        }
+        fn interrupt_line(&self) -> String {
+            ClaudeCode.interrupt_line()
+        }
+        fn mode_line(&self, mode: PolicyMode) -> String {
+            ClaudeCode.mode_line(mode)
+        }
+        fn mode_of(&self, line: &str) -> Option<PolicyMode> {
+            ClaudeCode.mode_of(line)
         }
     }
 
