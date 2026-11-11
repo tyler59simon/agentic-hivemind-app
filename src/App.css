@@ -100,6 +100,8 @@ button:disabled { opacity: .55; cursor: default; }
 .crumb { border: none; padding: 0; color: #dccbe8; overflow: hidden; text-overflow: ellipsis; }
 .crumb:hover { background: none; color: var(--fg); text-decoration: underline; }
 .crumb.here { color: var(--fg); font-weight: 700; }
+/* Only the last crumb gives way to a long title (a session's task, a note's name). */
+.crumb:not(.here) { flex: none; }
 .crumb-sep { color: var(--muted); }
 .top-search { margin-left: auto; display: flex; align-items: center; gap: .65rem; width: min(21.5rem, 40%); height: 2.35rem; padding: 0 .5rem 0 .8rem; border: 1px solid var(--border-strong); border-radius: .45rem; flex: none; }
 .top-search:focus-within, .lib-search:focus-within { border-color: var(--accent); }
@@ -509,6 +511,7 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .session-list { border-right: 1px solid var(--border-strong); padding: 1.1rem .7rem 1rem 0; overflow: auto; }
 .session-list h2 { margin: 0; font-size: 1.15rem; }
 .session-list-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin: 0 0 .6rem .6rem; }
+.session-list-head button { white-space: nowrap; }
 .session-day { margin: .9rem 0 .3rem .6rem; }
 .session-item { width: 100%; justify-content: flex-start; align-items: flex-start; gap: .75rem; text-align: left; border: none; border-radius: .5rem; padding: .6rem .7rem; }
 .session-item .grow { white-space: normal; }
@@ -546,7 +549,9 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .approval p { margin: 0; }
 .approval.done { flex-direction: row; align-items: center; gap: .7rem; padding: .45rem .8rem; border-color: var(--border-strong); background: none; }
 .approval.done code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: .86rem; color: var(--muted); }
-.approval-head { display: flex; align-items: center; gap: .6rem; font-weight: 600; }
+.approval-head { display: flex; align-items: center; gap: .6rem; font-weight: 600; white-space: nowrap; }
+.approval-head svg { flex: none; }
+.approval > code { overflow-wrap: anywhere; }
 .approval pre { margin: 0; max-height: 14rem; overflow: auto; padding: .5rem .7rem; background: var(--bg-code); border: 1px solid var(--border); border-radius: .45rem; font-family: var(--font-mono); font-size: .86rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 .approval-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
 .files-card { border: 1px solid var(--border-strong); border-radius: .5rem; padding: .3rem 1rem .9rem; }
