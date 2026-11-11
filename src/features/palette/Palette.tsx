@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
+import { useChangesEnabled, useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { domains, list } from "../../lib/lm";
 import { refreshStore } from "../../lib/refresh";
 import { fuzzy } from "../../lib/text";
 import { openProject, openSystem, useApp, type Route } from "../../store";
 import { railShown, useWorkspace } from "../../workspace/store";
+import { useChangeIntent } from "../changes/intent";
 import { useProjectIntent } from "../projects/intent";
 import { projectsQuery } from "../projects/useProject";
 import { systemsQuery, useSystemIntent } from "../systems/useSystem";
@@ -27,6 +28,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
   const projectsOn = useProjectsEnabled();
   const registry = useQuery({ ...projectsQuery(), enabled: projectsOn && app.palette === "commands" });
   const systemsOn = useSystemsEnabled();
+  const changesOn = useChangesEnabled();
   const systems = useQuery({ ...systemsQuery(), enabled: systemsOn && app.palette === "commands" });
   useEffect(() => { setQuery(""); setIndex(0); }, [app.palette]);
 
@@ -50,6 +52,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "work", label: "Open work", run: page({ page: "overview", view: "work" }) },
       { key: "review", label: "Review", run: page({ page: "review" }) },
       { key: "changes", label: "Changes", run: page({ page: "changes" }) },
+      ...(changesOn ? [{ key: "new-change", label: "Start a change…", run: () => { close(); useChangeIntent.getState().open(); } }] : []),
       ...(projectsOn ? [
         { key: "new-project", label: "New project…", run: () => { close(); useProjectIntent.getState().openWizard(); } },
         { key: "new-session", label: "Start an agent session", run: page({ page: "agents", view: "new" }) },
@@ -83,7 +86,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
         run: () => { app.setDomain(d.name); close(); },
       })),
     ];
-  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, client, onSettings, onReconnect]);
+  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, changesOn, client, onSettings, onReconnect]);
 
   const shown = useMemo(() => entries
     .map((e) => ({ e, score: fuzzy(query, e.label) }))

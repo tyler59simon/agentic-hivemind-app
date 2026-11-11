@@ -9,7 +9,7 @@ export type Shelf = "active" | "archived" | "any";
 export type Route =
   | { page: "overview"; view?: "work" }
   | { page: "agents"; session?: string; view?: "new" }
-  | { page: "changes"; ref?: string }
+  | { page: "changes"; id?: number; view?: "detail"; ref?: string }
   | { page: "architecture"; system?: string }
   | { page: "memory"; view?: "notes" | "graph" | "activity" | "tags"; q?: string }
   | { page: "review" };
@@ -69,3 +69,4 @@ export const openProject = (slug: string | null) => { app().setProject(slug); ap
 export const openSystem = (slug: string) => app().go({ page: "architecture", system: slug });
 export const openSession = (session: string) => app().go({ page: "agents", session });
 export const startSession = () => app().go({ page: "agents", view: "new" });
+export const openChange = (id: number) => app().go({ page: "changes", id, view: "detail" });
