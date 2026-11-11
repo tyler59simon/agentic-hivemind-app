@@ -3,13 +3,15 @@ import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { sessionsQuery } from "../../lib/agent";
 import { useChangesEnabled, useSystemsEnabled } from "../../lib/connection";
-import { applyPlan, changePlan, changes, list, LmError, review, type ChangeStage, type ChangesResult } from "../../lib/lm";
+import { classify } from "../../lib/errors";
+import { applyPlan, changePlan, changes, links, list, LmError, review, type ChangeStage, type ChangesResult } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
 import { startSession, useApp } from "../../store";
 import { useSessionDraft } from "../agents/draft";
 import { useAllLinks } from "../projects/useProject";
 import { systemsQuery } from "../systems/useSystem";
-import { contextRefs, viewOf, type ChangeView } from "./changes";
+import { toast } from "../../ui/toast";
+import { contextRefs, displayId, linkedContext, STAGE_LABELS, viewOf, type ChangeView } from "./changes";
 
 export const changesQuery = () => ({ queryKey: ["changes"], queryFn: () => changes() });
 
@@ -36,8 +38,11 @@ export function useChangeViews(): { enabled: boolean; query: UseQueryResult<Chan
 }
 
 /** Plan and apply a stage change at once (section 4.6). Resolves with the operation id; rejects without applying when the plan is not a stage-only, one-file update. */
-export async function moveStage(id: number, stage: ChangeStage): Promise<string> {
+export async function moveStage(id: number, stage: ChangeStage, from: ChangeStage): Promise<string> {
   for (let attempt = 0; ; attempt++) {
+    // Someone else may have moved the change since it was shown (or since a stale apply): never overwrite that move.
+    const now = (await changes()).changes.find((c) => c.id === id);
+    if (now?.stage !== from) throw new Error(`${displayId(id)} is now at ${now ? STAGE_LABELS[now.stage] : "an unknown stage"}; nothing was applied.`);
     const plan = await changePlan("update", { id, stage });
     const s = plan.summary;
     if (plan.kind !== "change_update" || s.id !== id || s.files !== 1 || s.fields.join() !== "stage")
@@ -52,9 +57,12 @@ export async function moveStage(id: number, stage: ChangeStage): Promise<string>
   }
 }
 
-/** Fill the session draft from a change and show the Start screen. */
-export function startSessionFor(view: ChangeView) {
+/** Fill the session draft from a change and show the Start screen. The link graph is read here, so the draft gets the
+ *  change's decisions and questions even when the screen's own copy had not loaded yet. */
+export async function startSessionFor(view: ChangeView) {
   const { change } = view;
+  try { view = { ...view, ...linkedContext(await links({ allDomains: true, status: "any" }), change) }; }
+  catch (e) { toast(`The notes linked to ${change.display} could not be read: ${classify(e).message}`, "error"); return; }
   const draft = useSessionDraft.getState();
   useSessionDraft.setState({ change: change.id });          // the draft has no setter for `change`; reset() clears it
   contextRefs(view).forEach(draft.addContext);              // keeps notes the user already added; ignores duplicates

@@ -110,19 +110,26 @@ export function connected(graph: LinkGraph | undefined, ref: string): LinkNode[]
   return out;
 }
 
+/** The notes linked to or from a change's brief that the screens and the session briefing use. */
+export function linkedContext(graph: LinkGraph | undefined, change: Pick<Change, "brief" | "display">): Pick<ChangeView, "decisions" | "questions" | "checkpoints"> {
+  const linked = connected(graph, change.brief);
+  return {
+    decisions: linked.filter((n) => n.type === "decision"),
+    questions: linked.filter((n) => n.type === "risk" && n.status === "active"),
+    // Only the app's own checkpoint notes: other status notes may link to the brief too, and titles are all there is to sort by.
+    checkpoints: linked.filter((n) => n.type === "status" && n.title.startsWith(`${change.display} checkpoint `)).sort((a, b) => (a.title < b.title ? 1 : a.title > b.title ? -1 : 0)),
+  };
+}
+
 export function viewOf(change: Change, ctx: ViewContext): ChangeView {
   const sessions = sessionsOf(change.id, ctx.sessions);
-  const linked = connected(ctx.graph, change.brief);
   const brief = ctx.rows.get(change.brief)?.updated ?? "";
   const system = change.system ? ctx.systems.find((s) => s.slug === change.system) : undefined;
   return {
     change, sessions, latest: sessions[0],
     chip: changeChip(change, sessions, ctx.due.has(change.brief)),
     updated: brief > change.updated ? brief : change.updated,
-    decisions: linked.filter((n) => n.type === "decision"),
-    questions: linked.filter((n) => n.type === "risk" && n.status === "active"),
-    // Only the app's own checkpoint notes: other status notes may link to the brief too, and titles are all there is to sort by.
-    checkpoints: linked.filter((n) => n.type === "status" && n.title.startsWith(`${change.display} checkpoint `)).sort((a, b) => (a.title < b.title ? 1 : a.title > b.title ? -1 : 0)),
+    ...linkedContext(ctx.graph, change),
     hasDiagram: !!system?.architecture,
   };
 }

@@ -41,7 +41,7 @@ function Stepper({ change, writable }: { change: Change; writable: boolean }) {
   const go = async (to: ChangeStage, from: ChangeStage) => {
     setBusy(to);
     try {
-      await moveStage(change.id, to);
+      await moveStage(change.id, to, from);
       client.invalidateQueries({ queryKey: ["changes"] });
       toast(`${change.display} moved to ${STAGE_LABELS[to]}`, "info", { label: "Undo", run: () => go(from, to) });
     } catch (e) {
@@ -274,6 +274,7 @@ export function ChangeDetail({ id }: { id: number }) {
   const go = useApp((s) => s.go);
 
   if (!view || !change) {
+    if (query.error) return <div className="page"><p className="error">{classify(query.error).message}</p></div>;
     if (query.isLoading || !query.data) return <p className="muted pad">Loading…</p>;
     return (
       <div className="page">

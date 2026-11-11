@@ -16,7 +16,7 @@ import { ArrowLink, dayMonth, PageHeader, Row, Section, Split } from "../../ui/P
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
 import { isEnded, sessionForNote, waitingForReview } from "../agents/session";
-import { engineName, topChange } from "../changes/changes";
+import { briefState, engineName, topChange } from "../changes/changes";
 import { useChangeIntent } from "../changes/intent";
 import { startSessionFor, useChangeViews } from "../changes/useChanges";
 import { PlanDialog } from "../plans/PlanDialog";
@@ -191,7 +191,7 @@ function ProjectOverview({ project }: { project: Project }) {
               <div className="focus-actions">
                 {top.latest && !isEnded(top.latest)
                   ? <button className="outline" onClick={() => openSession(top.latest!.id)}>Resume session<ArrowRight size="1.1em" aria-hidden /></button>
-                  : <button className="outline" onClick={() => startSessionFor(top)}>Start session</button>}
+                  : briefState(top.change) === "ok" && <button className="outline" onClick={() => startSessionFor(top)}>Start session</button>}
                 <ArrowLink onClick={() => openChange(top.change.id)}>Open change</ArrowLink>
               </div>
             </div>
