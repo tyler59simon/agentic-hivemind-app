@@ -54,7 +54,7 @@ Run these from the repository root before changing anything. Each must match. If
 | P1 | `git log --oneline -15` | Commits for Phase 2 (interactive sessions) and Phase 3 (changes). |
 | P2 | `git grep -n "mod worktree" src-tauri/src/lib.rs` | `src-tauri/src/worktree.rs` exists and is registered. |
 | P3 | `git grep -n "pub struct Worktree\|pub struct FileChange\|pub struct Totals\|pub fn changes\|pub fn totals\|pub fn patch\|pub fn ahead\|pub fn remove" src-tauri/src/worktree.rs` | Phase 2's worktree type, its per-file type with a `binary` flag, its totals type, the listing, and the two functions that decide whether a branch is deleted (`ahead`, `remove`). Read `changes`, `ahead` and `remove` in full. |
-| P4 | `git grep -n "files_changed" src-tauri/src/agent` | The place a finished turn stores `files_changed`. This is the hook point of section 4.4. |
+| P4 | `git grep -n "fn sync_files" src-tauri/src/agent/mod.rs` and `git grep -n "files_changed" src-tauri/src/agent` | Phase 2's `Inner::sync_files`, the one place a finished turn or an exited process stores `files_changed`. This is the hook point of section 4.4. |
 | P5 | `git grep -n "fn agent_send\|fn agent_files\|fn agent_end\|fn agent_interrupt\|fn agent_answer" src-tauri/src/lib.rs` and `git grep -n "pub fn send_task\|pub fn send\|pub fn files\|fn record\|pub fn events_of" src-tauri/src/agent/mod.rs` | All five commands; `send_task` (what `agent_send` calls), `Manager::send`, `Manager::files`, `Inner::record`, `events_of`. |
 | P6 | `git grep -n '"--resume"' src-tauri/src/agent` | The adapter can resume a session. Read what the send does for a session with no live process and for an ended one (section 4.6, UNVERIFIED-2). |
 | P7 | `git grep -n "Idle\|Waiting\|Ended" src-tauri/src/agent/events.rs` | The `Status` variants of README 7.1. |
@@ -558,7 +558,7 @@ pub fn review_after_turn(review: Option<Review>, before: Option<&Totals>, after:
 
 It is called from three places, each time with the stored totals as `before` and the totals just computed as `after` (a missing value counts as zero files), and its result is stored in the same locked update:
 
-- in the pump, at the end of **every** turn of an interactive session (Phase 2's turn-end step: after `worktree::changes` was computed, before the totals are stored), whether or not the totals changed;
+- in Phase 2's `Inner::sync_files`, which runs at the end of **every** turn of an interactive session, at every exit of its process and when a session without a process is ended: in its locked step, immediately before the stored totals are replaced (Phase 2's step (b)), on every call whether or not the totals changed. It must run there and not later in the pump: `sync_files` stores the new totals, so any later caller would see the new totals on both sides and never reopen a dismissed or approved session;
 - in `Manager::files` (behind `agent_files`), where Phase 2 stores totals that differ from the stored ones;
 - in `review::files` and `review::refresh` (behind `review_files` and `review_refresh`), in the same case (section 4.3, "Reconciling" and "Refreshing every worktree"); the two share one private function.
 
@@ -1082,7 +1082,7 @@ Behaviour:
 
 1. Beside `SessionInfo` (anchor `pub struct SessionInfo`): add `ReviewState`, `Review` and the two fields of section 4.1, and `ToolOutput`. Add `review: None, source_sha: None` to the literal in `Manager::start` and to every other literal the compiler names.
 2. Add the pure function `review_after_turn` (section 4.4), beside `finished`. It takes Phase 2's `Totals`.
-3. Call it at the two places in this file that section 4.4 names. In the pump's turn-end step (P4; Phase 2's "compute `worktree::changes` … `record` a `TurnFinished`"), inside the locked block and before the totals are stored: `info.review = review_after_turn(info.review.take(), info.files_changed.as_ref(), Some(&totals), at);`. In `Manager::files`, in the branch that stores differing totals: the same line with the current time.
+3. Call it at the two places in this file that section 4.4 names. In `Inner::sync_files` (Phase 2; anchor `fn sync_files`), inside its locked step and immediately before its step (b) replaces `info.files_changed`, on every call: `info.review = review_after_turn(info.review.take(), info.files_changed.as_ref(), new.as_ref(), now_ms());` (`new` is the totals that step just computed), and count a changed `review` as a reason to persist. In `Manager::files`, in the branch that stores differing totals: the same line, before the totals are stored.
 4. Make `now_ms` `pub(crate)`.
 5. In `impl Manager`, add (Phase 2's plan has no method that returns one session's details or changes them from outside; if the merged code has one, use it instead):
 
