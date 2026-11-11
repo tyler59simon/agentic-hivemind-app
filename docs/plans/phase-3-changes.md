@@ -84,7 +84,7 @@ Also in the tree since Phase 1: `src/ui/Markdown.tsx` exports `Markdown({ childr
 
 Two facts about Phase 2 that this document builds on as they are:
 
-- **A session's `adapter` is `"claude-code"`**, not `"claude"` (`fn name(&self)` in `src-tauri/src/agent/claude.rs`, and the stored example in Phase 2 section 4.2). README 7.1 says `"claude"`; the code does not store that.
+- **A session's `adapter` is `"claude-code"`** (README 7.1; it is what `fn name(&self)` in `src-tauri/src/agent/claude.rs` returns, and what the stored example in Phase 2 section 4.2 shows). Phase 5 adds `"codex"`. Map the engine's display name from that exact string.
 - **Phase 2's `waitingForReview(s)` is `filesChanged.files > 0` and the status is neither `running` nor `waiting`.** Phase 3 calls that function and does not define its own. Phase 4 adds the `review` part of README 7.3 to the same function.
 
 > **UNVERIFIED:** Phase 2 was implemented with exactly the names, signatures and file paths its document gives.
@@ -377,7 +377,8 @@ export interface Change {
   stage: ChangeStage; status: ChangeStatus;
   repo: string | null; branch: string | null; system: string | null; element: string | null;
   created: string; updated: string;
-  /** The brief note's status, or null when the brief does not resolve. */
+  /** The brief note's status, whatever it is: an archived or superseded note still resolves and reports that status.
+   *  Null only when no note with the brief's id exists any more (deleted, or the stored ref is broken). */
   brief_status: Status | null;
   actions: { open: number; done: number };
 }
@@ -406,6 +407,15 @@ export type ChangePlan = Plan & { summary: ChangePlanSummary };
 ```ts
 export type StepState = "done" | "current" | "later";
 export interface Chip { label: string; tone: "" | "active" | "waiting" | "busy" }
+/** What the app may do with a change's brief: "ok" (active or resolved), "retired" (archived or superseded: it still
+ *  reads, but is shown read-only), "missing" (`brief_status` is null: nothing to read). */
+export type BriefState = "ok" | "retired" | "missing";
+/** Whether the Start screen may start a session for the change in the draft (section 6.2, `StartSession.tsx`). */
+export type LinkState =
+  | { kind: "none" }                        // no change in the draft: Phase 2's screen, unchanged
+  | { kind: "loading"; what: string }       // Start is disabled; `what` is shown beside it
+  | { kind: "failed"; message: string }     // Start is disabled; the message is shown with "Unlink the change"
+  | { kind: "ready" };
 
 /** Everything the screens show about one change, joined from the registry, sessions, links and notes. */
 export interface ChangeView {
@@ -635,7 +645,8 @@ sequenceDiagram
   U->>D: "Start agent session"
   D->>D: startSessionFor(view): draft.change = id, addContext(brief, decisions, open questions), setSystem(system, element), pick the change's project
   D->>S: startSession() shows the route {page: agents, view: new}
-  S->>S: linked chip "CHG-014 · title", Repo and Start branch default to the change's, the briefing gains "## Change"
+  S->>LM: changes, repo_branches, read of the brief (Start session is disabled until all three have loaded)
+  S->>S: linked chip "CHG-014 · title", Repo and Start branch set to the change's, the briefing gains "## Change", linkState = ready
   U->>S: writes the task, "Start session"
   S->>R: agentStart({kind: work, project, repo, branch, change: id}, task, {policy, context, briefing, model, system})
   R->>LM: projects (git::project_entry, then scope::project_repo)
@@ -1014,7 +1025,17 @@ Function by function:
 
 Only the first element of `_change_set`'s result is used. `governance.plan` records the expected hash of every path in `files` itself, including `None` for a path that must not exist yet.
 
-`listing`: for each entry that passes the filters, build the row (entry plus `display`, `brief_status: None`, `actions: {open: 0, done: 0}`), add the two registry warnings, then resolve the brief. A resolved brief sets `brief` to its current ref, `brief_status` to the note's status and `actions` to the counts from `note_format.action_items`. An unresolved one adds a warning and keeps the defaults.
+`listing`: for each entry that passes the filters, build the row (entry plus `display`, `brief_status: None`, `actions: {open: 0, done: 0}`), add the two registry warnings, then resolve the brief. A brief that resolves sets `brief` to its current ref, `brief_status` to the note's status and `actions` to the counts from `note_format.action_items`. One that does not resolve adds a warning and keeps the defaults.
+
+"Resolves" means a note with that id exists, in any lifecycle state. `resolve_ref` and `find_note` (`core/notes.py`) both search `inventory(domain, root, retired=True)`, which includes `archive/`. So there are two different cases, and only the first is a warning:
+
+| Case | `brief_status` | Warning |
+| --- | --- | --- |
+| The note was deleted, or the stored ref is broken | `None` | `CHG-014: brief <ref> does not resolve to a note` |
+| The note was archived or superseded by a plan (it sits in `archive/`) | `"archived"` or `"superseded"` | none; the status says it |
+| The note was resolved (by `close`, or by hand) | `"resolved"` | none |
+
+`close` on a change whose brief is archived or superseded leaves the note alone (it is not an active plan note), exactly as for a brief resolved by hand.
 
 Error messages raised by the module (all `ValueError`, all exit 2):
 
@@ -1138,6 +1159,7 @@ SLASH=lambda p:str(p).replace(chr(92),'/')
 | `test_refusals` | A table of `(payload, expected substring)` for create, each must return a non-zero code and contain the substring: `project='ghost'` → `unknown project`; `system='ghost'` → `unknown system`; no `title` → `requires title`; no `brief` → `requires brief`; `brief={'body':'## Key Details\n* only details'}` → `Executive Summary`; `brief={'body':BRIEF,'extra':1}` → `brief accepts`; `repo='rel/path'` → `absolute`; `stage='ship'` → `stage must be one of`; `status='active'` → `Unknown payload`; `title='Fix [x]'` → `cannot contain`; `title='x'*121` → `1..120`; `system=None, element='Ingestion'` → `element needs a system`; `title='Rotate '+'sk-'+'a'*24` → `credential`. Then for update: `{'id':'CHG-x','stage':'design'}` → `change number`; `{'id':1,'project':'other'}` → `Unknown payload`. None of these creates `changes.json`. |
 | `test_viewer` | `changes` exits 0 as `viewer` and as `subagent`. `change-plan create` as `viewer` fails with `Viewers`; as `subagent` it fails. |
 | `test_warnings` | Create; rewrite `changes.json` by hand so the entry has `project` `ghost`, `system` `gone` and `brief` `demo:00000000-0000-0000-0000-000000000000`. `changes` warnings contain `unknown project ghost`, `unknown system gone` and `does not resolve`; the row has `brief_status` None and `actions` `{'open':0,'done':0}`. `doctor` has a warning starting `changes: `. Write `{broken` to the file: `changes` exits 2, and `doctor` has a warning starting `changes.json: `. |
+| `test_an_archived_brief_still_resolves` | Create. Archive the brief with a note plan (`self.cli('--domain','demo','plan','archive',ref)`, then apply). `changes` returns the row with the same `brief` ref, `brief_status` `archived`, the `actions` counts of the note, and **no** warning containing `does not resolve`. `close {'id':1}`: `inspect-plan` lists only `changes.json`, `brief_action` None; apply succeeds and the note is still `archived`. |
 | `test_a_brief_that_changed_domain_is_still_found` | `init_domain('other',[str(self.base/'other')],self.root)`. Create; rewrite the stored `brief` to `other:<same id>`. `changes` returns the row with `brief` `demo:<id>`, `brief_status` `active`, and no warning. |
 | `test_brief_keeps_custom_sections` | Create (the brief body has the `## Acceptance evidence` section). `check <ref> --index 2` ticks `Verify replay and restart`. Read the note: the body still contains `## Acceptance evidence`, `- [ ] Replay produces no duplicate alert` and `- [x] Suppression survives a restart`. `check <ref> --index 3` fails with `No Action Item 3; the note has 2`. `update <ref> --add-action 'Ship it'` keeps the section. An `update` with stdin `{"body": <the body with the first evidence line ticked>, "expected_revision": <revision>}` succeeds and the read shows `- [x] Replay produces no duplicate alert`; the `changes` row's `actions` still counts only Action Items. |
 | `test_backup_and_protection` | Create. `'changes.json'` is in `backup.canonical_files(self.root)`. `protected_rule(str(self.root/'changes.json'),str(self.base),self.root)` is `'config'`. `'changes'` is in `runtime.ALLOWED_SUBCOMMANDS`; `'change-plan'` is not; neither is in `runtime.MUTATING_SUBCOMMANDS`. |
@@ -1266,11 +1288,20 @@ export const STAGE_LABELS: Record<ChangeStage, string> = { explore: "Explore", d
 
 /** One state per stage, in STAGES order: every stage is done for a done change. */
 export function stageStates(change: Pick<Change, "stage" | "status">): StepState[]
-/** The stage a click moves to, or null at the last stage and for a change that is not active. */
-export function nextStage(change: Pick<Change, "stage" | "status">): ChangeStage | null
+/** "missing" for a null `brief_status`, "retired" for archived or superseded, else "ok". */
+export function briefState(change: Pick<Change, "brief_status">): BriefState
+/** The stage a click moves to, or null at the last stage, for a change that is not active, and for one whose brief is not "ok". */
+export function nextStage(change: Pick<Change, "stage" | "status" | "brief_status">): ChangeStage | null
+/** Whether the Start screen may start a session for the linked change, and what to say when it may not. */
+export function linkState(p: {
+  change: number | null; changesOn: boolean;
+  registryLoading: boolean; registryError: string | null; linked: Change | undefined;
+  branchesLoading: boolean; branchesError: string | null; applied: boolean;
+  briefLoading: boolean; briefError: string | null;
+}): LinkState
 
 /** A session's engine as the mocks name it. The Claude Code adapter stores "claude-code"; Phase 5 adds Codex. */
-export const engineName = (adapter: string) => ({ "claude-code": "Claude Code", claude: "Claude Code", codex: "Codex" } as Record<string, string>)[adapter] ?? adapter;
+export const engineName = (adapter: string) => ({ "claude-code": "Claude Code", codex: "Codex" } as Record<string, string>)[adapter] ?? adapter;
 /** Sessions whose task carries this change, newest first. */
 export function sessionsOf(id: number, sessions: SessionInfo[]): SessionInfo[]
 
@@ -1300,16 +1331,18 @@ Behaviour:
 | Function | Rule |
 | --- | --- |
 | `stageStates` | `status === "done"`: four `"done"`. Otherwise by position against `STAGES.indexOf(change.stage)`: before is `"done"`, equal is `"current"`, after is `"later"`. |
-| `nextStage` | `null` unless `status === "active"`; else `STAGES[i + 1] ?? null`. |
+| `briefState` | `brief_status === null`: `"missing"`; `"archived"` or `"superseded"`: `"retired"`; `"active"` or `"resolved"`: `"ok"`. Every screen decides what to show about the brief from this one function. |
+| `nextStage` | `null` unless `status === "active"` and `briefState(change) === "ok"`; else `STAGES[i + 1] ?? null`. (The stage of a change whose brief is gone or retired is still changed through "Edit change…", with a reviewed plan.) |
+| `linkState` | First match, with `D` the display id of `p.change`: (1) `change === null`: `none`. (2) `!changesOn`: `failed`, `D cannot be loaded: this Living Memory has no changes command.` (3) `registryLoading`: `loading`, `Loading D…`. (4) `registryError`: `failed`, `D could not be loaded: <error>`. (5) no `linked`: `failed`, `D is not in the change registry.` (6) `briefState(linked) === "missing"`: `failed`, `The brief of D is missing, so its briefing cannot be built.` (7) `briefLoading`: `loading`, `Loading the brief of D…`. (8) `briefError`: `failed`, `The brief of D could not be loaded: <error>`. (9) `branchesError`: `failed`, `The branches for D could not be read: <error>`. (10) `branchesLoading` or `!applied`: `loading`, `Loading the repository and branch of D…`. (11) `ready`. A done or cancelled change is **not** a failure here: Rust refuses it at start with its own message (section 4.3). A retired brief is not a failure either: it still reads. |
 | `sessionsOf` | `sessions.filter((s) => s.task.kind === "work" && s.task.change === id)` sorted by `startedAt` descending. |
 | `connected` | Nodes at the other end of every edge with `kind === "link"` where `from === ref` or `to === ref`, de-duplicated by `ref`, in edge order. |
 | `viewOf` | `sessions = sessionsOf(...)`; `latest = sessions[0]`; `chip = changeChip(change, sessions, ctx.due.has(change.brief))`; `updated` is the larger string of `change.updated` and `ctx.rows.get(change.brief)?.updated ?? ""`; `linked = connected(ctx.graph, change.brief)`; `decisions` are `type === "decision"`; `questions` are `type === "risk" && status === "active"`; `checkpoints` are `type === "status"` sorted by title descending; `hasDiagram` is true when `change.system` names a system in `ctx.systems` whose `architecture` is set. |
-| `metaLines` | With a `latest` session: `first = [engineName(latest.adapter), files]`, where `files` is `"N file(s) proposed"` when `waitingForReview(latest)`, `"N file(s) changed"` when `filesChanged.files > 0` otherwise, and left out at 0. `second = [stage label (only when there is no session), "N decision(s)" (when > 0), "1 diagram" (when hasDiagram), "Updated " + updatedLabel]`. |
+| `metaLines` | With a `latest` session: `first = [engineName(latest.adapter), files]`, where `files` is `"N file(s) proposed"` when `waitingForReview(latest)`, `"N file(s) changed"` when `filesChanged.files > 0` otherwise, and left out at 0. `second = ["Brief missing" (briefState "missing") or "Brief archived" / "Brief superseded" (briefState "retired"), stage label (only when there is no session), "N decision(s)" (when > 0), "1 diagram" (when hasDiagram), "Updated " + updatedLabel]`. |
 | `sessionLine` | `waitingForReview(s)`: `"N file(s) awaiting review"` (the wording of Phase 2's rail row); else by status: `running`: `"Working…"`; `waiting`: `"Waiting for you"`; `idle`: `"Ready · N turn(s)"` (Phase 2 shows `idle` as "ready"); `failed`: `"Failed"`; `cancelled`: `"Cancelled"`; otherwise `"Ended"`. |
 | `topChange` | Among views with `change.status === "active"`: the first with chip label `Waiting for review`, else the one with the largest `updated`. |
 | `changesFor` | `refs = {ref} ∪ link nodes in links.incoming ∪ link nodes in links.outgoing` (only `kind === "link"`); `changes.filter((c) => refs.has(c.brief))`. |
 | `unadopted` | `rows` with `type === "plan"`, `status === "active"`, `ref !== charter`, and `ref` not equal to any `change.brief`; newest `updated` first. |
-| `contextRefs` | `[change.brief, ...decisions refs, ...questions refs]`, de-duplicated; without the brief when `brief_status` is null. |
+| `contextRefs` | `[change.brief, ...decisions refs, ...questions refs]`, de-duplicated; without the brief when `briefState(change) === "missing"` (a retired brief still reads, so it stays in). |
 | `checkpointTitle` | `"CHG-014 checkpoint 2026-11-10 14:32"` in local time, zero-padded. The minute makes same-day checkpoints distinct. |
 | `checkpointBody` | `## 📌 Executive Summary\n<summary>\n\n---\n\n## 📝 Key Details\n* **Stage:** Implement\n* **Steps:** 2 of 5 done\n* **Evidence:** 0 of 2 verified\n* **Branch:** feature/idempotency\n\n## 🗂️ Resource Links\n* [[<briefTitle>]]`. The Steps line is left out when `total` is 0, the Evidence line when its `total` is 0, the Branch line when `branch` is null. Use `HEADINGS` from `src/lib/note.ts`. |
 
@@ -1423,7 +1456,9 @@ What the draft does **not** carry, and how the Start screen gets it instead:
 
 #### `src/features/agents/StartSession.tsx` (Phase 2 file, changed)
 
-Phase 2 leaves the linked chip and one Task boundaries line to this phase, and builds a task without `change`. Five edits follow; all key off `draft.change`, and with `draft.change === null` the screen is exactly Phase 2's.
+Phase 2 leaves the linked chip and one Task boundaries line to this phase, and builds a task without `change`. Six edits follow; all key off `draft.change`, and with `draft.change === null` the screen is exactly Phase 2's.
+
+**The rule that holds the edits together:** a session linked to a change must start from the change's repository and branch and with the `## Change` block in its briefing. None of the three is known until the change, the repository's branches and the brief have loaded. So while a change is linked, **Start session is disabled until all three have loaded and the change's repository and branch have been applied**, and a load that fails is shown with a way to unlink. The decision is the pure function `linkState` in `changes.ts`.
 
 Add near the top of the component:
 
@@ -1432,27 +1467,51 @@ const changesOn = useChangesEnabled();
 const registry = useQuery({ ...changesQuery(), enabled: changesOn && draft.change !== null });
 const linked = draft.change === null ? undefined : registry.data?.changes.find((c) => c.id === draft.change);
 // The brief itself, loaded on its own so nothing below depends on it staying ticked under "Included memory".
-const brief = useQuery({ ...noteQuery(linked?.brief ?? ""), enabled: !!linked && linked.brief_status !== null });
+const brief = useQuery({ ...noteQuery(linked?.brief ?? ""), enabled: !!linked && briefState(linked) !== "missing" });
 const briefNote = brief.data;
 const openSteps = briefNote ? actionItems(briefNote.body).filter((s) => !s.done).map((s) => stepParts(s.text).title) : [];
+// The change whose repository and branch have been put into the two selects (edit 2); null until that is done.
+const [appliedFor, setAppliedFor] = useState<number | null>(null);
+const link = linkState({
+  change: draft.change, changesOn,
+  registryLoading: registry.isLoading, registryError: registry.error ? classify(registry.error).message : null, linked,
+  branchesLoading: <Phase 2's branches query>.isLoading,
+  branchesError: <Phase 2's branches query>.error ? String(<Phase 2's branches query>.error) : null,
+  applied: appliedFor === draft.change,
+  briefLoading: brief.isLoading, briefError: brief.error ? classify(brief.error).message : null,
+});
+const blocked = link.kind === "loading" || link.kind === "failed";
 ```
+
+`<Phase 2's branches query>` is the query Phase 2 makes with `repoBranches(project.slug, repo)`; `branches` below is its `data.branches`.
 
 | # | Anchor | Edit |
 | --- | --- | --- |
 | 1 | `className="linked-chip"` | Phase 2 renders the button when `draft.change !== null`, with no text source and no handler. Give it the text `{displayId(draft.change)}{linked ? " · " + linked.title : ""}` after its `Link` icon, and `onClick={() => openChange(draft.change!)}`. Directly after it add `<button type="button" className="tag-x" aria-label="Unlink the change" title="Start the session without the change" onClick={() => useSessionDraft.setState({ change: null })}>×</button>`. Wrap the two in a `<span>` so they sit on one line. (`tag-x` is an existing class.) |
-| 2 | the state behind `aria-label="Repo"` and the one behind `aria-label="Start branch"` | Phase 2's defaults are the project's first repository and the repository's current branch. When `linked` arrives and the user has not picked by hand: if `linked.repo` is one of `project.repos` (compare with backslashes turned to `/`, a trailing `/` removed, and lower case), select that entry of `project.repos`; then, once the branches of that repository are loaded, if `linked.branch` is in `branches`, select it. A branch that no longer exists is not an error: the default stays and a line `<p className="muted small">The change names the branch {linked.branch}, which this repository does not have.</p>` shows under the Workspace row. Implement this as one `useEffect` on `[linked?.id, branches]` that sets the two pieces of state only while a `touched` ref is false; set that ref to true in the two selects' `onChange`. |
+| 2 | the state behind `aria-label="Repo"` and the one behind `aria-label="Start branch"` | Phase 2's defaults are the project's first repository and the repository's current branch. When `linked` arrives and the user has not picked by hand: if `linked.repo` is one of `project.repos` (compare with backslashes turned to `/`, a trailing `/` removed, and lower case), select that entry of `project.repos`; then, once the branches of that repository are loaded, if `linked.branch` is in `branches`, select it. A branch that no longer exists is not an error: the default stays and a line `<p className="muted small">The change names the branch {linked.branch}, which this repository does not have.</p>` shows under the Workspace row. Implement this as one `useEffect` on `[linked?.id, repo, branches]`, in this order: (a) no `linked`: return. (b) a `touched` ref is true (the user picked by hand; set it in the two selects' `onChange`): `setAppliedFor(linked.id)`, return. (c) `linked.repo` matches an entry of `project.repos` that is not the selected `repo`: select it and return (the branches query now reloads for that repository and the effect runs again). (d) `branches` not loaded: return. (e) `linked.branch` is in `branches`: select it. (f) `setAppliedFor(linked.id)`. Until step (f) or (b) has run for the linked change, `linkState` reports `loading`, so Start cannot be pressed with Phase 2's defaults still in the selects. |
 | 3 | `{ kind: "work", project: project.slug, repo, branch }` | Becomes `{ kind: "work", project: project.slug, repo, branch, ...(draft.change !== null ? { change: draft.change } : {}) }`. This is the only place the change enters a session. |
 | 4 | `Section title="Task boundaries"` | After the `Limit edits to …` line add one `<li>` per entry of `openSteps.slice(0, 3)`. This is the mock's "Verify replay and restart behavior" line, which Phase 2 section 7.1 leaves to this phase. |
-| 5 | the call of `sessionBriefing(` | Add to its input: `change: linked && briefNote ? { display: linked.display, title: linked.title, stage: STAGE_LABELS[linked.stage], briefTitle: briefNote.title, steps: openSteps, evidence: evidenceItems(briefNote.body).filter((e) => !e.done).map((e) => e.text) } : null`. The same `noteQuery` key is used by Phase 2's own loading of the included notes, so the brief is fetched once. |
+| 5 | the call of `sessionBriefing(` | Add to its input: `change: linked && briefNote ? { display: linked.display, title: linked.title, stage: STAGE_LABELS[linked.stage], briefTitle: briefNote.title, steps: openSteps, evidence: evidenceItems(briefNote.body).filter((e) => !e.done).map((e) => e.text) } : null`. The same `noteQuery` key is used by Phase 2's own loading of the included notes, so the brief is fetched once. With `link.kind === "ready"` both `linked` and `briefNote` are set, so a linked session never starts without the block. |
+| 6 | the Start button (`<button className="primary big">` with the `Play` icon), the handler it calls, and the task box's Ctrl+Enter | Add `blocked` to the button's `disabled` condition, and return early from the start handler when `blocked` (Ctrl+Enter calls the same handler). The button's `title` is `link.what` or `link.message` while blocked. In `footer.start-footer`, directly before Cancel, when `link.kind === "loading"`: `<span className="muted small" role="status">{link.what}</span>`. Above the form, where Phase 2 puts its "Claude Code not found" banner, when `link.kind === "failed"`: `<div className="banner warn" role="alert"><strong>{link.message}</strong><span className="small">Start is disabled so a session is not started without its change. Unlink the change to start a plain session, or go back and try again.</span><div className="actions"><button onClick={() => useSessionDraft.setState({ change: null })}>Unlink the change</button></div></div>`. |
 
-States added to the screen:
+States added to the screen (`D` is the display id; the texts come from `linkState`):
 
-| State | What shows |
-| --- | --- |
-| `draft.change` set, registry still loading | The chip shows `CHG-014` alone; Start session stays enabled (the task carries the number either way). |
-| `draft.change` set, the connected Living Memory has no `changes` command | Cannot be reached from the app: every control that sets the draft's change is behind `useChangesEnabled()`. If it happens, Rust refuses the start with `Living Memory could not list changes (is it up to date?): …`, shown by Phase 2's error toast. |
-| `draft.change` names a change of another project than the one picked | `startSessionFor` picks the change's project first, so this happens only if the user switches project afterwards. Rust then refuses with `CHG-014 belongs to project <slug>, not <picked>`; the toast shows it and the screen stays. |
-| Rust refuses the change (done, cancelled, another repository) | Phase 2's handling: `toast(String(e), "error")`, the screen stays, the draft is kept. |
+| State | `link` | What shows |
+| --- | --- | --- |
+| no change in the draft | `none` | Phase 2's screen, unchanged. |
+| the registry is loading | `loading` | The chip shows `CHG-014` alone. Start is disabled; beside it: `Loading CHG-014…` |
+| the brief is loading | `loading` | The chip has its title. Start is disabled; beside it: `Loading the brief of CHG-014…` |
+| the branches are loading, or the change's repository and branch are not in the selects yet | `loading` | Start is disabled; beside it: `Loading the repository and branch of CHG-014…` |
+| everything loaded and applied | `ready` | Start follows Phase 2's own conditions (a task is written, Claude Code is found, and so on). |
+| the registry cannot be read | `failed` | The banner: `CHG-014 could not be loaded: <error>`, with "Unlink the change". Start is disabled. |
+| the number is not in the registry (the create was undone) | `failed` | The banner: `CHG-014 is not in the change registry.` |
+| the brief is missing (`brief_status` null) | `failed` | The banner: `The brief of CHG-014 is missing, so its briefing cannot be built.` |
+| the brief cannot be read | `failed` | The banner: `The brief of CHG-014 could not be loaded: <error>` |
+| the branches cannot be read | `failed` | The banner: `The branches for CHG-014 could not be read: <error>`, with "Unlink the change". (Phase 2 also shows the git error under the Workspace row and disables Start on its own.) |
+| the connected Living Memory has no `changes` command | `failed` | The banner: `CHG-014 cannot be loaded: this Living Memory has no changes command.` Cannot normally be reached: every control that sets the draft's change is behind `useChangesEnabled()`. |
+| the brief is archived or superseded | `ready` | Nothing special: the note still reads, so the briefing is complete. (The change's own pages do not offer "Start agent session" in this state; section 7.2.) |
+| the change belongs to another project than the one picked | `ready` | `startSessionFor` picks the change's project first, so this happens only if the user switches project afterwards. Rust then refuses with `CHG-014 belongs to project <slug>, not <picked>`; the toast shows it and the screen stays. |
+| Rust refuses the change (done, cancelled, another repository) | `ready` | Phase 2's handling: `toast(String(e), "error")`, the screen stays, the draft is kept. |
 
 Nothing else on the Start screen changes. After a successful start Phase 2 calls `useSessionDraft.getState().reset()`, which clears `change`.
 
@@ -1492,7 +1551,7 @@ Data it loads:
 | Data | Source |
 | --- | --- |
 | the view | `useChangeViews().views.find((v) => v.change.id === id)` |
-| the brief | `useQuery({ ...noteQuery(change.brief), enabled: change.brief_status !== null })` |
+| the brief | `useQuery({ ...noteQuery(change.brief), enabled: briefState(change) !== "missing" })` (a retired brief is read and shown read-only) |
 | the brief's links | `noteLinks(useAllLinks().data, change.brief)` (for the "Decision recorded" chip) |
 | the system and its model | `useSystem(change.system ?? undefined)` |
 
@@ -1548,7 +1607,7 @@ When `review` is true it renders the `PlanDialog`:
 | `src/features/systems/MiniDiagram.tsx` | `const { nodes, linked } = chain(model);` | `chain(model, 3, selected)`. |
 | `src/features/projects/OverviewPage.tsx` | `<Section title="Continue your work"`, and `<button className="text underline" onClick={copy}` | Section 7.6. |
 | `src/features/agents/AgentWorkspace.tsx` | `<header className="chat-head">` | Section 7.7. |
-| `src/features/agents/StartSession.tsx`, `session.ts` | see their own headings above | The five edits to the Start screen and the `## Change` block of the briefing. |
+| `src/features/agents/StartSession.tsx`, `session.ts` | see their own headings above | The six edits to the Start screen and the `## Change` block of the briefing. |
 | `src/features/links/LinksPanel.tsx` | `<div className="links-panel">` | Section 7.8. |
 | `src/features/library/MemoryPage.tsx` | `<h3>Connections</h3>` in `function Preview(` | Section 7.8. |
 | `src/App.css` | `/* ---- Changes ---- */` and `.toast.error` | Section 7.10. |
@@ -1725,7 +1784,7 @@ The rail, for the selected change (`aside.split-rail`):
 2. `Section title="Linked session"`:
    - With a session: `div.session-card` holding `<strong>` engine name, the session title, a status chip, and `<button className="outline">Resume session<ArrowRight size="1.1em" aria-hidden /></button>` calling `openSession(latest.id)`. Resuming is just that: Phase 2's chat shows the composer for a session that has not ended, and its next message starts a new process if the old one is gone. For an ended session (`isEnded(latest)`) the button reads `Open session`.
    - The status chip: `<span className="status-chip waiting">Waiting for review</span>` when `waitingForReview(latest)`; otherwise the chip Phase 2's thread header shows for the status (its section 7.3): `<span className={"status-chip cap " + cls}>` with the status as text and class, except `idle`, shown as `ready` with class `active`, and `ended`, shown with no extra class.
-   - Without: `<p className="muted">No agent session yet.</p>` and, for an active change, `<button className="outline">Start agent session</button>` calling `startSessionFor(view)`.
+   - Without: `<p className="muted">No agent session yet.</p>` and, for an active change whose `briefState` is `"ok"`, `<button className="outline">Start agent session</button>` calling `startSessionFor(view)`.
 3. `Section title="Connected context"`, rows built with `Row`, at most six, in this order:
    - the system, when `change.system` is set: icon `Layers`, label `change.element ?? system name`, `meta` `Architecture`, click `openSystem(slug)`;
    - each decision: icon `FileText`, label the note title, `meta` `Decision`, click opens the note (Ctrl+click beside);
@@ -1744,7 +1803,8 @@ States:
 | `Completed` empty | `No completed changes yet. Marking a change as done completes it.` |
 | search matches nothing | `No change matches.` |
 | nothing selected | rail: `Select a change to see its outcome and context.` |
-| brief missing (`brief_status === null`) | the rail shows the title and `The brief note of this change is missing.` in `.muted` instead of the outcome |
+| brief missing (`briefState` is `"missing"`: `brief_status === null`) | the card's second meta line starts with `Brief missing`; the rail shows the title and `The brief note of this change is missing.` in `.muted` instead of the outcome; no "Start agent session"; the registry warning banner under the list names it |
+| brief archived or superseded (`briefState` is `"retired"`) | the card is listed under the tab of its own status as usual, with its usual chip; its second meta line starts with `Brief archived` (or `Brief superseded`); the rail shows the outcome as usual (the note still reads) and under it `The brief of this change was archived.` (or `superseded`) in `.muted`; no "Start agent session"; no registry warning |
 
 ### 7.2 Change detail (mock 06), route `{ page: "changes"; id; view: "detail" }`
 
@@ -1757,14 +1817,14 @@ Breadcrumb: `<project name> / Changes / CHG-014` (from `useCrumbs`).
 - `meta`: `<span className={"status-chip " + chip.tone}>` with a `Clock` icon (`size="1.1em"`) before the label when the tone is `waiting`; then `<span className="muted">Updated {dayMonth(view.updated)}</span>`.
 - `actions`: the `ChangeMenu`, then the primary button:
   - the latest session has not ended (`latest && !isEnded(latest)`): `<button className="primary big"><Play size="1.2em" aria-hidden />Resume agent session</button>` → `openSession(latest.id)`;
-  - otherwise, for an active change: the same button reading `Start agent session` → `startSessionFor(view)`;
-  - for a change that is not active: no primary button.
+  - otherwise, for an active change whose `briefState` is `"ok"`: the same button reading `Start agent session` → `startSessionFor(view)`;
+  - for a change that is not active, or whose brief is missing or retired: no primary button (a session that is still running can always be resumed, by the first rule).
 
 `ChangeMenu` is `<Menu label="Change actions" align="right" button={<Ellipsis size="1.3em" aria-hidden />} className="icon-menu">` with:
 
 | Item | Shown | Does |
 | --- | --- | --- |
-| `Open brief` | brief resolves | opens the note in Memory |
+| `Open brief` | `briefState` is not `"missing"` | opens the note in Memory (an archived note opens too; its History tab is where an archive is undone) |
 | `Edit change…` | always | `useChangeIntent.getState().open({ mode: "edit", change })` |
 | `Mark as done…` | active | `PlanDialog` title `Mark CHG-014 as done`, `make={() => changePlan("close", { id })}`, `applyLabel="Mark as done"`, intro `The change is marked done and its brief is resolved: it leaves open work and moves to the archive. Reopen the change to bring both back.` |
 | `Cancel change…` (`danger-text`) | active | `PlanDialog` title `Cancel CHG-014`, `make={() => changePlan("close", { id, status: "cancelled" })}`, `applyLabel="Cancel change"`, `danger`, intro `The change is marked cancelled and its brief is resolved. Its number is not reused.` |
@@ -1781,6 +1841,7 @@ Body: `Split` (default rail width) with the main column and the rail.
    - the stage returned by `nextStage(change)` renders its dot as `<button className="step-dot" aria-label="Move to Validate" title="Move to Validate">`. While the move runs it shows `LoaderCircle` with class `spin` and is disabled.
    - After a move: `toast(display + " moved to " + STAGE_LABELS[stage], "info", { label: "Undo", run: () => move.mutate(previous) })`. On failure: `toast(display + " was not moved: " + classify(e).message, "error")`.
    - For a change that is not active no dot is a button. A done change shows four ticks.
+   - For a change whose brief is missing or retired no dot is a button either (`nextStage` returns null); the stepper shows the stored stage. The stage can still be changed with "Edit change…".
 2. `Section title="Outcome"`: the brief's Executive Summary, `<div className="markdown"><Markdown>{sections(note.body).summary ?? ""}</Markdown></div>`. Empty text cannot happen (Living Memory requires a summary).
 3. `Section title="Implementation plan"`: `<ol className="plan-steps">`, one `<li>` per Action Item with the class `plan-step` plus `done` for a ticked step or `current` for the first one not ticked:
    - a `<button className="step-box" aria-label={done ? "Mark as not done" : "Mark as done"} aria-pressed={done}>` holding `CircleCheck` (done), `CircleEllipsis` (current) or `Circle` (later), `size="1.7em"`; a click ticks or unticks through `check`; disabled while pending and for a change that is not active;
@@ -1825,9 +1886,12 @@ States:
 | --- | --- |
 | loading the registry | `<p className="muted pad">Loading…</p>` |
 | the id is not in the registry | `<div className="page"><p className="muted">CHG-014 is not in the change registry. It may have been undone.</p><ArrowLink …>All changes</ArrowLink></div>` (the link goes to `{ page: "changes" }`) |
-| brief missing | a `banner warn` under the header: `The brief note of this change is missing: it was deleted, or its reference no longer resolves. The change can still be edited or cancelled.`; Outcome, Implementation plan, Acceptance evidence and Record checkpoint are not rendered |
+| brief missing (`briefState` `"missing"`) | a `banner warn` under the header: `The brief note of this change is missing: it was deleted, or its reference no longer resolves. The change can still be edited or cancelled.`; Outcome, Implementation plan, Acceptance evidence and Record checkpoint are not rendered; the stepper is inert; no "Start agent session" |
+| brief archived or superseded (`briefState` `"retired"`) | a `banner warn` under the header: `The brief of this change was archived, so it is shown read-only. Undo the archive from the brief's History to work on it again, or cancel the change.` (`superseded` in place of `archived` for that status), with `<div className="actions"><button>Open brief</button></div>`. Outcome, Implementation plan and Acceptance evidence **are** rendered from the note, read-only: step boxes and evidence boxes are disabled, "Add step", "Add evidence" and "Record checkpoint" are not rendered. The stepper is inert. No "Start agent session". "Edit change…", "Mark as done…" and "Cancel change…" work; closing leaves the retired note alone |
 | brief loading or failing | each of the three sections shows its own loading or error through `Section`'s `loading` and `error` props |
 | change not active | the stepper, the boxes, the add controls and Record checkpoint are inert or absent, as said above; the chip says `Done` or `Cancelled` |
+
+One rule covers the three rows above: the brief is **writable** only when `change.status === "active" && briefState(change) === "ok"`. Compute it once (`const writable = …`) and pass it to `Stepper`, `PlanSteps`, `Evidence` and `Checkpoint`.
 | no `systems` command | the Architecture section is not rendered |
 
 ### 7.3 Change wizard: create
@@ -1902,7 +1966,7 @@ The chip shows the number without waiting for the registry. It is shown even whe
 
 Nothing else in the chat changes. Phase 2's rail rows, files card and composer are as it left them.
 
-**Start screen (mock 02).** The five edits to `StartSession.tsx` are specified in section 6.2 with their states. On screen they add, and only when the draft has a change:
+**Start screen (mock 02).** The six edits to `StartSession.tsx` are specified in section 6.2 with their states. On screen they add, and only when the draft has a change:
 
 | Where | What shows |
 | --- | --- |
@@ -1910,8 +1974,10 @@ Nothing else in the chat changes. Phase 2's rail rows, files card and composer a
 | Workspace | Repo and Start branch preselected from the change; when the change's branch is gone: `The change names the branch feature/idempotency, which this repository does not have.` |
 | Briefing preview, Task boundaries | after `Limit edits to …`: the titles of the brief's open steps, at most three (the mock shows one: `Verify replay and restart behavior`) |
 | View full briefing | the `## Change` block of section 6.2 |
+| footer, before Cancel | while the change, its brief or the branches load: `Loading CHG-014…`, `Loading the brief of CHG-014…` or `Loading the repository and branch of CHG-014…` in `.muted.small` with `role="status"`; **Start session is disabled** and its `title` is the same text |
+| above the form | when one of them cannot be loaded: a `banner warn` with `role="alert"`, the failure (`CHG-014 could not be loaded: …`, `CHG-014 is not in the change registry.`, `The brief of CHG-014 is missing, so its briefing cannot be built.`, `The brief of CHG-014 could not be loaded: …`, `The branches for CHG-014 could not be read: …`), the line `Start is disabled so a session is not started without its change. Unlink the change to start a plain session, or go back and try again.` and the button `Unlink the change`; **Start session is disabled** |
 
-Keyboard: the chip and the `×` are ordinary buttons in the tab order, after the Task box.
+Keyboard: the chip and the `×` are ordinary buttons in the tab order, after the Task box. Ctrl+Enter in the task box does nothing while Start is disabled for the change. "Unlink the change" in the banner is a normal button; after it the screen is Phase 2's plain one and Start follows Phase 2's own rules.
 
 ### 7.8 Connections (mocks 09 and 08)
 
@@ -2035,7 +2101,7 @@ py -3.15 install.py --apply-plan <PLAN_ID> --expected-plan-sha256 <DIGEST>
 py -3.15 "$env:LOCALAPPDATA\agentic-living-memory\app\living_memory.py" version    # commands include "changes" and "change-plan"
 ```
 
-Part B does not wait for A4 or A5. Until the user has deployed, develop and verify the app against the source checkout: set `HIVEMIND_LM_SCRIPT` to `<lm>\living_memory.py` and `HIVEMIND_LM_ROOT` to a throwaway store (section 11). Never point `HIVEMIND_LM_ROOT` at the real store.
+Part B does not wait for A4 or A5. Until the user has deployed, develop and verify the app against the source checkout: set `HIVEMIND_LM_SCRIPT` to `<lm>\living_memory.py`, and both `HIVEMIND_LM_ROOT` and `LIVING_MEMORY_ROOT` to a throwaway store (section 11.2 says why both). Never point either at the real store.
 
 ### Part B, in `<repo>`: branch `feat/changes` from the Phase 2 branch (`feat/interactive-sessions`)
 
@@ -2069,18 +2135,20 @@ Checks before every commit: `npm test`, `npx tsc --noEmit`, and for commits that
 - Tests in `src/features/changes/changes.test.ts` (build small `Change`, `SessionInfo`, `LinkGraph` objects with helper factories; a session factory must fill every field of Phase 2's `SessionInfo`, with `adapter: "claude-code"`):
   - `"names the engine"`: `engineName("claude-code")` is `"Claude Code"`, `engineName("codex")` is `"Codex"`, an unknown name comes back unchanged.
   - `"formats display ids"`: `displayId(1)` `"CHG-001"`, `displayId(14)` `"CHG-014"`, `displayId(1000)` `"CHG-1000"`.
-  - `"stage states and the next stage"`: implement and active gives `["done","done","current","later"]` and next `"validate"`; validate gives next `null`; a done change gives four `"done"` and next `null`; a cancelled change at design gives `["done","current","later","later"]` and next `null`.
+  - `"stage states and the next stage"`: implement and active gives `["done","done","current","later"]` and next `"validate"`; validate gives next `null`; a done change gives four `"done"` and next `null`; a cancelled change at design gives `["done","current","later","later"]` and next `null`; an active change whose `brief_status` is `null`, `"archived"` or `"superseded"` gives next `null`, and one whose brief is `"resolved"` (resolved by hand) still gives its next stage.
+  - `"brief state"`: `null` is `"missing"`; `"archived"` and `"superseded"` are `"retired"`; `"active"` and `"resolved"` are `"ok"`.
+  - `"link state of the Start screen"`, one assertion per rule of `linkState` in order, starting from an input that is `ready` (`change: 14`, `changesOn: true`, nothing loading, no errors, `linked` an active change with `brief_status: "active"`, `applied: true`) and changing one field at a time: `change: null` gives `none`; `changesOn: false` gives `failed` with `CHG-014 cannot be loaded: this Living Memory has no changes command.`; `registryLoading` gives `loading` `Loading CHG-014…`; `registryError: "boom"` gives `failed` `CHG-014 could not be loaded: boom`; `linked: undefined` gives `failed` `CHG-014 is not in the change registry.`; `brief_status: null` gives `failed` `The brief of CHG-014 is missing, so its briefing cannot be built.`; `briefLoading` gives `loading` `Loading the brief of CHG-014…`; `briefError: "gone"` gives `failed` `The brief of CHG-014 could not be loaded: gone`; `branchesError: "not a repo"` gives `failed` `The branches for CHG-014 could not be read: not a repo`; `branchesLoading` gives `loading` `Loading the repository and branch of CHG-014…`; `applied: false` gives the same `loading`; the untouched input gives `ready`; `brief_status: "archived"` still gives `ready`; a `linked` change with `status: "done"` still gives `ready` (Rust refuses it). Also: with both `registryLoading` and `briefLoading` set, the registry message wins (order matters).
   - `"picks a change's sessions, newest first"`: only `work` tasks with the same `change`; a `system_passport` session and a work session without `change` are excluded.
   - `"chip order"`: one assertion per row of the table in section 4.5, including that a waiting-for-review session (status `idle`, `filesChanged.files` 3) beats a due brief, that a due brief beats "In progress", that a session with files changed but status `waiting` (a permission prompt) gives "In progress" and not "Waiting for review", and that an `ended` session with no files leaves an untouched change at "Not started".
   - `"session line"`: `"3 files awaiting review"` for an idle session with three files; `"Ready · 2 turns"` for an idle one with none and `turns: 2`; `"Working…"`, `"Waiting for you"`, `"Failed"`, `"Cancelled"`, `"Ended"` for the other statuses.
   - `"connected notes come from links in either direction"`: an edge brief→decision and an edge status→brief both count; a `supersedes` edge does not; a node linked both ways appears once.
   - `"viewOf joins the sources"`: `decisions`, `questions` (a resolved risk is excluded), `checkpoints` (newest title first), `updated` (the brief row's when later), `hasDiagram` (false when the system has no architecture folder).
-  - `"meta lines"`: with a waiting session: `first` is `["Claude Code", "3 files proposed"]` and `second` is `["3 decisions", "1 diagram", "Updated Nov 9"]`; with no session: `first` is `[]` and `second` starts with the stage label; singulars (`"1 file changed"`, `"1 decision"`).
+  - `"meta lines"`: with a waiting session: `first` is `["Claude Code", "3 files proposed"]` and `second` is `["3 decisions", "1 diagram", "Updated Nov 9"]`; with no session: `first` is `[]` and `second` starts with the stage label; singulars (`"1 file changed"`, `"1 decision"`); a change with `brief_status: "archived"` has `"Brief archived"` as the first item of `second`, `"superseded"` gives `"Brief superseded"`, `null` gives `"Brief missing"`, and `"active"` or `"resolved"` add nothing.
   - `"the top change"`: a waiting one wins over a more recently updated one; done and cancelled changes are never chosen; none gives `undefined`.
   - `"changes of a note"`: the brief itself, a note the brief links to, and a note linking to the brief each return the change; an unrelated note returns `[]`.
   - `"plans without a change"`: excludes briefs, the charter, resolved plans and non-plan notes.
   - `"checkpoint title and body"`: the title for a fixed `Date` is `"CHG-014 checkpoint 2026-11-10 14:32"`; the body starts with `## 📌 Executive Summary`, contains `* **Stage:** Implement`, `* **Steps:** 2 of 5 done`, ends with `* [[CHG-014 Prevent duplicate payment alerts]]`, and has no Evidence line when its total is 0.
-  - `"context refs"`: the brief first, then decisions, then questions, without duplicates; no brief when `brief_status` is null.
+  - `"context refs"`: the brief first, then decisions, then questions, without duplicates; no brief when `brief_status` is null; an archived brief stays in.
 - Tests in `src/features/changes/wizard.test.ts`:
   - `"validates a new change"`: an empty form returns the three "required" messages in order; a title with `#` returns the wikilink message; 121 characters returns the limit message; adopt mode does not ask for an outcome; an element without a system returns its message.
   - `"builds the create payload"`: empty optional fields are absent; `stage` is absent at `explore` and present otherwise; with `adopt`, `brief` is the ref string; otherwise `brief.body` starts with `## 📌 Executive Summary`.
@@ -2104,12 +2172,13 @@ Checks before every commit: `npm test`, `npx tsc --noEmit`, and for commits that
 
 **B7. `feat: sessions carry their change; refuse a change that does not fit the task`**
 
-- Contains: `change_entry` and `check_change` in `src-tauri/src/agent/scope.rs`; the call in `start_task` in `src-tauri/src/agent/mod.rs`; the five edits to `src/features/agents/StartSession.tsx`; the `## Change` block in `src/features/agents/session.ts`; the chip in `AgentWorkspace.tsx`. (`startSessionFor` exists since B4 and is already called by the list and the detail; before this commit a session started from a change simply does not carry it.)
+- Contains: `change_entry` and `check_change` in `src-tauri/src/agent/scope.rs`; the call in `start_task` in `src-tauri/src/agent/mod.rs`; the six edits to `src/features/agents/StartSession.tsx` (`linkState` itself and its test are in B3); the `## Change` block in `src/features/agents/session.ts`; the chip in `AgentWorkspace.tsx`. (`startSessionFor` exists since B4 and is already called by the list and the detail; before this commit a session started from a change simply does not carry it.)
 - Tests in `src-tauri/src/agent/scope.rs`, `mod tests`:
   - `change_must_fit_the_task`: with `json!({"id": 14, "project": "paystream", "status": "active", "repo": "C:/work/paystream"})`: `check_change(&e, "paystream", r"c:\work\paystream\")` is `Ok`; project `"ledger"` gives exactly `"CHG-014 belongs to project paystream, not ledger"`; a `"done"` entry gives `"CHG-014 is done; reopen it before starting a session"`; repo `"C:/work/other"` gives `"CHG-014 is tied to another repository: C:/work/paystream"`; an entry with `"repo": null` accepts any repo.
 - Test in `src-tauri/src/agent/mod.rs`, `mod tests`, only if Phase 2's rig for `start_task` can answer bridge calls (its tests use a scripted fake CLI; read how they stub Living Memory first): `a_work_task_with_a_closed_change_makes_no_worktree`: `start_task` with `change: Some(2)` against a registry whose change 2 is `done` returns the "is done" error and the worktrees folder is still empty. If the rig cannot stub the bridge, leave this to the manual check and say so in the report.
 - Tests in `src/features/agents/session.test.ts` (Phase 2's file), `"the briefing describes the change"`: with `change: { display: "CHG-014", title: "Prevent duplicate payment alerts", stage: "Implement", briefTitle: "CHG-014 Prevent duplicate payment alerts", steps: ["Verify replay"], evidence: ["Replay produces no duplicate alert"] }` the text contains `## Change`, `CHG-014 Prevent duplicate payment alerts (stage: Implement)`, `Open steps: Verify replay`, `Acceptance evidence still to show: Replay produces no duplicate alert` and `` `--link '[[CHG-014 Prevent duplicate payment alerts]]'` ``, and `## Change` comes after `## Workspace` and before `## Included memory`; with empty `steps` and `evidence` those two lines are absent; without `change` the output equals the output of the same input before this commit (Phase 2's own briefing test still passes unchanged).
-- Manual check: section 11.3, step 9.
+- No component test exists for the Start button (vitest has no DOM); the rule it follows is `linkState`, tested in B3. In review, check by reading that the button's `disabled`, the start handler's early return and Ctrl+Enter all use the one `blocked` value.
+- Manual check: section 11.3, step 9, including its "slow load" and "failed load" checks.
 
 **B8. `feat: the change on the Overview, in Agent Workspace and under Connections`**
 
@@ -2133,7 +2202,8 @@ Checks before every commit: `npm test`, `npx tsc --noEmit`, and for commits that
 | Undo of a stage move after the change was edited again | The change goes to the stage the toast remembered. | Undo is a new update, so it never hits the undo-conflict rule (C4). |
 | The user undoes a create from History | The change disappears; the detail page says it is not in the registry. The next change gets the same number. | Accepted (C3). The undo plan deletes the brief (or restores an adopted note's tags) and restores the previous `changes.json`. It is refused once the registry or the brief changed again. |
 | A session exists for a change whose create was undone | The session still shows `CHG-014`; the chip leads to "not in the change registry". If the number is reused, the old session shows under the new change. | Nothing: the exposure is the undo of a create after a session was started for it, which the app does not offer in one click. Listed in section 10. |
-| The brief was deleted or archived by plan | List: "The brief note of this change is missing." Detail: the warning banner; the brief-driven sections are hidden. The registry warning banner lists it. | `brief_status` is null. Edit, cancel and mark-as-done still work; close skips the note. |
+| The brief was deleted (by a delete plan), or the stored ref is broken | List: the card's meta line starts with "Brief missing"; the rail says "The brief note of this change is missing."; the registry warning banner lists it. Detail: the warning banner; Outcome, Implementation plan, Acceptance evidence and Record checkpoint are not rendered; the stepper is inert; no "Start agent session". | `brief_status` is null and `listing` warns `CHG-014: brief <ref> does not resolve to a note`. `briefState` is `"missing"`. Edit, cancel and mark-as-done still work; close skips the note. |
+| The brief was archived or superseded by a plan (it is in `archive/`) | List: the card stays where its status puts it, with "Brief archived" (or "Brief superseded") first in its meta line; the rail shows the outcome and "The brief of this change was archived." Detail: a banner says the brief is shown read-only and how to bring it back; Outcome, steps and evidence are shown but cannot be ticked or added to; no Record checkpoint; the stepper is inert; no "Start agent session". | The note still resolves (`find_note` searches `archive/` too), so `brief_status` is `"archived"` or `"superseded"` and there is **no** listing warning. `briefState` is `"retired"`. Edit, cancel and mark-as-done work; `close` leaves the note alone (`brief_action` null). Undoing the archive from the note's History makes `brief_status` `"active"` again and every control returns. |
 | The brief was resolved by hand, the change is still active | The detail works as for any active change; the brief is simply no longer in Living Memory's open work. | Nothing special. Closing the change then leaves the note alone (`brief_action` null). |
 | The brief was promoted or remapped to another domain | No difference. | `listing` resolves by id (C11) and returns the current ref. |
 | The brief is longer than 64,000 characters | Ticking or adding evidence: "This brief is too long to edit here. Open the brief and edit it there." Steps still tick. | `read` returned `truncated: true`; the app never sends a truncated body back. `check` does not need the body. |
@@ -2144,6 +2214,9 @@ Checks before every commit: `npm test`, `npx tsc --noEmit`, and for commits that
 | `task.change` names a change in another project, a closed change, or one tied to another repository | The Start screen shows the exact message from section 4.3 in Phase 2's error toast and stays open with the draft intact. | `check_change` in Rust, inside `start_task`, before the worktree is created and before anything is spawned. The webview's word is not trusted. |
 | The webview is compromised and sends a `repo` path | It can start a session only in a repository registered for the project. | Phase 2's rule stands: `scope::project_repo` checks `task.repo` against the project's registered repos and uses the registry's spelling. The change's `repo` is data in the registry; it grants nothing. It can only narrow (a session for the change must use that repo). |
 | A session carries a change that is later marked done or cancelled | The session keeps working and keeps its `CHG-014` chip; the change shows its sessions as before. A **new** session for that change is refused. | `agent_send` (Phase 2's `send_task`, `for_session`) does not look at the change. Only `start_task` does. |
+| The Start screen is opened for a change and the user presses Start (or Ctrl+Enter) before the change, its brief or the branches have loaded | Start is disabled and says what it is waiting for ("Loading CHG-014…", "Loading the brief of CHG-014…", "Loading the repository and branch of CHG-014…"). Ctrl+Enter does nothing. | `linkState` is `loading`; `blocked` disables the button and makes the start handler return. Without this the session could start from Phase 2's default repository and branch and without the `## Change` block. |
+| On the Start screen the change, its brief or the branches cannot be loaded (registry unreadable, the number gone, the brief deleted or unreadable, git failing) | A warning banner names what failed, says Start is disabled, and offers "Unlink the change". After unlinking the screen is Phase 2's plain Start screen. | `linkState` is `failed`. Unlinking sets `draft.change` to null; nothing else in the draft changes. A session is never started with a change number but without the change's data. |
+| The registry changes while the Start screen is open (the linked change is closed, or its brief archived) | Closed: nothing changes on screen until Start is pressed, then Rust's refusal is shown. Brief archived: nothing changes; the brief still reads. Brief deleted: the banner "The brief of CHG-014 is missing…" appears and Start is disabled. | The watcher invalidates `["changes"]` and the note query, so `linkState` is recomputed from fresh data. |
 | The user leaves the Start screen with Cancel after "Start agent session" | The next time the Start screen opens, the chip `CHG-014 · title` is still there, with its "×" to unlink. | Phase 2 keeps the draft on Cancel on purpose. `draft.change` is cleared by the "×", by `reset()` after a successful start, or by restarting the app (the draft is in memory only). |
 | The change names a branch the repository no longer has | The Start branch select keeps Phase 2's default and a line says which branch is missing. | Edit 2 in `StartSession.tsx`. If a stale branch were sent anyway, Phase 2's `Unknown branch: {branch}` would refuse it. |
 | An agent tries to edit `changes.json` with a write tool | The hook denies it. | `protected_rule` returns `'config'` (Part A). `changes` is auto-approved for agents; `change-plan` asks the user. |
@@ -2179,11 +2252,14 @@ Checks before every commit: `npm test`, `npx tsc --noEmit`, and for commits that
 16. **Session data lives in the app's real data folder even in a dev run** (README section 6). Phase 3 does not change its format. If you start a real session to verify, end it and say so in your report.
 17. **`tsc` runs in `npm run build` with `noUnusedLocals`.** The rename to `PlansFallback` is the place where a leftover import is likely.
 18. **`toast` used to be one button.** A toast with an action is a `div` with a button inside it; a button inside a button is invalid HTML.
-19. **A session's `adapter` is `"claude-code"`, not `"claude"`.** README 7.1 says `"claude"`; the code and Phase 2's stored example say `"claude-code"`. `engineName` maps both.
+19. **A session's `adapter` is `"claude-code"`.** That is the string in the session index (README 7.1), not the CLI's program name `claude`. `engineName` keys on it; a test session built with `adapter: "claude"` would show the raw string instead of "Claude Code".
 20. **`useSessionDraft().task` is the task text, not an `AgentTask`.** The task object is built by `StartSession` from its own state. A change reaches a session only through `draft.change` and edit 3 in `StartSession.tsx`; forget that edit and everything looks right while no session ever carries a change.
 21. **The draft survives Cancel and has no setter for `change`.** Phase 2 keeps the draft when the user leaves the Start screen. Set and clear `change` with `useSessionDraft.setState`; the "×" beside the chip is the user's way out.
 22. **Phase 2's `waitingForReview` is false while a session waits on a permission prompt.** A change whose session is `waiting` shows "In progress", and its session block says "Waiting for you".
 23. **An included note gives the briefing only its summary and key details.** That is why the `## Change` block exists; without it the agent does not see the steps or the evidence.
+24. **An archived brief still resolves.** `find_note` and `resolve_ref` search `archive/` as well, so `brief_status` is `"archived"` (or `"superseded"`), not null, and Living Memory gives no warning. Null means only "no note with this id". Never test `brief_status !== null` to decide whether the brief may be written; use `briefState`.
+25. **The Start screen's defaults are not the change's.** Phase 2 fills Repo and Start branch with the project's first repository and its current branch as soon as it renders. Until the linked change, the branches and the brief have loaded, those defaults are wrong for the change and the briefing has no `## Change` block; `linkState` keeps Start disabled for exactly that window.
+26. **Agent sessions use the store named by `LIVING_MEMORY_ROOT`, not by `HIVEMIND_LM_ROOT`.** Set both to the demo store before starting the app for verification (section 11.2).
 
 ---
 
@@ -2201,14 +2277,20 @@ It prints `changes: CHG-001 [done/validate], CHG-002 [active/design], CHG-003 [a
 
 ```powershell
 $env:HIVEMIND_LM_ROOT = "<scratch>\demo\store"; $env:HIVEMIND_LM_SCRIPT = "<lm>\living_memory.py"; $env:HIVEMIND_PYTHON = "<python.exe>"
+$env:LIVING_MEMORY_ROOT = "<scratch>\demo\store"                # the store Living Memory's own hooks use inside agent sessions
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
 $env:WEBVIEW2_USER_DATA_FOLDER = "<scratch>\webview-profile"
 npm run tauri dev
 ```
 
+**Why `LIVING_MEMORY_ROOT` as well** (README section 6). `HIVEMIND_LM_ROOT` only tells the app's bridge which store to use. A real agent session started by the app loads the user's own Living Memory hooks, and those choose their store from `LIVING_MEMORY_ROOT` (then `LIVING_MEMORY_HOME`, then the default; `resolve_root` in Living Memory's `core/storage.py`). Without the variable, a session started while the app is connected to the demo store would have its hooks write session state into the user's **real** store. Phase 2 also sets the variable on every CLI it starts (`Spec.memory_root`, README 7.1); setting it in the shell that starts the app covers anything started before that code is reached. Keep it set in the same shell for section 11.4 too.
+
 Pick the PayStream project in the sidebar if it is not already picked.
 
-Before any step that starts a real agent session, protect the user's session history the way Phase 2's document does (its section 11.2): `Copy-Item "$env:APPDATA\dev.hivemind.app\agent-sessions" "<scratch>\agent-sessions.bak" -Recurse -ErrorAction SilentlyContinue`.
+Before any step that starts a real agent session:
+
+1. Protect the user's session history the way Phase 2's document does (its section 11.2): `Copy-Item "$env:APPDATA\dev.hivemind.app\agent-sessions" "<scratch>\agent-sessions.bak" -Recurse -ErrorAction SilentlyContinue`.
+2. Prove the session cannot touch the real store. Note the newest modification time under the real store before the session (`Get-ChildItem <real store> -Recurse -File | Sort-Object LastWriteTime | Select-Object -Last 1`), run the session, and repeat the command afterwards: the newest file and its time must be unchanged, and the demo store's hook state (`<scratch>\demo\store\.turns`) must have changed. If the real store changed, stop, end the session, and report it; do not run another session until `LIVING_MEMORY_ROOT` is confirmed in the app's environment.
 
 ### 11.3 Drive it and compare
 
@@ -2286,6 +2368,10 @@ Each block is one `python scripts/drive_ui.py --out <scratch>\shots …` call. A
 
    Phase 2's Start screen (compare with mock 02) shows: under the Task box the chip `CHG-003 · Prevent duplicate payment alerts` with a "×"; Repo `paystream`; Start branch `feature/idempotency`; under "Included memory" the brief, its two decisions and "Key retention period", all ticked; under "Architecture" the PayStream line with `Attached: Ingestion`; under "Task boundaries" the first three open steps of the brief after "Limit edits to paystream". `click:View full briefing` then `shot:02-briefing`: the text has a `## Change` block naming CHG-003, the open steps, the two evidence items and the `--link '[[Prevent duplicate payment alerts]]'` line. Close the modal. Click the chip: the detail of CHG-003 opens; go back (Alt+Left): the screen is as it was. Click "×": the chip, the extra Task boundaries lines and the `## Change` block are gone; go back to the change and press "Start agent session" again to restore them.
 
+   Slow load (costs nothing). The three loads are usually too quick to see, so check the rule where it can be seen: run `eval:document.querySelector('.start-footer .primary').disabled + ' | ' + document.querySelector('.start-footer').innerText` as the very next step after `"click:Start agent session"` with no `wait:` between them, a few times. Whenever the footer text contains a `Loading …CHG-003…` line, `disabled` must be `true`; once it does not, with a task written, `disabled` must be `false`, Repo must read `paystream` and Start branch `feature/idempotency`. It must never be `false` while Start branch still shows the repository's current branch (`main`).
+
+   Failed load (costs nothing). With the Start screen open for CHG-003, delete its brief's link the hard way in the demo store: in a terminal run `py -3.15 <lm>\living_memory.py --root <scratch>\demo\store plan delete <brief ref> --domain paystream`, then `apply`. The watcher refreshes the screen: a warning banner reads `The brief of CHG-003 is missing, so its briefing cannot be built.`, Start is disabled (`shot:02-start-failed`). Click "Unlink the change": the banner and the chip go, Start follows Phase 2's rules again. Then undo the delete (`undo <operation id>`, `apply`) so the later steps still have the brief. Also check the archived case here: `plan archive <brief ref>` and `apply` instead of delete leaves the Start screen `ready` (no banner), while the detail of CHG-003 shows the read-only banner, disabled boxes, an inert stepper and no "Start agent session", and the list card's meta line starts with "Brief archived" with **no** registry warning banner (`shot:06-brief-archived`, `shot:05-brief-archived`); undo the archive afterwards.
+
    Do not start a session unless the user agreed to the cost (Phase 2's document says how it verified live sessions; follow the same agreement). If they did: write one small instruction that edits a file, "Start session", answer the permission prompt, wait for the turn to end, then re-run step 2 and step 4. CHG-003 must then show "Claude Code · N files proposed", the chip "Waiting for review" (yellow, with the clock on the detail), "Resume agent session", the linked session with "N files awaiting review" and "Review proposed changes", and in Agent Workspace the chip `CHG-003` under the session title (`nav:Agent Workspace wait:1 shot:03-chip`). While the permission prompt is open the change must read "In progress", not "Waiting for review". End the session afterwards ("End session" in its rail), remove its worktree, and report both. If no live session was run, say in the report that these states are covered by unit tests only.
 
    The refusal: with the Start screen open for CHG-002 (press "Start agent session" on its detail), mark CHG-002 as done in a terminal (`'{"id":2}' | py -3.15 <lm>\living_memory.py --root <scratch>\demo\store change-plan close`, then `apply`), write a task and press "Start session": an error toast must read `CHG-002 is done; reopen it before starting a session`, the screen stays, and no folder appears under the app data folder's `worktrees`. This costs nothing: Rust refuses before the CLI is started. Reopen CHG-002 afterwards.
@@ -2362,6 +2448,8 @@ Part B:
 - [ ] Steps tick through `check`; evidence ticks and adds through `update` with the revision; a truncated brief is never written.
 - [ ] "Record checkpoint" captures a `status` note that links to the brief.
 - [ ] A session started from a change carries `task.change`; Rust refuses a change that does not fit, before any worktree is made.
+- [ ] On the Start screen, Start is disabled (with the reason beside it) until the linked change, its repository's branches and its brief have loaded and been applied; a failed load shows the banner with "Unlink the change"; Ctrl+Enter obeys the same rule.
+- [ ] A change whose brief is archived or superseded shows the brief read-only with its banner, an inert stepper and no "Start agent session"; a change whose brief is missing shows the missing-brief banner; the two are never confused (`briefState`).
 - [ ] The Start screen shows the change chip with its unlink "×", defaults Repo and Start branch to the change's, lists the brief's open steps under Task boundaries, and the briefing has the `## Change` block. Without a change the Start screen and the briefing are exactly Phase 2's.
 - [ ] The Overview card, the "New change" link, the CHG chip in Agent Workspace and the change rows under Connections are in place.
 - [ ] With a Living Memory that has no `changes` command, the Phase 1 page shows with its notice and nothing else changed.

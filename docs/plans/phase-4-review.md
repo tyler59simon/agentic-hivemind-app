@@ -156,7 +156,7 @@ Every path is relative to the repository root. Find each place by its anchor str
 | `src-tauri/src/architecture.rs` (anchor `pub fn read_diagram`) | Serves a file only if the manifest lists it and its canonical path is inside the canonical folder. | The same two checks, in the same order, guard `review_file`. |
 | `src-tauri/src/lib.rs` (anchor `struct AppState`) | Bridge, settings path, drafts folder, the agent manager. | Phase 2 adds `worktrees_dir` to it; Phase 4 adds `snapshots_dir`. |
 | `src-tauri/src/lib.rs` (anchor `async fn blocking`) | Runs blocking work off the async runtime. | Every new command uses it. |
-| `src-tauri/src/lib.rs` (anchor `tauri::generate_handler![`) | The command list. | Ten new names (section 4.2). |
+| `src-tauri/src/lib.rs` (anchor `tauri::generate_handler![`) | The command list. | Eleven new names (section 4.2). |
 | `src-tauri/src/lib.rs` (anchor `let sessions_dir`) | `<app data>/agent-sessions`. | The snapshots folder is its sibling. |
 
 The signatures this phase calls or copies:
@@ -382,10 +382,11 @@ Every command takes names only: a session id, a system slug, a path that must be
 | --- | --- | --- | --- |
 | `review_files` | `sessionId` | `FileChange[]`, sorted by path | the common errors below |
 | `review_file` | `sessionId`, `path` | `FileContents` | common; `That file is not one of this session's changes`; `That file is outside the worktree` |
-| `review_approve` | `sessionId`, `message` | the commit id (40 hex characters) | common; busy; `Write a commit message first.`; `There is nothing to approve: the worktree matches its base commit.`; the identity error; `The commit did not go through:` followed by git's last lines |
-| `review_request_changes` | `sessionId`, `text` | nothing | `Write what should change first.`; then the errors of Phase 2's `agent_send`, unchanged: `Invalid session id`; `Unknown session`; `This session does not take messages`; `This session has ended`; `The agent is still working; wait for this turn to finish or stop it`; `This session's worktree no longer exists; end the session`; its start and limit errors |
+| `review_approve` | `sessionId`, `message` | the commit id (40 hex characters) | common; busy; the write checks; `Write a commit message first.`; `There is nothing to approve: the worktree matches its base commit.`; the identity error; `The commit did not go through:` followed by git's last lines |
+| `review_request_changes` | `sessionId`, `text` | nothing | `Write what should change first.`; busy; then the errors of Phase 2's `agent_send`, unchanged: `Invalid session id`; `Unknown session`; `This session does not take messages`; `This session has ended`; `The agent is still working; wait for this turn to finish or stop it`; `This session's worktree no longer exists; end the session`; its start and limit errors |
 | `review_dismiss` | `sessionId` | nothing | `Invalid session id`; `Unknown session` |
-| `review_discard` | `sessionId` | nothing | common; busy |
+| `review_discard` | `sessionId` | nothing | common; busy; the write checks |
+| `review_refresh` | none | the number of sessions whose stored totals changed | none (a session whose worktree cannot be read is skipped) |
 | `review_tool_output` | `sessionId`, `toolUseId` | `ToolOutput` | `Invalid session id`; `Unknown session`; `That tool call has no result in this session's log` |
 | `system_staleness` | `slug` | `Staleness` | `Unknown system: <slug>`; Living Memory's own error |
 | `system_snapshots` | `slug` | `SnapshotInfo[]`, newest first | `Invalid system slug` |
@@ -405,10 +406,27 @@ git timed out after <n>s
 <git's own "fatal: ..." or "error: ..." line>
 ```
 
-Busy (a turn is in progress, status `running` or `waiting`):
+Busy (from `Manager::reserve`, section 4.11; `review_approve`, `review_discard` and `review_request_changes` all start with it):
 
 ```text
-The session is still working. Wait for the turn to finish, or stop it first.
+This session is busy                                   (a turn is in progress: status running or waiting)
+A review action is already running for this session   (another approve, discard or request is still at work)
+```
+
+While one of those three commands runs, Phase 2's `agent_send`, `agent_end` and `agent_remove_worktree` answer, for that session:
+
+```text
+A review action is running for this session
+```
+
+Write checks (before `review_approve` and `review_discard` change anything; section 4.11):
+
+```text
+This session's branch name does not match its id: <branch>
+The session's folder is not a worktree of <repo>
+The session's folder is inside another git checkout: <top-level folder git reported>
+The session's worktree is on branch <found>, not on its own branch <branch>
+The session's worktree is on a detached commit, not on its own branch <branch>
 ```
 
 The identity error:
@@ -468,6 +486,10 @@ What `changes` returns, as Phase 2 specifies it and as section 5.1 verified the 
 
 **Reconciling.** `review_files` compares the totals of what it found with the session's stored `filesChanged`. When they differ and the session is not `running` or `waiting`, it stores the new totals through `Manager::amend`, and in the same update sets `review = review_after_turn(review, old totals, new totals, now)` (section 4.4). This is what makes the counts right, and puts an approved session back in the queue, after someone edits files in the worktree by hand.
 
+**Refreshing every worktree.** `review_files` is only called for sessions the page lists, and an approved or dismissed session is not listed. Edits made in such a worktree outside a turn (by hand, or by a tool the user ran there) would never be noticed. So there is a second entry to the same reconcile, `review_refresh`, that takes no session: for each session, newest first, that has a worktree, is not `running` or `waiting`, and whose worktree folder exists and passes the worktree check, it computes `worktree::changes` and reconciles exactly as above. It stops after `REFRESH_CAP` (20) such sessions. It returns how many sessions changed; a session whose worktree cannot be read is skipped without an error. The Review page and the Overview's "Needs your review" call it once each time they are shown (sections 6.17 and 6.20). A session it reopens arrives through the ordinary `agent-sessions-changed` event, and only then passes the page's filter.
+
+Cost: three read-only git commands per worktree, about a tenth of a second each on a small repository, run one after another on one blocking thread and never on the UI thread; at most 20 worktrees. Sessions without a worktree, and sessions whose folder is gone, cost one metadata lookup. The page does not wait for it: it shows what the stored totals say and updates if the refresh changes them.
+
 **If P3 shows that `worktree::changes` does not exist or does less than this** (no untracked files, no binary flag): write it in `worktree.rs` to this section and section 5.1, with the tests named for that case in section 8, commit 2, and make Phase 2's turn-end code call it. Do not put a listing in `review.rs`.
 
 Opening the page and one file:
@@ -481,6 +503,10 @@ sequenceDiagram
     participant G as git
     W->>M: agent_sessions
     M-->>W: SessionInfo list (filesChanged, review, worktree)
+    W->>R: review_refresh() (once, in the background)
+    R->>T: changes(tree) for up to 20 sessions with a worktree, not mid-turn
+    R->>M: amend totals and review where they differ
+    M-->>W: event agent-sessions-changed (only if something differed)
     W->>R: review_files(sessionId) for each listed session
     R->>M: info(sessionId), worktree checked
     R->>T: changes(tree)
@@ -530,11 +556,11 @@ pub fn review_after_turn(review: Option<Review>, before: Option<&Totals>, after:
 3. State is `Approved` or `Dismissed`, `after` has `files > 0`, and `after` differs from `before` (a missing `before` is zero files): return pending as in 2.
 4. Otherwise return `review` unchanged.
 
-It is called in three places, each time with the stored totals as `before` and the totals just computed as `after` (a missing value counts as zero files), and its result is stored in the same locked update:
+It is called from three places, each time with the stored totals as `before` and the totals just computed as `after` (a missing value counts as zero files), and its result is stored in the same locked update:
 
 - in the pump, at the end of **every** turn of an interactive session (Phase 2's turn-end step: after `worktree::changes` was computed, before the totals are stored), whether or not the totals changed;
 - in `Manager::files` (behind `agent_files`), where Phase 2 stores totals that differ from the stored ones;
-- in `review::files` (behind `review_files`), in the same case (section 4.3, "Reconciling").
+- in `review::files` and `review::refresh` (behind `review_files` and `review_refresh`), in the same case (section 4.3, "Reconciling" and "Refreshing every worktree"); the two share one private function.
 
 ### 4.5 Approve
 
@@ -554,7 +580,7 @@ Step 6 without step 4 is the case where the agent committed its own work during 
 
 A failed commit leaves the files staged. That is harmless: the listing compares the review base with the working tree and does not care what is staged.
 
-`approve(agents, worktrees_dir, id, message)` wraps it: take the write lock (section 4.11), read the session, refuse if busy, check the worktree (section 4.11), run `commit_all`, then in one `Manager::amend`: `worktree.reviewed_sha = Some(commit)`, `files_changed = Some(Totals::default())`, `review = Some(Review { state: Approved, commit: Some(commit), at: now })`. `base_sha` is not touched.
+`approve(agents, worktrees_dir, id, message)` wraps it: reserve the session (`agents.reserve(id)?`, section 4.11; this is the busy check, and the reservation is held until the function returns, on every path), read the session, check the worktree and run the write checks (section 4.11), run `commit_all`, then in one `Manager::amend`: `worktree.reviewed_sha = Some(commit)`, `files_changed = Some(Totals::default())`, `review = Some(Review { state: Approved, commit: Some(commit), at: now })`. `base_sha` is not touched.
 
 ```mermaid
 sequenceDiagram
@@ -567,8 +593,11 @@ sequenceDiagram
     W->>U: dialog with the commit message
     U->>W: click "Commit edits"
     W->>R: review_approve(sessionId, message)
+    R->>M: reserve(sessionId)
+    M-->>R: Reservation (the session is not mid-turn and not already reserved)
     R->>M: info(sessionId)
-    M-->>R: SessionInfo (status idle, worktree)
+    M-->>R: SessionInfo (worktree)
+    R->>G: worktree list --porcelain, rev-parse --show-toplevel, symbolic-ref --short HEAD (write checks)
     R->>G: add -A
     R->>G: diff --cached --name-only -z HEAD
     R->>G: commit -m message
@@ -576,6 +605,7 @@ sequenceDiagram
     G-->>R: 15a6b29…
     R->>M: amend: reviewedSha = commit, filesChanged = 0, review = approved
     M-->>W: event agent-sessions-changed
+    R->>M: the Reservation is dropped
     R-->>W: "15a6b29…"
     W->>U: toast "Committed 15a6b29 on hivemind/1a2b3c4d"
     W->>M: agent_sessions (refetch)
@@ -583,7 +613,7 @@ sequenceDiagram
 
 ### 4.6 Request changes, dismiss, discard
 
-**Request changes.** `request_changes(agents, bridge, saved, id, text)`: `text.trim()` empty fails with `Write what should change first.`; take the write lock; call Phase 2's `send_task(agents, bridge, saved, id, text, SendOptions::default())` (the function behind `agent_send`, P5) with the text exactly as typed; only when that returns `Ok`, `amend` the session to `changes_requested`. `send_task` does its own checks (the session exists, is interactive, has not ended, is `idle`); `review.rs` adds none. The message appears in the transcript as an ordinary `userMessage` event, because it went through the same path as a message typed in the chat.
+**Request changes.** `request_changes(agents, bridge, saved, id, text)`: `text.trim()` empty fails with `Write what should change first.`; reserve the session (`let held = agents.reserve(id)?`); call Phase 2's `send_task(agents, bridge, saved, id, text, SendOptions::default(), Some(&held))` (the function behind `agent_send`, P5; the last argument is the one Phase 4 adds, section 6.3) with the text exactly as typed; only when that returns `Ok`, `amend` the session to `changes_requested`; then the reservation is dropped. `send_task` does its own checks (the session exists, is interactive, has not ended, is `idle`); `review.rs` adds none. Holding the reservation across the send means no other message, and no second review action, can slip in between the send and the state change. The message appears in the transcript as an ordinary `userMessage` event, because it went through the same path as a message typed in the chat.
 
 Phase 2's plan (its section 4.6) says what the send does: for an `idle` session whose process is alive, the line is written; for an `idle` session with no process, a process is started with `--resume <session id>` and then the line is written; for `ended`, `cancelled` and `failed` sessions it answers `This session has ended`. Phase 4 adds nothing to that. The Review page disables "Request changes" for an ended session (section 7.3).
 
@@ -600,22 +630,24 @@ sequenceDiagram
     participant C as claude process
     U->>W: "Request changes", types the text, "Send to session"
     W->>R: review_request_changes(sessionId, text)
-    R->>M: send_task(sessionId, text) (checks: interactive, not ended, idle)
+    R->>M: reserve(sessionId)
+    R->>M: send_task(sessionId, text, held) (checks: interactive, not ended, idle)
     alt no live process
         M->>C: spawn with --resume sessionId
     end
     M->>C: one user line on stdin
     M-->>W: event agent-sessions-changed (status running)
     R->>M: amend: review = changes_requested
+    R->>M: the Reservation is dropped
     R-->>W: ok
     C-->>M: assistant and tool lines, then result
     M->>M: turn end: filesChanged recomputed, review_after_turn gives pending
     M-->>W: event agent-sessions-changed (status idle, review pending)
 ```
 
-**Dismiss.** `dismiss(agents, id)`: `amend` to `Review { state: Dismissed, commit: None, at: now }`. No git, no lock, allowed in any status.
+**Dismiss.** `dismiss(agents, id)`: `amend` to `Review { state: Dismissed, commit: None, at: now }`. No git, no reservation, allowed in any status.
 
-**Discard.** `discard(agents, worktrees_dir, id)`: take the write lock; read the session; refuse if busy; check the worktree; then
+**Discard.** `discard(agents, worktrees_dir, id)`: reserve the session (`agents.reserve(id)?`, held until the function returns); read the session; check the worktree and run the write checks (section 4.11); then
 
 ```text
 git -C <worktree> reset --hard <review base>
@@ -635,11 +667,14 @@ sequenceDiagram
     W->>U: Confirm "Discard this session's edits?"
     U->>W: "Discard edits"
     W->>R: review_discard(sessionId)
-    R->>M: info(sessionId), not busy, worktree checked
+    R->>M: reserve(sessionId) (fails when a turn runs or another review action holds it)
+    R->>M: info(sessionId), worktree checked
+    R->>G: write checks (registered worktree, top level, own branch)
     R->>G: reset --hard (review base)
     R->>G: clean -fd
     R->>M: amend: filesChanged = 0, review = dismissed
     M-->>W: event agent-sessions-changed
+    R->>M: the Reservation is dropped (agent_send works again)
     R-->>W: ok
 ```
 
@@ -722,7 +757,8 @@ Element ids come from the Architecture Suite. Where it derives an id from a file
 | `SessionInfo.review` | `<app data>/agent-sessions/index.json` | `review.rs` through `Manager::amend`; the manager's turn-end code through `review_after_turn` | every page, from the `["agent", "sessions"]` query |
 | `SessionInfo.worktree.reviewedSha` | the same | `review::approve` only | `worktree::changes` (through `review_base`), `review.rs` |
 | `SessionInfo.worktree.baseSha` | the same | Phase 2 at session start; never again | Phase 2's `ahead` and `remove`; `review_base` until the first approval |
-| `SessionInfo.filesChanged` | the same | Phase 2 at each turn end; `review::approve`, `review::discard` (zero); `review::files` (reconcile) | every page |
+| `SessionInfo.filesChanged` | the same | Phase 2 at each turn end; `review::approve`, `review::discard` (zero); `review::files` and `review::refresh` (reconcile) | every page |
+| Which session a review action holds | memory: `Session.reserved` in the manager | `Manager::reserve` and `Reservation`'s `Drop` only | `Manager::send`, `end`, `remove_worktree`; Phase 5's terminal start |
 | `SessionInfo.sourceSha` | the same | the manager, when a passport session succeeds | `architecture::staleness` |
 | The edits themselves | the session's worktree folder and its branch `hivemind/<id8>` | the agent; `git commit`, `git reset`, `git clean` run by `review.rs` | `review.rs` |
 | Snapshots | `<app data>/architecture-snapshots/<slug>/*.json` | `architecture::save_snapshot` only | `system_snapshots`, `system_snapshot` |
@@ -750,15 +786,44 @@ Query keys (the first element decides whether a note change refetches them; see 
 
 - Every command runs its work in `blocking(...)` (`src-tauri/src/lib.rs`), so no git call runs on the async runtime.
 - **The sessions mutex** (inside the manager) is never held across a git call or a file copy. `review.rs` reads a session with `Manager::info` (lock, clone, unlock), works, then writes with `Manager::amend` (lock, change, save index, unlock, emit).
-- **The write lock.** `review.rs` has one `static WRITES: Mutex<()>`. `approve`, `discard` and `request_changes` hold it from before they read the session until after their `amend`. Two decisions on any sessions therefore never interleave. `files`, `file`, `dismiss` and `tool_output` do not take it.
-- **Busy check.** `approve` and `discard` refuse a session whose status is `Running` or `Waiting`; `request_changes` leaves that to `Manager::send`, which accepts only an `Idle` session. The check and the git commands are not atomic with the start of a new turn: a turn started from another place in the few milliseconds between them would overlap. Both are user clicks in one window; this is accepted and not locked further.
-- **The worktree check** (`checked_worktree(info, worktrees_dir)`), used by every command that touches the worktree:
+- **The reservation.** A review action that writes (approve, discard, request changes) reserves its session for its whole duration, so no turn can start, and no worktree can be removed, while git is committing or resetting in it. The manager owns it:
+
+```rust
+/// Holds one session for a review action. While it lives, nothing else may start a turn in the session,
+/// end it or remove its worktree. Dropping it releases the session.
+pub struct Reservation { inner: Arc<Inner>, id: String }
+
+impl Reservation {
+    pub fn id(&self) -> &str
+}
+impl Drop for Reservation { /* clears the session's `reserved` flag under the sessions lock */ }
+
+impl Manager {
+    /// Reserve a session for one review action.
+    pub fn reserve(&self, id: &str) -> Result<Reservation, String>
+}
+```
+
+  - The flag is a new field of the manager's private `Session` struct, `reserved: bool` (false when a session is loaded or started). It lives under the sessions mutex, so reserving and every check below are atomic with the status they read. It is memory only; a restart clears it.
+  - `reserve`: `store::log_path` (`Invalid session id`); lock; the session must exist (`Unknown session`); status `Running` or `Waiting` gives `This session is busy`; `reserved` already true gives `A review action is already running for this session`; set `reserved = true`; unlock; return the `Reservation`.
+  - `Drop`: lock the sessions (take the guard even if the mutex is poisoned; a destructor must not panic), set `reserved = false` if the session is still there, unlock. Because release is a destructor, every return path of `approve`, `discard` and `request_changes`, including every `?`, releases it.
+  - **What refuses while a session is reserved**, each with `A review action is running for this session`, checked under the sessions lock at the point where the function first looks at the session: `Manager::send` (unless it is given the reservation itself, see below), `Manager::end` and `Manager::remove_worktree` (both can remove the worktree). Phase 5 adds the same check where it starts or attaches a terminal. `Manager::answer`, `interrupt`, `cancel`, `files` and the pump are not affected: a reserved session has no turn in progress, except the one `request_changes` has just started itself.
+  - `Manager::send` and `send_task` gain a last parameter `held: Option<&Reservation>`. `agent_send` passes `None`. `request_changes` passes its own reservation; `send` accepts a reserved session only when `held` is `Some` and `held.id()` is this session's id.
+  - There is no other lock in `review.rs`. Two review actions on **different** sessions may run at the same time; they touch different worktrees. `files`, `file`, `refresh`, `dismiss` and `tool_output` take no reservation: they do not change the worktree.
+- **The worktree check** (`checked_worktree(info, worktrees_dir)`), used by every command that touches the worktree, reading or writing:
   1. `info.worktree` must be `Some`.
   2. `base_sha`, and `reviewed_sha` when set, must be 40 or 64 hex characters (so neither can ever be read as an option or a path).
   3. `std::fs::canonicalize(worktree.path)` must succeed.
   4. The canonical path must start with the canonical `worktrees_dir`. An `index.json` that was edited or damaged can therefore never make Hivemind commit in, or reset, a folder outside its own worktrees.
+- **The write checks** (`checked_for_write(id, tree)`), run by `approve` and `discard` after the worktree check and before the first command that changes anything. Being inside `worktrees_dir` does not prove that git will change the session's own branch: someone may have checked out another branch in that folder, or the record may be damaged. Each step refuses with a message that says what was found (the texts are in section 4.2):
+  1. `tree.branch` must equal `hivemind/<first 8 characters of the session id>`. Otherwise: `This session's branch name does not match its id: <branch>`.
+  2. The folder must be a registered worktree of the session's repository: `git --no-optional-locks -C <tree.repo> worktree list --porcelain` (through Phase 2's `worktree::list(repo)`, which parses it) must have an entry whose path, canonicalised, equals the canonical worktree path. Otherwise: `The session's folder is not a worktree of <repo>`.
+  3. `git --no-optional-locks -C <worktree> rev-parse --show-toplevel`, canonicalised, must equal the canonical worktree path. Otherwise: `The session's folder is inside another git checkout: <what git printed>`.
+  4. `git --no-optional-locks -C <worktree> symbolic-ref --short HEAD` must print `tree.branch`. Another name: `The session's worktree is on branch <found>, not on its own branch <branch>`. A failure (git prints `fatal: ref HEAD is not a symbolic ref`): `The session's worktree is on a detached commit, not on its own branch <branch>`.
+
+  The checks and the write are not one atomic step, but nothing Hivemind does can change the branch in between: the session is reserved, so no agent turn runs. A person switching branches by hand in that folder during those milliseconds is not guarded against.
 - **The pump thread** runs `rev-parse` before it locks and `save_snapshot` after it unlocks (section 4.8).
-- **Timeouts.** Reads: 20 s. `add -A`, `commit`, `reset --hard`, `clean -fd`: 120 s. A timeout kills the git process (existing behaviour of `run_with_timeout`).
+- **Timeouts.** Reads: 20 s. `add -A`, `commit`, `reset --hard`, `clean -fd`: 120 s. On a timeout `run_captured` kills the **whole process tree** of the command, not only git, and waits a bounded time for the output (section 6.1). A commit hook that hangs, or that leaves a child holding the pipes, therefore cannot keep an approval, and its reservation, blocked past the timeout plus a few seconds.
 
 ### 4.12 Memory items
 
@@ -815,6 +880,8 @@ Facts the design relies on, each seen in that run:
 | `git rev-list --count <a>..HEAD` prints one number. With a commit id the repository does not have: exit 128, `fatal: Invalid revision range 1111…1111..HEAD`. | Yes. |
 | `git rev-list --count --since=@<unix seconds> HEAD` counts commits whose committer date is after that instant. | 2 for one second before the first commit; 0 for a time in the future. |
 | `git rev-parse HEAD` prints 40 hex characters and a newline. `git rev-parse --show-toplevel` in the linked worktree prints that worktree's own root with forward slashes. | Yes. |
+| `git worktree list --porcelain`, run in the repository, prints one block per working tree: `worktree <path with forward slashes>`, `HEAD <sha>`, then `branch refs/heads/<name>` or the single word `detached`. The linked worktree's block names its folder and `refs/heads/hivemind/1a2b3c4d`. | Yes (checked again on 2026-11-10 for the write checks of section 4.11). |
+| `git symbolic-ref --short HEAD` in the linked worktree prints `hivemind/1a2b3c4d`; after `git checkout -b other` there it prints `other`; after `git checkout --detach` it exits 128 with `fatal: ref HEAD is not a symbolic ref`. | Yes. |
 
 To check again, in Git Bash, in an empty scratch folder (never in a real repository):
 
@@ -945,7 +1012,11 @@ pub fn head_sha(repo: &Path) -> Result<String, String>
 pub fn rev_count(repo: &Path, selector: &[&str]) -> Result<u64, String>
 ```
 
-- `run_captured` is today's body of `run_with_timeout` (anchor `pub fn run_with_timeout`) up to and including the `join` of the two drain threads. It returns `Err(format!("{name} timed out after {}s", …))` on a timeout and `Ok(Ran { … })` otherwise.
+- `run_captured` starts from today's body of `run_with_timeout` (anchor `pub fn run_with_timeout`): the same environment, pipes, `CREATE_NO_WINDOW` and polling loop. It returns `Err(format!("{name} timed out after {}s", …))` on a timeout and `Ok(Ran { … })` otherwise. Two things change, because today's body is not safe for a command that starts other programs (a `git commit` runs hooks):
+  - **On a timeout it kills the whole process tree.** Today's `child.kill()` ends only the program that was started. A commit hook, or anything the hook started, lives on and keeps the write ends of the stdout and stderr pipes open. Add a private `fn kill_tree(child: &mut Child)`: on Windows run `taskkill /PID <pid> /T /F` (the same command `fn kill` in `src-tauri/src/agent/mod.rs` uses; start it with `Command::new("taskkill")`, the three stdio handles set to null, `CREATE_NO_WINDOW`, and `.status()`, not through `run_captured`), then `child.kill()` and `child.wait()`. On other systems the command is started in its own process group (`std::os::unix::process::CommandExt::process_group(0)`, set in `run_captured` before `spawn`), and `kill_tree` runs `kill -KILL -<pid>` (the minus sign addresses the group), then `child.kill()` and `child.wait()`.
+  - **It waits a bounded time for the output.** Today's `out.join()` and `err.join()` return only when every holder of the pipe has closed it. Replace them with a private `fn collect(reader: JoinHandle<String>, grace: Duration) -> String` that polls `reader.is_finished()` every 20 ms for at most `DRAIN_GRACE` (a new constant, 2 seconds): finished gives the joined text; not finished gives an empty string and leaves the thread to end by itself when the pipe closes. This is used on both paths, after a normal exit and after a timeout kill. After a normal exit the readers finish at once unless a surviving child still holds a pipe; in that case the text is lost, which costs nothing here because no caller reads the output of a command that runs hooks (`commit_all` reads the new commit id with `rev-parse` afterwards), and a failing commit's hook has ended by then.
+  - The worst case for a command with timeout `t` is therefore `t` plus the time `taskkill` takes plus twice `DRAIN_GRACE`: for an approval, a little over 124 seconds, never unbounded.
+- `drain` (anchor `pub fn drain`) keeps its signature; the manager uses it for a session's stderr.
 - `run_with_timeout` becomes: call `run_captured`; on success return `stdout`; otherwise the same message as today (the first non-empty stderr line, else `"{name} exited with {status}"`).
 - `head_sha`: `git --no-optional-locks -C <repo> rev-parse HEAD` with the existing `TIMEOUT`; trim; if `!is_sha(..)` return `Err("git did not print a commit id")`.
 - `rev_count`: `git --no-optional-locks -C <repo> rev-list --count` plus the selector; trim and parse as `u64`; a parse failure is `Err("git did not print a number")`.
@@ -962,9 +1033,8 @@ pub const MAX_FILE: u64 = 2 * 1024 * 1024;          // bytes, per side of a diff
 const SNIFF: usize = 8000;                          // bytes git looks at to call a file binary
 const READ: Duration = Duration::from_secs(20);
 const WRITE: Duration = Duration::from_secs(120);
-const BUSY: &str = "The session is still working. Wait for the turn to finish, or stop it first.";
+pub const REFRESH_CAP: usize = 20;                  // worktrees one review_refresh looks at
 const NO_IDENTITY: &str = "Git has no author identity, so it cannot commit. Set one with: git config --global user.name \"Your Name\" and git config --global user.email \"you@example.com\". Then approve again.";
-static WRITES: Mutex<()> = Mutex::new(());
 
 pub struct FileContents { … }     // section 4.1
 
@@ -976,8 +1046,10 @@ pub fn reset_to_base(tree: &Worktree) -> Result<(), String>
 
 // ---- the same for a session (what the commands call) ----
 fn checked_worktree(info: &SessionInfo, worktrees_dir: &Path) -> Result<Worktree, String>
-fn settled(info: &SessionInfo) -> Result<(), String>
+fn checked_for_write(id: &str, tree: &Worktree) -> Result<(), String>
+fn reconcile(agents: &Manager, info: &SessionInfo, list: &[FileChange]) -> bool
 pub fn files(agents: &Manager, worktrees_dir: &Path, id: &str) -> Result<Vec<FileChange>, String>
+pub fn refresh(agents: &Manager, worktrees_dir: &Path) -> usize
 pub fn file(agents: &Manager, worktrees_dir: &Path, id: &str, path: &str) -> Result<FileContents, String>
 pub fn approve(agents: &Manager, worktrees_dir: &Path, id: &str, message: &str) -> Result<String, String>
 pub fn request_changes(agents: &Manager, bridge: &Bridge, saved: &Settings, id: &str, text: &str) -> Result<(), String>
@@ -997,10 +1069,14 @@ Behaviour:
 - `commit_all`: section 4.5.
 - `reset_to_base`: `git reset --hard <tree.review_base()>` then `git clean -fd`, both with `WRITE`.
 - `checked_worktree`: section 4.11; returns the session's `Worktree`.
-- `settled`: `Err(BUSY.into())` when `info.status` is `Running` or `Waiting`.
-- `files`: `info = agents.info(id)?`; `tree = checked_worktree(..)?`; `list = worktree::changes(&tree)?`; when `settled(&info).is_ok()` and `worktree::totals(&list)` differs from the stored totals, `agents.amend` stores them and applies `review_after_turn` (section 4.4); return `list`.
+- `checked_for_write`: the four write checks of section 4.11, in that order, with the messages of section 4.2. Step 2 calls Phase 2's `worktree::list(Path::new(&tree.repo))` and compares canonical paths; steps 3 and 4 use `run` with `READ`. For step 4, any error from `symbolic-ref` is reported as the detached case.
+- `reconcile`: when `info.status` is not `Running` or `Waiting` and `worktree::totals(list)` differs from `info.files_changed` (a missing value is zero), `agents.amend` stores the totals and sets `review = review_after_turn(..)` (section 4.4) and the function returns `true`; otherwise it does nothing and returns `false`.
+- `files`: `info = agents.info(id)?`; `tree = checked_worktree(..)?`; `list = worktree::changes(&tree)?`; `reconcile(agents, &info, &list)`; return `list`.
+- `refresh`: section 4.3, "Refreshing every worktree". Walk `agents.sessions()` (newest first); skip a session with no worktree, or with status `Running` or `Waiting`; skip one for which `checked_worktree` fails (the folder is gone, or the record is bad); for the rest call `worktree::changes` (skip on an error) and `reconcile`; stop after `REFRESH_CAP` sessions that reached `worktree::changes`. Return the number of `true` results.
 - `file`: `info`, `checked_worktree`, `file_contents`.
-- `approve`, `request_changes`, `dismiss`, `discard`: sections 4.5 and 4.6. `now` is `agent::now_ms()` (made `pub(crate)`, section 6.3).
+- `approve`, `discard`: sections 4.5 and 4.6. Both begin `let _held = agents.reserve(id)?;` and keep `_held` alive to the end of the function, then `checked_worktree`, then `checked_for_write`. The busy errors come from `reserve`; `review.rs` has no busy text of its own.
+- `request_changes`: section 4.6; `let held = agents.reserve(id)?;` then `agent::send_task(agents, bridge, saved, id, text, SendOptions::default(), Some(&held))`.
+- `dismiss`: section 4.6. `now` is `agent::now_ms()` (made `pub(crate)`, section 6.3).
 
 ### 6.3 `src-tauri/src/agent/mod.rs` (changed): review state and manager access
 
@@ -1019,9 +1095,22 @@ Behaviour:
 
     /// The full text of one tool result, read back from the raw log.
     pub fn tool_output(&self, id: &str, tool_use_id: &str) -> Result<ToolOutput, String>
+
+    /// Reserve a session for one review action (section 4.11).
+    pub fn reserve(&self, id: &str) -> Result<Reservation, String>
 ```
 
+6. The reservation (section 4.11), as edits to what Phase 2 left in this file:
+   - Add `pub struct Reservation` with `id()` and its `Drop`, and two constants: `const RESERVED: &str = "A review action is running for this session";` and the two texts `reserve` returns.
+   - Phase 2's private `struct Session { info, live, tape }` gains `reserved: bool`; set it to `false` in the three places a `Session` is built (`Manager::new`, `start`, and wherever Phase 2 inserts one).
+   - `Manager::send` (Phase 2's signature `send(&self, id, text, options, launch)`) gains a last parameter `held: Option<&Reservation>`. In its first locked step, where it checks that the session exists, is interactive, has not ended and is `Idle`, add after the existence check: `if session.reserved && held.is_none_or(|h| h.id() != id) { return Err(RESERVED.into()); }`. Its second locked step (after a resume's wait) repeats the same line.
+   - `send_task` gains the same last parameter and passes it on. The `agent_send` command in `src-tauri/src/lib.rs` passes `None`.
+   - `Manager::end`: in its first lock, after the existence check: `if session.reserved { return Err(RESERVED.into()); }`.
+   - `Manager::remove_worktree`: the same line at the same point.
+   - Nothing else changes: `answer`, `interrupt`, `cancel`, `files`, `stop_all` and the pump do not look at the flag.
+
 - `info`: `store::log_path(&self.inner.dir, id)?` (gives `Invalid session id`), then the session's `info` cloned, or `Err("Unknown session")`.
+- `reserve` and `Reservation`: section 4.11. `Reservation` holds a clone of the manager's `Arc<Inner>` and the id.
 - `amend`: the same two checks; then, under the sessions lock, apply `change`, `persist`, unlock, emit `Emit::SessionsChanged`, return the changed details. It is `Inner::update` (anchor `fn update(&self, id: &str`) with an error for an unknown id and a return value; have `Inner::update` stay as it is.
 - `tool_output`: `info(id)?` for the two checks; `store::read_log(&self.inner.dir, id)?`; walk the records from the last to the first; for each `Record::Raw { raw, .. }` call `self.inner.adapter.tool_result(&raw, tool_use_id)`; on the first `Some((ok, text))` build the `ToolOutput`: when `text.chars().count() > MAX_OUTPUT` (a constant, `400_000`) keep the last `MAX_OUTPUT` characters and set `truncated`. No hit: `Err("That tool call has no result in this session's log")`. If Phase 5 has given sessions different adapters, use the session's own adapter the way `Manager::session` does.
 
@@ -1130,6 +1219,9 @@ async fn review_dismiss(state: State<'_, AppState>, session_id: String) -> Resul
 /// Throw the session's edits away: reset its worktree to its review base and remove untracked files.
 #[tauri::command]
 async fn review_discard(state: State<'_, AppState>, session_id: String) -> Result<(), String>
+/// Look at every session's worktree again, so edits made outside a turn are noticed.
+#[tauri::command]
+async fn review_refresh(state: State<'_, AppState>) -> Result<usize, String>
 #[tauri::command]
 async fn review_tool_output(state: State<'_, AppState>, session_id: String, tool_use_id: String) -> Result<agent::ToolOutput, String>
 #[tauri::command]
@@ -1142,7 +1234,9 @@ async fn system_snapshot(state: State<'_, AppState>, slug: String, id: String) -
 
 `review_request_changes` clones the manager, the bridge and the settings path, as `agent_send` does, and calls `review::request_changes(&agents, &bridge, &settings::load(&path), &session_id, &text)`. `system_staleness` clones the bridge and the manager and calls `architecture::staleness(&bridge, &agents.sessions(), &slug)` inside `blocking`.
 
-- Add the ten names to the handler list (anchor `tauri::generate_handler![`).
+- `review_refresh` clones the manager and `worktrees_dir` and returns `Ok(review::refresh(&agents, &root))` from inside `blocking`.
+- `agent_send` (Phase 2's command) passes `None` as the new last argument of `agent::send_task` (section 6.3).
+- Add the eleven names to the handler list (anchor `tauri::generate_handler![`).
 
 ### 6.10 `src/lib/agent.ts` (changed) and `src/features/agents/session.ts` (changed, Phase 2's file)
 
@@ -1155,6 +1249,8 @@ export const reviewApprove = (sessionId: string, message: string) => invoke<stri
 export const reviewRequestChanges = (sessionId: string, text: string) => invoke<void>("review_request_changes", { sessionId, text });
 export const reviewDismiss = (sessionId: string) => invoke<void>("review_dismiss", { sessionId });
 export const reviewDiscard = (sessionId: string) => invoke<void>("review_discard", { sessionId });
+/** Have Rust look at every session's worktree again; resolves to how many sessions changed. */
+export const reviewRefresh = () => invoke<number>("review_refresh");
 export const reviewToolOutput = (sessionId: string, toolUseId: string) => invoke<ToolOutput>("review_tool_output", { sessionId, toolUseId });
 
 /** The commit a session's proposed edits are compared with. */
@@ -1210,6 +1306,8 @@ export function reviewLabel(info: SessionInfo): { text: string; tone: "waiting" 
 export function proposedFiles(sessions: SessionInfo[]): number
 /** The key `delta` rows away from `current` in `keys`, staying inside the list. */
 export function step(keys: string[], current: string | null, delta: 1 | -1): string | null
+/** Where the page goes after a decision took `done` out of the queue: the next session that waits, else the bare page. */
+export function afterDecision(listed: SessionInfo[], done: string): { page: "review"; session?: string }
 /** "3 files", "1 file". */
 export const filesWord = (n: number) => `${n} file${n === 1 ? "" : "s"}`;
 ```
@@ -1221,6 +1319,7 @@ export const filesWord = (n: number) => `${n} file${n === 1 ? "" : "s"}`;
 - `reviewLabel`: status `running` or `waiting`: `null`. `review.state === "changes_requested"`: `{ text: "Changes requested", tone: "busy" }`. `waitingForReview(info)`: `{ text: "Waiting for review", tone: "waiting" }`. `"approved"`: `{ text: "Approved", tone: "active" }`. `"dismissed"`: `{ text: "Dismissed", tone: "" }`. Else `null`.
 - `proposedFiles`: the sum of `filesChanged.files` over sessions for which `waitingForReview` holds.
 - `step`: index of `current` (not found: `delta > 0 ? -1 : keys.length`), plus `delta`, clamped to `0..keys.length - 1`; `null` for an empty list.
+- `afterDecision`: look at `listed` (the page's groups, in their order) starting after the position of `done` and wrapping round, skipping `done` itself; the first session for which `waitingForReview` holds gives `{ page: "review", session: its id }`; none gives `{ page: "review" }`. It exists because `reviewSessions` always keeps the session the route names: unless the route moves, an approved or dismissed session would stay on the page.
 
 ### 6.13 `src/features/review/validation.ts` (**new**) and `validation.test.ts` (**new**)
 
@@ -1364,12 +1463,12 @@ export function FilePane({ info, file }: { info: SessionInfo; file: FileChange }
 /** What stands in for the diff when a session has no file selected: its state, or that nothing is left to review. */
 export function SessionPane({ info }: { info: SessionInfo })
 /** "3 files proposed · Waiting for your review", the standing warning, and the decisions. */
-export function ReviewBar({ info, files, title }: { info: SessionInfo; files: number; title: string })
+export function ReviewBar({ info, files, title, onDecided }: { info: SessionInfo; files: number; title: string; onDecided: () => void })
 ```
 
 - `FilePane` loads `reviewFile(info.id, file.path)` (key in section 4.10) and renders the header, then one of: `CodeDiff` with `base ?? ""` and `head ?? ""`; the binary, too-large, loading or error text (section 7.2). Below it, `Validation`.
 - `Validation` (not exported) loads `agentSession(info.id, 0)` under `["agent", "review-events", info.id, reviewVersion(info)]`, computes `validation(events, (info.filesChanged?.files ?? 0) > 0)` and renders the rows. `OutputDialog` (not exported) loads `reviewToolOutput` for one check.
-- `ReviewBar` holds the three dialogs' open state and runs the four mutations with `useMutation`; on success it calls `client.invalidateQueries({ queryKey: ["agent", "sessions"] })` (the event does it too; this makes the UI move at once) and toasts; on error it shows the message (in the dialog for approve and request changes, as a toast for dismiss and discard). `title` is the prefilled commit message.
+- `ReviewBar` holds the three dialogs' open state and runs the four mutations with `useMutation`; on success it calls `client.invalidateQueries({ queryKey: ["agent", "sessions"] })` (the event does it too; this makes the UI move at once) and toasts; on error it shows the message (in the dialog for approve and request changes, as a toast for dismiss and discard). `title` is the prefilled commit message. After a successful **approve**, **dismiss** or **discard** it calls `onDecided()`: those three take the session out of the queue, and the page must stop naming it in the route. A successful request for changes does not call it: the session stays on the page, working.
 
 ### 6.17 `src/features/review/ReviewPage.tsx` (rewritten)
 
@@ -1380,12 +1479,15 @@ This document describes the page as it is at the last commit. If the page has ga
 Data:
 
 - `sessions = useQuery(sessionsQuery())`; `groups = reviewSessions(sessions.data ?? [], project?.slug, route.session)`.
+- Refresh on showing the page: `useEffect(() => { reviewRefresh().catch(() => undefined); }, [])`. `review_refresh` looks at every session's worktree, including approved and dismissed ones the filter above leaves out, and stores what it finds (section 4.3). Nothing is awaited and its result is not used: a session it reopens comes back through `agent-sessions-changed`, the sessions query refetches, and `reviewSessions` then lists it. Without this call an approved session edited by hand afterwards would never return to the page.
 - `lists = useQueries` over `groups`, each `reviewFiles(g.id)` under `["agent", "review-files", g.id, reviewVersion(g)]`.
 - `changes`: `useQuery({ ...changesQuery(), enabled: useChangesEnabled() && groups.some((g) => changeOf(g) !== undefined) })` (Phase 3's query from `src/features/changes/useChanges.ts`, the same cache entry the Changes page uses); used for `display` and `title`.
 - Memory: `due` exactly as today; `recent = useQuery({ queryKey: ["list", "review-candidates", project?.slug ?? "*"], queryFn: () => list({ allDomains: true, status: "active", tags: project ? [project.tag] : undefined, limit: CANDIDATES }), enabled: projectsOn })`; `metas = useQueries` over `candidates(recent.data?.notes ?? [])` with `["meta", ref]` and `staleTime: Infinity`; `captures = unconfirmed(...)`.
 - Architecture: `useSystemProposals(scoped, all)` as today; plus, for each system in `scoped` that has a repository and an architecture folder, `systemStaleness(slug)` through `useQueries` (key in section 4.10 with `"review"` in place of `generatedAt`); the "behind" items are those with `behind > 0`.
 
 Selection: `picked: string | null` in state (a key of a Memory or Architecture item). When `picked` is null the selection is `fileKey(route.session, route.file)` if that file is listed, else the first file of the routed session, else the first file of the first group, else the first Memory item, else the first Architecture item. Selecting a file calls `go({ page: "review", session, file }, { replace: true })` and `setPicked(null)`; selecting another item calls `setPicked(key)`.
+
+After a decision: the page passes `onDecided={() => { setPicked(null); go(afterDecision(groups, info.id), { replace: true }); }}` to `ReviewBar`. So after an approve, a dismiss or a discard the route names the next waiting session, or is `{ page: "review" }` when none waits, and the decided session is gone from the list as soon as the sessions query has refetched. (`groups` here is the list from before the decision; `afterDecision` skips the decided session itself.) A session opened on purpose later, from the chat's "Review changes", is still shown whatever its state, because the route names it again.
 
 Tabs filter which sections the left list shows; counts are in section 7.1.
 
@@ -1469,7 +1571,7 @@ Algorithm: section 4.9. `removedEdges` names come from the base model's elements
   - `Chat.tsx`: delete `ChangesModal` and the imports only it used (`agentFiles`, `DiffView`, `Modal` if nothing else there uses them). Phase 2's own note at that component says Phase 4 does this.
   - `FilesCard`: the chip on the latest card is hard-coded to `Waiting for review`. Give the card a prop `chip: { text: string; tone: string } | null` and render `<span className={"status-chip " + chip.tone}>{chip.text}</span>` when it is set; the caller passes `reviewLabel(info)` for the latest card.
   - The rail's Changes row is shown when `waitingForReview(info)` (it says "awaiting review"); for other sessions with files it reads `{n} file{s} changed` and still opens the Review page.
-- **Overview** (`src/features/projects/OverviewPage.tsx`): add a component `NeedsReview({ project }: { project?: Project })` and use it in place of both "Needs your review" sections (anchor `<Section title="Needs your review"` in `ProjectOverview`, and the one in `StoreOverview`). Its rows are in section 7.5. In `SystemContext` (anchor `function SystemContext(`) delete the `commits` prop, the estimate (anchor `const behind =`) and the row under the section; update its one call site. The "Continue your work" cards of Phases 2 and 3 are not touched; they call `waitingForReview` and follow.
+- **Overview** (`src/features/projects/OverviewPage.tsx`): add a component `NeedsReview({ project }: { project?: Project })` and use it in place of both "Needs your review" sections (anchor `<Section title="Needs your review"` in `ProjectOverview`, and the one in `StoreOverview`). Its rows are in section 7.5. `NeedsReview` also calls `reviewRefresh().catch(() => undefined)` in an effect when it is first shown, for the same reason the Review page does (section 6.17): the count of proposed files must include an approved session that was edited afterwards. In `SystemContext` (anchor `function SystemContext(`) delete the `commits` prop, the estimate (anchor `const behind =`) and the row under the section; update its one call site. The "Continue your work" cards of Phases 2 and 3 are not touched; they call `waitingForReview` and follow.
 - **Changes** (Phase 3's `src/features/changes/ChangeDetail.tsx`): in the "Linked session" section, the `ArrowLink` `Review proposed changes` calls `openReview(latest.id)` instead of `openSession(latest.id)`. Nothing else in Phase 3's files changes: its chip (`changeChip`), its meta lines and its session line are built on `waitingForReview`.
 
 ### 6.21 `src/App.css` (changed)
@@ -1624,7 +1726,7 @@ CSS:
 
 | Session | `state` text | Buttons |
 | --- | --- | --- |
-| status `running` or `waiting` | `The agent is working` | All disabled, with the title `The session is still working. Wait for the turn to finish, or stop it first.` |
+| status `running` or `waiting` | `The agent is working` | All disabled, with the title `The session is still working. Wait for the turn to finish, or stop it first.` (A call made anyway returns `This session is busy`.) |
 | files > 0, review null or `pending` | `Waiting for your review` | All enabled. |
 | files > 0, `changes_requested`, not busy | `Changes requested` | All enabled. |
 | files > 0, `dismissed` | `Dismissed` | Approve, Request changes and the menu; no Dismiss. |
@@ -1638,7 +1740,7 @@ CSS:
 - `<label className="field">Commit message<textarea className="review-message" autoFocus … /></label>`, prefilled with the change's title when the session belongs to a change, else the session's title.
 - An error from the command as `<p className="error">` (it keeps git's line breaks; `.error` is `white-space: pre-wrap`).
 - Actions: `Cancel`, and `<button className="primary">Commit edits</button>` (`Committing…` while it runs; disabled when the message is blank).
-- On success: close, toast `Committed <first 7> on <branch>`.
+- On success: close, toast `Committed <first 7> on <branch>`, then `onDecided()`: the route moves to the next session that waits for review, or to the bare Review page when none does (section 6.17), so the approved session leaves the list.
 
 **Request changes dialog.** `Modal` titled `Request changes`.
 
@@ -1647,9 +1749,11 @@ CSS:
 - The error, as above. Actions: `Cancel`, `<button className="primary">Send to session</button>` (`Sending…`; disabled when blank).
 - On success: close, toast `Sent to the session`. The list then shows `Working…` beside the session until the turn ends.
 
-**Dismiss.** No dialog. Toast: `Dismissed. The edits stay in the session's worktree.` The session leaves the list; the selection moves to the next item.
+**Dismiss.** No dialog. Toast: `Dismissed. The edits stay in the session's worktree.` Then `onDecided()`: the route moves to the next session that waits for review, or to the bare Review page; the dismissed session leaves the list. (It can be opened again from its chat with "Review changes".)
 
-**Discard.** `Confirm` with title `Discard this session's edits?`, message `This resets the session's worktree to commit <first 7 of the review base> and deletes the files the agent created. It cannot be undone.`, action `Discard edits`, `danger`. On success: toast `Edits discarded`. On an error: an error toast with the message.
+**Discard.** `Confirm` with title `Discard this session's edits?`, message `This resets the session's worktree to commit <first 7 of the review base> and deletes the files the agent created. It cannot be undone.`, action `Discard edits`, `danger`. On success: toast `Edits discarded`, then `onDecided()` as for Dismiss. On an error: an error toast with the message.
+
+While one of the three commands runs, its button shows its busy label and the other decision buttons of that session are disabled. A second click that gets through anyway is answered by the reservation: an error toast `A review action is already running for this session`.
 
 CSS:
 
@@ -1740,23 +1844,28 @@ Empty: `Nothing is waiting for you.` Loading and error: the section's own, from 
 Branch from the Phase 3 branch. Twelve commits. After each: `npm test`, `npx tsc --noEmit`, `npm run build`, `cd src-tauri && cargo test && cargo clippy` must pass. Rust tests that need git start with the existing guard (`if !git_available() { return; }`; copy the helper from the tests in `src-tauri/src/git.rs`). Every test repository sets, in its own local config, `user.name`, `user.email`, `commit.gpgsign false` and `core.autocrlf false`, so the numbers are the same on every machine.
 
 **Commit 1. `feat(review): review state, review base and source commit on sessions`**
-Sections 6.3 (items 1 to 5 without `tool_output`), 6.6, 6.8, and the types and the `waitingForReview` change in 6.10.
+Sections 6.3 (items 1 to 6 without `tool_output`), 6.6, 6.8, and the types and the `waitingForReview` change in 6.10. The new last argument of `send` and `send_task` is `None` at every existing call.
 
 - `agent/mod.rs`, test `review_json_is_the_contract_shape`: `Review { state: ChangesRequested, commit: None, at: 5 }` serialises to `{"state":"changes_requested","commit":null,"at":5}` and reads back; the four states serialise as `pending`, `approved`, `changes_requested`, `dismissed`.
 - `agent/mod.rs`, test `a_turn_reopens_the_review_when_it_should`: with `f(n)` a totals value of `n` files: `None` stays `None`; `ChangesRequested` becomes `Pending` with `commit None` and `at = now`, with any totals; `Approved` with before `f(0)` and after `f(2)` becomes `Pending`; `Approved` with after `f(0)` is unchanged (commit kept); `Dismissed` with before and after both `f(3)` is unchanged; `Dismissed` with before `f(3)` and after `f(4)` becomes `Pending`; `Pending` is unchanged.
 - `agent/mod.rs`, test `amend_changes_saves_and_announces`: with the rig, after a session finished: `amend(id, |i| i.review = Some(…))` returns the changed details, `manager.sessions()` shows them, a new `Manager::new` on the same folder shows them, and a `SessionsChanged` was emitted after the call; `amend("../index", …)` is `Err("Invalid session id")`; an unknown UUID is `Err("Unknown session")`.
+- `agent/mod.rs`, test `reserve_refuses_a_busy_or_reserved_session`: for a session loaded as `idle`: `reserve` succeeds; a second `reserve` while the first is held is `Err("A review action is already running for this session")`; after the first is dropped, `reserve` succeeds again. For a session that is running (the rig's lingering process): `Err("This session is busy")`. `reserve("../index")` is `Err("Invalid session id")`; an unknown UUID is `Err("Unknown session")`.
+- `agent/mod.rs`, test `a_reserved_session_refuses_send_end_and_remove`: an interactive `idle` session loaded from an index, with a launch closure that returns `Err("no launch")`. While a reservation is held: `send(id, "x", SendOptions::default(), launch, None)` is `Err("A review action is running for this session")` and the closure was not called; `end(id)` and `remove_worktree(id)` give the same error; `send(.., Some(&held))` gets past the check (its error is `no launch`). After the reservation is dropped, `send(.., None)` also gets past the check (`no launch`).
+- `agent/mod.rs`, test `a_reservation_is_released_when_its_holder_fails`: a function that reserves and then returns `Err` through `?` leaves the session reservable; so does a thread that panics while holding one (run it with `std::thread::spawn` and `join`, then `reserve` again).
 - `agent/store.rs`, test `index_written_before_phase_4_still_loads`: write an `index.json` holding one work session with every field Phases 1 to 3 write and **no** `review`, `sourceSha` or `worktree.reviewedSha`; `load_index` returns one session with `review == None`, `source_sha == None` and `worktree.reviewed_sha == None`.
 - `worktree.rs`, test `the_review_base_is_the_last_approved_commit`: `review_base()` is `base_sha` when `reviewed_sha` is `None` and the reviewed commit when it is set; with a real worktree in which one commit was made and `reviewed_sha` set to it, `changes(&tree)` is empty while `ahead(&tree)` is still 1.
 
 **Commit 2. `feat(review): read a worktree's changes and both versions of a file`**
-Sections 6.1, 6.2 (the read half), 6.9 (`review_files`, `review_file`), the invokes in 6.10.
+Sections 6.1, 6.2 (the read half: `file_contents`, `checked_worktree`, `reconcile`, `files`, `refresh`, `file`), 6.9 (`review_files`, `review_file`, `review_refresh`), the invokes in 6.10.
 
 - `git.rs`, test `captured_run_keeps_status_and_both_streams`: run `git --version`: `status.success()`, stdout starts with `git version`; run `git rev-parse --verify nothing-here` in a temp folder: not success, stderr not empty. The existing `timeout_kills_a_long_process` still passes.
+- `git.rs`, test `timeout_kills_a_hook_that_outlives_git`: a temp repository with one commit and a hooks folder whose `pre-commit` is `#!/bin/sh` and `sleep 30` (on Unix also mode `0o755`); run `git -C <repo> -c core.hooksPath=<hooks> commit --allow-empty -m x` through `run_captured` with a timeout of 2 seconds. The result is `Err` containing `timed out`, and the call returns in under 10 seconds. (With today's body it returns only when the `sleep` ends, after 30 seconds, because the hook keeps the pipes open.) Skip the test when git is missing.
 - `git.rs`, test `sha_check`: 40 hex is true; 64 hex is true; 39 characters, `"HEAD"`, a 40-character string with a `g`, and `"--all"` are false.
 - `review.rs`, test `file_contents_gives_both_sides`: a repository with a base commit and a linked worktree; in the worktree modify a file, delete one, write an untracked file and a binary untracked file. Modified file: `base` and `head` are the two texts; untracked file: `base` is `None`; deleted file: `head` is `None`; binary: `binary` true and both `None`; a path not in the list, `"../x"` and an absolute path are `Err("That file is not one of this session's changes")`.
 - `review.rs`, test `file_contents_refuses_large_files`: a changed tracked file of `MAX_FILE + 1` bytes gives `too_large` true and both sides `None`.
 - `review.rs`, test `worktree_must_be_inside_the_worktrees_folder`: `checked_worktree` with no worktree, with `base_sha: "HEAD"`, with a missing folder, and with a real folder outside the given root gives the four messages of section 4.2; inside the root it returns the canonical path and the review base.
 - `review.rs`, test `listing_a_session_reconciles_its_totals`: a session (made as in commit 3) whose stored totals say 1 file while its worktree has 2: `files` returns 2 entries and the session then has `files_changed.files == 2`; an `approved` session whose worktree gained a file becomes `pending`.
+- `review.rs`, test `refresh_finds_edits_in_sessions_the_page_does_not_list`: three sessions in one index: (a) `approved` with zero stored files, whose worktree then gets a new file; (b) `idle` and pending with correct totals; (c) a session whose worktree folder does not exist. `refresh` returns 1; (a) then has `files_changed.files == 1` and `review.state == Pending`; (b) is unchanged; (c) is unchanged and caused no error. A second `refresh` returns 0. With `REFRESH_CAP + 1` sessions that have real worktrees, only `REFRESH_CAP` are looked at (give the oldest one stale totals and assert it keeps them).
 - Only if Phase 2's `worktree::changes` is missing or incomplete (section 6.8): also the fallback's tests, `parses_numstat_and_name_status` (the two verbatim strings of section 5.1 give the seven paths with `(2,1)`, `(0,2)`, `(1,0)`, `(4,0)`, `(0,4)`, binary, `(1,0)` and the letters `M D M A D M A`) and `counts_lines_the_way_git_does` (`""`, `"a\n"`, `"n1\nn2\nn3"` give 0, 1, 3; bytes with a NUL give binary).
 
 **Commit 3. `feat(review): approve, request changes, dismiss, discard`**
@@ -1770,7 +1879,8 @@ The rest of 6.2 and of 6.9's review commands. Sessions for these tests are made 
 - `review.rs`, test `discard_resets_and_removes_untracked`: after `reset_to_base`, `worktree::changes` is empty, the untracked file and folder are gone, a deleted tracked file is back, and a commit made after the base is no longer HEAD.
 - `review.rs`, test `approving_a_session_records_the_commit_as_its_review_base`: `approve(&manager, &root, id, "msg")`: the session then has `review.state == Approved`, `review.commit == Some(sha)`, `worktree.reviewed_sha == Some(sha)`, `worktree.base_sha` **unchanged**, zero files, and `worktree::ahead` is 1; a `SessionsChanged` was emitted; a second `approve` fails with the "nothing to approve" message; after one more edit and a `discard`, HEAD is still `sha` (approved work survives a discard).
 - `review.rs`, test `discarding_and_dismissing_a_session`: `dismiss` sets `Dismissed` and leaves the files; `discard` sets `Dismissed`, zero files, and the worktree is clean.
-- `review.rs`, test `a_busy_session_is_refused`: `settled` on details with status `Running` and with `Waiting` is `Err(BUSY)`; with `Idle`, `Ended` and `Succeeded` it is `Ok`.
+- `review.rs`, test `a_review_action_holds_and_releases_its_session`: `approve` with a blank message is `Err("Write a commit message first.")` and the session can be reserved straight afterwards; the same after an approve that failed in git (the identity test's setup) and after a `discard` that failed its write checks. While a test holds a reservation itself, `approve` and `discard` are `Err("A review action is already running for this session")` and the worktree is untouched (`worktree::changes` gives the same list as before).
+- `review.rs`, test `writes_need_the_sessions_own_worktree_and_branch`: with a session whose worktree is real and correct, `checked_for_write` is `Ok`. Then, one at a time: `git checkout -b other` in the worktree gives `The session's worktree is on branch other, not on its own branch hivemind/<id8>`; `git checkout --detach` gives `The session's worktree is on a detached commit, not on its own branch hivemind/<id8>`; a `tree.branch` of `main` gives `This session's branch name does not match its id: main`; a `tree.repo` that points at a second, unrelated repository gives `The session's folder is not a worktree of <that repository>`; a plain folder created inside the worktrees root (not a git folder) with `tree.path` pointing at it gives the same "not a worktree" error. In each failing case `approve` and `discard` return that error and `git status --porcelain` and `git rev-parse HEAD` in the folder are what they were.
 - `review.rs`, test `request_changes_needs_text_and_a_session_that_takes_messages`: blank text is `Err("Write what should change first.")`; for an `ended` session the error is Phase 2's `This session has ended`; in both cases the review state is unchanged. (A real send is covered by Phase 2's tests of `send` and by section 11.4.)
 
 **Commit 4. `feat(review): read one tool result in full from the session log`**
@@ -1794,6 +1904,7 @@ Sections 6.11, 6.12, 6.15, 6.17 (Code only; Memory and Architecture keep today's
   - `reviewLabel names the state`: the five outcomes of section 6.12.
   - `proposedFiles counts waiting sessions only`: 3 for the set above with project `p`.
   - `step moves inside the list`: from `b` in `[a, b, c]`: +1 is `c`, −1 is `a`; from `c` +1 stays `c`; from `null` +1 is `a` and −1 is `c`; an empty list gives `null`.
+  - `afterDecision goes to the next waiting session`: with listed sessions `[a (waiting), b (waiting), c (dismissed, the routed one)]`: after `a` it is `{ page: "review", session: b }`; after `b` it wraps to `a`; after `c` it is `a`; with only `[a]` listed, after `a` it is `{ page: "review" }`; a running session and an approved one are never chosen.
 
 **Commit 7. `feat(review): validation from the session's own commands`**
 Section 6.13, the Validation block and the output dialog of 6.16, the CSS of 7.2.
@@ -1807,7 +1918,7 @@ Section 6.13, the Validation block and the output dialog of 6.16, the CSS of 7.2
   - `ignores tools that are not a shell`: a `Read` whose summary is `npm test` is not a check.
 
 **Commit 8. `feat(review): approve, request changes, dismiss and discard from the page`**
-`ReviewBar` and its dialogs (6.16), the CSS of 7.3. No new unit tests (the logic is in Rust and in `review.ts`); verified in section 11.2.
+`ReviewBar` and its dialogs (6.16), `onDecided` and the route move after a decision (6.17), the CSS of 7.3. No new unit tests (the logic is in Rust and in `review.ts`, where `afterDecision` is tested); verified in section 11.2.
 
 **Commit 9. `feat(review): memory items: notes due and unconfirmed agent captures`**
 Sections 6.14, 6.18, the Memory part of 6.17 and 7.2.
@@ -1851,18 +1962,29 @@ Section 6.20 (chat card and Changes) and 7.5. Remove Phase 2's changes modal. `n
 | A base commit in the index is not a commit id | `The session's base commit is not a commit id` | `checked_worktree`, step 2; the value is never passed to git. |
 | The worktree folder was deleted by hand, or removed by Phase 2 after the session ended | `The session's worktree folder is missing: <path>`, or the session is simply not listed (Phase 2 clears `worktree` when it removes one) | Nothing is recreated. |
 | Git is not installed | `Could not run git: …` in each session group; on Overview the staleness row is absent | Spawn error from `run_captured`. |
-| Approve while the agent is working | Buttons are disabled; a direct call returns the busy message | `settled`. |
-| Two approvals at once (double click) | The second waits, then fails with "There is nothing to approve…"; the dialog is locked while the first runs | `WRITES` mutex; `Modal locked`. |
+| Approve or discard while the agent is working | Buttons are disabled; a direct call returns `This session is busy` | `Manager::reserve`. |
+| Two review actions on one session at once (double click, or approve during a discard) | The second fails at once with `A review action is already running for this session`; the dialog is locked while the first runs | The session's reservation; `Modal locked`. Nothing waits. |
+| A message is sent from the chat while an approve or a discard is running | The send fails with `A review action is running for this session`; the composer keeps the text (Phase 2 keeps it on an error) | `Manager::send` checks the reservation under the sessions lock, so a turn cannot start while git commits or resets. |
+| "End session" or "Remove worktree" while a review action runs | The same error, as a toast | `Manager::end` and `Manager::remove_worktree` check the reservation; both can delete the worktree. |
+| A review action fails or panics half way | The error; the session is usable again at once | The reservation is released by `Drop` on every path. |
+| The app closes during an approve | See "The app closed after `git commit`…" below; reservations are memory only and are gone after a restart | |
+| Someone checked out another branch in the session's worktree | Approve and discard refuse: `The session's worktree is on branch <found>, not on its own branch hivemind/<id8>`. The files are still listed and can be read | Write check 4. Nothing is committed or reset on a branch that is not the session's. |
+| The worktree is on a detached commit | `The session's worktree is on a detached commit, not on its own branch hivemind/<id8>` | Write check 4 (`symbolic-ref` fails). |
+| The session's folder exists under the worktrees folder but is no longer a worktree of its repository (`git worktree prune` ran after the folder was moved, or the record's `repo` is wrong) | `The session's folder is not a worktree of <repo>` | Write check 2. |
+| The session's folder has lost its `.git` file and sits inside some other checkout | `The session's folder is inside another git checkout: <folder>` | Write check 3; without it git would act on the enclosing repository. |
+| The record's `branch` is not `hivemind/<id8>` | `This session's branch name does not match its id: <branch>` | Write check 1. |
 | Git has no identity | The identity error in the approve dialog, with the two commands to run | Mapped from `Author identity unknown` and `empty ident name`. Nothing is committed; the files stay staged. |
 | A commit hook fails | `The commit did not go through:` and the hook's output, in the dialog | Hooks run (C5). Nothing is recorded as approved. |
-| Commit signing needs a passphrase prompt | After 120 s: `git timed out after 120s` | The process is killed. The user can commit by hand in the worktree; approving then records that commit. |
+| Commit signing needs a passphrase prompt | After 120 s: `git timed out after 120s` | The process tree is killed. The user can commit by hand in the worktree; approving then records that commit. |
+| A commit hook hangs, or starts something that keeps running | After 120 s and a few seconds more: `git timed out after 120s`; the session is free again | `run_captured` kills the whole process tree (`taskkill /T /F` on Windows, the process group elsewhere) and waits at most 2 s per stream for the output (section 6.1). |
 | The agent committed during its turn | The files are still listed (the diff is against the review base). Approve succeeds and the toast names the agent's commit | `commit_all` steps 3 to 7. |
 | The agent created thousands of untracked files | "N files proposed" with the real number; the list shows 300 rows and `and N more files` | The page caps rows. Approving would commit them all: the user should request changes or discard. |
 | A binary file, or a file over 2 MB | The texts of section 7.2 | No content is sent to the webview. |
 | A file not in UTF-8 | The diff, with replacement characters where bytes are invalid | `from_utf8_lossy`. |
 | Only line endings changed | Counts like `+40 −40` and `No visible changes: only line endings differ.` | Git counts the lines (without `autocrlf`); CodeMirror compares lines without their endings. |
 | A file the agent wrote with CRLF on a machine with `core.autocrlf=true` | A normal diff; git's counts are normal too | Section 5.1. |
-| The user edits files in the worktree by hand | The next time the page lists the session, the counts follow, and an approved session is pending again | Reconcile in `review::files`. |
+| The user edits files in the worktree by hand | The next time the Review page or the Overview is shown, the counts follow; an approved or dismissed session whose totals changed is pending again and back in the list | `review_refresh` looks at every session that has a worktree (at most 20, none mid-turn), not only the listed ones; `review_files` does the same for a listed one. |
+| More than 20 sessions have a worktree | The 20 newest are refreshed; an older approved session edited by hand is noticed only when it is opened from its chat ("Review changes") | `REFRESH_CAP`. |
 | The app closed after `git commit` but before the index was saved | The session still lists the files (the review base did not move). Approving again records the existing commit | `commit_all` finds nothing staged and HEAD ahead of the review base. |
 | The app closed during a turn | Whatever Phase 2 does for the session; its `review` is unchanged | No Phase 4 state is written mid-turn. |
 | Discard while a file is open in another program (Windows) | Error toast: `warning: failed to remove <file>: Invalid argument`; the session still lists what is left | `git clean` exits 1; nothing is recorded; the next listing shows the truth. |
@@ -1907,6 +2029,12 @@ Security rules, restated: the webview names a session, a system, a tool call, a 
 16. **Do not run `cargo fmt`.** Files are hand-formatted at about 140 columns (README section 4).
 17. **`noUnusedLocals` fails the build.** Removing Phase 2's changes modal leaves imports behind in `Chat.tsx` and `AgentWorkspace.tsx`; remove what your change orphans, nothing else. `agentFiles` and the Rust command `agent_files` stay (README 7.1; Phase 5 uses them).
 18. **The adapter's name is `claude-code`.** Show it through Phase 3's `engineName`; do not compare against `"claude"` anywhere.
+19. **A check followed by a git write is not safe by itself.** A turn could start between "the session is idle" and `git reset --hard`. Approve, discard and request changes therefore hold a `Reservation` (section 4.11), and `send`, `end` and `remove_worktree` refuse while one is held. Do not replace it with a status check.
+20. **Being inside the worktrees folder does not make a folder the session's branch.** Before a commit or a reset, run the write checks: registered worktree of the repository, its own top level, on `hivemind/<id8>`.
+21. **Killing git does not kill its hooks.** A hook that outlives git keeps the output pipes open and a plain `join` on the reader threads never returns. `run_captured` kills the process tree and bounds the wait (section 6.1).
+22. **A session that is not listed is never looked at by `review_files`.** Approved and dismissed sessions are found again only by `review_refresh`, which the Review page and the Overview call when shown.
+23. **The route keeps a session on the Review page.** `reviewSessions` always lists the session the route names; after approve, dismiss and discard the page must move the route (`afterDecision`), or the decided session stays.
+24. **`architecture` queries are not refetched by Refresh.** `refreshStore` skips them (`KEEP` in `src/lib/refresh.ts`). To see a changed model during verification, reload the window.
 
 ---
 
@@ -1925,10 +2053,13 @@ git -C <scratch>\demo\repos\paystream -c user.name=Demo -c user.email=demo@examp
 git -C <scratch>\demo\repos\paystream -c user.name=Demo -c user.email=demo@example.invalid commit --allow-empty -m "Log dropped events"
 
 $env:HIVEMIND_LM_ROOT = "<scratch>\demo\store"; $env:HIVEMIND_LM_SCRIPT = "<path>\living_memory.py"; $env:HIVEMIND_PYTHON = "<python.exe>"
+$env:LIVING_MEMORY_ROOT = "<scratch>\demo\store"     # the same store, for agent CLIs; see below
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
 $env:WEBVIEW2_USER_DATA_FOLDER = "<scratch>\webview-profile"
 npm run tauri dev
 ```
+
+Why `LIVING_MEMORY_ROOT` as well as `HIVEMIND_LM_ROOT` (README section 6): `HIVEMIND_LM_ROOT` only tells the app's own bridge which store to read. An agent CLI that Hivemind starts loads the user's Living Memory hooks, and those hooks choose their store from `LIVING_MEMORY_ROOT`. Without it, a real session started during verification (section 11.4, or a "Request changes" that resumes one) would write its session state into the user's real store. The fixture steps of 11.2 and 11.3 start no CLI, but set the variable anyway so that nothing run from this window can reach the real store.
 
 The demo store has two notes due for review, so Memory is 2. Pick the project PayStream if it is not already picked.
 
@@ -1941,7 +2072,7 @@ python scripts/drive_ui.py --out <scratch>\shots "eval:document.querySelector('.
 python scripts/drive_ui.py --out <scratch>\shots "click:View test output" wait:1 shot:review-output "sel:.modal-head button"
 python scripts/drive_ui.py --out <scratch>\shots click:Memory wait:1 shot:review-memory click:Architecture wait:1 shot:review-architecture click:All
 python scripts/drive_ui.py --out <scratch>\shots "click:Request changes" wait:1 shot:review-request click:Cancel
-python scripts/drive_ui.py --out <scratch>\shots "click:Approve proposed edits" wait:1 shot:review-approve "click:Commit edits" wait:4 shot:review-approved text
+python scripts/drive_ui.py --out <scratch>\shots "click:Approve proposed edits" wait:1 shot:review-approve "click:Commit edits" wait:4 shot:review-approved text "eval:JSON.stringify(JSON.parse(localStorage['hivemind.nav']).state.route)"
 ```
 
 What each must show:
@@ -1955,7 +2086,7 @@ What each must show:
 | `review-memory`, `review-architecture` | Only that section's rows on the left; the selected item's card on the right ("…architecture output is 2 commits behind its repository."). |
 | `review-request` | The dialog "Request changes" with the text box. |
 | `review-approve` | The dialog with the session title as the commit message. |
-| `review-approved` | A toast "Committed <7 hex> on hivemind/00000000". Tabs `All 3`, `Code 0`. The session is gone from the list. |
+| `review-approved` | A toast "Committed <7 hex> on hivemind/00000000". Tabs `All 3`, `Code 0`. The session is gone from the list and the first Memory item is selected. The last `eval` prints `{"page":"review"}`: the route no longer names the approved session (no other session waits). |
 
 Then check git, in a terminal:
 
@@ -1967,17 +2098,26 @@ git -C <scratch>\demo\repos\paystream status --porcelain            # empty: the
 git -C <scratch>\demo\repos\paystream log -1 --format=%s main       # "Log dropped events": main did not move
 ```
 
-Dismiss, the routed entry point and discard:
+An approved session that is edited afterwards comes back; then dismiss, the routed entry point and discard:
 
 ```powershell
-Set-Content "$wt\notes.txt" "scratch"     # a new edit made by hand; the page finds it when the session is opened from the chat
+Set-Content "$wt\notes.txt" "scratch"     # a new edit made by hand, outside any turn, in the approved session's worktree
+python scripts/drive_ui.py --out <scratch>\shots nav:Overview wait:3 shot:overview-rediscovered
+python scripts/drive_ui.py --out <scratch>\shots nav:Review wait:3 shot:review-rediscovered
+python scripts/drive_ui.py --out <scratch>\shots click:Dismiss wait:2 shot:review-dismissed "eval:JSON.stringify(JSON.parse(localStorage['hivemind.nav']).state.route)"
 python scripts/drive_ui.py --out <scratch>\shots "nav:Agent Workspace" wait:1 "click:Review changes" wait:2 shot:review-routed
-python scripts/drive_ui.py --out <scratch>\shots click:Dismiss wait:1 shot:review-dismissed
-python scripts/drive_ui.py --out <scratch>\shots "nav:Agent Workspace" wait:1 "click:Review changes" wait:2 "sel:.review-bar .menu-button" "click:Discard edits" wait:1 shot:review-discard "sel:.modal .danger" wait:3 shot:review-discarded
+python scripts/drive_ui.py --out <scratch>\shots "sel:.review-bar .menu-button" "click:Discard edits" wait:1 shot:review-discard "sel:.modal .danger" wait:3 shot:review-discarded "eval:JSON.stringify(JSON.parse(localStorage['hivemind.nav']).state.route)"
 git -C $wt log -1 --format=%s                                       # still the approval commit: a discard keeps approved work
 ```
 
-`review-routed`: the Review page with the session listed again, one file `notes.txt` marked `new`, "1 file proposed · Waiting for your review". `review-dismissed`: the toast, the session gone. `review-discard`: the confirmation, naming the approval commit's first 7 characters. `review-discarded`: the toast "Edits discarded"; `Test-Path "$wt\notes.txt"` is false.
+| Shot | Must show |
+| --- | --- |
+| `overview-rediscovered` | "Needs your review" has "1 proposed file change". Nothing opened the session: showing the Overview ran `review_refresh`, which found the new file in the approved session's worktree and made it pending again. |
+| `review-rediscovered` | The session is in the list again without having been opened from the chat: one file `notes.txt` marked `new`, "1 file proposed · Waiting for your review", `Base` showing the approval commit's first 7 characters. |
+| `review-dismissed` | The toast "Dismissed. The edits stay in the session's worktree."; the session is gone from the list; the `eval` prints `{"page":"review"}`. |
+| `review-routed` | Opened from the chat's "Review changes", the dismissed session is shown again: `notes.txt`, the bar says "1 file proposed · Dismissed" with Approve, Request changes and the menu, no Dismiss. |
+| `review-discard` | The confirmation, naming the approval commit's first 7 characters. |
+| `review-discarded` | The toast "Edits discarded"; the session is gone from the list; the `eval` prints `{"page":"review"}`; `Test-Path "$wt\notes.txt"` is false. |
 
 ### 11.3 Overview and Architecture (compare with `01_Project_Overview.png` and `07_Architecture_Diagram_Viewer.png`)
 
@@ -1996,19 +2136,23 @@ python scripts/drive_ui.py --out <scratch>\shots "eval:document.querySelector('.
 | `architecture-compare` | "Event store" tinted green, "Delivery" tinted yellow, a green arrow into the event store, and the legend "Compared with {three days ago}: Added 2, Changed 1". |
 | `architecture-inspector` | The inspector for the clicked box, with the banner under "Talks to". No "View evidence" (the demo model has none). |
 
-Evidence: add it to the demo model, then reload the Architecture page.
+Evidence: add it to the demo model, then **reload the app window**. A reload is needed, not a wait and not the palette's "Refresh": `refreshStore` in `src/lib/refresh.ts` leaves every query whose key starts with `architecture` alone (its `KEEP` list), and the architecture query has a `staleTime` of a minute, which only matters when a component mounts again or something invalidates it; a mounted query never refetches by itself. Reloading the window empties the query cache, so the model is read again from disk.
 
 ```powershell
 python -c "import json,sys; p=sys.argv[1]; m=json.load(open(p,encoding='utf-8')); m['evidence']=[{'id':'evidence-1','reference':'src/ingest/consumer.py','kind':'static-source','line':1,'excerpt':'def consume(event):','confidence':0.85}]; [e.update(evidence_ids=['evidence-1']) for e in m['elements'] if e['id']=='ingestion']; json.dump(m,open(p,'w',encoding='utf-8'),indent=2)" <scratch>\demo\architecture\paystream\architecture-model.json
-python scripts/drive_ui.py --out <scratch>\shots nav:Overview nav:Architecture wait:2 "eval:[...document.querySelectorAll('.canvas-node')].find(n=>n.textContent.includes('Ingestion')).click()" wait:1 "click:View evidence" wait:1 shot:architecture-evidence
+python scripts/drive_ui.py --out <scratch>\shots "eval:setTimeout(() => location.reload(), 100)" wait:8
+python scripts/drive_ui.py --out <scratch>\shots nav:Architecture wait:3 "eval:[...document.querySelectorAll('.canvas-node')].find(n=>n.textContent.includes('Ingestion')).click()" wait:1 "click:View evidence" wait:1 shot:architecture-evidence
 ```
 
-`architecture-evidence`: a dialog "Evidence for Ingestion" with `src/ingest/consumer.py:1`, the badge `static-source`, `85%` and the excerpt. (Rewriting the model file makes it newer than the two commits, so the banner is gone after this step; that is correct. The architecture query is cached for a minute: if the link does not appear, use the palette's "Refresh" or wait.)
+The reload is its own `drive_ui.py` run: the page it was talking to goes away, and the next run attaches to the reloaded one. The `setTimeout` lets the `eval` step return before the page unloads. After the reload the app connects to Living Memory again (the "Connecting…" screen for a moment) and comes back on the page it was on.
+
+`architecture-evidence`: a dialog "Evidence for Ingestion" with `src/ingest/consumer.py:1`, the badge `static-source`, `85%` and the excerpt. (Rewriting the model file makes it newer than the two commits, so the banner is gone after this step; that is correct.) If `click:View evidence` prints `no button View evidence`, the reload did not happen: check the first command's output and run it again; do not conclude the feature is broken from a stale cache.
 
 ### 11.4 The one paid check (a few cents; ask the user first if your session must not spend)
 
 This covers what the fixture cannot: a real turn, resume, a failing command, and a passport snapshot.
 
+0. Before any real CLI runs, prove it will use the demo store, not the real one. In the window that started the app, `echo $env:LIVING_MEMORY_ROOT` must print the demo store. Note the newest modification time under the user's real Living Memory store: `(Get-ChildItem <real store> -Recurse -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime`, and the time of `<scratch>\demo\store\hooks\last-delivery.json` if it exists. After step 1's session has run a turn, the first value must be unchanged and the demo store's `hooks\last-delivery.json` must be new. If the real store changed, stop, end the session, and report it: Phase 2's `LIVING_MEMORY_ROOT` hand-over to the CLI is not working.
 1. In the demo project start a work session from the Agent Workspace with the prompt: `Add a file hello.txt containing one line, then run the command: python -c "import sys; sys.exit(1)"`.
 2. When it is idle: Review lists `hello.txt`. Open the session's log (`…\agent-sessions\<id>.jsonl`) and find the `tool_result` of the failing command: note whether it has `"is_error":true` (UNVERIFIED-3). Validation shows nothing for it (it is not a test command); that is expected.
 3. Close the app and start it again (so the session's process is gone and the session is idle), then on Review send "Request changes" with `Rename the file to greeting.txt.` Pass: the session shows `Working…`, then lists `greeting.txt`, state "Waiting for your review" again (UNVERIFIED-2).
@@ -2036,12 +2180,17 @@ Report any worktree, branch, session or snapshot left behind by 11.4.
 ### 12.1 Checklist
 
 - [ ] Preflight P1 to P16 passed, or each deviation is written down.
-- [ ] The ten commands of section 4.2 exist, are registered, and take only names from the webview.
+- [ ] The eleven commands of section 4.2 exist, are registered, and take only names from the webview.
 - [ ] `SessionInfo` has `review` and `sourceSha`, and `Worktree` has `reviewedSha`, all with serde defaults; an index written before this phase loads (test).
 - [ ] One implementation lists a worktree's changes; `agent_files`, the `filesChanged` event and `review_files` agree, including untracked and binary files.
 - [ ] Approve commits on the session's branch only; the main checkout and its branch are untouched (test and section 11.2). No code path merges or pushes.
 - [ ] After an approval `reviewedSha` is the approval commit, `baseSha` is unchanged, the session has zero files, and a later turn with new edits is `pending` again.
 - [ ] Request changes sends the text through Phase 2's send and sets `changes_requested` only on success.
+- [ ] Approve, discard and request changes hold a `Reservation` for their whole duration; while one is held `agent_send`, `agent_end` and `agent_remove_worktree` answer `A review action is running for this session`; it is released on every path (tests).
+- [ ] Approve and discard run the write checks first and refuse, naming what they found, when the folder is not the session's own worktree on its own branch (tests).
+- [ ] A git command that times out has its whole process tree killed and returns within the timeout plus a few seconds, even when a hook is still running (test).
+- [ ] An approved session edited afterwards comes back to the Review page and the Overview without being opened from the chat (`review_refresh`; test and section 11.2).
+- [ ] After approve, dismiss and discard the route no longer names the decided session (section 11.2).
 - [ ] Discard is behind a confirmation, refused while the session works, confined to Hivemind's worktrees folder, and never undoes an approved commit (tests).
 - [ ] The Review page matches mock 10 apart from the listed differences; up and down move through the list.
 - [ ] The diff pane shows line numbers, diff colours from `--diff-add` and `--diff-del`, and syntax colours; the language data is not in the entry bundle (UNVERIFIED-1 checked).
@@ -2061,8 +2210,9 @@ Report any worktree, branch, session or snapshot left behind by 11.4.
 - What was verified in the running app and what was not. Say plainly whether section 11.4 (the paid check) was run.
 - The outcome of each UNVERIFIED block (1 language data, 2 resume on send, 3 `is_error` on a failed command, 4 the diff theme, 5 hooks without a console), and any fallback you took.
 - Anything in this document that turned out wrong, and what you did instead. In particular: the names of section 1.5 that differed.
-- Where this phase adds to the README's contracts, so the README can be brought in line: `Worktree` has a new field `reviewedSha`, and after an approval `filesChanged` and `review_discard` are measured against it, not against `baseSha` (README 7.1 and 7.3 say `baseSha`); `review_file` returns one more field (`tooLarge`); four commands beyond README 7.3 (`review_tool_output`, `system_staleness`, `system_snapshots`, `system_snapshot`).
-- What other phases can now use: `openReview(session?, file?)` in `src/store.ts`; `reviewBase(worktree)` in `src/lib/agent.ts`; `reviewLabel` and `filesWord` in `src/features/review/review.ts`; `Worktree::review_base()` in Rust. Phase 5's "Review diff" link is `openReview(sessionId)`. Tell the user that Phase 5's plan computes a terminal session's totals from `base_sha` by a placeholder name; it must use `worktree::changes(&tree)` (which follows the review base) and apply `review_after_turn`, or an approved terminal session will show its approved files again.
+- Where this phase adds to the README's contracts, so the README can be brought in line: `Worktree` has a new field `reviewedSha`, and after an approval `filesChanged` and `review_discard` are measured against it, not against `baseSha` (README 7.1 and 7.3 say `baseSha`); `review_file` returns one more field (`tooLarge`); five commands beyond README 7.3 (`review_refresh`, `review_tool_output`, `system_staleness`, `system_snapshots`, `system_snapshot`); `Manager::reserve` and the refusals of `send`, `end` and `remove_worktree` while a session is reserved (`end` is one more than the shared decision S3 lists, because ending a session can remove its worktree).
+- What other phases must honour: a reserved session. Phase 5 must refuse to start or attach a terminal for a session while `Manager::reserve` holds it, with `A review action is running for this session` (shared decision S3).
+- What other phases can now use: `Manager::reserve` and `Reservation` in `src-tauri/src/agent/mod.rs`; `openReview(session?, file?)` in `src/store.ts`; `reviewBase(worktree)` in `src/lib/agent.ts`; `reviewLabel` and `filesWord` in `src/features/review/review.ts`; `Worktree::review_base()` in Rust. Phase 5's "Review diff" link is `openReview(sessionId)`. Tell the user that Phase 5's plan computes a terminal session's totals from `base_sha` by a placeholder name; it must use `worktree::changes(&tree)` (which follows the review base) and apply `review_after_turn`, or an approved terminal session will show its approved files again.
 - Every side effect outside the repository: the fixture (added and removed), worktrees and branches made by section 11.4, commits made in the demo repository, files under `<app data>/architecture-snapshots`, the new npm package.
 
 ### 12.3 What to record in the project's memory

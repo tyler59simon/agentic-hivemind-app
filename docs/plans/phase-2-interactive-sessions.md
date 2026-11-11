@@ -73,7 +73,7 @@ Also check the tools: `claude --version` prints 2.1.322 or newer; `git --version
 
 ### 1.5 Prerequisite: the runner has never met the real CLI on this branch
 
-The agent runner in `src-tauri/src/agent/` is tested only with a fake adapter. It has not been run against a real Claude Code from inside the app on this branch; the user postponed that. Step 0 of the commit sequence (section 8) is therefore a short real unattended run from the app, and a real two-turn interactive run from a script in a scratch git repository. Do not build UI on top of the runner before step 0 passes. Step 0 also settles the four UNVERIFIED blocks about the CLI in this document.
+The agent runner in `src-tauri/src/agent/` is tested only with a fake adapter. It has not been run against a real Claude Code from inside the app on this branch; the user postponed that. Step 0 of the commit sequence (section 8) is therefore a short real unattended run from the app, and a real two-turn interactive run from a script in a scratch git repository. Do not build UI on top of the runner before step 0 passes. Step 0 also settles the five UNVERIFIED blocks about the CLI in this document (two in section 4.9, three in section 5.1), and it must not touch the user's real Living Memory store: before any real run, `LIVING_MEMORY_ROOT` is set to a demo store and the real store is checked for changes (section 8, step 0).
 
 ---
 
@@ -102,7 +102,8 @@ Choices this document makes where the README left them open (each with its reaso
 | `MAX_RUNNING` becomes 3 and counts processes that are working or can still take input. | Three working agents is as many as one person can supervise; an idle process holds memory, so it counts until it is closed. |
 | A session that needs a slot closes the longest-idle process (stdin close, clean exit). | Idle sessions can always be resumed with `--resume`, so nothing is lost. |
 | `work` sessions get no `--add-dir`. | An unasked edit must never land in the user's real checkout, and whether `acceptEdits` treats additional directories as editable was not verified. |
-| A shell command that names the Living Memory script and a plan, apply, undo or recover command is refused by Hivemind without asking. | Its hook auto-allows read and capture commands only; the governed commands must stay denied whatever the user clicks. |
+| A shell command that names the Living Memory script and a plan, apply, undo or recover command is refused twice over: by deny rules on the command line (`--disallowedTools`, from `governed_rules()`), and by Hivemind answering deny itself if such a request still arrives. | Its hook auto-allows read and capture commands only; the governed commands must stay denied whatever the user clicks, and whatever allow rules the user's own Claude Code settings hold (an allowed call never reaches Hivemind as a request). |
+| Every CLI Hivemind starts gets `LIVING_MEMORY_ROOT` set to the store the app is connected to (`Spec.memory_root`). | Living Memory's hooks pick their store from that variable; without it a session started while the app shows a throwaway store would write its hook state into the user's real store. |
 | "Always allow" sends only rule suggestions (rewritten to the session) or, when there are none, the `acceptEdits` mode suggestion. `addDirectories` suggestions are never sent. | Widening the folders a session may write to is not something one click on a command prompt should do. |
 | The briefing text is built in TypeScript and sent in the start options as `briefing`; the preview shows the exact text. | One implementation, and what the user previews is what the agent receives. It is prompt text, not a path or a rule. |
 | A worktree is removed automatically only when its session ends with no changes and no commits. Otherwise the user removes it. | Removing a worktree with uncommitted files destroys work. |
@@ -133,7 +134,7 @@ Cite by path and anchor; line numbers drift.
 | `agent/mod.rs` | `pub fn session(&self, id: &str, from_seq: u64)` | Rebuilds numbered events from the log. | Must use the same derivation as the live path (`events_of`). |
 | `agent/mod.rs` | `pub fn start_task(` | Resolves the scope from Living Memory, then `manager.start`. | Gains worktree creation and options; `send_task` is added beside it. |
 | `agent/mod.rs` | `mod tests`, `struct Fake`, `struct Rig` | A fake adapter that runs `cmd /C type` or `ping`. | Gains a scripted fake CLI (section 8, commit 4). |
-| `agent/claude.rs` | `fn command(&self, spec: &Spec)` | Builds the `dontAsk` / `none` command line. | Gains the host-prompt flags, `--resume`, `--model`. |
+| `agent/claude.rs` | `fn command(&self, spec: &Spec)` | Builds the `dontAsk` / `none` command line. | Gains the host-prompt flags, `--resume`, `--model`, `--disallowedTools`, and the `LIVING_MEMORY_ROOT` environment variable. |
 | `agent/claude.rs` | `fn failure(subtype: &str, result: Option<&str>)` | Words for a failed `result`. | Gains the `errors[0]` fallback. |
 | `agent/claude.rs` | `fn parse_line(&self, line: &str)` | `init`, `permission_denied`, `assistant`, `user` tool results. | Gains `control_request` and `control_cancel_request`. |
 | `agent/claude.rs` | `fn outcome(&self, line: &str)` | Reads a `result` line. | Gains `budget`. |
@@ -290,7 +291,8 @@ pub enum RunEvent {
         /// The tool's input, with every string cut to APPROVAL_INPUT characters.
         input: Value,
         can_always: bool,
-        /// What "always" would allow, in words ("Bash(mkdir build)", "all file edits in this session").
+        /// What "always" would allow, in words ("Bash(mkdir build)", "file edits and simple file commands in the
+        /// worktree").
         #[serde(default)]
         always_label: Option<String>,
     },
@@ -383,6 +385,11 @@ pub struct Spec {
     pub resume: bool,
     /// A model alias for `--model`, or None for the user's Claude Code default.
     pub model: Option<String>,
+    /// Rules the CLI must refuse whatever else allows them (`--disallowedTools`). Copied from the scope.
+    pub deny: Vec<String>,
+    /// The Living Memory store the app is connected to; the CLI's hooks must use the same one. None when the app
+    /// uses Living Memory's own default.
+    pub memory_root: Option<PathBuf>,
 }
 
 pub struct Scope {
@@ -395,8 +402,12 @@ pub struct Scope {
     pub required_plugin: Option<String>,
     pub mode: Mode,
     pub worktree: Option<crate::worktree::Worktree>,
+    /// Rules denied in every session: `governed_rules()`. Set for passport and work scopes alike.
+    pub deny: Vec<String>,
 }
 ```
+
+`Spec.memory_root` and `Spec.deny` apply to unattended sessions too (README 7.1). `memory_root` travels in `Launch` (below), not in `Scope`: it comes from the app's connection, not from the task.
 
 `worktree.rs` (new):
 
@@ -422,7 +433,8 @@ pub struct FileChange {
     pub status: String,
     pub added: u64,
     pub removed: u64,
-    /// Binary, or larger than MAX_COUNTED: no line counts and no patch.
+    /// Not read: binary, larger than MAX_COUNTED, or an untracked path that leads outside the worktree.
+    /// No line counts and no patch.
     #[serde(default)]
     pub binary: bool,
 }
@@ -525,7 +537,13 @@ pub struct SendOptions {
 }
 
 /// Everything needed to start a process for a session.
-pub struct Launch { pub scope: Scope, pub program: String, pub budget_usd: f64 }
+pub struct Launch {
+    pub scope: Scope,
+    pub program: String,
+    pub budget_usd: f64,
+    /// The store root the app's bridge is connected to (`bridge.launch().root`); becomes `Spec.memory_root`.
+    pub memory_root: Option<PathBuf>,
+}
 
 pub enum Stop { Cancelled, Failed(String), Ended }
 
@@ -542,9 +560,10 @@ struct Live {
     idle_since: u64,
 }
 
-/// Where a session's event numbering stands.
-#[derive(Clone, Copy, Default)]
-struct Tape { seq: u64, started: bool }
+/// Where a session's log stands: the next event number, whether `started` has been reported, and the list of the
+/// last `filesChanged` event (empty when there was none).
+#[derive(Clone, Default)]
+struct Tape { seq: u64, started: bool, files: Vec<FileChange> }
 
 struct Session {
     info: SessionInfo,
@@ -698,7 +717,7 @@ Numbering is the position in the concatenation of these lists. The replay rule f
 | `denied` for a governed Living Memory command | The same raw `control_request` line | `parse_line` applies the guard (a pure function of the command text) and gives `denied` instead of `approvalRequest`. |
 | `approvalResolved` with `allow`, `allow_always`, `deny` | `Record::Event`, written by `answer` | Stored. |
 | `approvalResolved` with `withdrawn` | Raw `control_cancel_request` line | Pure function of the line. |
-| `filesChanged` | `Record::Event`, written by the pump at the end of a turn | Stored; git state is not in the log. |
+| `filesChanged` | `Record::Event`, written by `Inner::sync_files` at the end of a turn and at every exit of an interactive session's process, and by `recover` | Stored; git state is not in the log. |
 | `turnFinished` | `Record::Event`, written by the pump at a `result` line, by the pump when a process dies mid-turn, and by `recover` | Stored. The raw `result` line itself gives no event, exactly as today. |
 | `finished` | `Record::Event`, once | Stored. |
 
@@ -706,7 +725,9 @@ Consequences to keep in mind:
 
 - Every append and its numbering happen in one place, `Inner::record`, under the sessions lock. No other code may call `store::append` for a session that can be live.
 - Changing what `parse_line` returns for a kind of line changes how old logs replay. The lines this phase teaches it (`control_request`, `control_cancel_request`) never occur in logs written before it, because those sessions ran with `--permission-prompts none`.
-- A resumed process needs the numbering to continue. `Tape { seq, started }` is counted from the log (the same fold as `session()`) the first time it is needed after a restart.
+- A resumed process needs the numbering to continue. `Tape { seq, started, files }` is counted from the log (the same fold as `session()`) the first time it is needed after a restart; `files` is the list of the last `filesChanged` event in it.
+- A `filesChanged` event is recorded whenever the worktree's complete list of changes (every path with its status and counts) differs from the list of the last one recorded. Comparing totals is not enough: one changed file replaced by another with the same counts must still produce a new card. `info.files_changed` keeps only the totals.
+- The worktree is compared not only at a `result` line but at every exit of an interactive session's process (cancel, a failure without a result, a crash, End) and at recovery after a restart, each time before the closing event. Files an agent wrote before it died are therefore always reported.
 
 ### 4.6 State machine of an interactive session
 
@@ -720,16 +741,16 @@ Unattended sessions keep today's lifecycle: `running`, then exactly one of `succ
 | `waiting` | `agent_answer` | `running` when `pending` is empty, else `waiting` | `approvalResolved` recorded; `control_response` written. |
 | `waiting` | `control_cancel_request` | `running` when `pending` is empty, else `waiting` | `approvalResolved` (`withdrawn`) emitted. |
 | `running`, `waiting` | `agent_interrupt` | unchanged | `interrupted = true`; interrupt line written; the CLI then prints a `result`. |
-| `running`, `waiting` | `result` line | `idle` | `filesChanged` when the totals changed; `turnFinished`; `turns += 1`; `pending` cleared; `interrupted` cleared; on a budget stop stdin is closed. |
-| `running`, `waiting` | Process exits without a `result`, after `started` | `idle` | `turnFinished` (`ok: false`, `outcome: error`, reason with exit code and stderr tail). |
-| any | Process exits and the session never reported `started`, no stop reason | `failed` | `finished` (`failed`, reason from stderr), as today. |
+| `running`, `waiting` | `result` line | `idle` | `filesChanged` when the list of changes differs from the last one recorded; `turnFinished`; `turns += 1`; `pending` cleared; `interrupted` cleared; on a budget stop stdin is closed. |
+| `running`, `waiting` | Process exits without a `result`, after `started` | `idle` | `filesChanged` when the list differs; `turnFinished` (`ok: false`, `outcome: error`, reason with exit code and stderr tail). |
+| any | Process exits and the session never reported `started`, no stop reason | `failed` | `filesChanged` when the list differs; `finished` (`failed`, reason from stderr), as today. |
 | `idle` | `agent_send`, process alive | `running` | `userMessage` recorded; line written. |
 | `idle` | `agent_send`, no process | `running` | Slot found (section 4.7); process spawned with `--resume`; `userMessage` recorded; line written. |
 | `idle` | Another session needs a slot and this is the longest idle | `idle` | Stdin closed; the process exits by itself. |
 | `idle` | Process exits | `idle` | Nothing recorded. |
-| `running`, `waiting`, `idle` | `agent_end` | `ended` | Interrupt when a turn runs; stdin closed; wait up to `END_WAIT`; kill what remains; `finished` (`ended`); a clean worktree is removed. |
-| `running`, `waiting`, `idle` with a process | `agent_cancel` | `cancelled` | `taskkill /T /F`; `finished` (`cancelled`). |
-| `running`, `waiting` | Hivemind exits | `idle` at next start | `recover` records `turnFinished` (`outcome: error`, reason `CLOSED`). |
+| `running`, `waiting`, `idle` | `agent_end` | `ended` | Interrupt when a turn runs; stdin closed; wait up to `END_WAIT`; kill what remains; `filesChanged` when the list differs; `finished` (`ended`); a clean worktree is removed. |
+| `running`, `waiting`, `idle` with a process | `agent_cancel` | `cancelled` | `taskkill /T /F`; `filesChanged` when the list differs; `finished` (`cancelled`). |
+| `running`, `waiting` | Hivemind exits | `idle` at next start | `recover` records `filesChanged` when the worktree's list differs from the last one in the log, then `turnFinished` (`outcome: error`, reason `CLOSED`). |
 | `ended`, `cancelled`, `failed` | any | unchanged | `agent_send` answers `This session has ended`. |
 
 `turnFinished.outcome` is chosen in this order: `completed` when the result is ok; `stopped` when `interrupted` is set; `budget` when the result says so; else `error`. `reason` is `None` for `completed` and `stopped`, and the words from `failure()` otherwise.
@@ -776,13 +797,18 @@ Built in `agent/scope.rs` from the registry. The webview sends a project slug, a
 What the session may do:
 
 - **Working directory:** the worktree. `add_dirs` is empty in Phase 2.
-- **Without asking:** reads inside the working directory (CLI behaviour, spike section B "Pre-allowed tools do not prompt"); Living Memory's read and capture commands, which its own PreToolUse hook allows (`ALLOWED_SUBCOMMANDS` in the installed `core/runtime.py`; it answers "allow" only for commands confined to the session's store and project). `allow` is an empty list for `work`.
-- **After asking:** everything else the CLI gates. In `accept_edits`, file edits in the working directory are not asked about.
-- **Never:** a `Bash` or `PowerShell` request whose command names the Living Memory script and one of its governed commands. `governed_memory_command` (section 6) decides; Hivemind answers deny and the user is not asked.
+- **Without asking:** reads inside the working directory (CLI behaviour, spike section B "Pre-allowed tools do not prompt"); Living Memory's read and capture commands, which its own PreToolUse hook allows (`ALLOWED_SUBCOMMANDS` in the installed `core/runtime.py`; it answers "allow" only for commands confined to the session's store and project); and whatever the user's own Claude Code settings already allow, because the session loads them and an allowed call never reaches Hivemind. `allow` is an empty list for `work`: Hivemind itself pre-allows nothing.
+- **After asking:** everything else the CLI gates. In `accept_edits`, file edits in the working directory are not asked about, and neither are some shell commands that only touch files there (the spike saw `mkdir` in the working folder run without a prompt under `acceptEdits`).
+- **Never:** a `Bash` or `PowerShell` call whose command names the Living Memory script and one of its governed commands. Two checks enforce it. First, `Scope.deny` holds `governed_rules()` and the adapter passes them with `--disallowedTools`; deny rules win over allow rules, so a broad allow rule in the user's settings cannot let such a call through. Second, if such a call still arrives as a permission request, `governed_memory_command` (section 6) recognises it, Hivemind answers deny and the user is not asked. Both apply to unattended passport sessions as well.
+- **Living Memory store:** every CLI is started with the environment variable `LIVING_MEMORY_ROOT` set to the store root the app's bridge is connected to (`Spec.memory_root`; unset when the app uses Living Memory's default). Living Memory's hooks, which run inside the CLI, choose their store from that variable (`resolve_root` in its `core/storage.py`). Without it a session started from an app that shows a throwaway store would keep its hook state, and its captures, in the user's real store.
 - The session loads the user's Claude Code settings, hooks, plugins and MCP servers, because `--setting-sources` is not passed. That is required: the Living Memory hook and the login live there.
 
+> UNVERIFIED: The rules from `governed_rules()` (a `*` in the middle of a `Bash(...)` or `PowerShell(...)` pattern, passed with `--disallowedTools`) match the governed commands and win over an allow rule that covers the same command. (`--disallowedTools` is in `claude --help` on 2.1.322: "Comma or space-separated list of tool names to deny (e.g. \"Bash(git *) Edit\")". The pattern form with a leading `*` is the one `passport_rules` already uses for `--allowedTools`; neither was exercised by the spike.)
+> First step: step 0, check E (section 8): a real session with an allow rule for every Living Memory command and the deny rules, asked to run a governed command. Pass: no `control_request`, the tool result is an error, the call is in `result.permission_denials`, and Living Memory's own answer is nowhere in the output. Fail: the command ran.
+> If it fails: pass the same rules as `--settings '{"permissions":{"deny":[...]}}'` (the spike verified `--settings` with an allow rule), build that JSON with `serde_json` in `fn command`, and run check E again. If neither form denies, stop and tell the user; do not ship sessions that rely on the host-side check alone.
+
 > UNVERIFIED: In a session started in a worktree outside the repository's own folder, with host prompts on, Living Memory's hook still pins the project's domain and still auto-allows its read and capture commands. (Living Memory finds a domain by path prefix, see `domain_prefixes` in its `core/common.py`, and a worktree under the app data folder is not under the bound folder.)
-> First step: step 0, check D (section 8). Pass: the `system/hook_response` line before the first turn contains `Living Memory session=` with the project's domain, and a search command runs with no `control_request`. Fail: no domain in the hook text, or a `control_request` arrives for the search.
+> First step: step 0, check D (section 8), run with `LIVING_MEMORY_ROOT` set to the demo store in a worktree of the demo repository (which that store binds to the domain `paystream`); never in a worktree of a repository bound in the user's real store. Pass: the `system/hook_response` line before the first turn contains `Living Memory session=` with the project's domain, and a search command runs with no `control_request`. Fail: no domain in the hook text, or a `control_request` arrives for the search.
 > If it fails: nothing changes in the design. The briefing already names the domain and the project in its capture line (section 7.2), and an un-allowed read or capture command arrives as a normal approval card. Tell the user in the final report that sessions in worktrees are not bound to the Living Memory domain.
 
 ### 4.10 Sequences
@@ -899,8 +925,10 @@ sequenceDiagram
 | Session list and details | `%APPDATA%\dev.hivemind.app\agent-sessions\index.json` | `Inner::persist` only. |
 | Transcript | `agent-sessions\<id>.jsonl` | `Inner::record` and `store::recover` only. |
 | The CLI's own conversation | Claude Code's own project folders | Claude Code. Hivemind never reads it. |
-| Worktrees | `%APPDATA%\dev.hivemind.app\worktrees\<repo name>-<hash>\<id8>` | `worktree::create` and `worktree::remove`; the agent edits files inside. |
+| Worktrees | `%APPDATA%\dev.hivemind.app\worktrees\<repo folder name, lowercase>-<hash>\<id8>` | `worktree::create` and `worktree::remove`; the agent edits files inside. |
+| Living Memory hook state of a session | The store the app is connected to (`LIVING_MEMORY_ROOT` on the CLI) | Living Memory's hooks inside the CLI. Never the user's default store unless the app itself uses it. |
 | Open permission requests, interrupt flag, stdin | Memory (`Live`) | Manager and pump under the sessions lock. |
+| The last recorded list of changed files | Memory (`Tape.files`), rebuilt from the log | `Inner::sync_files`. |
 | Session draft | Memory (`useSessionDraft`) | Entry-point buttons and the Start screen. |
 | Live transcript in the UI | Component state, rebuilt from `agent_session` plus `agent-event` | `events.ts` reducer. |
 
@@ -922,6 +950,11 @@ claude.exe -p --input-format stream-json --output-format stream-json --verbose
 ```
 
 Resume: the same flags with `--resume <session-id>` in place of `--session-id <uuid>`. Unattended (unchanged): `--permission-mode dontAsk --permission-prompts none`, one user line, stdin closed.
+
+Two additions that every Hivemind command line carries, interactive or unattended. Neither was exercised by the spike:
+
+- `--disallowedTools <rule>...` with the rules of `governed_rules()`. The flag is in `claude --help` on 2.1.322: "Comma or space-separated list of tool names to deny (e.g. \"Bash(git *) Edit\")". Deny rules take precedence over allow rules. Why it is needed (spike, B): a call that something already allows never reaches the host as a request. The exact pattern syntax is the UNVERIFIED block in section 4.9.
+- The environment variable `LIVING_MEMORY_ROOT=<store root>`. Verified in Living Memory's source (`resolve_root` in `core/storage.py`): its hooks, which the user's Claude Code loads in every session, choose their store from `LIVING_MEMORY_ROOT`, then `LIVING_MEMORY_HOME`, then the default. Hivemind's bridge passes `--root` to its own Living Memory process (anchor `command.arg("--root")` in `src-tauri/src/bridge.rs`), which does nothing for the hooks inside an agent CLI.
 
 `--permission-prompt-tool` is hidden from `--help`. The spike's table, verbatim:
 
@@ -1089,7 +1122,7 @@ pub fn remove(tree: &Worktree) -> Result<(), String>;
 
 Private helper: `fn git(dir: &Path) -> Command` returns `git` with `--no-optional-locks -c core.longpaths=true -c core.quotepath=false -C <dir>`. Run everything with `crate::git::run_with_timeout`.
 
-- **`folder_for`**: `worktrees/<name>-<hash>`. `name` is the repository's last path component with every character outside `[A-Za-z0-9._-]` replaced by `-`, cut to 40 characters. `hash` is 8 lowercase hex digits: 32-bit FNV-1a (offset `0x811c9dc5`, prime `0x01000193`) over the bytes of the normalised path (backslashes to `/`, trailing `/` removed, lowercase). Write the five-line FNV loop inline; do not add a crate.
+- **`folder_for`**: `worktrees/<name>-<hash>`. Both parts come from the normalised path: the repository path as a string with backslashes turned to `/`, trailing `/` removed, and lowercased (the same normalisation as `scope::same_path`). `name` is the last `/`-separated component of the normalised path, with every character outside `[a-z0-9._-]` replaced by `-`, cut to 40 characters. `hash` is 8 lowercase hex digits: 32-bit FNV-1a (offset `0x811c9dc5`, prime `0x01000193`) over the bytes of the normalised path. Two spellings of one repository (`C:\Work\Pay Stream`, `c:/work/pay stream/`) therefore give the same folder, `pay-stream-<hash>`. This is README 7.1's `<repo folder name>-<8 hex of a hash of the repo path>` with the folder name in lowercase. Write the five-line FNV loop inline; do not add a crate.
 - **`create`**:
   1. `repo` must be a folder, else `The repository folder does not exist: {path}`.
   2. `rev-parse --is-inside-work-tree` must succeed, else `Not a git repository: {path}`.
@@ -1098,9 +1131,16 @@ Private helper: `fn git(dir: &Path) -> Command` returns `git` with `--no-optiona
   5. `id8` is the first 8 characters of `session_id`. `path = folder_for(worktrees, repo).join(id8)`. Create the parent folder. If `path` exists: `Could not create the worktree: {path} already exists`.
   6. `worktree add -b hivemind/<id8> <path> <base sha>` with `CREATE_TIMEOUT`. On failure: `Could not create the worktree: {git message}`.
   7. Return `Worktree { repo: repo.display(), path: path.display(), branch: "hivemind/<id8>", base_branch, base_sha }`.
-- **`changes`**: in the worktree, run the numstat, name-status and untracked commands of section 5.2 with `base_sha`. Parse on `\0`. Tracked: status letter from name-status (`A`, `D`; anything else is `M`), counts from numstat, `binary` when numstat printed `-`. Untracked: status `A`, `removed` 0; read the file unless it is larger than `MAX_COUNTED`; `binary` when it is larger or has a NUL byte in its first 8,000 bytes; otherwise `added` is the number of `\n` plus one when the file is non-empty and does not end in `\n`. Sort by path.
+- **`changes`**: in the worktree, run the numstat, name-status and untracked commands of section 5.2 with `base_sha`. Parse on `\0`. Tracked: status letter from name-status (`A`, `D`; anything else is `M`), counts from numstat, `binary` when numstat printed `-`. Untracked: status `A`, `removed` 0, and the content is looked at only through `untracked(tree, path)` below. Sort by path.
+- **`untracked`** (private): `fn untracked(tree: &Worktree, path: &str) -> Option<Untracked>` with `enum Untracked { Link(String), Text(String), Unread }`. It is the only place that touches an untracked file's content, and it never follows a link out of the worktree:
+  1. `std::fs::symlink_metadata(worktree.join(path))` first; on an error return `None`.
+  2. A symbolic link (`file_type().is_symlink()`; whether the Rust standard library also reports a Windows junction this way was not checked for this document, and the design does not depend on it, because a junction that git walks as a folder is caught by step 4 and one that reaches here as a folder by step 3): return `Link(target)` where `target` is `std::fs::read_link(..)` printed with `display()`. The link is never opened and never dereferenced.
+  3. Anything that is not a regular file (`!file_type().is_file()`: a folder, a device, a socket): return `None`.
+  4. A regular file: `std::fs::canonicalize` it and the worktree folder; when the file's canonical path does not start with the worktree's canonical path (a parent folder of it is a link or junction that leads elsewhere), or either call fails, return `Unread`.
+  5. Larger than `MAX_COUNTED`, or a NUL byte in its first 8,000 bytes: `Unread`. Otherwise `Text(content)`, read as UTF-8 with `from_utf8_lossy`.
+- **`changes`, untracked entries**: `None` leaves the path out of the list. `Link(_)` gives `added: 1, binary: false`. `Text(content)` gives `added` = the number of `\n`, plus one when the content is non-empty and does not end in `\n`. `Unread` gives `added: 0, binary: true`.
 - **`totals`**: number of files, and the sums of `added` and `removed`.
-- **`patch`**: `("", false)` for a binary file. Otherwise run the one-file diff. If git prints nothing and the file exists in the worktree (it is untracked), build the patch from its text: the lines `diff --git a/<path> b/<path>`, `new file`, `--- /dev/null`, `+++ b/<path>`, `@@ -0,0 +1,<n> @@`, then every line with a `+` in front. Cut at `PATCH_LIMIT` characters and report whether it was cut.
+- **`patch`**: `("", false)` for a binary file. Otherwise run the one-file diff (git itself shows a tracked link as its target text and never follows it). If git prints nothing, the file is untracked: call `untracked` and build the patch from the lines `diff --git a/<path> b/<path>`, `new file`, `--- /dev/null`, `+++ b/<path>`, `@@ -0,0 +1,<n> @@`, then for `Text` every line with a `+` in front, and for `Link(target)` the single line `+<target>` (with `new file mode 120000` in place of `new file`). `Unread` and `None` give `("", false)`. Cut at `PATCH_LIMIT` characters and report whether it was cut.
 - **`changed_files`**: `changes`, then `patch` for the first `MAX_FILES`; `truncated` when there were more.
 - **`ahead`**: the `rev-list --count` command, run in `tree.repo`.
 - **`list`**: parse `worktree list --porcelain`; `branch` is the name after `refs/heads/`, `None` for a detached worktree.
@@ -1111,6 +1151,7 @@ Windows details:
 - Paths under the app data folder add about 85 characters; `core.longpaths=true` is passed on every call for that reason. The agent's own git calls do not have it; see section 9.
 - `worktree remove` fails while any process has the folder open or as its working directory. Hivemind only calls `remove` for a session with no process.
 - Ignored files (`node_modules`, `.env`) and submodule contents are not in a new worktree. The Start screen says so.
+- An agent can create a symbolic link or a junction inside its worktree that points anywhere on the disk. `git ls-files --others` then lists the link, or (for a junction, which git may walk as a folder) the files behind it. `untracked` is what keeps Hivemind from reading such a target: a link is reported by its target text only, and a file whose canonical path leaves the worktree is listed but never read.
 
 ### 6.2 Changed: `src-tauri/src/git.rs`
 
@@ -1129,12 +1170,12 @@ It runs the "is it a repository", "current branch" and "branch list" commands of
 
 ### 6.3 Changed: `src-tauri/src/agent/events.rs`
 
-Replace `Status`, `RunEvent` and `Outcome` with the versions in section 4.2 and add `Mode`, `Decision`, `TurnEnd`. Extend the test `events_serialise_in_the_contract_shape` (section 8, commit 1).
+Replace `Status`, `RunEvent` and `Outcome` with the versions in section 4.2 and add `Mode`, `Decision`, `TurnEnd`. Extend the test `events_serialise_in_the_contract_shape` (section 8, commit 2).
 
 ### 6.4 Changed: `src-tauri/src/agent/scope.rs`
 
-- Replace `AgentTask`, `Policy`, `Spec`, `Scope` with the versions in section 4.2; add `PolicyMode` and `impl Policy`.
-- In `fn system_passport(`: add `mode: Mode::Unattended, worktree: None` to the returned `Scope`. Nothing else changes for passports.
+- Replace `AgentTask`, `Policy`, `Spec`, `Scope` with the versions in section 4.2; add `PolicyMode` and `impl Policy`. `Policy` now has three variants, so the two irrefutable patterns `let Policy::PreApproved { allow } = …` (one in `fn command` in `claude.rs`, one in the test `passport_scope_comes_from_the_registry_entry`) stop compiling: use `policy.allow()` there.
+- In `fn system_passport(`: add `mode: Mode::Unattended, worktree: None, deny: governed_rules()` to the returned `Scope`. Nothing else changes for passports.
 - `pub fn for_task(`: add the arm `AgentTask::Work { .. } => Err("A work session is started with start_task".into())`. Work scopes need a worktree and are built by the functions below.
 - Add:
 
@@ -1151,15 +1192,24 @@ pub fn work(tree: Worktree, policy: PolicyMode, prompt: &str) -> Result<Scope, S
 /// The scope of a stored work session, checked against the registry again before a process is started for it.
 pub fn for_session(bridge: &Bridge, info: &SessionInfo) -> Result<Scope, String>;
 
+/// The Living Memory commands only the user may run, through Hivemind's reviewed dialogs.
+const GOVERNED_COMMANDS: [&str; 11] = ["apply", "undo", "recover", "plan", "merge-plan", "retag-plan", "taxonomy-plan",
+    "project-plan", "system-plan", "promote-plan", "change-plan"];
+
 /// A shell command that would change the Living Memory store through a plan. Its hook lets read and capture
 /// commands through before Hivemind is asked; these must never run from a session, whatever the user clicks.
 pub fn governed_memory_command(command: &str) -> bool;
+
+/// Deny rules for the same commands, for the CLI's own rule engine: they hold even where the user's settings
+/// allow the call, so it never becomes a question Hivemind could refuse.
+pub fn governed_rules() -> Vec<String>;
 ```
 
 - **`project_repo`**: find the entry's `repos` string for which `same_path` holds; else `That repository is not registered for this project`.
-- **`work`**: `policy` `Ask` gives `Policy::Ask { allow: vec![] }`, `AcceptEdits` gives `Policy::AcceptEdits { allow: vec![] }`, `PreApproved` gives the error `A work session needs the ask or accept_edits policy`. `title` is `clip(first non-empty line of prompt, TITLE)`. `cwd` is the worktree path; `add_dirs`, `plugin_dirs` empty; `schema`, `required_plugin` `None`; `mode: Mode::Interactive`; `worktree: Some(tree)`.
+- **`work`**: `policy` `Ask` gives `Policy::Ask { allow: vec![] }`, `AcceptEdits` gives `Policy::AcceptEdits { allow: vec![] }`, `PreApproved` gives the error `A work session needs the ask or accept_edits policy`. `title` is `clip(first non-empty line of prompt, TITLE)`. `cwd` is the worktree path; `add_dirs`, `plugin_dirs` empty; `schema`, `required_plugin` `None`; `mode: Mode::Interactive`; `worktree: Some(tree)`; `deny: governed_rules()`.
 - **`for_session`**: for `AgentTask::Work`: `project_entry`, `project_repo` (so a repository removed from the project stops the session), then `info.worktree` must be `Some` and its `path` a folder, else `This session's worktree no longer exists; end the session`. Build the scope with `work(tree, info.policy, &info.title)`. For a passport task: `Err("This session does not take messages")`.
-- **`governed_memory_command`**: lowercase the text; it must contain `living_memory`; split on every character that is not an ASCII letter, digit, `-` or `_`; return true when a word is `apply`, `undo`, `recover` or `plan`, or ends with `-plan` and is not `inspect-plan`.
+- **`governed_memory_command`**: lowercase the text; it must contain `living_memory`; split on every character that is not an ASCII letter, digit, `-` or `_`; return true when a word is in `GOVERNED_COMMANDS`, or ends with `-plan` and is not `inspect-plan` (so a plan command added to Living Memory later is refused before this list learns its name).
+- **`governed_rules`**: for each tool in `["Bash", "PowerShell"]` and each command in `GOVERNED_COMMANDS`, two rules: `{tool}(*living_memory.py* {command} *)` (the command followed by arguments) and `{tool}(*living_memory.py* {command})` (the command as the last word). 44 strings, in that nested order. Examples: `Bash(*living_memory.py* apply *)`, `PowerShell(*living_memory.py* project-plan)`. The first `*` covers the interpreter and the path in front of the script name; the second covers the closing quote of a quoted path and any options (`--domain x`, `--root y`) before the command. `inspect-plan` and every read or capture command match none of them. The pattern syntax is the UNVERIFIED block in section 4.9.
 
 ### 6.5 Changed: `src-tauri/src/agent/claude.rs`
 
@@ -1169,7 +1219,9 @@ Trait methods the adapter implements (the trait itself is in section 6.6):
   - `Policy::PreApproved`: `--permission-mode dontAsk --permission-prompts none` (unchanged).
   - `Policy::Ask`: `--permission-mode manual --permission-prompts host --permission-prompt-tool stdio`.
   - `Policy::AcceptEdits`: `--permission-mode acceptEdits --permission-prompts host --permission-prompt-tool stdio`.
-  - Then `--resume <id>` when `spec.resume`, else `--session-id <id>`; then `--max-budget-usd <n>`; then `--model <alias>` when set; then `--json-schema`, `--allowedTools` (from `policy.allow()`), `--add-dir`, `--plugin-dir` as today.
+  - Then `--resume <id>` when `spec.resume`, else `--session-id <id>`; then `--max-budget-usd <n>`; then `--model <alias>` when set; then `--json-schema` and `--allowedTools` (from `policy.allow()`) as today; then, when `spec.deny` is not empty, `--disallowedTools` followed by every rule as its own argument (`command.arg("--disallowedTools").args(&spec.deny)`, the same form as `--allowedTools`); then `--add-dir`, `--plugin-dir` as today.
+  - When `spec.memory_root` is `Some(root)`: `command.env("LIVING_MEMORY_ROOT", root)`. When it is `None` the variable is left as the app inherited it.
+  - Both hold for every policy, so unattended passport sessions get the deny rules and the variable too.
 - **`user_line`** (the renamed `first_message`): same body. Renamed because every message now uses it.
 - **`parse_line`**: two new arms, matched on `type`:
   - `control_request` whose `request.subtype` is `can_use_tool`: read `request_id`, `request.tool_name`, `request.input`, `request.description`. When the tool is `Bash` or `PowerShell` and `governed_memory_command(input.command)`: give `Denied { tool, summary: GOVERNED.into() }`. Otherwise give `ApprovalRequest { request_id, tool, summary: clip(description or input_summary(input), TOOL_SUMMARY), input: clip_strings(input, APPROVAL_INPUT), can_always, always_label }` from `always(request)`.
@@ -1190,9 +1242,9 @@ fn clip_strings(value: &Value, max: usize) -> Value;
 fn always(request: &Value) -> (Vec<Value>, Option<String>);
 ```
 
-- **`always`**: empty when `request.suppress_always_allow_rule` is `true`. Take `permission_suggestions`. Keep the entries with `"type":"addRules"` and `"behavior":"allow"`; if there are any, they are the updates and the label is their rules written `Tool(ruleContent)` (just `Tool` without content), joined by `, `. If there are none and an entry has `"type":"setMode"` and `"mode":"acceptEdits"`, that entry is the update and the label is `all file edits in this session`. In every kept entry set `"destination":"session"`. `addDirectories` entries are never kept.
+- **`always`**: empty when `request.suppress_always_allow_rule` is `true`. Take `permission_suggestions`. Keep the entries with `"type":"addRules"` and `"behavior":"allow"`; if there are any, they are the updates and the label is their rules written `Tool(ruleContent)` (just `Tool` without content), joined by `, `. If there are none and an entry has `"type":"setMode"` and `"mode":"acceptEdits"`, that entry is the update and the label is `file edits and simple file commands in the worktree` (the card's button adds "for the rest of this session"; that is what `acceptEdits` does; the spike saw it run `mkdir` in the working folder without a prompt). In every kept entry set `"destination":"session"`. `addDirectories` entries are never kept.
 - **`answer_line(request, decision)`**: parse the stored request line; `None` when it is not a `can_use_tool` request or the decision is `Withdrawn`. Inner object: `Allow` gives `{"behavior":"allow"}`; `AllowAlways` gives `{"behavior":"allow","updatedPermissions":[…always(request)…]}` (plain allow when the list is empty); `Deny` gives `{"behavior":"deny","message":DECLINED}`. Wrap in the envelope of section 5.1 with the request's `request_id`. Build with `json!` and `to_string`, never by formatting text.
-- **`refusal(line)`**: `Some(envelope with {"behavior":"deny","message":GOVERNED})` exactly when `parse_line` would give the governed `Denied` for this line; else `None`.
+- **`refusal(line)`**: `Some(envelope with {"behavior":"deny","message":GOVERNED})` exactly when `parse_line` would give the governed `Denied` for this line; else `None`. This is the second check: with the deny rules of `governed_rules()` on the command line the CLI refuses such a call itself and prints a `system/permission_denied` line (an ordinary `Denied` event), so a request should reach this function only when a rule failed to match.
 - **`interrupt_line()`**: `{"type":"control_request","request_id":"hivemind-<uuid v4>","request":{"subtype":"interrupt"}}`.
 - **`mode_line(mode)`**: the same envelope with `{"subtype":"set_permission_mode","mode":"default"}` for `Ask` and `"acceptEdits"` for `AcceptEdits`.
 - **`mode_of(line)`**: for a line with `"type":"system"`, `"subtype":"status"` and a string `permissionMode`: `Some(AcceptEdits)` for `acceptEdits`, `Some(Ask)` for `default`, else `None`.
@@ -1245,8 +1297,9 @@ pub fn send_task(manager: &Manager, bridge: &Bridge, saved: &Settings, id: &str,
   1. `program = claude::available(saved)?`, `id = Uuid::new_v4().to_string()`.
   2. Passport task: `scope::for_task(...)` as today; `options` are ignored.
   3. Work task: prompt must be non-blank (`Write a task for the session first`); `options.model` must be `None` or one of `sonnet`, `opus`, `haiku` (`Unknown model: {model}`); policy is `options.policy.unwrap_or(PolicyMode::Ask)`; `entry = git::project_entry(bridge, project)?`; `repo = scope::project_repo(&entry, repo)?`; `tree = worktree::create(worktrees, &repo, branch.as_deref(), &id)?`; `scope = scope::work(tree.clone(), policy, prompt)`.
-  4. `manager.start(id, task, Launch { scope, program, budget_usd: saved.agent_budget_usd() }, prompt, &options)`. When a work start fails after the worktree was created, call `worktree::remove(&tree)` and return the original error.
-- **`send_task`**: `manager.send(id, text, options, |info| Ok(Launch { scope: scope::for_session(bridge, info)?, program: claude::available(saved)?, budget_usd: saved.agent_budget_usd() }))`.
+  4. `manager.start(id, task, Launch { scope, program, budget_usd: saved.agent_budget_usd(), memory_root: bridge.launch().root }, prompt, &options)`. When a work start fails after the worktree was created, call `worktree::remove(&tree)` and return the original error.
+- **`send_task`**: `manager.send(id, text, options, |info| Ok(Launch { scope: scope::for_session(bridge, info)?, program: claude::available(saved)?, budget_usd: saved.agent_budget_usd(), memory_root: bridge.launch().root }))`.
+- **`memory_root`** is the same in both, and for passport and work tasks alike: `bridge.launch()` (anchor `pub fn launch(&self) -> Launch` in `bridge.rs`) returns the `settings::Launch` the bridge was started with, and its `root` is the store the bridge passes to Living Memory with `--root` (`HIVEMIND_LM_ROOT`, else the saved setting, else `None`). Note the two types named `Launch`: `settings::Launch` (how to start Living Memory) and `agent::Launch` (how to start an agent); refer to the first by its path in `agent/mod.rs`.
 
 **`Manager` methods.**
 
@@ -1282,10 +1335,10 @@ pub fn session(&self, id: &str, from_seq: u64) -> Result<SessionLog, String>;
 - **`interrupt`**: lock; when the session has a process and is `Running` or `Waiting`: set `interrupted`, take stdin, unlock, write `interrupt_line()`. Otherwise `Ok(())`.
 - **`end`**: unattended: `Only an interactive session can be ended; stop a background session instead`. Already in an end state: `Ok(())`.
   - With a process: lock; `stop.get_or_insert(Stop::Ended)`; note whether a turn runs; take stdin; unlock. Write the interrupt line when a turn runs (set `interrupted` first). Set the stdin slot to `None`. Poll every 50 ms until `live` is `None`, at most `END_WAIT`; then `kill` and wait for the pump the same way.
-  - Without a process: lock; `record` the `Finished` event built with `finished(Some(Stop::Ended), None, 0, None, "")` but with `cost_usd: info.cost_usd` and `turns: Some(info.turns)`; set `status: Ended`, `ended_at`; persist; unlock.
+  - Without a process: `sync_files(id)` first (the user or a tool may have changed the worktree since the last turn); then lock; `record` the `Finished` event built with `finished(Some(Stop::Ended), None, 0, None, "")` but with `cost_usd: info.cost_usd` and `turns: Some(info.turns)`; set `status: Ended`, `ended_at`; persist; unlock.
   - Last, for both: when the session has a worktree and `worktree::changes` is empty and `worktree::ahead` is 0, `worktree::remove` it and set `info.worktree = None`, `info.files_changed = None`. Persist and emit `SessionsChanged`.
 - **`set_policy`**: interactive only (`Only an interactive session has a permission mode`); `PreApproved` is `Unknown policy`; an ended session is `This session has ended`. Lock; set `info.policy`; persist; take stdin when there is a process; unlock; emit `SessionsChanged`; write `mode_line(mode)` (ignore a write error).
-- **`files`**: the session's worktree (`This session has no worktree`); `worktree::changed_files`; then store the totals in `info.files_changed` and emit `SessionsChanged` when they differ. The totals are `totals` of the full `worktree::changes` list, not of the returned list, which is cut at `MAX_FILES`: otherwise a large change set would be undercounted here and counted in full at the end of a turn.
+- **`files`**: the session's worktree (`This session has no worktree`); `worktree::changed_files`; then store the totals in `info.files_changed` and emit `SessionsChanged` when they differ. The totals are `totals` of the full `worktree::changes` list, not of the returned list, which is cut at `MAX_FILES`: otherwise a large change set would be undercounted here and counted in full at the end of a turn. `files` records no event and leaves `Tape.files` alone; the next `sync_files` still sees the difference and records it.
 - **`remove_worktree`**: needs a worktree; the session must be in an end state (`End the session before removing its worktree`); `worktree::remove`; set `info.worktree = None`, `info.files_changed = None`; persist; emit.
 - **`stop_all`**: section 4.7.
 - **`session`**: fold the records with `events_of` and one `started` flag, then number, filter and wrap as today.
@@ -1303,17 +1356,27 @@ fn free_slot(&self, sessions: &mut HashMap<String, Session>) -> Result<(), Strin
 /// Start the CLI for a session. Returns the live handle and the pipes the pump reads.
 fn spawn(&self, id: &str, launch: &Launch, resume: bool, model: Option<String>) -> Result<(Live, Option<ChildStdout>, JoinHandle<String>), String>;
 
+/// Compare the session's worktree with the list of the last `filesChanged` event and record a new one when they
+/// differ. Runs git with no lock held. Does nothing for a session without a worktree.
+fn sync_files(&self, id: &str);
+
 fn persist(&self, sessions: &mut HashMap<String, Session>) -> Result<(), String>;                   // unchanged
 fn update(&self, id: &str, change: impl FnOnce(&mut SessionInfo));                                  // unchanged
 fn pump(&self, id: &str, stdout: Option<ChildStdout>, stderr: JoinHandle<String>, child: &Mutex<Child>, required_plugin: Option<&str>);
 ```
 
 - **`record`**: `store::append`; `events_of` with the session's `tape.started`; for each event call the sink with `SeqEvent { seq: tape.seq, .. }` and add one to `tape.seq`. Return the events.
+- **`spawn`**: builds the `Spec` from the launch: `cwd`, `add_dirs`, `policy`, `plugin_dirs`, `schema` and `deny` from `launch.scope`; `program`, `budget_usd` and `memory_root` from `launch`; `session_id: id`, `resume`, `model`. Then `adapter.command(&spec)`, the three pipes and `CREATE_NO_WINDOW` as `start` does today.
+- **`sync_files`**:
+  1. Lock; clone `info.worktree`; unlock. Return when it is `None`.
+  2. `worktree::changes(&tree)` with no lock held. On an error return (the worktree may be gone).
+  3. Lock. Fill `tape` from the log when it is `None` (the fold of section 4.5; `files` is the list of the last `FilesChanged` event). When the new list is not equal to `tape.files` (`Vec<FileChange>` equality: same paths, statuses, counts and flags in the same order; both are sorted by path): `record` a `FilesChanged { files }`, set `tape.files`, and set `info.files_changed` to `Some(totals(&files))` when the list is not empty, else `None`. Persist. Unlock. The caller emits `SessionsChanged`.
+  - It is called at the end of every turn, at every exit of an interactive session's process, and by `end` for a session without a process. Totals are never what decides: replacing one changed file by another with the same counts changes the list and gives a new event.
 - **`pump`**, per stdout line:
   1. Lock; `record(Raw)`; for each event: `Started` updates `cli_version` and runs the plugin check (as today); `Denied` counts for the unattended total; `ApprovalRequest` puts the line in `pending` and sets `status: Waiting`; `ApprovalResolved` removes the id from `pending` and sets `status: Running` when it is empty and the status was `Waiting`. `mode_of(line)` sets `info.policy` on an interactive session. Persist when the status or policy changed. Unlock; emit `SessionsChanged` when something changed.
   2. `refusal(line)`: write it to stdin.
-  3. `outcome(line)`: keep it as `last` and update `cost_usd` (as today). For an interactive session this is the end of a turn: compute `worktree::changes` for the session's worktree with no lock held (ignore an error); lock; when `totals(files)` differs from `info.files_changed.unwrap_or_default()`, `record` a `FilesChanged` and store the totals; `record` a `TurnFinished` (section 4.6 for `outcome` and `reason`; `cost_usd`, `duration_ms`, `result`, `denials` from the `Outcome`); `turns += 1`; `status: Idle`; clear `pending` and `interrupted`; set `idle_since`; when the outcome is `Budget` set the stdin slot to `None`; persist; unlock; emit `SessionsChanged`.
-- **`pump`**, when stdout ends: wait for the exit code and stderr as today, then lock and take `live`.
+  3. `outcome(line)`: keep it as `last` and update `cost_usd` (as today). For an interactive session this is the end of a turn: `sync_files(id)`; then lock; `record` a `TurnFinished` (section 4.6 for `outcome` and `reason`; `cost_usd`, `duration_ms`, `result`, `denials` from the `Outcome`); `turns += 1`; `status: Idle`; clear `pending` and `interrupted`; set `idle_since`; when the outcome is `Budget` set the stdin slot to `None`; persist; unlock; emit `SessionsChanged`.
+- **`pump`**, when stdout ends: wait for the exit code and stderr as today. For an interactive session call `sync_files(id)` now, before any closing event: the process is gone, so the worktree is final for this run, and whatever the agent wrote before a cancel, a crash or a failure without a result is reported. Then lock and take `live`.
   - Unattended: today's code, unchanged.
   - Interactive with a stop reason: `record` the `Finished` from `finished(stop, None, 0, code, &stderr)` with `cost_usd: info.cost_usd` and `turns: Some(info.turns)`; set the status, `ended_at` and `error` from it.
   - Interactive, no stop reason, `tape.started` false: `record` the `Finished` from `finished(None, None, 0, code, &stderr)` (status `failed`, the "stopped without reporting a result" text).
@@ -1328,7 +1391,7 @@ To get the "stopped without reporting a result" text without a `Finished`, move 
 - **`prune`**: keep a session when `seen <= KEEP`, or its status is `Running` or `Waiting`, or `session.worktree.is_some()`.
 - **`recover`**: for a session whose status is `Running` or `Waiting`:
   - `mode == Unattended`: as today (failed, `CLOSED`, a `Finished` record).
-  - `mode == Interactive`: set `status: Idle`; append `Record::Event` with `TurnFinished { ok: false, reason: Some(CLOSED.into()), cost_usd: session.cost_usd, duration_ms: None, result: None, denials: 0, outcome: TurnEnd::Error }`. Do not set `ended_at` or `error`.
+  - `mode == Interactive`: first report what the dead process left behind. When the session has a worktree and `worktree::changes(&tree)` succeeds, compare the list with the `files` of the last `Record::Event` holding a `FilesChanged` in the session's log (`read_log`; an empty list when there is none). When they differ, append a `Record::Event` with `FilesChanged { files }` and set `files_changed` to `Some(totals)` for a non-empty list, else `None`. Then set `status: Idle` and append `Record::Event` with `TurnFinished { ok: false, reason: Some(CLOSED.into()), cost_usd: session.cost_usd, duration_ms: None, result: None, denials: 0, outcome: TurnEnd::Error }`. Do not set `ended_at` or `error`. This runs git once per session that was mid-turn when Hivemind stopped, at startup; a git failure is ignored and only the `TurnFinished` is written.
 
 ### 6.8 Changed: `src-tauri/src/lib.rs`
 
@@ -1401,8 +1464,10 @@ export function noteBlock(notes: { ref: string; title: string; type: string; bod
 export function sessionBriefing(input: BriefingInput): string;
 ```
 
-- `POLICIES`: `{ id: "ask", label: "Review edits", help: "Inspect proposed edits and approve commands when requested." }` (mock 02, verbatim) and `{ id: "accept_edits", label: "Accept edits", help: "File edits apply in the worktree without asking. Commands still ask first." }`.
-- `permissionLines`: `ask` gives `["File edits require review", "Commands ask first"]`; `accept_edits` gives `["File edits apply without asking", "Commands ask first"]`; `pre_approved` gives `["Unattended: pre-approved actions only"]`.
+- `POLICIES`: `{ id: "ask", label: "Review edits", help: "Inspect proposed edits and approve commands when requested." }` (mock 02, verbatim) and `{ id: "accept_edits", label: "Accept edits", help: "File edits apply in the worktree without asking, and so can simple file commands there, such as creating a folder. Other commands ask, unless something already allows them." }`. The first sentence stays as the mock has it; it is true as written ("when requested": a command your Claude Code settings already allow is never requested).
+- `permissionLines`: `ask` gives `["File edits require review", "Commands ask unless already allowed"]`; `accept_edits` gives `["File edits apply without asking", "Simple file commands in the worktree may run without asking", "Other commands ask unless already allowed"]`; `pre_approved` gives `["Unattended: pre-approved actions only"]`.
+- `ALLOWED_NOTE`: the constant string `“Already allowed” means a rule in your own Claude Code settings, or one you added with “Always allow”. Reading files in the worktree never asks.` It is shown under the permission lines wherever they appear (the Start screen's Permissions section and the chat rail).
+- Why these words: the spike showed that a pre-allowed call never prompts (section 5.1, B) and that `acceptEdits` ran `mkdir` in the working folder without a prompt. The UI must not promise a question the CLI will not ask.
 - `draftCounts(3, 1)` gives `"3 memory notes · 1 diagram · 1 repository"`; singular forms `1 memory note`; `0 diagrams`.
 - `sessionForNote`: the newest session with `mode === "interactive"`, `project === project`, not ended, and `context.includes(ref)`.
 - `waitingForReview`: `(s.filesChanged?.files ?? 0) > 0 && s.status !== "running" && s.status !== "waiting"` (README 7.3; `review` does not exist yet).
@@ -1413,7 +1478,7 @@ export function sessionBriefing(input: BriefingInput): string;
 
 **Other changed files** (section 7.5 for the exact controls): `src/shell/Topbar.tsx`, `src/shell/Sidebar.tsx`, `src/features/palette/Palette.tsx`, `src/features/projects/OverviewPage.tsx`, `src/features/editor/NoteTab.tsx`, `src/features/library/MemoryPage.tsx`, `src/features/systems/ArchitecturePage.tsx`, `src/features/settings/SettingsForm.tsx`, `src/App.css`.
 
-`SettingsForm.tsx`, text only: the label `Spend cap per session (USD)` becomes `Spend cap per agent run (USD)`, and the paragraph under it becomes: "Hivemind starts Claude Code for you. A background task, such as generating a system's architecture, may only read the system's repositories, run Architecture Suite and write to the system's architecture folder. An interactive session works in its own git worktree and asks before it edits files or runs commands. The cap applies to each run of the agent; continuing a session after the cap starts a new run."
+`SettingsForm.tsx`, text only: the label `Spend cap per session (USD)` becomes `Spend cap per agent run (USD)`, and the paragraph under it becomes: "Hivemind starts Claude Code for you. A background task, such as generating a system's architecture, may only read the system's repositories, run Architecture Suite and write to the system's architecture folder. An interactive session works in its own git worktree. It asks before it edits files or runs commands, except where you chose “Accept edits” or your own Claude Code settings already allow the action. The cap applies to each run of the agent; continuing a session after the cap starts a new run."
 
 No file is deleted.
 
@@ -1457,7 +1522,7 @@ The mock's subtitle is "Choose an engine, scope the workspace, and inspect the c
 | Start branch | `<label className="field"><span>Start branch</span><select aria-label="Start branch">` | options: branch names | From `repoBranches(project.slug, repo)`. Default: `current`, else the first. |
 | Workspace helper | `<p className="muted small">` | `The session works in a new git worktree on its own branch. Uncommitted changes, ignored files and submodules of your checkout are not in it.` | |
 | Permissions | `<select aria-label="Permissions">` | `Review edits`, `Accept edits` | Default `ask`. |
-| Permissions helper | `<p className="muted small">` | the `help` of the picked policy | |
+| Permissions helper | `<p className="muted small">`, twice | the `help` of the picked policy; then `ALLOWED_NOTE` | |
 | Tools, MCP & hooks | `<details className="start-more"><summary>` | see below | Read-only. |
 | Environment & session options | `<details className="start-more"><summary>` | see below | |
 | Start session | `<button className="primary big">` with `Play` icon | `Start session`, `Starting…` while the call runs | Calls `agentStart`. |
@@ -1465,9 +1530,10 @@ The mock's subtitle is "Choose an engine, scope the workspace, and inspect the c
 
 Contents of "Tools, MCP & hooks" (a `<ul>`; static text that describes what Rust enforces, section 4.9):
 
-- `Without asking: reading files in the worktree, and Living Memory's search, read and capture commands (allowed by its own hook).`
-- `Asks you first: shell commands, anything outside the worktree, and file edits unless Permissions is “Accept edits”.`
-- `Never: Living Memory plan, apply and undo commands.`
+- `Without asking: reading files in the worktree; Living Memory's search, read and capture commands (allowed by its own hook); and anything your own Claude Code settings already allow.`
+- `With “Accept edits”, also without asking: file edits in the worktree and simple file commands there, such as creating a folder.`
+- `Asks you first: everything else, such as other shell commands, reading or writing outside the worktree, and file edits under “Review edits”.`
+- `Never: Living Memory plan, apply and undo commands, even if a setting allows them.`
 - `Loaded from your Claude Code setup: settings, hooks, plugins and MCP servers. The first line of the session lists the plugins that loaded.`
 
 Contents of "Environment & session options":
@@ -1543,7 +1609,7 @@ Output, block by block (a block with nothing to say is left out):
 - Repository: {repo}
 - You are in a git worktree of it, on a new branch created from `{branch}`. Stay inside this folder.
 - Do not push, merge, switch branches or delete the worktree.
-- {"File edits and commands wait for the user's approval." | "File edits apply at once; commands wait for the user's approval."}
+- {"File edits wait for the user's approval, and so do commands that nothing has allowed yet. A wait can be long; do not work around it." | "File edits apply at once, and so can simple file commands in this folder. Other commands wait for the user's approval unless something already allows them."}
 
 ## Included memory
 ### {title} ({type}, {ref})
@@ -1677,11 +1743,11 @@ Phase 4 replaces the `onReview` handler with a jump to the Review page and delet
 | Section | Rows |
 | --- | --- |
 | `Session context` | `Row` icon `Layers`, label `Project`, meta the project name, `onClick` `openProject(slug)`. `Row` icon `CodeXml`, label `Repo`, meta `repoName(task.repo)` with the full path as `title`. `Row` icon `Link`, label `{n} linked note{s}`, `onClick` toggles a `ul.card-list.compact` of the notes under it (each a `NoteLink`-style button that opens the note); the row is left out when `context` is empty. `Row` icon `Network`, label `1 architecture view`, `onClick` `openSystem(info.system)`; left out without `info.system`. `Row` label `Started`, meta the date. `Row` label `Duration`, meta `{elapsed} · {cost}`. |
-| `Permissions` | One `Row` with a `ShieldCheck` icon per line of `permissionLines(info.policy)`, then `Row` `Living Memory plans are never applied`. |
+| `Permissions` | One `Row` with a `ShieldCheck` icon per line of `permissionLines(info.policy)`, then `Row` `Living Memory plans are never applied`, then `<p className="muted small">{ALLOWED_NOTE}</p>`. |
 | `Changes` | With `info.filesChanged?.files`: `Row` icon `FileText`, label `{n} file{s} awaiting review`, `onClick` opens the changes modal. Otherwise `<p className="muted small">No file changes yet.</p>`. |
 | actions (`div.rail-actions`) | Not ended: `<button className="danger-text">End session</button>`. It asks first only while a turn runs: `<Confirm title="End this session?" danger action="End session" message="The agent is still working. Ending stops it; the files it has changed stay in the worktree.">`. Ended with a worktree: `<button className="outline">Remove worktree</button>` behind `<Confirm title="Remove the worktree?" danger action="Remove" message={…}>` with the message `The folder is deleted{, with {n} uncommitted file change(s)}. Commits on {branch} are kept.` Ended: `Copy resume command` (existing button). |
 
-The mock's rail says "3 linked decisions", "File edits require review" and "Network requests ask first". Phase 2 says "linked notes" (any note type can be attached) and "Commands ask first" (what the spike verified is that shell commands prompt).
+The mock's rail says "3 linked decisions", "File edits require review" and "Network requests ask first". Phase 2 says "linked notes" (any note type can be attached) and "Commands ask unless already allowed" (the spike verified that a shell command prompts when nothing allows it, that a pre-allowed call never prompts, and that `acceptEdits` runs some file commands in the working folder without a prompt; the rail says no more than that).
 
 `Session` keeps loading the log with `agentSession(id, 0)` and listening to `agent-event`; that logic does not change. Replace the non-compiling `info.task.slug` access by narrowing once: `const passport = info.task.kind === "system_passport" ? info.task : null;`.
 
@@ -1801,11 +1867,35 @@ No new colour token is needed: every colour above is an existing token, or `#b99
 
 Each commit builds and passes `npm test`, `npx tsc --noEmit`, `npm run build`, and in `src-tauri` `cargo test` and `cargo clippy`. Do not run `cargo fmt`.
 
+The order is chosen so that no commit refers to something a later commit creates: the worktree module first (it needs nothing from the agent code), then the types that name its structs, then the adapter, then the manager together with its only caller in `lib.rs`. Two rules keep each commit green on its own:
+
+- A function or trait method added in commits 1 to 3 may have no caller until commit 4, and `cargo clippy` then reports `dead_code`. Put `#[allow(dead_code)] // used from commit 4` on exactly those items, and remove every one of them in commit 4. After commit 4, `git grep -n "allow(dead_code)" -- src-tauri/src` must print nothing that this phase added.
+- When a commit changes a signature, the same commit changes every caller. The places where this bites are named in the commits below.
+
 ### Step 0: prove the runner against the real CLI (one docs commit)
 
 Nothing below may start before this passes. It spends a few cents of the user's Claude plan.
 
-**0a. The unattended run, from the app.** Build a demo store and start the app as in section 11. Set the spend cap to `0.5` in Settings. Open Architecture, pick PayStream, click "Generate with agent".
+**Before any real run: point the CLI's Living Memory hooks at the demo store.** The user's Claude Code loads Living Memory's hooks in every session, and those hooks choose their store from the environment variable `LIVING_MEMORY_ROOT`. Today's code does not set it for the processes it starts (this phase adds that, section 4.9; it takes effect with commit 4), so in step 0 the variable must come from the shell. Keep setting it in the shell for every later real run as well: it costs nothing and covers a mistake in the new code.
+
+1. Build the demo store (`python scripts/seed_demo_store.py --out <scratch>\demo`, section 11.2).
+2. In the shell command that runs the step 0 script, and in the one that starts the dev app: `$env:LIVING_MEMORY_ROOT = "<scratch>\demo\store"` (as well as `HIVEMIND_LM_ROOT`, README section 6). Child processes inherit it. If your shell tool does not keep variables from one command to the next, the assignment must be in the same command as the program it is meant for; the wrapper below and the block in section 11.2 are written that way.
+3. Find the real store: `<real store>` is the folder Living Memory uses without that variable (the `root` in `%USERPROFILE%\.config\agentic-living-memory\config.json`; commonly `%USERPROFILE%\LivingMemory`). Do not run Living Memory against it.
+4. Take the "untouched" reading around each real run, and take both readings inside ONE shell command. Your own Claude Code session also runs Living Memory hooks between your commands, and they write to the real store, so a before and an after taken in separate commands prove nothing.
+
+```powershell
+$env:LIVING_MEMORY_ROOT = "<scratch>\demo\store"
+$newest = { param($root) Get-ChildItem $root -Recurse -File -Force | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1 FullName, LastWriteTimeUtc }
+$realBefore = & $newest "<real store>"; $demoBefore = & $newest "<scratch>\demo\store"
+python <scratch>\step0\step0.py <scratch>\step0\repo <scratch>\step0\wt <path>\living_memory.py   # the real run (0b); for 0a put the drive_ui.py call that clicks "Generate with agent", waits and stops here instead
+$realAfter = & $newest "<real store>"; $demoAfter = & $newest "<scratch>\demo\store"
+"real store untouched: " + ($realBefore.FullName -eq $realAfter.FullName -and $realBefore.LastWriteTimeUtc -eq $realAfter.LastWriteTimeUtc)
+"demo store written:   " + ($demoAfter.LastWriteTimeUtc -gt $demoBefore.LastWriteTimeUtc)
+```
+
+Pass: `real store untouched: True` and `demo store written: True`. If the real store changed, stop: find out which file changed and why before running anything else, and tell the user. If the demo store did not change, the hooks are not using the variable (or are not installed); say so in the final report and treat the UNVERIFIED block in section 4.9 about the hook in a worktree as failed.
+
+**0a. The unattended run, from the app.** Start the app as in section 11 (the demo store, with `LIVING_MEMORY_ROOT` set). Set the spend cap to `0.5` in Settings. Open Architecture, pick PayStream, click "Generate with agent".
 
 | Check | Pass |
 | --- | --- |
@@ -1813,20 +1903,24 @@ Nothing below may start before this passes. It spends a few cents of the user's 
 | The first transcript line names Claude Code's version and the `architecture-suite` plugin. | Yes. If the scope check fails first (no Architecture Suite runtime, no plugin), write down the exact message, tell the user, and go on to 0b; that failure is in today's code, not this phase's. |
 | Tool rows stream in while it works. | Yes. |
 | "Stop session" after about a minute ends it as `Cancelled`. | Yes, within ten seconds. |
+| The one-command wrapper above, around the `drive_ui.py` call that starts and stops this run. | `real store untouched: True`, `demo store written: True`. |
 | `Get-Process claude, bash -ErrorAction SilentlyContinue` right after. | No process started by the app is left. |
 | Restart the app. | The session is still listed with the same transcript. |
 
-**0b. The interactive run, from a script.** Create `<scratch>\step0\repo` (`git init -b main`, one commit with a README). Save the script below as `<scratch>\step0\step0.py` and run `python step0.py <scratch>\step0\repo`. The script was written for this document and has not been run; fix small mistakes in it rather than skipping the step. It never sends `initialize`, so no line it reads carries account data; still, do not paste its raw output into the repository.
+**0b. The interactive run, from a script.** Create `<scratch>\step0\repo` (`git init -b main`, one commit with a README). Save the script below as `<scratch>\step0\step0.py` and run it as shown after the script, inside the one-command wrapper above. The script refuses to start without `LIVING_MEMORY_ROOT`. The script was written for this document and has not been run; fix small mistakes in it rather than skipping the step. It never sends `initialize`, so no line it reads carries account data; still, do not paste its raw output into the repository.
 
 ```python
-import json, os, queue, subprocess, sys, threading, time, uuid
+import json, os, queue, re, subprocess, sys, threading, time, uuid
 
 CLAUDE = os.path.expandvars(r"%USERPROFILE%\.local\bin\claude.exe")
 FIXED = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
          "--permission-prompts", "host", "--permission-prompt-tool", "stdio", "--max-budget-usd", "0.50", "--model", "haiku"]
 
-def start(cwd, session, resume=False, mode="manual"):
-    args = [CLAUDE, *FIXED, "--permission-mode", mode, "--resume" if resume else "--session-id", session]
+if not os.environ.get("LIVING_MEMORY_ROOT"):
+    sys.exit("Set LIVING_MEMORY_ROOT to the demo store first; this script must not touch the real store.")
+
+def start(cwd, session, resume=False, mode="manual", extra=()):
+    args = [CLAUDE, *FIXED, "--permission-mode", mode, "--resume" if resume else "--session-id", session, *extra]
     proc = subprocess.Popen(args, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, creationflags=0x08000000)
     lines = queue.Queue()
     def pump():
@@ -1845,14 +1939,18 @@ def user(proc, text):
 def allow(proc, line):
     send(proc, {"type": "control_response", "response": {"subtype": "success", "request_id": line["request_id"], "response": {"behavior": "allow"}}})
 
+TOOL_TEXT = ""   # everything tool results said, for check E
+
 def turn(proc, lines):
     """Read to the end of the turn, allowing every prompt. Returns (line kinds, prompted tools, hook text seen, result)."""
+    global TOOL_TEXT
     kinds, prompts, hooks = [], [], ""
     while True:
         line = lines.get(timeout=240)
         if line is None: return kinds, prompts, hooks, None
         kinds.append(line.get("type", "?") + ("/" + line["subtype"] if "subtype" in line else ""))
         if kinds[-1] == "system/hook_response": hooks += json.dumps(line)
+        if line.get("type") == "user": TOOL_TEXT += json.dumps(line)
         if line.get("type") == "control_request" and line["request"].get("subtype") == "can_use_tool":
             prompts.append(line["request"]["tool_name"]); allow(proc, line)
         if line.get("type") == "result": return kinds, prompts, hooks, line
@@ -1890,7 +1988,31 @@ user(proc, "Create a file named beta.txt containing the word beta. Then run the 
 _, p, _, r = turn(proc, lines)
 print("C prompts under acceptEdits:", p, "| result:", r["subtype"])
 proc.stdin.close(); proc.wait(timeout=30)
+
+# D: Living Memory in a worktree that lies outside the bound repository folder (pass the worktree as argument 2)
+if len(sys.argv) > 2:
+    proc, lines = start(sys.argv[2], str(uuid.uuid4()))
+    user(proc, "Search Living Memory for the word \"retry\" with its script and reply with the number of results.")
+    _, p, h, r = turn(proc, lines)
+    print("D hook names a session:", "Living Memory session=" in h, "| domain paystream in the hook text:", "paystream" in h, "| prompts:", p)
+    proc.stdin.close(); proc.wait(timeout=30)
+
+# E: deny rules beat an allow rule (pass the Living Memory script as argument 3)
+if len(sys.argv) > 3:
+    script = sys.argv[3]; root = os.environ["LIVING_MEMORY_ROOT"]
+    allow_all = json.dumps({"permissions": {"allow": ["Bash(*living_memory.py*)", "PowerShell(*living_memory.py*)"]}})
+    deny = [f"{tool}(*living_memory.py* undo{tail})" for tool in ("Bash", "PowerShell") for tail in (" *", "")]
+    TOOL_TEXT = ""
+    proc, lines = start(repo, str(uuid.uuid4()), extra=["--settings", allow_all, "--disallowedTools", *deny])
+    user(proc, f"Run exactly this shell command once and report what happened: python \"{script}\" --root \"{root}\" undo 00000000000000000000000000000000")
+    _, p, _, r = turn(proc, lines)
+    print("E prompts:", p, "| denials in the result:", len(r.get("permission_denials", [])), "| Living Memory answered:", bool(re.search(r'\\*"ok\\*"\s*:', TOOL_TEXT)))   # its replies are JSON objects with an "ok" key
+    proc.stdin.close(); proc.wait(timeout=30)
 ```
+
+Run it as `python step0.py <scratch>\step0\repo <scratch>\step0\wt <path>\living_memory.py`, inside the one-command wrapper above. Before that, create the worktree for check D from the demo repository, which the demo store binds to the domain `paystream`: `git -C <scratch>\demo\repos\paystream worktree add -b step0/lm <scratch>\step0\wt HEAD`. Afterwards remove it: `git -C <scratch>\demo\repos\paystream worktree remove --force <scratch>\step0\wt` and `git -C <scratch>\demo\repos\paystream branch -D step0/lm`.
+
+The command in check E is harmless even if the deny rule fails: it asks the demo store to undo an operation that does not exist, which Living Memory refuses.
 
 | Check | Pass | If it fails |
 | --- | --- | --- |
@@ -1901,14 +2023,45 @@ proc.stdin.close(); proc.wait(timeout=30)
 | B: resume after a kill | `success 'resumed'` | Apply the fallback of the second UNVERIFIED block in section 5.1. |
 | C: prompts under acceptEdits | No `Write` or `Edit`; `Bash` or `PowerShell` present. | Apply the fallback of the first UNVERIFIED block in section 5.1. |
 | `claude --help`, the `--model` line | Names `opus` as an alias. | Remove the Opus option (third block in section 5.1). |
+| `claude --help`, the `--disallowedTools` line | Present. | Go straight to the fallback of the deny-rule block in section 4.9. |
+| D: Living Memory in a worktree (the UNVERIFIED block in section 4.9 about the hook in a worktree) | `True`, `True`, and an empty prompt list: the hook pinned a session for the domain `paystream` of the demo store, and the search ran without a request. | Nothing changes in the design (see that block); report it. |
+| E: deny rules (the UNVERIFIED block in section 4.9 about `governed_rules()`) | No prompt, at least one denial in the result, and `Living Memory answered: False`. | Apply that block's fallback (`--settings` with `permissions.deny`), change the script's `extra` the same way, and run E again. |
+| The one-command wrapper | `real store untouched: True`, `demo store written: True`. | See the paragraph above the wrapper. |
 
-**Check D, Living Memory in a worktree** (the UNVERIFIED block in section 4.9). It needs a repository that the user's Living Memory store is bound to; this repository is one if the session that implements the phase has Living Memory. Create a throwaway worktree of it outside its folder: `git worktree add -b step0/lm <scratch>\step0\wt HEAD`. Run check A's first turn there with the prompt `Search Living Memory for the word "worktree" with its script and reply with the number of results.` Print the hook text test and the prompt list. Pass: `Living Memory session=` is in the hook text and the prompt list is empty. Then remove it: `git worktree remove --force <scratch>\step0\wt` and `git branch -D step0/lm`. If this repository is not bound, skip D and say so in the final report.
+Check D uses the demo store and the demo repository on purpose. A worktree of a repository bound in the user's real store would make the hooks read and write that store, which this step must never do.
 
 Record what happened in a new section "Step 0 results (Phase 2)" at the end of `docs/plans/spikes/claude-headless.md`: the CLI version, each check with pass or fail, and any fallback taken. Commit: `docs: step 0 results for interactive sessions`.
 
-### Commit 1: `feat(agent): work task, policy modes and the interactive session fields`
+### Commit 1: `feat(worktree): create, diff, list and remove session worktrees`
 
-Contains: sections 6.3, 6.4 (types, `same_path`, `project_repo`, `governed_memory_command`; `work` and `for_session` need commit 2 and come there), 6.7, the `SessionInfo` fields, `git::project_entry`; the TypeScript types of section 4.3 without the new invokes; the one-line narrowing fix in `AgentWorkspace.tsx`. Every existing constructor of `SessionInfo`, `Scope`, `Spec` and `Outcome` in code and tests gets the new fields.
+Contains: section 6.1 (the whole of `worktree.rs`, including its types `Worktree`, `FileChange`, `Totals`, `FileDiff`, `ChangedFiles`, `Listed`), `mod worktree;` in `lib.rs` (the first bullet of section 6.8; the rest of 6.8 is commit 4), and section 6.2 (`git::project_entry`, `git::branches`). Nothing in `agent/` changes, so nothing here refers to a type that does not exist yet. Nothing calls the new functions yet: use the `dead_code` rule at the top of this section.
+
+Tests in `worktree.rs` use a real git repository in the temp folder and return early when git is missing, like `live_repo_gives_commits` in `git.rs`. Helper: a repository with user name, e-mail and `commit.gpgsign false` set, one commit with `a.txt` ("one\ntwo\n") and `b.txt`, and a branch `feature/x`.
+
+| Test | Asserts |
+| --- | --- |
+| `folder_names_are_stable_and_safe` | `folder_for(root, "C:\\Work\\Pay Stream")` and `folder_for(root, "c:/work/pay stream/")` are equal, as whole paths; the last component is `pay-stream-` plus 8 lowercase hex digits (the name comes from the normalised, lowercased path, like the hash); `folder_for(root, "C:/Work/Other")` ends in `other-` plus a different hash; a name of 60 characters is cut to 40 before the hyphen. |
+| `creates_a_worktree_on_its_own_branch` | `create(.., Some("feature/x"), id)` returns `branch == "hivemind/<id8>"`, `base_branch == "feature/x"`, `base_sha` equal to `rev-parse feature/x`; the folder exists and holds `a.txt`; `list(repo)` has an entry whose branch is `hivemind/<id8>`. With `None` the base branch is `main`. |
+| `create_errors_say_what_is_wrong` | A missing folder, a plain folder, an unknown branch, a branch named `--upload-pack=x`, and a repository with no commits each give the string of section 6.1; nothing is created under the worktrees root. |
+| `changes_cover_edits_deletions_untracked_and_commits` | After changing `a.txt`, deleting `b.txt`, adding `new file.txt` ("n1\nn2"), a binary file and `sub/é.txt`: the list is sorted, with `a.txt` `M` +2 −1, `b.txt` `D` +0 −1, `blob.bin` `A` binary, `new file.txt` `A` +2, `sub/é.txt` `A` +1. `totals` matches. After committing everything in the worktree the same list comes back and `ahead` is 1. |
+| `patches_are_unified_diffs_cut_at_the_limit` | `patch` of `a.txt` contains `-two` and `+TWO`; of the untracked file starts with `diff --git a/new file.txt b/new file.txt` and has `+n1`; of the binary file is empty; of a 40,000-character untracked file has `PATCH_LIMIT` characters and `truncated == true`. |
+| `remove_deletes_the_folder_and_an_unused_branch` | On a dirty worktree with no commits: the folder is gone, `list` no longer has it, `git branch --list hivemind/*` is empty. On a worktree with one commit: the folder is gone and the branch remains. Removing twice is `Ok`. |
+| `git::branches` in `git.rs`: `lists_branches_and_the_current_one` | `current == Some("main")`, both names listed; after `checkout --detach`, `current == None`; a plain folder gives `Not a git repository: …`. |
+| `an_untracked_link_is_reported_by_its_target_and_never_followed` | Outside the worktree, make a folder `outside` holding `secret.txt` with the text `TOP-SECRET-LINE` on 50 lines. In the worktree create a symbolic link `leak.txt` to that file (`std::os::windows::fs::symlink_file` or `std::os::unix::fs::symlink`); return early when the link cannot be created (Windows without the privilege). `changes` has `leak.txt` with status `A`, `added == 1`, `binary == false`. `patch` of it contains `new file mode 120000` and one `+` line holding the target path, and does not contain `TOP-SECRET-LINE`. |
+| `files_behind_a_junction_are_listed_but_never_read` (Windows only, `#[cfg(windows)]`) | In the worktree create a junction `vendor` to the same `outside` folder with `cmd /C mklink /J` (no privilege needed). For every entry of `changes` whose path starts with `vendor`: `added == 0` and, when it is a file path under the junction, `binary == true`. No `patch` of any entry contains `TOP-SECRET-LINE`. `changed_files` as a whole, serialised to JSON, does not contain it either. |
+| `things_that_are_not_regular_files_are_skipped` | `untracked` returns `None` for a folder path and for a path that does not exist; `changes` on a worktree with an empty untracked folder lists nothing for it. |
+
+### Commit 2: `feat(agent): work task, policy modes, the session fields and the command line`
+
+Contains: sections 6.3 and 6.4 in full (the event and scope types, `same_path`, `project_repo`, `work`, `for_session`, `governed_memory_command`, `governed_rules`), section 6.7, the `SessionInfo` fields; the TypeScript types of section 4.3 without the new invokes; the one-line narrowing fix in `AgentWorkspace.tsx`. The types name `crate::worktree::{Worktree, FileChange, Totals}`, which commit 1 created.
+
+Things this commit must also change so that it compiles and passes by itself:
+
+- `Policy` gains two variants, so `fn command` in `claude.rs` gets its final form now (the `command` bullets of section 6.5: the three policy flag sets, `--resume`, `--model`, `--disallowedTools`, `LIVING_MEMORY_ROOT`), together with its test. `Outcome` gains `budget`, so `fn outcome` in `claude.rs` gets its final form now as well (the `outcome` bullet of section 6.5). The rest of section 6.5 (the protocol methods) is commit 3.
+- `Manager::start` keeps today's signature in this commit. Where it builds the `Spec`, add `resume: false, model: None, deny: scope.deny.clone(), memory_root: None`; where it builds the `SessionInfo`, add `mode: scope.mode`, `policy: scope.policy.mode()`, `worktree: scope.worktree.clone()` and defaults for the rest. Commit 4 replaces this function and supplies the real `memory_root`.
+- Every other constructor of `SessionInfo`, `Scope`, `Spec` and `Outcome` in code and tests gets the new fields (`Rig::start` and the `Spec` in `command_carries_the_spec`, the `session(..)` helper in `store.rs` tests, the `Scope` in `system_passport`).
+- Every TypeScript object literal of type `SessionInfo` in a test or fixture gets the new fields (search for `cliVersion:` under `src`).
+- `store::recover` now calls `worktree::changes` (section 6.7); that function exists since commit 1.
 
 Tests:
 
@@ -1921,46 +2074,34 @@ Tests:
 | `agent/events.rs` | `events_serialise_in_the_contract_shape` (extend) | The five new variants serialise exactly as the examples in section 4.4 and deserialise back; `turnFinished` without `outcome` reads as `Completed`; `userMessage` without `context` reads as an empty list; the statuses serialise as `waiting`, `idle`, `ended`. |
 | `agent/scope.rs` | `task_json_is_tagged_by_kind` (extend) | `{"kind":"work","project":"paystream","repo":"C:/r"}` reads as `Work` with `branch` and `change` `None` and writes back without those two keys; with `"branch":"main","change":14` both survive. |
 | `agent/scope.rs` | `registered_repos_match_whatever_the_slashes_and_case` | `project_repo` on `{"repos":["C:/Work/Pay"]}` returns `C:/Work/Pay` for `c:\work\pay\` and errors with `That repository is not registered for this project` for `C:/Work/Pay2` and for `C:/Work`. |
-| `agent/scope.rs` | `governed_memory_commands_are_recognised` | True for `python "C:\x\living_memory.py" apply abc --expected-plan-sha256 d`, `… living_memory.py --domain a plan archive x`, `… living_memory.py project-plan create`, `… LIVING_MEMORY.PY undo 123`. False for `… living_memory.py search "apply the plan"`? No: that contains the word `apply`, so it is true, and the test says so on purpose (a refused search is the safe side). False for `… living_memory.py search retries`, `… living_memory.py inspect-plan abc`, `… living_memory.py capture --title x`, `git apply patch.diff`. |
-
-### Commit 2: `feat(worktree): create, diff, list and remove session worktrees`
-
-Contains: section 6.1, `git::branches`, `scope::work`, `scope::for_session`, `mod worktree;`.
-
-Tests in `worktree.rs` use a real git repository in the temp folder and return early when git is missing, like `live_repo_gives_commits` in `git.rs`. Helper: a repository with user name, e-mail and `commit.gpgsign false` set, one commit with `a.txt` ("one\ntwo\n") and `b.txt`, and a branch `feature/x`.
-
-| Test | Asserts |
-| --- | --- |
-| `folder_names_are_stable_and_safe` | `folder_for(root, "C:\\Work\\Pay Stream")` and `folder_for(root, "c:/work/pay stream/")` are equal; the last component is `Pay-Stream-` plus 8 hex digits; a different repository gives a different hash. |
-| `creates_a_worktree_on_its_own_branch` | `create(.., Some("feature/x"), id)` returns `branch == "hivemind/<id8>"`, `base_branch == "feature/x"`, `base_sha` equal to `rev-parse feature/x`; the folder exists and holds `a.txt`; `list(repo)` has an entry whose branch is `hivemind/<id8>`. With `None` the base branch is `main`. |
-| `create_errors_say_what_is_wrong` | A missing folder, a plain folder, an unknown branch, a branch named `--upload-pack=x`, and a repository with no commits each give the string of section 6.1; nothing is created under the worktrees root. |
-| `changes_cover_edits_deletions_untracked_and_commits` | After changing `a.txt`, deleting `b.txt`, adding `new file.txt` ("n1\nn2"), a binary file and `sub/é.txt`: the list is sorted, with `a.txt` `M` +2 −1, `b.txt` `D` +0 −1, `blob.bin` `A` binary, `new file.txt` `A` +2, `sub/é.txt` `A` +1. `totals` matches. After committing everything in the worktree the same list comes back and `ahead` is 1. |
-| `patches_are_unified_diffs_cut_at_the_limit` | `patch` of `a.txt` contains `-two` and `+TWO`; of the untracked file starts with `diff --git a/new file.txt b/new file.txt` and has `+n1`; of the binary file is empty; of a 40,000-character untracked file has `PATCH_LIMIT` characters and `truncated == true`. |
-| `remove_deletes_the_folder_and_an_unused_branch` | On a dirty worktree with no commits: the folder is gone, `list` no longer has it, `git branch --list hivemind/*` is empty. On a worktree with one commit: the folder is gone and the branch remains. Removing twice is `Ok`. |
-| `git::branches` in `git.rs`: `lists_branches_and_the_current_one` | `current == Some("main")`, both names listed; after `checkout --detach`, `current == None`; a plain folder gives `Not a git repository: …`. |
-| `scope.rs`: `work_scope_is_the_worktree_and_nothing_else` | `work(tree, Ask, "Fix the retry\nmore")` has `cwd` the worktree path, empty `add_dirs` and `plugin_dirs`, `Policy::Ask { allow: [] }`, `mode == Interactive`, title `Fix the retry`; `PreApproved` errors. |
+| `agent/scope.rs` | `governed_memory_commands_are_recognised` | True for `python "C:\x\living_memory.py" apply abc --expected-plan-sha256 d`, `… living_memory.py --domain a plan archive x`, `… living_memory.py project-plan create`, `… LIVING_MEMORY.PY undo 123`. False for `… living_memory.py search "apply the plan"`? No: that contains the word `apply`, so it is true, and the test says so on purpose (a refused search is the safe side). False for `… living_memory.py search retries`, `… living_memory.py inspect-plan abc`, `… living_memory.py capture --title x`, `git apply patch.diff`. True for a command not in the list that ends in `-plan` (`… living_memory.py future-plan x`). |
+| `agent/scope.rs` | `governed_rules_cover_every_command_for_both_shells` | `governed_rules()` has 44 entries, all different; it contains `Bash(*living_memory.py* apply *)`, `Bash(*living_memory.py* apply)`, `PowerShell(*living_memory.py* undo *)`, `PowerShell(*living_memory.py* change-plan)`; every entry starts with `Bash(*living_memory.py* ` or `PowerShell(*living_memory.py* `; none contains `inspect-plan`, `search`, `read` or `capture`. For every command in `GOVERNED_COMMANDS`, `governed_memory_command("python living_memory.py " + command + " x")` is true (the two checks cover the same list). |
+| `agent/scope.rs` | `work_scope_is_the_worktree_and_nothing_else` | `work(tree, Ask, "Fix the retry\nmore")` has `cwd` the worktree path, empty `add_dirs` and `plugin_dirs`, `Policy::Ask { allow: [] }`, `mode == Interactive`, title `Fix the retry`, `deny == governed_rules()`; `PreApproved` errors. |
+| `agent/scope.rs` | `passport_scope_comes_from_the_registry_entry` (extend) | The passport scope has `deny == governed_rules()`, `mode == Unattended`, `worktree == None`; its allow list is unchanged. |
+| `agent/store.rs` | `recovery_reports_files_a_dead_process_left` (needs git) | An interactive session saved as `Running`, with a real worktree in which one file was added and an empty log: after `recover` the log is `[FilesChanged { 1 file }, TurnFinished { outcome: Error, .. }]` in that order and `files_changed == Some(Totals { files: 1, .. })`. Run `recover` on a second copy whose log already ends with a `FilesChanged` holding the same list: no second `FilesChanged` is written. With a worktree path that does not exist: only the `TurnFinished` is written. |
+| `agent/claude.rs` | `command_carries_the_spec` (extend) | For `PreApproved` the expected list is today's plus `--disallowedTools` and the spec's deny rules, each its own argument, between the `--allowedTools` rules and `--add-dir`; with `deny` empty the flag is absent. `Ask`: the arguments after `--verbose` start `--permission-mode manual --permission-prompts host --permission-prompt-tool stdio --session-id <id> --max-budget-usd 5`. `AcceptEdits` with `resume: true` and `model: Some("haiku")`: `--permission-mode acceptEdits … --resume <id> --max-budget-usd 5 --model haiku`, and no `--session-id`. |
+| `agent/claude.rs` | `command_points_living_memory_at_the_apps_store` | With `memory_root: Some("/stores/demo")`, `command.get_envs()` contains `("LIVING_MEMORY_ROOT", Some("/stores/demo"))`. With `None`, `get_envs()` has no entry for `LIVING_MEMORY_ROOT` (the variable is neither set nor removed). Both hold for a `PreApproved` spec and for an `Ask` spec. |
 
 ### Commit 3: `feat(agent): the Claude adapter speaks the host permission protocol`
 
-Contains: section 6.5 and the trait of section 6.6 (the `Fake` adapter delegates the new methods to `ClaudeCode`). The manager does not use the new methods yet.
+Contains: the rest of section 6.5 (everything except `fn command`, which commit 2 finished) and the trait of section 6.6. The trait change and its implementers go together: `ClaudeCode` implements the new methods, the `Fake` adapter in the `agent/mod.rs` tests delegates each of them to `ClaudeCode`, and the one call of `first_message` in `Manager::start` becomes `user_line`. The manager does not use the other new methods yet (the `dead_code` rule applies).
 
 Tests in `claude.rs`. Use the verbatim request lines of section 5.1 as constants `WRITE_REQUEST` and `BASH_REQUEST`.
 
 | Test | Asserts |
 | --- | --- |
-| `command_carries_the_spec` (extend) | Existing expectation unchanged for `PreApproved`. `Ask`: the arguments after `--verbose` are `--permission-mode manual --permission-prompts host --permission-prompt-tool stdio --session-id <id> --max-budget-usd 5`. `AcceptEdits` with `resume: true` and `model: Some("haiku")`: `--permission-mode acceptEdits … --resume <id> --max-budget-usd 5 --model haiku`, and no `--session-id`. |
-| `permission_requests_become_approval_requests` | `WRITE_REQUEST` gives one `ApprovalRequest` with the request id, tool `Write`, summary `a.txt`, `input.content == "x"`, `can_always == true`, `always_label == Some("all file edits in this session")`. `BASH_REQUEST` gives tool `Bash`, summary `Create directory spike_dir_1`, `always_label == Some("Bash(mkdir spike_dir_1)")`. A request with no suggestions gives `can_always == false`. A 10,000-character `content` is cut to 4,000. |
+| `permission_requests_become_approval_requests` | `WRITE_REQUEST` gives one `ApprovalRequest` with the request id, tool `Write`, summary `a.txt`, `input.content == "x"`, `can_always == true`, `always_label == Some("file edits and simple file commands in the worktree")`. `BASH_REQUEST` gives tool `Bash`, summary `Create directory spike_dir_1`, `always_label == Some("Bash(mkdir spike_dir_1)")`. A request with no suggestions gives `can_always == false`. A 10,000-character `content` is cut to 4,000. |
 | `governed_memory_requests_are_denied_without_asking` | A Bash request whose command is `python living_memory.py apply x --expected-plan-sha256 y` gives `[Denied { tool: "Bash", summary: GOVERNED }]`, and `refusal` gives a line that parses to the envelope with `behavior` `deny`. `refusal(BASH_REQUEST)` is `None`. |
 | `answers_are_one_json_line_in_the_envelope` | `answer_line(BASH_REQUEST, Allow)` parses to `{"type":"control_response","response":{"subtype":"success","request_id":"6c738ff4-…","response":{"behavior":"allow"}}}` and has no newline. `Deny` has `behavior` `deny` and a non-empty `message`. `Withdrawn` and a non-request line give `None`. |
 | `always_allow_is_rewritten_to_the_session` | `answer_line(BASH_REQUEST, AllowAlways)`: `updatedPermissions` has exactly one entry, of type `addRules`, with `destination == "session"` and the rule `mkdir spike_dir_1`; the text does not contain `localSettings` or `addDirectories`. For `WRITE_REQUEST`: one `setMode` entry with `mode` `acceptEdits`. |
 | `withdrawn_requests_resolve` | `{"type":"control_cancel_request","request_id":"r1"}` gives `ApprovalResolved { request_id: "r1", decision: Withdrawn }`. A `control_response` line gives nothing. |
 | `control_lines_are_valid_and_never_initialize` | `interrupt_line()` parses and has `request.subtype == "interrupt"`; two calls have different `request_id`s. `mode_line(Ask)` has mode `default`, `mode_line(AcceptEdits)` has `acceptEdits`. None of the produced lines contains `initialize` or `get_status`. |
 | `status_lines_report_the_mode` | The spike's `{"type":"system","subtype":"status","status":null,"permissionMode":"acceptEdits"}` gives `Some(AcceptEdits)`; `default` gives `Some(Ask)`; a `status":"requesting"` line without the key gives `None`. |
-| `result_lines_give_the_outcome` (extend) | The real budget line (`"is_error":true,"subtype":"error_max_budget_usd","errors":["Reached maximum budget ($0.004)"]`) gives `budget == true` and a reason that contains `Reached maximum budget`. The unknown-session result gives a reason that contains `No conversation found`. A success result gives `budget == false`. |
+| `result_lines_give_the_outcome` (extend; this one belongs to commit 2, with `fn outcome`) | The real budget line (`"is_error":true,"subtype":"error_max_budget_usd","errors":["Reached maximum budget ($0.004)"]`) gives `budget == true` and a reason that contains `Reached maximum budget`. The unknown-session result gives a reason that contains `No conversation found`. A success result gives `budget == false`. |
 
-### Commit 4: `feat(agent): long-lived sessions in the manager`
+### Commit 4: `feat(agent): long-lived sessions in the manager, and their commands`
 
-Contains: the rest of section 6.6.
+Contains: the rest of section 6.6 and the rest of section 6.8 (`AppState.worktrees_dir`, the changed `agent_start`, the eight new commands, the handler list). They are one commit because `start_task` changes its signature here and `agent_start` in `lib.rs` is its only caller; a commit with one and not the other does not compile. The existing TypeScript call `agentStart(task, prompt)` keeps working against the new command: `options` is an `Option` and a missing argument arrives as `None`. Remove every `#[allow(dead_code)]` this phase added.
 
 **The fake CLI.** Interactive tests need a program that answers stdin lines. Add a test function that acts as that program when an environment variable is set, and run the test binary itself as the CLI:
 
@@ -1974,7 +2115,7 @@ fn fake_cli() {
 }
 ```
 
-`Fake::command` for these tests: program `std::env::current_exe()`, arguments `["--exact", "agent::tests::fake_cli", "--nocapture", "--test-threads=1"]`, the two variables set with `Command::env`, `current_dir(&spec.cwd)`. The fake prints with `println!` and flushes stdout after every line. The test harness's own lines ("running 1 test") are not JSON and give no events. `Fake` also pushes `spec.resume` into an `Arc<Mutex<Vec<bool>>>` so tests can see how each process was started.
+`Fake::command` for these tests: program `std::env::current_exe()`, arguments `["--exact", "agent::tests::fake_cli", "--nocapture", "--test-threads=1"]`, the two variables set with `Command::env`, `current_dir(&spec.cwd)`. The fake prints with `println!` and flushes stdout after every line. The test harness's own lines ("running 1 test") are not JSON and give no events. `Fake` also pushes a clone of every `Spec` it is given into an `Arc<Mutex<Vec<Spec>>>`, so tests can see how each process was started (`resume`, `deny`, `memory_root`). `Rig` builds its `Launch` with `memory_root: Some(rig.dir.join("store"))` and its scopes with `deny: scope::governed_rules()`.
 
 > UNVERIFIED: A `cargo test` binary can serve as the scripted CLI this way (libtest passes the output through with `--nocapture` and the function sees the parent's pipes).
 > First step: write `fake_cli` and the first test below. Pass: the test sees the scripted events. Fail: no output arrives, or the harness swallows stdin.
@@ -1989,19 +2130,22 @@ Script lines used below: `INIT` (a `system/init` line), `TEXT` (an assistant tex
 | `approval_waits_for_an_answer` | `<`, INIT, BASH_REQUEST, `<`, TOOL_RESULT, RESULT, `<` | Status becomes `Waiting` and an `ApprovalRequest` is emitted. `answer(id, "nope", Allow)` errors with `That request is no longer waiting for an answer`. `answer(id, <id>, AllowAlways)` records `ApprovalResolved`, the stdin file's second line has `destination` `session`, the turn ends, status `Idle`. Replay equals live. |
 | `governed_requests_are_refused_by_hivemind` | `<`, INIT, the governed request, `<`, RESULT, `<` | A `Denied` event, never `Waiting`, and the stdin file's second line is the deny envelope, written without any `answer` call. |
 | `a_withdrawn_request_clears_waiting` | `<`, INIT, BASH_REQUEST, `<`, CANCEL, ABORTED, `<` | After `interrupt`: stdin line 2 is the interrupt request; events end `[ApprovalResolved(Withdrawn), TurnFinished { ok: false, outcome: Stopped, reason: None }]`; status `Idle`; a following `send` is accepted. |
-| `budget_stop_closes_the_process_and_the_next_message_resumes` | First process: `<`, INIT, BUDGET, `<`. Second: `<`, INIT, RESULT, `<` | The turn ends `Budget` with a reason; the process exits without a `Finished`; status stays `Idle`. `send` starts a second process; the recorded `resume` flags are `[false, true]`; exactly one `Started` event exists in total; replay equals live. |
+| `budget_stop_closes_the_process_and_the_next_message_resumes` | First process: `<`, INIT, BUDGET, `<`. Second: `<`, INIT, RESULT, `<` | The turn ends `Budget` with a reason; the process exits without a `Finished`; status stays `Idle`. `send` starts a second process; the recorded specs have `resume` `[false, true]`; exactly one `Started` event exists in total; replay equals live. |
+| `every_process_gets_the_store_and_the_deny_rules` | two-turn script over two processes (budget stop in between), plus one unattended `printing` session | Every recorded `Spec`, for the first process, the resumed one and the unattended one, has `memory_root == Some(<rig>/store)` and `deny == governed_rules()`. With a `Launch` whose `memory_root` is `None`, the spec's is `None`. |
 | `process_that_dies_mid_turn_leaves_the_session_idle` | `<`, INIT (then the script ends) | Events end with `TurnFinished { ok: false, outcome: Error, reason: Some(text containing "without reporting a result") }`; status `Idle`; no `Finished`. |
 | `process_that_never_starts_fails_the_session` | a program that exits at once | One `Finished` with status `Failed`; `send` then errors with `This session has ended`. |
 | `idle_session_gives_up_its_process_when_a_slot_is_needed` | each: `<`, INIT, RESULT, `<` | Start three sessions and let each go `Idle`. A fourth start succeeds; the first session's process exits and its status stays `Idle`. With three `lingering` unattended sessions instead, a fourth start errors with `3 agent sessions are already working; wait for one to finish or stop one`. |
 | `session_resumes_after_a_restart_with_the_same_numbering` | as the two-turn script, split over two processes | Run one turn, call `stop_all`, build a new `Manager` on the same folder: the session is `Idle`. `send` works; the new events continue the numbering; `resume` was `true`; replay of the whole log equals everything emitted by both managers. |
 | `end_writes_finished_once_and_refuses_more_messages` | `<`, INIT, RESULT, `<` | `end` returns within `END_WAIT`; the last event is `Finished { status: Ended, turns: Some(1) }`; `info.ended_at` is set; `end` again is `Ok`; `send` errors with `This session has ended`. Ending a session whose process is already gone writes the same `Finished`. |
 | `files_changed_follows_the_worktree` (needs git) | `<`, INIT, RESULT, `<`, INIT, RESULT, `<` | With a real worktree in the scope: write a file into it, then send; the turn's events are `[.., FilesChanged { 1 file }, TurnFinished]` and `info.files_changed == Some(Totals { files: 1, .. })`. A second turn with no further change emits no `FilesChanged`. `files(id)` returns the file with a patch. After `end`, the worktree is still there (it has changes); `remove_worktree` deletes it and clears `info.worktree`. A session ended with a clean worktree has `worktree == None` afterwards. |
+| `a_different_file_with_the_same_counts_is_a_new_event` (needs git) | three turns: `<`, INIT, RESULT, repeated, then `<` | Before turn 1 write `one.txt` ("x\n"). Before turn 2 delete it and write `two.txt` ("y\n"): the totals are the same (1 file, +1 −0). Turn 2 still records a `FilesChanged` whose only path is `two.txt`. Before turn 3 change nothing: no `FilesChanged`. `info.files_changed` is `Some(Totals { files: 1, added: 1, removed: 0 })` throughout. After a restart (`stop_all`, new `Manager`), a turn with no change records no `FilesChanged` (the list was rebuilt from the log); a turn after writing `three.txt` records one. |
+| `files_written_before_the_process_dies_are_reported` (needs git) | (a) `<`, INIT, then the script ends; (b) `<`, INIT, `<` and `cancel`; (c) a program that exits at once | With a real worktree and a file written into it before `start` (so the test does not race the process): (a) the events end `[FilesChanged { 1 file }, TurnFinished { outcome: Error, .. }]`; (b) after `cancel` they end `[FilesChanged { 1 file }, Finished { status: Cancelled, .. }]`; (c) they are `[UserMessage, FilesChanged { 1 file }, Finished { status: Failed, .. }]`. In each case `FilesChanged` comes before the closing event, `info.files_changed.files == 1`, and replay equals live. |
 | `cancel_stops_a_running_session_and_frees_the_limit` (update) | lingering | Start three; the fourth errors with the new limit message; cancel one; a start succeeds. The rest of the test is unchanged. |
 | `session_runs_to_success_and_replays_exactly` and the other existing tests | unchanged scripts | Still pass with the same six events: an unattended session records no `UserMessage` and no `TurnFinished`. |
 
-### Commit 5: `feat(agent): commands for sending, answering, stopping and ending`
+### Commit 5: `feat(agent): typed invokes for the session commands`
 
-Contains: section 6.8 and the invokes of section 6.9 (`agent.ts`). No test beyond compilation and the existing suites; the commands are thin wrappers. Check by hand in the dev app's console: `await window.__TAURI__` is not exposed, so use the Start screen once commit 7 exists.
+Contains: the invokes of section 6.9 in `src/lib/agent.ts` (the types came with commit 2; the commands they call came with commit 4). No test beyond compilation and the existing suites. Nothing in the UI calls them until commits 7 and 8; an unused export does not fail `tsc`.
 
 ### Commit 6: `feat(agents): transcript reducer for interactive events`
 
@@ -2055,7 +2199,16 @@ Only if verification changed anything in this document or the spike file. Otherw
 | The webview sends a repository path that is not the project's | Toast `That repository is not registered for this project` | `scope::project_repo` refuses; no git command runs on the string. |
 | The webview sends a branch name that looks like an option | Toast `Unknown branch: …` | Resolved as `refs/heads/<name>` after `--end-of-options`; only the resulting hash reaches `worktree add`. |
 | The webview sends `withdrawn` as a decision | Toast `Invalid decision` | `Manager::answer` refuses. |
-| The agent asks to run `living_memory.py apply …` | A "Not allowed: Bash" banner in the transcript | Hivemind writes the deny answer itself; no card, the user cannot allow it. |
+| The agent asks to run `living_memory.py apply …` | A "Not allowed: Bash" banner in the transcript | The CLI refuses it by the deny rules of `governed_rules()` (`--disallowedTools`) and prints `system/permission_denied`. If a request still arrives, Hivemind writes the deny answer itself. No card either way; the user cannot allow it. |
+| The user's own Claude Code settings allow every Living Memory command (a broad `Bash(...)` allow rule) | The same banner | An allowed call never becomes a request, so the host-side check alone would be bypassed; the deny rules win over the allow rule. Step 0, check E proves it on the installed CLI. |
+| The app is connected to a throwaway store (`HIVEMIND_LM_ROOT`) and a session starts | Nothing visible | The CLI gets `LIVING_MEMORY_ROOT` for that store, so the session's Living Memory hooks read and write there and the user's real store is not touched. |
+| The app uses Living Memory's default store (no root configured) | Nothing visible | `Spec.memory_root` is `None`; the variable is left as inherited and the hooks resolve the default store themselves, as they do in any Claude Code session. |
+| The user changes the store in Settings while a session is idle | Nothing visible | `save_settings` reconfigures the bridge; the next process for the session (start or resume) reads `bridge.launch().root` again. A process that is already running keeps the store it was started with. |
+| The agent creates a symbolic link in its worktree to a file elsewhere (`C:\Users\…\.ssh\id_rsa`) | The files card lists the link as one added line; the changes modal shows the link's target path, not the file's content | `worktree::untracked` checks `symlink_metadata` first and never opens a link. |
+| The agent creates a junction or folder link in its worktree to a folder elsewhere | Files under it, if git lists them, appear as "Binary or too large to show" with no counts | The canonical path of each file is outside the worktree, so `untracked` returns `Unread`; nothing is read. |
+| The agent is cancelled, crashes, or fails before any `result` after writing files | A files card appears before the "Cancelled" / "The turn failed" marker; the rail's Changes row counts the files | `sync_files` runs at every exit of an interactive session's process, before the closing event. |
+| Hivemind itself dies while a turn is writing files | After the restart, a files card, then the failed turn | `recover` compares the worktree with the last recorded list and appends `filesChanged` before the `turnFinished`. |
+| A turn replaces one changed file by another with the same line counts | A new files card with the new path | The whole list is compared, not the totals. |
 | The agent asks to read a file outside the worktree | A normal approval card for `Read` | Allow once, or always (a session rule for that folder, shown in the button's tooltip). |
 | The user never answers a prompt | The card and the yellow dots stay | Nothing; the CLI waits. Other sessions are unaffected. |
 | The user answers a card twice quickly | The buttons are disabled after the first click | The second `agent_answer` gets `That request is no longer waiting for an answer`. |
@@ -2064,7 +2217,9 @@ Only if verification changed anything in this document or the spike file. Otherw
 | Stop does not stop the turn | The spinner on Stop stays | Nothing more in Phase 2; "End session" still works and kills after `END_WAIT`. |
 | The spending limit is reached | The "Spending limit reached" banner; the next send asks to continue | The capped process's stdin is closed; the next message starts a new process with `--resume` and a fresh limit. |
 | Hivemind is closed to the tray while a session runs | Nothing changes | The window is hidden; processes keep running. |
-| Hivemind exits while a turn runs | After restart the session is "ready" with a failed turn that says `Hivemind closed while this session was running` | `stop_all` kills; `recover` records the `turnFinished` and sets `idle`; the next message resumes. |
+| Hivemind exits while a turn runs | After restart the session is "ready" with a failed turn that says `Hivemind closed while this session was running` | `stop_all` kills; `recover` records `filesChanged` when the worktree differs from the last recorded list, then the `turnFinished`, and sets `idle`; the next message resumes. |
+| With "Accept edits", the agent creates a folder or moves a file in the worktree by a shell command | No card for it | `acceptEdits` approves some file commands in the working folder by itself (spike: `mkdir`). The helper text and the rail say so. |
+| A command the user's Claude Code settings allow (`Bash(npm test)`, say) | No card for it | The CLI does not ask about a pre-allowed call. The rail's note explains "already allowed". |
 | Hivemind crashes | The same as above | `recover` does not depend on a clean exit. Orphaned `claude.exe` processes may remain; the report in section 12 says so. |
 | The CLI crashes mid-turn | "The turn failed" with the exit code and the stderr tail | `turnFinished` (`error`); the session stays `idle`. |
 | The CLI cannot start a resumed conversation (`No conversation found`) | "The turn failed: … No conversation found …" | The short error `result` ends the turn; the process exits; the session stays `idle`. The user ends it. |
@@ -2107,8 +2262,16 @@ Only if verification changed anything in this document or the spike file. Otherw
 | The sink runs with the sessions lock held. | It must only emit. Do not call the manager from it. |
 | Vitest has no DOM. | Logic lives in `events.ts`, `session.ts`, `draft.ts`; components stay thin. |
 | `tsc` fails on unused imports. | Remove `agentCancel` and others from a file when the code that used them moves. |
-| Living Memory binds a domain by folder prefix; a worktree is elsewhere. | The briefing names the project and the domain for captures (section 7.2). See the UNVERIFIED block in section 4.9. |
+| Living Memory binds a domain by folder prefix; a worktree is elsewhere. | The briefing names the project and the domain for captures (section 7.2). See the UNVERIFIED block in section 4.9 about the hook in a worktree. |
 | The Living Memory hook allows only read and capture commands confined to the project. | Anything else reaches Hivemind as a request; governed commands are refused, the rest are shown. |
+| A call the user's own settings allow never reaches the host as a request, so answering requests cannot be the only guard. | `governed_rules()` go on the command line with `--disallowedTools` for every session, unattended ones included; the host-side refusal stays as the second check. The pattern syntax is UNVERIFIED until step 0, check E. |
+| Living Memory's hooks inside the CLI pick their store from `LIVING_MEMORY_ROOT`, not from anything Hivemind's bridge passes. | `Spec.memory_root` sets the variable on every CLI. In step 0 and in every verification run it is also set in the shell, and the real store is checked for changes. |
+| Your own Claude Code session writes to the real store between your commands. | Take the "before" and "after" readings of the real store inside one shell command (section 8, step 0). |
+| A link or junction in the worktree can point anywhere; `git ls-files --others` lists it like a file. | `worktree::untracked` is the only reader of untracked content: `symlink_metadata` first, links reported by target, canonical path must stay inside the worktree. |
+| `acceptEdits` approves more than edits, and pre-allowed calls never prompt. | The helper text, the rail, the "always" label and the briefing say exactly that and no more (sections 6.9, 7.1, 7.2, 7.3). |
+| The process can die without a `result`. | `sync_files` runs at every process exit and `recover` does the same at startup, so written files are always reported. |
+| Equal totals do not mean equal changes. | `filesChanged` is decided by comparing the whole list with `Tape.files`. |
+| Two types are named `Launch`. | `settings::Launch` starts Living Memory; `agent::Launch` starts an agent. Use the path for the first inside `agent/`. |
 | Sessions, settings and worktrees live in the app's real data folder even in a dev run. | Back up `agent-sessions` before verifying and restore it after (section 11). |
 | The dev port 1420 is fixed. | Only one dev instance at a time. |
 
@@ -2138,12 +2301,26 @@ Build the demo store and start the app:
 ```powershell
 python scripts/seed_demo_store.py --out <scratch>\demo
 $env:HIVEMIND_LM_ROOT = "<scratch>\demo\store"; $env:HIVEMIND_LM_SCRIPT = "<path>\living_memory.py"; $env:HIVEMIND_PYTHON = "<python.exe>"
+$env:LIVING_MEMORY_ROOT = "<scratch>\demo\store"     # the agent CLIs' Living Memory hooks must use the demo store too (README section 6)
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
 $env:WEBVIEW2_USER_DATA_FOLDER = "<scratch>\webview-profile"
 npm run tauri dev
 ```
 
 The demo project "PayStream" has one git repository, `<scratch>\demo\repos\paystream`, on branch `main`. Real turns below use the Haiku model and cost a few cents in total.
+
+**The real store stays untouched.** No real CLI run may happen before `LIVING_MEMORY_ROOT` is set as above; check with `$env:LIVING_MEMORY_ROOT` in the window that starts the app. The app also sets it itself for every CLI from commit 4 on (`Spec.memory_root`); the shell variable covers a mistake in that code. Prove it for Block 2 below, which is the first real turn, by running the block inside the one-command wrapper of section 8, step 0, with the `drive_ui.py` call in the middle:
+
+```powershell
+$newest = { param($root) Get-ChildItem $root -Recurse -File -Force | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1 FullName, LastWriteTimeUtc }
+$realBefore = & $newest "<real store>"; $demoBefore = & $newest "<scratch>\demo\store"
+python scripts/drive_ui.py --out <scratch>\shots "click:Start session" wait:12 shot:03-approval "click:Allow once" wait:15 shot:03-files "click:Review changes" wait:2 shot:03-diff "sel:.modal-head button"
+$realAfter = & $newest "<real store>"; $demoAfter = & $newest "<scratch>\demo\store"
+"real store untouched: " + ($realBefore.FullName -eq $realAfter.FullName -and $realBefore.LastWriteTimeUtc -eq $realAfter.LastWriteTimeUtc)
+"demo store written:   " + ($demoAfter.LastWriteTimeUtc -gt $demoBefore.LastWriteTimeUtc)
+```
+
+Both lines must end in `True`. `<real store>` is the folder Living Memory uses without the variable (section 8, step 0, point 3). Both readings must be taken in this one command: your own Claude Code session's hooks write to the real store between your commands. Then also check the code path without the shell's help: in the session's log `%APPDATA%\dev.hivemind.app\agent-sessions\<id>.jsonl`, the `system/hook_response` line before the first turn, if it names a store path or a domain, names the demo store's (`paystream`), never one of the user's real domains.
 
 Run the steps in order (one `drive_ui.py` call per block; `--out <scratch>\shots` on each).
 
@@ -2159,7 +2336,7 @@ wait:1 shot:02-start-filled
 "click:View full briefing" wait:1 shot:02-briefing "sel:.modal-head button"
 ```
 
-Block 2, first turn with an approval:
+Block 2, first turn with an approval (run it through the wrapper above; the steps are the same):
 
 ```text
 "click:Start session" wait:12 shot:03-approval
@@ -2224,6 +2401,10 @@ Also check by hand:
 - `git -C <scratch>\demo\repos\paystream worktree list` shows only the main worktree at the end, and `git -C <scratch>\demo\repos\paystream status --short` is empty: the user's checkout was never touched.
 - `git -C <scratch>\demo\repos\paystream branch --list "hivemind/*"` is empty (the session made no commit).
 - `<worktree>\.claude\settings.local.json` never existed (look before removing the worktree).
+- The wrapper around Block 2 printed `real store untouched: True` and `demo store written: True`.
+- Governed commands: in a new session (Haiku), send `Run exactly this shell command once and tell me what happened: python "<path>\living_memory.py" --root "<scratch>\demo\store" undo 00000000000000000000000000000000`. The transcript shows a "Not allowed" banner or a failed tool row saying the call was denied; no approval card appears for it; Living Memory's own JSON answer is not in the tool row. (The command is harmless even if it ran: the operation does not exist, and the store is the demo one.)
+- Files before a death: in a session, send `Create a file named late.txt containing the word late, then run the shell command: ping -n 60 127.0.0.1`, allow both, and while the ping runs kill the CLI from outside (`taskkill /IM claude.exe /T /F` when no other Claude Code is running on the machine, else pick the app's process id from `Get-Process claude`). The transcript shows a files card with `late.txt` and then "The turn failed"; the rail's Changes row counts the file.
+- A link is not followed: create `<scratch>\outside\secret.txt` with the text `TOP-SECRET-LINE`; in a session's worktree run `cmd /C mklink /J vendor <scratch>\outside` yourself; end a turn; open "Review changes". The text `TOP-SECRET-LINE` is nowhere in the modal.
 - Start "Generate with agent" once more and stop it: the unattended flow is unchanged.
 
 Clean up: quit the app; delete `%APPDATA%\dev.hivemind.app\agent-sessions` and put the backup back in its place; confirm `%APPDATA%\dev.hivemind.app\worktrees` holds no folder from this run; delete `<scratch>\demo`, `<scratch>\step0` and the webview profile.
@@ -2241,7 +2422,12 @@ Clean up: quit the app; delete `%APPDATA%\dev.hivemind.app\agent-sessions` and p
 - [ ] The Start screen matches mock 02 except for the documented deviations (no Engine, no Interface, "Start branch", the subtitle).
 - [ ] The chat matches mock 03 except for the documented deviations (no Chat / Terminal switch, no paperclip, a branch label, the composer under the thread only, the rail wording).
 - [ ] Send, approve once, approve always, deny, stop, end, resume after a restart, and continue after a budget stop all work in the running app.
-- [ ] A governed Living Memory command is refused without a card.
+- [ ] A governed Living Memory command is refused without a card, by the CLI's deny rules (`--disallowedTools` from `governed_rules()`, proven by step 0, check E, with an allow rule present) and by the host-side refusal behind them.
+- [ ] Every CLI Hivemind starts carries `LIVING_MEMORY_ROOT` for the app's store (tests `command_points_living_memory_at_the_apps_store`, `every_process_gets_the_store_and_the_deny_rules`), and a real run left the user's real store unchanged while the demo store was written.
+- [ ] An untracked link or junction in a worktree is never read through (tests in commit 1).
+- [ ] Files written before a cancel, a crash or a restart show up in the transcript before the closing event, and a file swap with equal counts gives a new files card (tests in commits 2 and 4).
+- [ ] No permission text promises a question the CLI does not ask: the helper, the rail, the "always" label, the Settings paragraph and the briefing all allow for "Accept edits" file commands and for pre-allowed calls.
+- [ ] Every commit compiled and passed its tests alone, in the order of section 8, and no `allow(dead_code)` added by this phase remains.
 - [ ] "Always allow" never writes a file into the worktree.
 - [ ] The user's checkout is unchanged after a session; worktrees are created under the app data folder and removed when unused.
 - [ ] The four entry points work: Overview, note, Memory preview, Architecture (header and inspector).
@@ -2253,7 +2439,8 @@ Clean up: quit the app; delete `%APPDATA%\dev.hivemind.app\agent-sessions` and p
 
 - What was built, commit by commit; what was verified in the running app (name the screenshots) and what was not.
 - The step 0 results, including the checks that failed and the fallbacks taken.
-- Anything in this document that turned out wrong, and what you did instead. In particular: whether the scripted fake CLI worked as a test binary; whether sessions in a worktree are bound to the Living Memory domain.
+- Anything in this document that turned out wrong, and what you did instead. In particular: whether the scripted fake CLI worked as a test binary; whether sessions in a worktree are bound to the Living Memory domain; whether the `--disallowedTools` patterns denied a governed command with an allow rule present, or the `--settings` fallback was needed.
+- The Living Memory isolation result: the two lines the wrapper printed (`real store untouched`, `demo store written`) for step 0 and for the verification run. If either was not `True`, say exactly what changed in the real store.
 - Every side effect outside the repository: the `step0` scratch folder and branch (removed), worktrees and `hivemind/*` branches created in the demo repository (removed), the backup and restore of `agent-sessions`, money spent on real turns, any `claude.exe` you had to kill by hand.
 - The known limits of this phase: no timer closes idle processes; a hung Stop needs End session; an older build cannot read the new index; paths over 260 characters depend on the user's git setting.
 - Where the next phases plug in: the linked chip and `task.change` (Phase 3); `onReview` and the changes modal (Phase 4); the Engine and Interface sections, the engine dropdown and the Chat / Terminal switch (Phase 5).
@@ -2266,5 +2453,9 @@ If the implementing session has Living Memory, record these as notes for the pro
 - **Gotcha:** `--permission-prompt-tool stdio` is hidden and required; without it `host` prompts are denied at once. Include the CLI version it was checked on.
 - **Gotcha:** the session index is not readable by builds from before this phase (new status values); back up `agent-sessions` before switching builds.
 - **Knowledge:** where things live: worktrees under the app data folder, the scripted fake CLI in `agent/mod.rs` tests (or the Python fallback), the step 0 script and its results in the spike file.
-- **Finding from step 0:** whether a worktree session is bound to the Living Memory domain, whether resume after a kill works, whether `acceptEdits` at launch routes shell prompts to the host.
+- **Finding from step 0:** whether a worktree session is bound to the Living Memory domain, whether resume after a kill works, whether `acceptEdits` at launch routes shell prompts to the host, and which form of deny rule the installed CLI honours for the governed commands.
+- **Gotcha:** agent CLIs take their Living Memory store from `LIVING_MEMORY_ROOT`; Hivemind sets it on every CLI it starts (`Spec.memory_root`), and every real test run must also set it in the shell and check the real store, taking both readings in one command.
+- **Decision:** governed Living Memory commands are denied by rule (`--disallowedTools` from `governed_rules()`) and, behind that, by Hivemind answering deny; answering requests alone is bypassed by a user allow rule.
+
+Record these from a shell whose `LIVING_MEMORY_ROOT` is not the demo store (a new window, or clear the variable first): the notes belong in the user's real store, the test runs do not.
 - Update the repository's codebase map note with the new files: `src-tauri/src/worktree.rs`, `src/features/agents/{draft,session}.ts`, `StartSession.tsx`, `Chat.tsx`.

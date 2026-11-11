@@ -45,7 +45,7 @@ Mock 04 in words, top to bottom:
 - No plain shell tab. A terminal always runs `claude` or `codex` (or their sign-in command).
 - No change of interface or engine for an existing session (section 4.9).
 - No spending limit in the terminal. Claude Code's `--max-budget-usd` works only with `--print`, and Codex has no budget.
-- No Hivemind-side refusal of Living Memory's plan, apply and undo commands in the terminal. Phase 2 refuses them for chat sessions by answering the CLI's permission request itself (`governed_memory_command`). In a terminal Hivemind does not see permission requests: the CLI asks the user. The briefing still tells the agent not to run them.
+- No refusal of Living Memory's plan, apply and undo commands in a **Codex** terminal. For a Claude Code terminal they are denied by rule: it is started with `--disallowedTools` and Phase 2's `scope::governed_rules()` (README 7.1), the same deny rules a chat session gets, and deny rules win over any allow rule in the user's settings. Phase 2's second check, answering a permission request itself (`governed_memory_command`), does not exist in a terminal, because Hivemind does not see the CLI's prompts. Codex has no deny-rule flag, so in a Codex terminal such a command reaches Codex's own approval prompt like any other. The briefing tells both agents not to run them.
 - No unattended Codex tasks (`codex exec`). The only unattended task is the system passport, which needs a Claude Code plugin.
 - No model picker, no reasoning-effort control, no Codex cost or budget.
 - No WebGL renderer for the terminal, no terminal search, no split terminals.
@@ -64,7 +64,7 @@ Phase 5 builds on Phase 2 ([phase-2-interactive-sessions.md](phase-2-interactive
 | P4 | Commands | `git grep -n -E "agent_send\|agent_answer\|agent_interrupt\|agent_end\|agent_files\|agent_set_policy\|agent_remove_worktree\|repo_branches" -- src-tauri/src/lib.rs` | All eight inside `tauri::generate_handler![` | Stop. |
 | P5 | Worktree module | `git grep -n -E "pub fn (folder_for\|create\|changes\|totals\|patch\|changed_files\|ahead\|list\|remove)\(" -- src-tauri/src/worktree.rs` | Nine functions; `pub struct Worktree`, `FileChange`, `Totals` in the same file | Stop. |
 | P6 | Start path | `git grep -n -A1 "pub fn start_task" -- src-tauri/src/agent/mod.rs` and `git grep -n -A12 "pub struct StartOptions" -- src-tauri/src/agent/mod.rs` | `start_task(manager, bridge, saved, worktrees, task, prompt, options)`; `StartOptions { policy, context, briefing, model, system }` | Stop. |
-| P7 | Scope functions | `git grep -n -E "pub enum PolicyMode\|pub fn (work\|for_session\|project_repo\|same_path)\(" -- src-tauri/src/agent/scope.rs` | `PolicyMode` and the four functions | Stop. |
+| P7 | Scope functions | `git grep -n -E "pub enum PolicyMode\|pub fn (work\|for_session\|project_repo\|same_path\|governed_rules\|governed_memory_command)\(\|pub (deny\|memory_root):" -- src-tauri/src/agent/scope.rs` | `PolicyMode`, the six functions, and `deny` and `memory_root` on `Spec` (README 7.1) | Stop. |
 | P8 | Manager internals | `git grep -n -E "fn (free_slot\|record\|spawn\|pump)\(\|pub fn (send\|end\|set_policy\|files\|remove_worktree)\(\|pub fn events_of" -- src-tauri/src/agent/mod.rs` and `git grep -n "worktrees_dir" -- src-tauri/src/lib.rs` | Each name once; `worktrees_dir` on `AppState` | Stop. |
 | P9 | Start screen | `git grep -n "Phase 5: Engine and Interface sections go here" -- src/features/agents/StartSession.tsx` | The comment Phase 2 leaves where the two sections go | If the comment is gone, the place is between the Task section and the Workspace section of `form.start-form`. |
 | P10 | Session draft | `git grep -n -E "useSessionDraft\|setTask\|setSystem" -- src/features/agents/draft.ts` | The store; `task` is the task text | Stop. |
@@ -73,7 +73,7 @@ Phase 5 builds on Phase 2 ([phase-2-interactive-sessions.md](phase-2-interactive
 | P13 | Chat view and toolbar | `git grep -n -E "engine-chip\|agent-toolbar\|branch-label\|toolbar-sep" -- src/features/agents/AgentWorkspace.tsx src/App.css` and `git grep -n "export function" -- src/features/agents/Chat.tsx` | `function Toolbar(` renders `.agent-toolbar` with `.engine-chip`; `Chat.tsx` exports `ApprovalCard`, `FilesCard`, `Composer` | Stop. |
 | P14 | Adapter name | `git grep -n '"claude-code"' -- src-tauri/src/agent/claude.rs` | `fn name` returns `"claude-code"` (README 7.1) | Stop and tell the user; section 4.1's `Engine::of` works with any name that is not `"codex"`. |
 | P15 | Shared Markdown | `git grep -n "export function Markdown" -- src/ui/Markdown.tsx` | The component whose links open in the system browser | Phase 5's screens render no Markdown. If you add any, use this component, not `react-markdown` directly. |
-| P16 | Phase 4 | `git grep -n "review_files" -- src-tauri/src/lib.rs`, `git grep -n "export const openReview" -- src/store.ts`, `git grep -n -E "pub fn (info\|amend)\(\|pub fn review_after_turn" -- src-tauri/src/agent/mod.rs` | The command, `openReview(session?, file?)`, `Manager::info`, `Manager::amend`, `review_after_turn` | Phase 4 is not merged: do not render "Review diff" (section 7.6); add `Manager::info` and `Manager::amend` yourself with Phase 4's exact signatures (section 6.6); leave out the `review_after_turn` call. |
+| P16 | Phase 4 | `git grep -n "review_files" -- src-tauri/src/lib.rs`, `git grep -n "export const openReview" -- src/store.ts`, `git grep -n -E "pub fn (info\|amend\|reserve)\(\|pub fn review_after_turn\|A review action is running for this session" -- src-tauri/src/agent/mod.rs` | The command, `openReview(session?, file?)`, `Manager::info`, `Manager::amend`, `Manager::reserve` with its `Reservation`, the reservation test used by `Manager::send`, `review_after_turn` | Phase 4 is not merged: do not render "Review diff" (section 7.6); add `Manager::info` and `Manager::amend` yourself with Phase 4's exact signatures (section 6.6); leave out the `review_after_turn` call and `term_open`'s reservation check. |
 | P17 | Phase 3 | `git grep -n "export const engineName" -- src/features/changes` and `git grep -n "check_change" -- src-tauri/src/agent/mod.rs` | Phase 3's engine label and its check in `start_task` | Phase 3 is not merged: use Phase 4's `engineLabel` (`src/features/review/review.ts`) for a session's engine name, or, with neither, add `ENGINE_LABEL` (section 4.2). |
 | P18 | Clean tree, tests green | `git status --short`, `npm test`, `npx tsc --noEmit`, `cd src-tauri && cargo test && cargo clippy` | No output from `git status`; everything passes | Fix or report before starting. |
 | P19 | The CLIs | `claude --version`, `codex --version` (PowerShell) | `2.1.322 (Claude Code)` or newer; `codex-cli 0.166.0` or newer | A missing CLI only blocks the manual checks for that engine. |
@@ -97,6 +97,8 @@ These are defined by the Phase 2 and Phase 4 documents. Phase 5 uses them as the
 | `start_task(manager, bridge, saved, worktrees, task, prompt, options)`, `send_task(...)` | `src-tauri/src/agent/mod.rs` | Phase 2 |
 | `Manager::start`, `send`, `answer`, `interrupt`, `end`, `set_policy`, `files`, `remove_worktree`, `cancel`, `stop_all`, `sessions`, `session`; `Inner::record`, `free_slot`, `spawn`, `pump`, `update`, `persist`; `events_of`; `MAX_RUNNING = 3` | `src-tauri/src/agent/mod.rs` | Phase 2 |
 | `Manager::info(id) -> Result<SessionInfo, String>` (`Invalid session id`, `Unknown session`), `Manager::amend(id, change) -> Result<SessionInfo, String>`, `review_after_turn(review, before, after, now)` | `src-tauri/src/agent/mod.rs` | Phase 4 |
+| `scope::governed_rules() -> Vec<String>` (the deny rules for Living Memory's plan, apply and undo commands), `Spec.deny`, `Spec.memory_root: Option<PathBuf>` (the store the app is connected to; the adapter sets `LIVING_MEMORY_ROOT` from it) | `src-tauri/src/agent/scope.rs` | Phase 2, README 7.1 |
+| `Manager::reserve(id) -> Result<Reservation, String>`; while a `Reservation` lives, `send`, `remove_worktree` and starting or attaching a terminal fail with `A review action is running for this session` | `src-tauri/src/agent/mod.rs` | Phase 4, README 7.1 |
 | `AppState.worktrees_dir` | `src-tauri/src/lib.rs` | Phase 2 |
 | The Adapter trait: `name`, `command`, `user_line`, `parse_line`, `outcome`, `answer_line`, `refusal`, `interrupt_line`, `mode_line`, `mode_of` (and Phase 4's provided `tool_result`) | `src-tauri/src/agent/mod.rs` | Phase 2 (Part C changes it) |
 | `StartOptions` (TypeScript), `agentStart(task, prompt, options?)`, `agentFiles`, `agentRemoveWorktree`, `agentSetPolicy`, `Policy`, `Worktree`, `FileTotals`, `ChangedFiles` | `src/lib/agent.ts` | Phase 2 |
@@ -124,18 +126,18 @@ Made by the user on 2026-11-10. Do not reopen.
 7. Part C is built only if Parts A and B are done and its go/no-go check passes.
 8. All of README section 1 (dark only, sections are pages, brand, one phase per branch).
 
-Decisions this document makes where the README left a choice open. Each has its reason in one sentence.
+Decisions this document makes where the README left a choice open. Each has its reason in one sentence. D2 and D8 are not this document's alone: README section 7.1 carries them as the terminal-session exceptions to the session lifecycle, so other phases can rely on them.
 
 | # | Choice | Reason |
 | --- | --- | --- |
 | D1 | A session keeps its interface and its engine for life. The Chat | Terminal switch and the engine menu navigate; they never convert a session. | README 7.1 ties one worktree to one session id and README 7.3 reviews one session's diff, so two conversations in one worktree would make "whose edits are these" unanswerable. |
-| D2 | A terminal session writes no events to its `.jsonl` log; it keeps a capped raw scrollback file instead. | A PTY stream has no structure to turn into events, and the README's rule "`Finished` is the single last event" cannot hold for a session that can be resumed any number of times. |
+| D2 | A terminal session writes no events to its `.jsonl` log; it keeps a capped raw scrollback file instead. | A PTY stream has no structure to turn into events. README 7.1 states this as the terminal-session exception to the session lifecycle: a terminal session writes no events and no `Finished`. |
 | D3 | Scrollback is kept to the last 2 MiB of raw bytes per session. | That repaints the final screen and recent history of both TUIs and bounds disk use at 4 MiB per session at the moment before a trim. |
 | D4 | The briefing reaches the CLI as a file plus a short prompt argument that points at it. | A long, multi-line briefing as a command-line argument is fragile on Windows, and a file can be read again after a resume. |
 | D5 | Codex is started as the native `codex.exe` when it can be found, else as `node codex.js`; never through `cmd.exe`. | Arguments that pass through `cmd.exe` are re-parsed by it, which is unsafe for a path. |
 | D6 | Codex runs with `--no-alt-screen --no-daemon` in the terminal. | The spike verified this form; it keeps xterm's scrollback and plain-drag text selection, and keeps Hivemind away from the shared, self-updating Codex daemon. |
 | D7 | Claude Code gets Hivemind's session id (`--session-id`); Codex is resumed with `resume --last` in the session's own worktree. | Codex assigns its own id and a session's worktree folder is used by nothing else, so "the last conversation in this folder" is exact without parsing Codex's files. |
-| D8 | After exit a terminal session is `ended` (clean or user-caused) or `failed`; either can go back to `running` through "Resume in terminal". | The brief asks for these statuses, and the conversation lives in the CLI's own store, so it survives the process. |
+| D8 | After exit a terminal session is `ended` (clean or user-caused) or `failed`; either can go back to `running` through "Resume in terminal". | The conversation lives in the CLI's own store, so it survives the process. README 7.1 has this as its second terminal-session exception: an ended or failed terminal session may be started again and returns to `running`. |
 | D9 | At most 4 terminals run at once (`MAX_TERMINALS`). | Each CLI is a process tree around a 350 MB executable. |
 | D10 | xterm instances live in a module-level registry, outside React. | The page component is unmounted on every navigation, and a terminal must keep its screen and keep receiving output while hidden. |
 | D11 | Codex Chat (Part C) does not stream text deltas. | README 7.1's event contract has no delta event, and Phase 2's transcript shows whole text blocks. |
@@ -178,7 +180,7 @@ This table is the code after Phase 1. Section 3.1 lists what Phases 2 and 4 add 
 | `src/App.css`, anchor `.segmented {` | `.segmented { display: flex; gap: .25rem; }`, `.segmented .on { background: var(--accent-strong); border-color: var(--accent-strong); }` | The Chat | Terminal switch and the Engine and Interface controls. |
 | `src/App.tsx`, anchor `function useShortcuts()` | A `keydown` listener on `window` (bubble phase): Alt+Left goes back; Ctrl/Cmd+P palette, +O notes, +N new note, +G graph, +Shift+A activity, +W swallowed. | These must not fire while the terminal has focus (section 4.8). |
 | `src/shell/Topbar.tsx`, anchor `(key === "k" && !e.shiftKey)` | A second `window` `keydown` listener: Ctrl/Cmd+K and Ctrl/Cmd+Shift+F focus the search field. | Same. |
-| `src/App.tsx`, anchor `function useLiveRefresh(` | Listens for `agent-sessions-changed` and invalidates `["agent", "sessions"]`. | Add `term-exit`. |
+| `src/App.tsx`, anchor `function useLiveRefresh(` | Listens for `agent-sessions-changed` and invalidates `["agent", "sessions"]`. | Not changed. A terminal session's status reaches the page through this event; the terminal registry listens for `term-exit` itself. |
 | `src/features/agents/AgentWorkspace.tsx`, anchors `function Session(`, `export function AgentWorkspace()` | Session list, transcript, context rail; "Copy resume command" builds `claude --resume ${info.id}`. | Gains the terminal branch, the engine menu and the switch. |
 | `src/lib/agent.ts`, anchor `export interface SessionInfo` | Types and `agent_*` invokes. | Gains `Engine`, `Interface`, `EngineInfo`, `agentEngines`. |
 | `src/features/settings/SettingsForm.tsx`, anchor `type PathKey =` | The path fields, built by `field(key, label, hint)`. | Gains `codex_path`. |
@@ -253,7 +255,8 @@ pub struct SessionInfo {
     /// README 7.1. Default `chat`, so older indexes load.
     #[serde(default)]
     pub interface: Interface,
-    /// Part C only: the engine's own id for the conversation (a Codex thread id). Claude Code uses `id`.
+    /// Part C only (added in commit 10, not in Parts A and B): the engine's own id for the conversation
+    /// (a Codex thread id). Claude Code uses `id`.
     #[serde(default)]
     pub engine_session: Option<String>,
 }
@@ -422,8 +425,9 @@ export const termWrite = (id: string, data: string) => invoke<void>("term_write"
 export const termResize = (id: string, cols: number, rows: number) => invoke<void>("term_resize", { id, cols, rows });
 export const termClose = (id: string) => invoke<void>("term_close", { id });
 export const termList = () => invoke<TermInfo[]>("term_list");
-export const termsQuery = () => ({ queryKey: ["term", "list"], queryFn: termList });
 ```
+
+There is no query over `term_list`, on purpose. Whether a terminal's program is running is known in one place in the webview, the registry (section 6.10): it sets `running` from the result of every `term_open` and `term_login` and clears it on `term-exit`. The tab strip, the status line and "Stop session" all read that one value through `useRunning`. `term_list` stays as a command (README 7.4) for checks from outside the registry: section 8's commit 5 check and section 11.
 
 `interface` is a reserved word in TypeScript's strict mode as an identifier, but it is legal as a property name. Write `info.interface`; when destructuring, rename it: `const { interface: face } = info`.
 
@@ -439,7 +443,7 @@ All arguments are named in camelCase on the JavaScript side (Tauri converts to s
 
 | Command | Arguments | Returns | Errors |
 | --- | --- | --- | --- |
-| `term_open` | `sessionId: string`, `cols: number`, `rows: number`, `start: "fresh" \| "resume" \| null`, `replay: boolean`, `output: Channel` | `TermInfo` | `Invalid session id`; `Unknown session`; `This session is not a terminal session`; `This session has no worktree` (it was removed); `The session's worktree folder is missing: {path}`; `Close a terminal first: 4 are already running`; `Could not start {program}: {error}`; the two "was not found" strings below |
+| `term_open` | `sessionId: string`, `cols: number`, `rows: number`, `start: "fresh" \| "resume" \| null`, `replay: boolean`, `output: Channel` | `TermInfo` | `Invalid session id`; `Unknown session`; `This session is not a terminal session`; and, only when a program would be started or attached to: `A review action is running for this session` (Phase 4's reservation), `This session has no worktree` (it was removed), `The session's worktree folder is missing: {path}`, `Close a terminal first: 4 are already running`, `Could not start {program}: {error}`; the two "was not found" strings below |
 | `term_login` | `engine: "claude" \| "codex"`, `cols`, `rows`, `output: Channel` | `TermInfo` (id `login-claude` or `login-codex`) | `Could not start {program}: {error}`; "was not found" |
 | `term_write` | `id: string`, `data: string` | nothing | `This terminal is not running` |
 | `term_resize` | `id: string`, `cols: number`, `rows: number` | nothing | none (a terminal that is not running is ignored) |
@@ -451,14 +455,17 @@ All arguments are named in camelCase on the JavaScript side (Tauri converts to s
 
 What `term_open` does, in order:
 
-1. Look the session up with Phase 4's `Manager::info` (it validates the id as a plain UUID). It must have `interface == Terminal` and a `worktree` whose `path` is an existing folder.
+1. Look the session up with Phase 4's `Manager::info` (it validates the id as a plain UUID). It must have `interface == Terminal`. Nothing else is required yet: a session whose worktree was removed can still be looked at.
 2. Clamp `cols` to 20..=500 and `rows` to 5..=300.
-3. If `replay` is true, send the session's saved scrollback through `output` as one message (skip when the file is empty or missing).
-4. If a program is running for this session: make `output` the terminal's output (replacing the old one), resize the PTY to `cols` x `rows`, return `TermInfo { running: true, .. }`. `start` is ignored.
-5. Otherwise, if `start` is null: return `TermInfo { running: false, .. }`. Nothing is started. This is the read-only view of an ended session.
-6. Otherwise: enforce `MAX_TERMINALS`, find the program, build the command line for `start` (section 5.4), set the session `running`, spawn it in a PTY of that size in the worktree, return `TermInfo { running: true, .. }`.
+3. Decide what the call is. **Attach**: a program is running for this session. **Start**: no program is running and `start` is not null. **View**: no program is running and `start` is null.
+4. For an attach or a start, and not for a view: if Phase 4 has reserved the session for a review action (README 7.1; Phase 4's `Manager::reserve`), fail with `A review action is running for this session`. This is the first thing checked for those two, before anything is sent.
+5. For a start only: the session must have a `worktree` (`This session has no worktree`) whose `path` is an existing folder (`The session's worktree folder is missing: {path}`). Checked before anything is sent.
+6. If `replay` is true, send the session's saved scrollback through `output` as one message (skip when the file is empty or missing). The scrollback file lives under the app data folder, not in the worktree, so this works with no worktree.
+7. Attach: make `output` the terminal's output (replacing the old one), resize the PTY to `cols` x `rows`, return `TermInfo { running: true, .. }`. `start` is ignored.
+8. View: return `TermInfo { running: false, .. }`. Nothing is started. This is the read-only view of a session whose program is not running, with or without a worktree.
+9. Start: enforce `MAX_TERMINALS`, find the program, build the command line for `start` (section 5.4), set the session `running`, spawn it in a PTY of that size in the worktree, return `TermInfo { running: true, .. }`.
 
-Steps 3 and 4 happen under one lock, so no byte is lost or sent twice between the saved history and the live stream (section 4.7).
+Steps 6 and 7 happen under one lock, so no byte is lost or sent twice between the saved history and the live stream (section 4.7).
 
 Example call and reply:
 
@@ -501,7 +508,7 @@ Phase 2's chat-only commands refuse a terminal session (decision D12), each with
 
 | Event | Payload | When |
 | --- | --- | --- |
-| `term-exit` | `TermExit`, for example `{"id":"5f0c1c2e-…","sessionId":"5f0c1c2e-…","code":0}` | Once per program run, after its last output was sent. |
+| `term-exit` | `TermExit`, for example `{"id":"5f0c1c2e-…","sessionId":"5f0c1c2e-…","code":0}` | Once per program run, after its last output was sent. The only listener is the terminal registry (section 6.10). |
 | `agent-sessions-changed` (exists) | none | Whenever a terminal session's status or `filesChanged` changes; it is emitted by the agent manager's `amend`. |
 
 Terminal output does not use events. It goes over the `Channel` passed to `term_open`.
@@ -519,11 +526,13 @@ Terminal output does not use events. It goes over the `Channel` passed to `term_
 | `running` | The program exits, close was requested or the code is in `QUIET_EXITS` | `ended` | `ended_at` set. `files_changed` recomputed. `term-exit`. |
 | `running` | The program exits with any other code | `failed` | As above, and `error = "The program exited with code N."` |
 | `ended`, `failed` | `term_open(start: "resume" or "fresh")` succeeds | `running` | As the second row. |
-| `ended`, `failed`, `idle` | `term_open(start: null)` | unchanged | Only the saved scrollback is sent (if `replay`). |
+| `ended`, `failed`, `idle` | `term_open(start: null)` | unchanged | Only the saved scrollback is sent (if `replay`). Works with or without a worktree. |
+| `ended`, `failed` (worktree removed) | `term_open(start: …)` | unchanged | Refused: `This session has no worktree`. |
+| `idle`, `ended`, `failed` | `term_open(start: …)` while Phase 4 holds a reservation | unchanged | Refused: `A review action is running for this session`. |
 | `running` (in the index at app start) | `store::recover` | `ended` | `ended_at = now`. No record is written. Phase 2's rule for interactive sessions (back to `idle`, with a `turnFinished` record) must not reach a terminal session. |
 | `ended`, `failed` | `agent_remove_worktree` (Phase 2) | unchanged | The worktree is removed; `worktree` and `files_changed` become `None`. The session can no longer be started. |
 
-`waiting`, `succeeded` and `cancelled` are never used by a terminal session. This table extends README 7.1 in one respect: for a terminal session `ended` and `failed` are not final. What that means for code from other phases:
+`waiting`, `succeeded` and `cancelled` are never used by a terminal session. The two ways this table differs from a chat session's lifecycle are the terminal-session exceptions README section 7.1 states: a terminal session writes no events and no `Finished`, and an ended or failed terminal session may be started again and returns to `running`. This document does not extend the contract; it implements that paragraph. What the exceptions mean for code from other phases:
 
 - Phase 2's `isEnded(s)` is true for an `ended` or `failed` terminal session. That is right for everything that uses it (no "Resume session" on Overview, no composer), because those all mean "cannot take a message now".
 - Phase 4 refuses Approve, Request changes and Discard while a session is `running` or `waiting`, and shows "The agent is working". A terminal session is `running` for as long as its program runs, even when the CLI sits at its prompt. So the user stops the terminal, then approves. The Review page can be opened and read at any time.
@@ -820,6 +829,11 @@ pub trait Adapter: Send + Sync {
     fn tool_result(&self, _line: &str, _tool_use_id: &str) -> Option<(bool, String)> {
         None
     }
+    /// Whether the manager records a `processStarted` event each time it starts a process for a session.
+    /// True for an engine whose driver must begin again (a handshake) with every process.
+    fn marks_process_start(&self) -> bool {
+        false
+    }
 }
 
 /// What one log record led to.
@@ -837,23 +851,43 @@ pub struct Step {
 }
 
 /// One session's conversation with its process.
+///
+/// THE REPLAY RULE: everything that decides which events a driver gives changes in `read` and `note` only,
+/// that is, only when a log record is fed to it. The other methods render lines to write. They may keep
+/// data that only affects what is written (a message kept until a handshake ends), never anything that
+/// affects events. A replay calls `read` and `note` and nothing else, and must give the same events.
 pub trait Driver: Send {
-    /// Lines to write as soon as the process is up, before any message (a handshake). Often none.
-    fn open(&mut self) -> Vec<String>;
-    /// One stdout line. Unknown and malformed lines give an empty step; never `Finished` or `TurnFinished`.
+    /// One stdout line (a `Record::Raw`). Unknown and malformed lines give an empty step; never `Finished` or `TurnFinished`.
     fn read(&mut self, line: &str) -> Step;
-    /// Hivemind recorded an event of its own (a `Record::Event`), for example an answered approval.
+    /// One event Hivemind recorded itself (a `Record::Event`): a process was started, an approval was
+    /// answered, a turn was closed by Hivemind. This is how a driver learns what Hivemind did.
     fn note(&mut self, _event: &RunEvent) {}
-    /// The lines that carry one user message. A driver still in its handshake keeps the text and writes it from `read` later.
+    /// Render only: the lines to write as soon as a process is up, before any message (a handshake). Often none.
+    fn open(&mut self) -> Vec<String>;
+    /// Render only: the lines that carry one user message. A driver still in its handshake keeps the text and
+    /// writes it from `read` later.
     fn send(&mut self, text: &str) -> Vec<String>;
-    /// The line that answers a permission request. `request` is the stdout line that asked, as printed.
+    /// Render only: the line that answers a permission request. `request` is the stdout line that asked, as printed.
     fn answer(&mut self, request_id: &str, request: &str, decision: Decision) -> Option<String>;
-    /// The line that stops the running turn, when there is one to stop.
+    /// Render only: the line that stops the running turn, when there is one to stop.
     fn interrupt(&mut self) -> Option<String>;
-    /// The line that changes the permission mode of a running CLI, when the CLI can do that.
+    /// Render only: the line that changes the permission mode of a running CLI, when the CLI can do that.
     fn set_mode(&mut self, mode: PolicyMode) -> Option<String>;
 }
 ```
+
+**The lifecycle record.** A replay sees records, not calls. So the one step Hivemind takes that a driver must know about and that no stdout line shows, starting a process, is written to the log as an event, the way Phase 2 writes the user's message:
+
+```rust
+// src-tauri/src/agent/events.rs, a new `RunEvent` variant
+/// Written by Hivemind each time it starts a process for a session whose engine asks for it
+/// (`Adapter::marks_process_start`). `resume` says whether it continues an earlier conversation.
+ProcessStarted { resume: bool },
+```
+
+JSON: `{"type":"processStarted","resume":false}`. In `src/lib/agent.ts` the `RunEvent` union gains `| { type: "processStarted"; resume: boolean }`. Phase 2's reducer (`src/features/agents/events.ts`) already ignores an event kind it does not know and still counts its `seq`, so the transcript does not change. The manager records it, through `Inner::record`, right after `spawn` and before the `userMessage` record, and only when `adapter.marks_process_start()` is true. Claude Code's adapter keeps the default `false`, so Claude Code logs and their numbering are exactly as Phase 2 wrote them.
+
+Two more records already exist and are fed to the driver the same way: Phase 2's `approvalResolved` (written by `answer`) and Phase 2's `turnFinished` (written by the pump at a turn's end and when a process dies in mid-turn, and by `recover`).
 
 **The Claude adapter after the change.** `ClaudeCode::driver` returns a `ClaudeDriver` with no fields. Phase 2's eight functions stay in `claude.rs` as private functions; the driver calls them:
 
@@ -861,7 +895,7 @@ pub trait Driver: Send {
 | --- | --- |
 | `open` | `vec![]` (spike: "Handshake: NONE required"). |
 | `read(line)` | `Step { write: refusal(line).into_iter().collect(), events: parse_line(line), turn: outcome(line), mode: mode_of(line), engine_session: None }` |
-| `note` | The default: nothing. |
+| `note` | The default: nothing. `ClaudeCode::marks_process_start` is the default `false`, so no `processStarted` record is written for Claude Code. |
 | `send(text)` | `vec![user_line(text)]` |
 | `answer(_, request, decision)` | `answer_line(request, decision)` |
 | `interrupt` | `Some(interrupt_line())` |
@@ -876,29 +910,60 @@ No behaviour changes for Claude Code. Phase 2's and Phase 4's tests must pass, c
 - Phase 2's `events_of(adapter, record, started)` becomes `fn step_of(driver: &mut dyn Driver, record: &Record, started: &mut bool) -> Step`. A `Record::Event` gives its event as is, after `driver.note(&event)`. A `Record::Raw` gives `driver.read(raw)`, minus every `Started` after the first (Phase 2's rule stays here, not in a driver). It is still the one function both the live path and the replay use.
 - `Inner::record` returns the `Step`. Its events are numbered and emitted as in Phase 2.
 - The pump, per line: where Phase 2 writes `refusal(line)`, write `step.write`; where it calls `outcome(line)`, use `step.turn`; where it calls `mode_of(line)`, use `step.mode`; store `step.engine_session` in `info.engine_session` when it is set. Lines are written after the sessions lock is released, through `Live.stdin`, exactly as Phase 2 writes (its rule: never hold the sessions lock while writing to a CLI).
-- `start` and a resuming `send`: after `spawn`, write `driver.open()`; then, where Phase 2 writes `user_line(text)`, write `driver.send(text)`.
+- `start` and a resuming `send`: after `spawn`, when `adapter.marks_process_start()`, `record` a `ProcessStarted { resume }` event (it reaches `driver.note`, which puts the driver at the start of a handshake). Then write `driver.open()`. Then Phase 2's `userMessage` record, and, where Phase 2 writes `user_line(text)`, write `driver.send(text)`.
 - `answer`: `driver.answer(request_id, &request_line, decision)` where Phase 2 calls `answer_line`. The `ApprovalResolved` it records reaches `driver.note` through `record`.
 - `interrupt` and `set_policy`: `driver.interrupt()` and `driver.set_mode(mode)`; `None` means there is nothing to write.
-- `Manager::session` (replay): make a fresh driver with `adapter.driver(Path::new(&info.workspace[0]), info.policy, None)`, fold the records with `step_of`, keep the events, drop `write`, `turn`, `mode` and `engine_session`.
+- `Manager::session` (replay): make a fresh driver with `adapter.driver(Path::new(&info.workspace[0]), info.policy, None)`, fold the records with `step_of`, keep the events, drop `write`, `turn`, `mode` and `engine_session`. It never calls `open`, `send`, `answer`, `interrupt` or `set_mode`.
+- The same fold rebuilds `Session.driver` for a session loaded from disk before a new process is started for it; the manager then passes the stored `info.engine_session` to the fresh driver, so the live driver resumes the right conversation.
 
-Why replay still numbers events exactly as the live run did: a driver's events depend only on the records it was fed, in order. Stdout lines reach it through `read`; Hivemind's own events (including every answered approval) reach it through `note`. Nothing a driver emits depends on what was written to stdin.
+Why replay numbers events exactly as the live run did: by the replay rule, a driver's events depend only on the records it was fed, in order. Stdout lines reach it through `read`. What Hivemind did reaches it through `note`: a process start, every answered approval, every turn Hivemind closed. `open`, `send`, `answer`, `interrupt` and `set_mode` only render lines, and nothing a driver emits depends on what was written to stdin. A log that spans several processes works for the same reason: each `processStarted` record puts the driver back at the start of a handshake, in the live run and in the replay alike, so the second process's `{"id":1,…}` and `{"id":2,…}` replies are read as handshake replies again and not as stray lines.
 
-**The Codex driver's states.**
+**The Codex driver's states.** `Codex::marks_process_start` is `true`. Every transition is caused by a record: a stdout line (`read`) or one of Hivemind's own events (`note`). The render calls are listed after the table; they cause no transition.
 
-| State | Line read (or call) | Next | Lines written | Events |
+| State | Record | Next | Lines `read` gives to write | Events |
 | --- | --- | --- | --- | --- |
-| (new) | `open()` | `Handshake` | `initialize` (id 1) | none |
-| `Handshake` | `{"id":1,"result":{…}}` | `Starting` | `initialized`, then `thread/start` or `thread/resume` (id 2) | none; if `userAgent` shows a version below 0.166.0 the step's turn is a failed `Outcome` with reason `This Codex version is not supported for Chat. Use Terminal.` |
-| `Handshake`, `Starting` | `send(text)` | same | none (text kept) | none |
-| `Starting` | `{"id":2,"result":{"thread":{"id":…}}}` | `Ready` | `turn/start` for the kept text, if any | `started { model, cliVersion, plugins: [] }`; `engine_session = thread.id` |
+| any (a new driver is `NoProcess`) | `note(ProcessStarted { resume })` | `Handshake` | none (`note` writes nothing) | none. Everything that belongs to one process is forgotten: the client id counter goes back to 1, the server request ids, the remembered items, the open requests, the turn id, the last text. The thread id is kept. |
+| `Handshake` | `{"id":1,"result":{…}}` | `Starting` | `initialized`, then `thread/resume` when the driver has a thread id (given at construction, or read from an earlier `thread/start` reply), else `thread/start` (id 2) | none; if `userAgent` shows a version below 0.166.0 the step's turn is a failed `Outcome` with reason `This Codex version is not supported for Chat. Use Terminal.` |
+| `Starting` | `{"id":2,"result":{"thread":{"id":…}}}` | `Ready` | `turn/start` for the kept text, if any | `started { model, cliVersion, plugins: [] }` (`step_of` drops it for every process after the first, by Phase 2's rule); `engine_session = thread.id` |
 | `Starting` | `{"id":2,"error":…}` | `Failed` | none | turn = failed `Outcome` with the error's message |
-| `Ready` | `send(text)` | `Turn` (when `turn/started` arrives) | `turn/start` (next client id) | none (Phase 2 logs `userMessage`) |
-| `Turn` | notifications and server requests | `Turn` | A decline, at once, for a command Phase 2's `governed_memory_command` refuses; an error reply for a request Hivemind cannot answer. Other approval answers come from `answer`. | section 5.10 |
-| `Turn` | `interrupt()` | `Turn` | `turn/interrupt` with the thread id and turn id | none |
-| any other state | `interrupt()` | unchanged | none (`None`) | none |
-| any | `set_mode(mode)` | unchanged | none (`None`): changing the approval policy of a running thread was not verified | none |
-| any | `note(ApprovalResolved { request_id, .. })` | unchanged | none | The request is no longer open. |
+| `Ready` | `turn/started` | `Turn` | none | none |
+| `Ready`, `Turn` | item notifications and server requests | unchanged | A decline, at once, for a command Phase 2's `governed_memory_command` refuses; an error reply for a request Hivemind cannot answer. | section 5.10. An approval request becomes an open request. |
+| `Ready`, `Turn` | `note(ApprovalResolved { request_id, .. })` | unchanged | none | none. The request is no longer open. |
 | `Turn` | `turn/completed` | `Ready` | none | `approvalResolved { withdrawn }` for each request still open; turn = `Outcome` |
+| any | `note(TurnFinished { .. })` (Hivemind closed the turn: the process died, or `recover`) | unchanged | none | none. The open requests are forgotten, so they are not reported as withdrawn a second time by a later process. |
+| any | a line with `"id"` and no `"method"` that the state does not expect (a reply to `turn/start`, `turn/interrupt`, or to a request of an earlier process) | unchanged | none | none |
+| any | any other record | unchanged | none | none |
+
+The render calls, which change nothing a replay could see:
+
+| Call | In state | Returns |
+| --- | --- | --- |
+| `open()` | `Handshake` | `initialize` (id 1) |
+| `send(text)` | `Handshake`, `Starting` | nothing; the text is kept and written as `turn/start` by the `read` that reaches `Ready` |
+| `send(text)` | `Ready` | `turn/start` (next client id) with the thread id |
+| `answer(request_id, _, decision)` | any | the reply for that open request (section 5.10), or `None` |
+| `interrupt()` | `Turn` | `turn/interrupt` with the thread id and the turn id; `None` in any other state |
+| `set_mode(mode)` | any | `None`: changing the approval policy of a running thread was not verified |
+
+A log that spans two processes, record by record, as the live run and the replay both see it:
+
+| # | Record | State after | Event numbered |
+| --- | --- | --- | --- |
+| 1 | `Event(ProcessStarted { resume: false })` | `Handshake` | `processStarted` |
+| 2 | `Event(UserMessage)` | `Handshake` | `userMessage` |
+| 3 | `Raw({"id":1,"result":…})` | `Starting` | none |
+| 4 | `Raw({"id":2,"result":{"thread":{"id":"T"}…}})` | `Ready` | `started` |
+| 5 | `Raw(turn/started)`, item lines, an approval request | `Turn` | `toolUse`, `approvalRequest`, … |
+| 6 | `Event(ApprovalResolved { allow })` | `Turn` | `approvalResolved` |
+| 7 | `Raw(turn/completed)` | `Ready` | none from the driver (no open request); Phase 2's manager records `filesChanged` and `turnFinished` |
+| 8 | the app is closed and started again; the user sends a message | | |
+| 9 | `Event(ProcessStarted { resume: true })` | `Handshake` | `processStarted` |
+| 10 | `Event(UserMessage)` | `Handshake` | `userMessage` |
+| 11 | `Raw({"id":1,"result":…})` | `Starting` | none |
+| 12 | `Raw({"id":2,"result":{"thread":{"id":"T"}…}})` (the reply to `thread/resume`) | `Ready` | none: this `started` is dropped |
+| 13 | the second turn's lines | `Turn`, then `Ready` | as in rows 5 to 7 |
+
+Without row 9 a replay could not tell row 11 from a stray reply, and would stay in `Ready` with the first process's request ids.
 
 **What has no Codex equivalent.**
 
@@ -1063,8 +1128,8 @@ Read the file <ctx>\briefing.md first. It holds your task and the project contex
 
 | Engine | Start | Program and arguments |
 | --- | --- | --- |
-| Claude Code | fresh | `<claude> --add-dir <ctx> --session-id <session id> [--model <alias>] --permission-mode <mode> <prompt>` |
-| Claude Code | resume | `<claude> --add-dir <ctx> --resume <session id> [--model <alias>] --permission-mode <mode>` |
+| Claude Code | fresh | `<claude> --add-dir <ctx> --disallowedTools <deny rule>… --session-id <session id> [--model <alias>] --permission-mode <mode> <prompt>` |
+| Claude Code | resume | `<claude> --add-dir <ctx> --disallowedTools <deny rule>… --resume <session id> [--model <alias>] --permission-mode <mode>` |
 | Codex | fresh | `<codex> --no-alt-screen --no-daemon -s <sandbox> -a on-request <prompt>` |
 | Codex | resume | `<codex> resume --last --no-alt-screen --no-daemon -s <sandbox> -a on-request` |
 | Claude Code | sign-in | `<claude> auth login` (working directory: the home folder) |
@@ -1084,11 +1149,12 @@ Rules that the order of arguments encodes:
 
 - Claude Code's `--add-dir` takes a list (Phase 1's adapter passes several folders after one `--add-dir`). The prompt must not follow it directly or it would be read as another folder. That is why `--add-dir <ctx>` comes first and the prompt comes last, after `--permission-mode <mode>`, which takes exactly one value.
 - Phase 2 gives a chat `work` session no `--add-dir` at all, so that an unasked edit cannot land outside the worktree. The terminal adds one folder, `<ctx>`, which is Hivemind's own and holds only `briefing.md`. Whether `acceptEdits` lets Claude Code write there without asking was not verified (Phase 2 says the same about additional directories); the worst case is an edited copy of the briefing.
+- `--disallowedTools <deny rule>…` carries Phase 2's `scope::governed_rules()`, one argument per rule, exactly as Phase 2's adapter passes them to a headless session (README 7.1: governed Living Memory commands are denied by rule). Help text on 2.1.322: "Comma or space-separated list of tool names to deny (e.g. "Bash(git *) Edit")". It also takes a list, so the same ordering rule applies: it is followed by `--session-id` or `--resume`, never by the prompt. The rules are passed on a resume too. Codex has no such flag; that is a stated limit (section 1.3).
 - `--add-dir <ctx>` is needed for Claude Code: a read outside the working folders prompts (`"decision_reason":"Path is outside allowed working directories"`), and "reads inside the working folders" do not.
 - Codex needs no extra folder to read the briefing: its sandbox restricts writes, and the recorded permission profile of a `workspace-write` turn starts with `{"path":{"type":"special","value":{"kind":"root"}},"access":"read"}`. Do not pass `--add-dir` to Codex: there it means "additional directories that should be writable".
 - `codex resume` accepts "the same `-C -s -a -m --no-alt-screen --no-daemon` set". Codex does not remember the sandbox across a resume (verified for `exec resume`), so the flags are passed again.
 
-Environment, for every program started in a PTY: the app's own environment, plus `TERM=xterm-256color` and `COLORTERM=truecolor`. If the app's own environment contains `CLAUDECODE` (Hivemind was started from inside a Claude Code session, as `npm run tauri dev` often is), also remove `NO_COLOR` and every variable whose name starts with `CLAUDE`. A Claude Code session's environment on 2026-11-10 held `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_EXECPATH` and several more `CLAUDE_*` names. When `CLAUDECODE` is absent nothing is removed, so a user's own `CLAUDE_*` settings keep working.
+Environment, for every program started in a PTY (session terminals and sign-in terminals, both engines): the app's own environment, plus `TERM=xterm-256color` and `COLORTERM=truecolor`, plus `LIVING_MEMORY_ROOT=<the store root the app is connected to>` when the app has one. The last one is README 7.1's rule (Phase 2 sets it on headless sessions through `Spec.memory_root`): Living Memory's hooks, which the user's Claude Code and Codex load in every session, choose their store from that variable, and without it a terminal opened while the app is connected to another store (a demo store, a second store) would write its session state into the user's default store. The value comes from the same source Phase 2 uses for `Spec.memory_root`: the `root` of `settings::resolve(&settings::load(path), |k| std::env::var(k).ok())`. `None` (the app uses Living Memory's own default) sets nothing. If the app's own environment contains `CLAUDECODE` (Hivemind was started from inside a Claude Code session, as `npm run tauri dev` often is), also remove `NO_COLOR` and every variable whose name starts with `CLAUDE`. A Claude Code session's environment on 2026-11-10 held `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_EXECPATH` and several more `CLAUDE_*` names. When `CLAUDECODE` is absent nothing is removed, so a user's own `CLAUDE_*` settings keep working.
 
 Verbatim help text these lines rest on:
 
@@ -1114,7 +1180,7 @@ Codex, from `codex --help` (0.166.0), verbatim descriptions:
 
 Verified end to end in the spike (run `e1-tui`): `codex.exe --no-alt-screen --no-daemon -m gpt-6-luna -c model_reasoning_effort=low -s read-only -a never "Reply with exactly: tui-ok"` in a ConPTY submitted the prompt and answered it. With piped stdio the TUI refuses: `Error: stdin is not a terminal`.
 
-> UNVERIFIED (U2): interactive `claude` (without `-p`) accepts a positional prompt, `--session-id`, `--resume`, `--add-dir`, `--model` and `--permission-mode`. The spikes verified these flags only with `-p`, and the app's existing "Copy resume command" already relies on interactive `claude --resume <id>`. First step: run `claude --help` and read it (it starts nothing). Pass: the usage line shows a `[prompt]` argument; `--session-id` and `--add-dir` are listed and their descriptions do not say "only works with --print". Fail: any of them is missing or print-only. If the prompt argument fails: start without it; the hint line above the terminal then ends with "Ask the agent to read the briefing: <ctx>\briefing.md". If `--session-id` fails: start without it and resume with `<claude> --continue` (the worktree is used by this session only, so "the most recent conversation in this folder" is the right one).
+> UNVERIFIED (U2): interactive `claude` (without `-p`) accepts a positional prompt, `--session-id`, `--resume`, `--add-dir`, `--disallowedTools`, `--model` and `--permission-mode`. (Whether the deny-rule patterns themselves match is Phase 2's own UNVERIFIED block for `governed_rules`; if Phase 2 had to fall back to a `--settings` JSON with `permissions.deny`, the terminal passes the same `--settings` value in place of `--disallowedTools`.) The spikes verified these flags only with `-p`, and the app's existing "Copy resume command" already relies on interactive `claude --resume <id>`. First step: run `claude --help` and read it (it starts nothing). Pass: the usage line shows a `[prompt]` argument; `--session-id` and `--add-dir` are listed and their descriptions do not say "only works with --print". Fail: any of them is missing or print-only. If the prompt argument fails: start without it; the hint line above the terminal then ends with "Ask the agent to read the briefing: <ctx>\briefing.md". If `--session-id` fails: start without it and resume with `<claude> --continue` (the worktree is used by this session only, so "the most recent conversation in this folder" is the right one).
 
 > UNVERIFIED (U3): (a) interactive `codex resume --last`, started in the worktree, continues that worktree's conversation without showing a picker; (b) with `-s read-only -a on-request` the Codex TUI asks before an edit. The spike verified `--last` and its per-folder filter only for `codex exec resume`, and never exercised `on-request` in the TUI. First step: section 11, step V8 (one small Codex turn in a scratch worktree). Pass for (a): after quitting and running the resume line, the earlier exchange is on screen. Pass for (b): asked to create a file, Codex shows its own approval prompt. If (a) fails: use the fresh command line for "Resume in terminal" as well and label the button "Start again in terminal" for Codex sessions. If (b) fails (Codex refuses instead of asking): map `ask` to `-s workspace-write -a on-request` for Codex too, and say so in the Start screen's permission help text.
 
@@ -1374,11 +1440,11 @@ pub fn program(engine: Engine, saved: &Settings) -> Result<Cli, String>;
 /// The one-line prompt that points the CLI at its briefing file.
 pub fn pointer_prompt(briefing: &Path) -> String;
 /// The CLI's own arguments for a session terminal (section 5.4), without the launch prefix.
-pub fn session_args(engine: Engine, mode: StartMode, accept_edits: bool, model: Option<&str>, session_id: &str, context_dir: &Path) -> Vec<String>;
+pub fn session_args(engine: Engine, mode: StartMode, accept_edits: bool, model: Option<&str>, deny: &[String], session_id: &str, context_dir: &Path) -> Vec<String>;
 /// The CLI's own arguments for its sign-in command.
 pub fn login_args(engine: Engine) -> Vec<String>;
 /// Variables to set and names to remove, given the app's own variable names.
-pub fn environment(own: &[String]) -> (Vec<(String, String)>, Vec<String>);
+pub fn environment(own: &[String], memory_root: Option<&Path>) -> (Vec<(String, String)>, Vec<String>);
 /// The build number in the text `cmd /d /c ver` prints, e.g. 26100 from "Microsoft Windows [Version 10.0.26100.9711]".
 pub fn parse_build(ver: &str) -> Option<u32>;
 /// The Windows build number, read once; None on other systems.
@@ -1402,9 +1468,9 @@ It never returns `codex.cmd`, the extensionless `codex`, or `cmd.exe` (decision 
 
 `claude`: `let found = agent::claude::available(saved)?;` then, on Windows, `"claude"` becomes `"claude.exe"` (the PTY's own PATH search tries the exact name first and could find an extensionless npm shim; section 5.1).
 
-`session_args` returns exactly the argument lists of section 5.4's table, with `mode` = `"acceptEdits"` or `"manual"`, `sandbox` = `"workspace-write"` or `"read-only"`, `--model <alias>` for Claude Code when `model` is `Some` (ignored for Codex), and the prompt from `pointer_prompt(&context_dir.join("briefing.md"))`. The caller passes `accept_edits = info.policy == PolicyMode::AcceptEdits` and `model = info.model.as_deref()`. It takes a `bool`, not Phase 2's `Policy`, because a terminal has no allow rules.
+`session_args` returns exactly the argument lists of section 5.4's table, with `mode` = `"acceptEdits"` or `"manual"`, `sandbox` = `"workspace-write"` or `"read-only"`, `--model <alias>` for Claude Code when `model` is `Some` (ignored for Codex), and the prompt from `pointer_prompt(&context_dir.join("briefing.md"))`. For Claude Code, when `deny` is not empty, `--disallowedTools` and every rule follow `--add-dir <ctx>` (ignored for Codex). The caller passes `accept_edits = info.policy == PolicyMode::AcceptEdits`, `model = info.model.as_deref()` and `deny = &scope::governed_rules()` (Phase 2's function; the same list a chat session's `Spec.deny` holds). It takes a `bool`, not Phase 2's `Policy`, because a terminal has no allow rules.
 
-`environment(own)`: set = `[("TERM", "xterm-256color"), ("COLORTERM", "truecolor")]`. remove = empty unless `own` contains `CLAUDECODE`; then every name in `own` that starts with `CLAUDE`, plus `NO_COLOR` if present.
+`environment(own, memory_root)`: set = `[("TERM", "xterm-256color"), ("COLORTERM", "truecolor")]`, plus `("LIVING_MEMORY_ROOT", <root>)` when `memory_root` is `Some` (section 5.4). remove = empty unless `own` contains `CLAUDECODE`; then every name in `own` that starts with `CLAUDE`, plus `NO_COLOR` if present.
 
 `windows_build`: on Windows, a `OnceLock<Option<u32>>` filled by `run_with_timeout(cmd /d /c ver, 5 s)` and `parse_build`. `parse_build` takes the text between `[` and `]`, splits it on anything that is not a digit or a dot, takes the piece with at least three dots, and parses its third number.
 
@@ -1464,16 +1530,17 @@ pub fn write_briefing(dir: &Path, session_id: &str, text: &str) -> Result<PathBu
 
 Private pieces and their behaviour:
 
-- `fn spawn(&self, id: String, session_id: Option<String>, engine: Engine, launch: Cli, cwd: &Path, cols: u16, rows: u16, scrollback: Option<Scrollback>, output: Output) -> Result<TermInfo, String>`: the shared tail of `open` and `login`, and what tests call with a harmless program. Under `Inner.terms`: reject when `terms.len() >= MAX_TERMINALS` with `Close a terminal first: 4 are already running`; build `Shared`; build the PTY sink (below); `pty::Session::open`; on error return `Could not start {program}: {error}`; insert the entry.
+- `fn memory_root(&self) -> Option<PathBuf>`: the store the app is connected to, read at each start: `settings::resolve(&settings::load(&self.settings_path), |k| std::env::var(k).ok()).root`. This is the expression Phase 2 uses to fill `Spec.memory_root`; if Phase 2 put it in a function (`git grep -n "memory_root" -- src-tauri/src`), call that function here and do not write this one. `open` and `login` pass its result to `spawn`.
+- `fn spawn(&self, id: String, session_id: Option<String>, engine: Engine, launch: Cli, cwd: &Path, memory_root: Option<&Path>, cols: u16, rows: u16, scrollback: Option<Scrollback>, output: Output) -> Result<TermInfo, String>`: the environment of the program is `launch::environment(<the app's own variable names>, memory_root)`. the shared tail of `open` and `login`, and what tests call with a harmless program. Under `Inner.terms`: reject when `terms.len() >= MAX_TERMINALS` with `Close a terminal first: 4 are already running`; build `Shared`; build the PTY sink (below); `pty::Session::open`; on error return `Could not start {program}: {error}`; insert the entry.
 - The PTY sink, a closure over `Arc<Shared>` and `Arc<Inner>`:
   - `Data(bytes)`: lock `shared.out`; append to the scrollback if there is one; if there is an output and it returns `false`, set it to `None`.
   - `Quiet`: for a session terminal, if `refreshing` was `false` (swap to `true`), start a thread that calls `inner.refresh_files(session_id)` and then clears the flag.
   - `Exit(code)`: `inner.finish(&shared, code)`.
 - `Inner::refresh_files(&self, session_id)`: `agents.info(session_id)`; take its `worktree` (none: return); `let new = worktree::totals(&worktree::changes(&tree)?)` (Phase 2's functions; on an error return and leave the stored value). When `new != info.files_changed.unwrap_or_default()` (the comparison Phase 2's turn end uses): `agents.amend(session_id, |info| { let old = info.files_changed; info.files_changed = Some(new); info.review = review_after_turn(info.review.take(), old.as_ref(), Some(&new), now); })`. The `review_after_turn` line is Phase 4's rule (an approved or dismissed session whose files changed goes back to the review queue); leave it out when Phase 4 is not merged. No `filesChanged` event is recorded: a terminal session has no event log.
 - `Inner::finish(&self, shared, code)`: lock `terms`, remove the entry, unlock. For a session terminal: status = `Ended` when `close_requested` or `code` is in `QUIET_EXITS` (a missing code counts as not quiet), else `Failed`; `refresh_files`; `agents.amend(|info| { info.status = status; info.ended_at = Some(now); info.error = failed.then(|| format!("The program exited with code {n}.")) })` (for a missing code: `The program ended without an exit code.`). Then emit `Emit::Exit`.
-- `open`: `agents.info(session_id)?` (Phase 4's; it gives `Invalid session id` and `Unknown session`); check the interface (`This session is not a terminal session`), the worktree (`This session has no worktree`) and its folder (`The session's worktree folder is missing: {path}`); clamp the size. Then steps 3 to 6 of section 4.3. For step 6: `launch::program(engine, &settings::load(&settings_path))`, append `launch::session_args(...)` to its `args`, remember the old status, `agents.amend(status = Running, ended_at = None, error = None)`, `spawn(...)`, and on error put the old status back.
+- `open`: `agents.info(session_id)?` (Phase 4's; it gives `Invalid session id` and `Unknown session`); check the interface (`This session is not a terminal session`); clamp the size. Then steps 3 to 9 of section 4.3, in that order: the reservation check for an attach or a start, the worktree checks for a start only, the replay, then attach, view or start. Phase 4 keeps the reservation as a private flag, `reserved: bool` on the manager's `Session` struct, and checks it inside `Manager::send`, `end` and `remove_worktree`; it adds no accessor. Add one beside `Manager::reserve`: `pub fn is_reserved(&self, id: &str) -> bool` (locks the sessions, returns the session's `reserved` flag, `false` for an unknown id), and call it here: when it is true, return `Err("A review action is running for this session".into())`. When Phase 4 is not merged there are no reservations and this check is left out. For the start: `launch::program(engine, &settings::load(&settings_path))`, append `launch::session_args(...)` to its `args` (with `scope::governed_rules()` as `deny`), remember the old status, `agents.amend(status = Running, ended_at = None, error = None)`, `spawn(...)`, and on error put the old status back.
 - `close(id)`: clone the entry out of the map; set `close_requested`; `entry.pty.close()` (outside the lock). The exit handler does the rest.
-- `login`: id `login-<engine>`; if that id is already running, behave like step 4 of `term_open` (attach); else `spawn` with `launch::login_args`, the home folder as the working directory, and no scrollback.
+- `login`: id `login-<engine>`; if that id is already running, behave like the attach of `term_open` (section 4.3, step 7); else `spawn` with `launch::login_args`, the home folder as the working directory, and no scrollback.
 
 ### 6.6 `src-tauri/src/agent/mod.rs` and `agent/store.rs` (changed)
 
@@ -1686,12 +1753,12 @@ export function latestOf(sessions: SessionInfo[], project: string | null, face: 
 /** The shield label in the toolbar for a terminal session. */
 export function accessLabel(s: SessionInfo): string;
 /** "● Session active" and its siblings. */
-export function statusLine(s: SessionInfo, live: boolean): { tone: "on" | "off" | "failed"; text: string };
+export function statusLine(s: SessionInfo, running: boolean): { tone: "on" | "off" | "failed"; text: string };
 ```
 
 - `tabLabel`: `${engineName(s.adapter)} · ${repoName(s.task.repo)}` for a work task (Phase 3's `engineName`, Phase 2's `repoName`). The task's `repo` is used, not `worktree.repo`, because the worktree can have been removed.
 - `accessLabel`: Codex and `accept_edits`: `Workspace access` (mock 04). Codex and anything else: `Read only, asks first`. Claude Code: the `label` of the matching entry in Phase 2's `POLICIES` ("Accept edits" for `accept_edits`, else "Review edits", as in mock 03).
-- `statusLine`: `running` and live: `on`, `Session active`. `idle`, or `running` and not live: `off`, `Starting…`. `ended`: `off`, `Session ended`. `failed`: `failed`, `Session failed` followed by ` · ` and `s.error` when there is one.
+- `statusLine`: `running` is the registry's value for this terminal (`useRunning`), not the session's status. `running` true: `on`, `Session active`. Otherwise by the session's status: `idle` or `running` (the program is being started, or the page has not attached yet): `off`, `Starting…`. `ended`: `off`, `Session ended`. `failed`: `failed`, `Session failed` followed by ` · ` and `s.error` when there is one. When the session has no worktree (`s.worktree === null`), ` · worktree removed` is added to the `ended` or `failed` text.
 
 `src/features/terminal/registry.ts`: the xterm instances, kept outside React (decision D10).
 
@@ -1713,6 +1780,11 @@ export interface Live {
 /** Subscribe to changes of any terminal's `running`, `error` or `touched` (for `useSyncExternalStore`). */
 export function subscribe(listener: () => void): () => void;
 export function get(id: string): Live | undefined;
+/** Whether this session's program is running: the registry's value when it has the terminal, else the session's stored status
+ *  (a running session the page has not attached to yet, for example right after a reload). */
+export function isRunning(s: Pick<SessionInfo, "id" | "status">): boolean;
+/** The same, as a hook that re-renders when it changes (`useSyncExternalStore(subscribe, () => isRunning(s))`). */
+export function useRunning(s: Pick<SessionInfo, "id" | "status">): boolean;
 /** Create the terminal for `id` if there is none, then attach to the Rust side. Safe to call twice. */
 export function ensure(id: string, opts: { sessionId: string | null; engine: Engine; start: StartMode | null }): Live;
 /** Start or resume the program in an existing terminal. */
@@ -1745,11 +1817,11 @@ new Terminal({
 7. Resize: `term.onResize(({ cols, rows }) => { termResize(id, cols, rows).catch(() => {}); })`.
 8. Attach: `await attach(id, opts.start, true)`.
 
-`attach(id, start, replay)`: make `const output = new Channel<ArrayBuffer>(); output.onmessage = (bytes) => live.term.write(new Uint8Array(bytes));`, call `termOpen({ sessionId, cols: term.cols, rows: term.rows, start, replay, output })` (or `termLogin` for a sign-in terminal), set `running` and `error` from the result, and, when the result has `windowsBuild`, set `term.options.windowsPty = { backend: "conpty", buildNumber: windowsBuild }`. On rejection set `error` to the message. Notify.
+`attach(id, start, replay)`: make `const output = new Channel<ArrayBuffer>(); output.onmessage = (bytes) => live.term.write(new Uint8Array(bytes));`, call `termOpen({ sessionId, cols: term.cols, rows: term.rows, start, replay, output })` (or `termLogin` for a sign-in terminal), set `running` and `error` from the result, and, when the result has `windowsBuild`, set `term.options.windowsPty = { backend: "conpty", buildNumber: windowsBuild }`. On rejection set `error` to the message. Then set `term.options.disableStdin = !running`, so a terminal with no program takes no input (a read-only view, including a session whose worktree was removed). Notify. The `term-exit` listener sets `disableStdin = true` as well.
 
 `start(id, mode)` is `attach(id, mode, false)`: the terminal already shows its history, so no replay.
 
-The registry listens once for `term-exit` (`listen<TermExit>("term-exit", …)`): it sets `running = false` on that terminal and notifies.
+The registry listens once for `term-exit` (`listen<TermExit>("term-exit", …)`): it sets `running = false` on that terminal and notifies. Together with `attach`, which sets `running` from every `term_open` and `term_login` result and notifies, this is the whole source of the "is it running" value: a successful open shows "Session active" at once, without waiting for any query to refetch.
 
 `mount(id, host)`: `host.replaceChildren(live.box)`, `refit(id)`, `live.term.focus()`.
 
@@ -1803,19 +1875,22 @@ export function RemoveWorktree({ info }: { info: SessionInfo }): JSX.Element;
 
   The chat rail renders `<RemoveWorktree info={info} />` where the button was; the terminal rail renders the same component (section 7.6).
 - `src/features/agents/AgentWorkspace.tsx`: sections 7.2 and 7.3. In short: `Toolbar` gets the engine menu and the pill switch and can be shown without a session; the view is chosen from the selected session's interface; terminal sessions get a terminal icon in the session list; `<StopSession>` goes into the header's `actions`.
-- `src/App.tsx`, anchor `listen("agent-sessions-changed"`: add `listen("term-exit", () => client.invalidateQueries({ queryKey: ["term"] })),` to the same array.
+- `src/App.tsx`: not changed. `term-exit` is handled by the registry; a session's new status arrives with the existing `agent-sessions-changed`.
 - `src/App.css`: section 7.9.
 
 ### 6.12 Part C files
 
 - `src-tauri/src/agent/mod.rs`:
   - the `Adapter` and `Driver` traits and `Step` (section 4.11), replacing Phase 2's ten-method trait;
+  - the `ProcessStarted` record: written by `start` and by a resuming `send` right after `spawn`, when `adapter.marks_process_start()`;
   - `Session.driver`, `step_of` in place of `events_of`, and the pump, `start`, `send`, `answer`, `interrupt`, `set_policy` and `session` changes listed in section 4.11;
   - `Inner.claude` and `Inner.codex`; `Manager::new(dir, claude, codex, sink)`; Phase 4's `tool_output` picks the session's adapter;
   - `engine_session` on `SessionInfo` (`None` in `session_info`);
   - Phase 2's `Launch` and `Spec` each gain `pub program_args: Vec<String>` (empty for Claude Code; `codex.js` for the `node` form), and `spawn` copies it from one to the other;
   - `start_task` for `Engine::Codex` with `Interface::Chat`: `let cli = crate::term::launch::codex(saved)?;`, the Codex adapter's name in `session_info`, `Launch { scope, program: cli.program, program_args: cli.args, budget_usd }`, `model: None`. `send_task` picks the program the same way from `Engine::of(&info.adapter)`;
   - `pub const CODEX_CHAT: bool = true;`.
+- `src-tauri/src/agent/events.rs`: the `RunEvent::ProcessStarted { resume: bool }` variant (section 4.11); extend Phase 2's test `events_serialise_in_the_contract_shape` with `{"type":"processStarted","resume":true}`.
+- `src/lib/agent.ts`: `| { type: "processStarted"; resume: boolean }` in `RunEvent`. `src/features/agents/events.ts` is not changed; add one case to its test: a `processStarted` event advances `next` and adds no item.
 - `src-tauri/src/agent/claude.rs`: `ClaudeDriver` (section 4.11). `ClaudeCode` keeps `name`, `command` and `tool_result` and gains `driver`. Phase 2's eight per-line functions become private functions of the module, called by the driver. `const GOVERNED` becomes `pub(crate)`.
 - `src-tauri/src/agent/codex.rs` (new):
 
@@ -1831,6 +1906,8 @@ impl Adapter for Codex {
     /// For an `item/completed` line of a `commandExecution` item with this id:
     /// `(status == "completed" && exitCode == 0, aggregatedOutput or "")`.
     fn tool_result(&self, line: &str, tool_use_id: &str) -> Option<(bool, String)>;
+    /// True: a Codex process starts with a handshake, so each start is recorded.
+    fn marks_process_start(&self) -> bool { true }
 }
 
 pub struct CodexDriver { /* state (section 4.11), cwd, policy, thread id, turn id, next client id, kept prompt,
@@ -1883,14 +1960,14 @@ The `PageHeader` subtitle goes back to the mock's sentence: "Choose an engine, s
 | "Environment & session options": the Model select | Shown for Claude Code only. For Codex: `<p className="muted small">Codex uses the model set in your Codex configuration.</p>`, and no `model` is sent. |
 | The same block: `Spending limit: $5.00 per run. Change it in Settings.` | Shown for Claude Code with Chat. Otherwise: `<p className="muted small">No spending limit applies in the terminal or with Codex.</p>` |
 | The same block: `Claude Code: <code>{path}</code>` | `{label}: <code>{path}</code>` from the selected engine's `EngineInfo`. |
-| "Tools, MCP & hooks" (four lines of static text about what Hivemind enforces) | Unchanged for Claude Code with Chat. For Terminal, with either engine, the list is instead: `The program asks for approvals itself, in the terminal.`; `Hivemind does not see or answer those prompts, and cannot refuse Living Memory plan, apply and undo commands there. The briefing tells the agent not to run them.`; `Loaded from your own {label} setup: settings, hooks, plugins and MCP servers.` For Codex with Chat (Part C): `Asks you first: shell commands and file edits, by Codex's rules for the chosen permission.`; `Never: Living Memory plan, apply and undo commands.`; `Loaded from your Codex setup: its configuration, AGENTS.md, plugins and MCP servers.` |
-| Task, Repo, Start branch, Permissions and their helper lines, the briefing preview, the footer | Unchanged. The briefing and the task are the same for every engine and interface. |
+| "Tools, MCP & hooks" (four lines of static text about what Hivemind enforces) | Unchanged for Claude Code with Chat. For Terminal the list is instead, for Claude Code: `The program asks for approvals itself, in the terminal. Hivemind does not see or answer those prompts.`; `Never: Living Memory plan, apply and undo commands. Claude Code is started with rules that deny them.`; `Loaded from your own Claude Code setup: settings, hooks, plugins and MCP servers.` And for Codex: `The program asks for approvals itself, in the terminal. Hivemind does not see or answer those prompts.`; `Hivemind cannot refuse Living Memory plan, apply and undo commands in a Codex terminal. The briefing tells the agent not to run them; do not approve one if Codex asks.`; `Loaded from your own Codex setup: its configuration, AGENTS.md, plugins and MCP servers.` For Codex with Chat (Part C): `Asks you first: shell commands and file edits, by Codex's rules for the chosen permission.`; `Never: Living Memory plan, apply and undo commands.`; `Loaded from your Codex setup: its configuration, AGENTS.md, plugins and MCP servers.` |
+| Task, Phase 3's linked chip (`CHG-014 · title`), Repo, Start branch, Permissions and their helper lines, the briefing preview, the footer | Unchanged. The briefing, the task and the change a session belongs to are the same for every engine and interface. A terminal session of a change carries `task.change` like a chat session, so Phase 3 lists it under the change. |
 
-**Starting.** Phase 2's call gains two option fields, and sends the model only for Claude Code:
+**Starting.** Only the third argument of the existing call changes: it gains two option fields and sends the model only for Claude Code. Leave the first argument (the task) exactly as you find it. After Phase 2 it is `{ kind: "work", project: project.slug, repo, branch }`. Phase 3 (phase-3-changes.md section 6.2, the `StartSession` edits) adds the `change` to the task at exactly this place, and that is the only place a change enters a session; when Phase 3 is merged the call site already carries it, as shown here, and it must stay:
 
 ```ts
 const info = await agentStart(
-  { kind: "work", project: project.slug, repo, branch },
+  { kind: "work", project: project.slug, repo, branch, ...(draft.change !== null ? { change: draft.change } : {}) },   // Phase 3's; without Phase 3 there is no `change` part
   draft.task.trim(),
   { policy, context: draft.context, briefing, model: draft.engine === "claude" ? model || undefined : undefined, system: system?.slug,
     engine: draft.engine, interface: draft.interface },
@@ -1905,7 +1982,7 @@ Keyboard: both groups are ordinary buttons in tab order; Space and Enter select.
 
 **Header** (`PageHeader`): title "Agent Workspace". Phase 2 shows no subtitle. When the terminal view is shown, the subtitle is "Run Claude Code or Codex in a local, project-aware harness with memory and context." (mock 04). `actions`: `<StopSession session={selected} />`.
 
-**Stop session**: `<button className="outline" onClick={…}><Square size="1em" aria-hidden />Stop session</button>`. Shown only when the selected session is a terminal session whose program is running. It calls `termClose(session.id)` and shows a toast on error. No confirmation: the conversation can be resumed, and the button says what it does. While the close is in flight the button is `disabled`.
+**Stop session**: `<button className="outline" onClick={…}><Square size="1em" aria-hidden />Stop session</button>`. Shown only when the selected session is a terminal session and `useRunning(session)` is true (the registry's value, section 6.10). It calls `termClose(session.id)` and shows a toast on error. No confirmation: the conversation can be resumed, and the button says what it does. While the close is in flight the button is `disabled`.
 
 **Toolbar.** This is Phase 2's `Toolbar` in `AgentWorkspace.tsx` (`.agent-toolbar`). Phase 2 renders it only for an interactive session, as `Toolbar({ info })`. It becomes `Toolbar({ info, face })` with `info` optional, and is rendered when the current session is interactive **or** when the terminal view is shown without a session (its empty state), so the switch is always reachable from there. Left to right:
 
@@ -1966,7 +2043,7 @@ After the pills: `<button className="icon-button" title="New terminal session" a
 
 `close(s)`:
 
-- Program running: `Confirm` with title "Close this terminal?", message "The program in it will be stopped. You can resume the conversation later from the session list.", action "Close terminal", `danger`. On yes: `termClose(s.id)`; when the selected tab was this one, select the next tab or none.
+- `isRunning(s)` (registry, section 6.10): `Confirm` with title "Close this terminal?", message "The program in it will be stopped. You can resume the conversation later from the session list.", action "Close terminal", `danger`. On yes: `termClose(s.id)`; when the selected tab was this one, select the next tab or none.
 - Not running: `dispose(s.id)` in the registry, then select the next tab or none. The session stays in the history and in the chat view's session list.
 
 **Hint.** One line above the box, `<p className="term-hint" role="note">`, shown while the selected session's program is running, the session's `ended_at` has never been set (its first run), and the registry's `touched` is false. Text by engine:
@@ -1976,13 +2053,13 @@ After the pills: `<button className="icon-button" title="New terminal session" a
 
 It disappears on the user's first key press in that terminal. There is no close button and nothing is stored.
 
-**Terminal.** `<TerminalView id={s.id} sessionId={s.id} engine={engineOf(s)} start={s.status === "idle" ? "fresh" : null} label={tabLabel(s)} key={s.id} />` inside `.term-box`. A session that is `idle` is started on first view. A session that is `ended` or `failed` shows its saved screen and is not started.
+**Terminal.** `<TerminalView id={s.id} sessionId={s.id} engine={engineOf(s)} start={s.status === "idle" ? "fresh" : null} label={tabLabel(s)} key={s.id} />` inside `.term-box`. A session that is `idle` is started on first view. A session that is `ended` or `failed` shows its saved screen and is not started: `start={null}` is the read-only view of section 4.3, which needs no worktree. Typing does nothing there (`disableStdin`).
 
 **Status line.** `<div className="term-status" role="status">`:
 
 - Left: when the program is not running, the session is `ended` or `failed`, and it still has a worktree: `<button className="primary" onClick={() => start(s.id, "resume")}>Resume in terminal</button>` and `<button className="text underline" title="Start the program again with the briefing, as a new conversation" onClick={() => start(s.id, "fresh")}>Start over</button>`. Both are `disabled` while a start is in flight. When `waitingForReview(s)`: the `status-chip waiting` chip "Waiting for review".
 - A `.fill` spacer.
-- Right: `<span className={`term-dot ${tone}`} aria-hidden />` and the text from `statusLine(s, live)`, where `live` is "this id is in `term_list`" (`useQuery(termsQuery())`).
+- Right: `<span className={`term-dot ${tone}`} aria-hidden />` and the text from `statusLine(s, running)`, where `running` is `useRunning(s)` from the registry. Every other "the program is running" in this section means the same value.
 
 The mock's "> ▮" at the left of this line is part of its drawn terminal and is not built: the real prompt is inside the terminal.
 
@@ -1997,7 +2074,8 @@ The mock's "> ▮" at the left of this line is part of its drawn terminal and is
 | Running | The terminal; "● Session active"; the header shows "Stop session". |
 | Ended | The saved screen; "Session ended"; "Resume in terminal" and "Start over". |
 | Failed | The same, with "Session failed · The program exited with code 1." in the error colour. |
-| Ended or failed, worktree removed | The saved screen; the status text; no "Resume in terminal" and no "Start over". The rail says "The worktree was removed." |
+| Ended or failed, worktree removed | The saved screen, read-only (`term_open` with `start: null` replays it; no worktree is needed for that). Status line: "Session ended · worktree removed" (or "Session failed · … · worktree removed"). No "Resume in terminal" and no "Start over". Typing does nothing. The rail says "The worktree was removed." |
+| A start or an attach while Phase 4 is approving, discarding or sending "Request changes" for this session | In the box: "A review action is running for this session" and "Try again" | `term_open` refuses (section 4.3, step 4). The read-only view is not refused. |
 | Four terminals already running | The start fails with "Close a terminal first: 4 are already running", shown as in the `term_open` failed row. |
 | Engine not found | Shown on the Start screen (section 7.1). For "Resume in terminal" on an old session: the same in-box error, with the "was not found" text. |
 | No project picked ("All memory") | `terminalTabs` gets `project = null` and returns the terminal sessions of every project. |
@@ -2099,6 +2177,26 @@ Deviations from the mock, on purpose:
 
 Each commit builds and passes `npm test`, `npx tsc --noEmit`, `npm run build`, `cargo test` and `cargo clippy` (run the two `cargo` commands in `src-tauri`). Do not run `cargo fmt`. Rust tests never start `claude` or `codex`; they use `cmd.exe`, `ping`, `sh` and `sleep`, as `agent/mod.rs`'s tests do.
 
+**No commit uses a name a later commit introduces.** The table says, for each commit, what it adds that later commits use and what it needs from earlier ones. If you move something, keep this property and re-check the table.
+
+| Commit | Adds (used later) | Needs (from) |
+| --- | --- | --- |
+| 1 | `term::pty` (`Session`, `Spawn`, `TermEvent`), `mod term;` | `git::run_with_timeout` (Phase 1) |
+| 2 | `term::scrollback` | nothing |
+| 3 | `agent::Engine`; `term::StartMode`; `term::launch` (`Cli`, `program`, `claude`, `codex`, `session_args`, `login_args`, `environment`, `windows_build`); `Settings.codex_path` | `agent::claude::available` (Phase 1); `scope::governed_rules` (Phase 2) |
+| 4 | `agent::Interface`, `SessionInfo.interface`, the `StartOptions` fields, `CODEX_CHAT`, `session_info`, `first_text`, `register`, `check_combination`, the guards; `term::session_dir`, `term::write_briefing`; `AppState.terminals_dir`; TypeScript `Engine`, `Interface`, the draft fields | `Engine`, `term::launch::program` (3); `Manager::info` and `amend` (Phase 4, or added here) |
+| 5 | `term::Manager`, `TermInfo`, `TermExit`, `Emit`, `Output`; the six `term_*` commands; `AppState.terminals` | `pty` (1), `scrollback` (2), `launch`, `StartMode` (3), `Interface`, `info`, `amend`, `session_dir` (4); `worktree::changes`, `totals` (Phase 2); `review_after_turn` and the reservation test (Phase 4, when merged) |
+| 6 | the `@xterm` packages; `src/lib/term.ts`; `theme.ts`, `keys.ts`, `writer.ts`, `tabs.ts` | TypeScript `Engine`, `SessionInfo.interface` (4); `repoName`, `POLICIES` (Phase 2); `engineName` (Phase 3) |
+| 7 | `registry.ts`, `TerminalView`, `TerminalWorkspace`, `StopSession`, `RemoveWorktree` | everything in 6; the `term_*` commands (5); the draft's `setInterface`, `setEngine` (4); `agentFiles`, `agentRemoveWorktree`, `startSession` (Phase 2); `reviewFiles`, `reviewVersion`, `openReview` (Phase 4, when merged) |
+| 8 | `agent_engines`, `EngineInfo` (Rust and TypeScript), `agentEngines`, `enginesQuery`, `ConnectionDialog` | `launch::program` (3), `CODEX_CHAT`, `check_combination` (4), `term_login` (5), `TerminalView` (7) |
+| 9 | the toolbar's engine menu and switch | `enginesQuery` (8), `latestOf` (6), the draft fields (4) |
+| 10 | `Driver`, `Step`, `step_of`, `Record` lifecycle events, `SessionInfo.engine_session` (Rust and TypeScript) | Phase 2's trait and manager |
+| 11 | `agent::codex` (`Codex`, `CodexDriver`), `program_args` on `Launch` and `Spec` | `Driver`, `Step` (10) |
+| 12 | Codex chat sessions; `CODEX_CHAT = true` | `Codex` (11), `term::launch::codex` (3) |
+| 13 | the Codex chat UI items | 12 |
+
+**Keeping `cargo clippy` clean between commits.** `agent` and `term` are private modules of the crate, so an item that only tests use yet is reported as dead code. Where a commit adds such an item, put `#[allow(dead_code)]` on it with a comment `// used from commit N`, and remove the attribute in commit N. The known cases: the whole `term` module in commits 1 to 4 (the attribute sits on `mod term;` and goes in commit 5); `Engine` and its methods in commit 3 (`label` until commit 8, the rest until commit 4 and 5); `Manager::info` and `amend` in commit 4 when Phase 4 has not added them (until commit 5); `agent/codex.rs` in commit 11 (a module-level `#![allow(dead_code)]`, removed in commit 12).
+
 ### Step 0 (not committed): prove the raw channel
 
 Do this first. It decides U1.
@@ -2137,7 +2235,7 @@ python scripts/drive_ui.py --out <scratch>\shots "eval:window.probe().then(r => 
 
 ### Commit 1: `feat(term): a program in a pseudo terminal`
 
-Contains: `Cargo.toml` (`portable-pty`), `src-tauri/src/term/pty.rs`, a `mod.rs` with only `pub mod pty;`, `mod term;` in `lib.rs` (with `#[allow(dead_code)]` on the module until commit 5 uses it; remove the attribute then).
+Contains: `Cargo.toml` (`portable-pty`), `src-tauri/src/term/pty.rs`, a `term/mod.rs` with only `pub mod pty;`, and `mod term;` in `lib.rs` (with `#[allow(dead_code)]` on that line until commit 5 uses the module; remove the attribute then). Nothing here names `Engine`, `StartMode` or any other type of a later commit.
 
 Tests, in `term/pty.rs` (a helper `collect()` returns a sink and the shared list of events, as the spike's harness does; `shell(line)` gives `cmd.exe /d /c <line>` on Windows and `sh -c <line>` elsewhere):
 
@@ -2151,7 +2249,7 @@ Tests, in `term/pty.rs` (a helper `collect()` returns a sink and the shared list
 
 ### Commit 2: `feat(term): capped scrollback file`
 
-Contains: `term/scrollback.rs`.
+Contains: `term/scrollback.rs`, and `pub mod scrollback;` in `term/mod.rs`.
 
 | Test | Assertions |
 | --- | --- |
@@ -2161,27 +2259,30 @@ Contains: `term/scrollback.rs`.
 
 ### Commit 3: `feat(term): find the programs and build their command lines`
 
-Contains: `term/launch.rs`, `settings.rs` (`codex_path`), `src/lib/lm.ts` (`codex_path`), `SettingsForm.tsx` (the field and the text changes of section 6.11).
+Contains: `term/launch.rs` and `pub mod launch;`. Its signatures need two types, so this commit adds them too, and only them: in `agent/mod.rs`, the `Engine` enum with `of`, `adapter_name` and `label` (section 4.1; `Interface` and the `SessionInfo` field wait for commit 4); in `term/mod.rs`, the `StartMode` enum (section 4.1; the manager's other types wait for commit 5). Also `settings.rs` (`codex_path`), `src/lib/lm.ts` (`codex_path`), `SettingsForm.tsx` (the field and the text changes of section 6.11).
 
 | Test (file) | Assertions |
 | --- | --- |
 | `codex_is_found_in_order` (`launch.rs`, Windows only: `#[cfg(windows)]`) | In a temp folder build `npm\codex.cmd`, `npm\codex` (extensionless), `npm\node_modules\@openai\codex\bin\codex.js`, and `npm\node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe`. With `path_dirs = [npm]` and default settings: the native exe, no prefix arguments. Delete the exe: `program == "node"`, `args == [the codex.js path]`. Delete `codex.js`: `Err` equal to `NO_CODEX`. With a saved `codex_path` to another `x.exe` file: that file, whatever PATH holds. A saved path that does not exist falls through to PATH. The result is never `codex.cmd`, the extensionless file, or anything containing `cmd`. |
 | `codex_on_other_systems_is_the_file_on_path` (`#[cfg(not(windows))]`) | A temp folder with a file `codex` in `path_dirs` is returned; none gives `NO_CODEX`. |
-| `session_command_lines` | With `ctx = Path::new("C:/data/terminals/ID/context")`, `id = "00000000-0000-4000-8000-000000000001"` and no model: Claude fresh, `accept_edits = false` is exactly `["--add-dir", ctx, "--session-id", id, "--permission-mode", "manual", <prompt>]`; Claude resume, `accept_edits = true` is `["--add-dir", ctx, "--resume", id, "--permission-mode", "acceptEdits"]`; Codex fresh, false is `["--no-alt-screen", "--no-daemon", "-s", "read-only", "-a", "on-request", <prompt>]`; Codex resume, true is `["resume", "--last", "--no-alt-screen", "--no-daemon", "-s", "workspace-write", "-a", "on-request"]`. With `model = Some("opus")`: Claude fresh is `["--add-dir", ctx, "--session-id", id, "--model", "opus", "--permission-mode", "manual", <prompt>]`, and both Codex lists are unchanged. |
+| `session_command_lines` | With `ctx = Path::new("C:/data/terminals/ID/context")`, `id = "00000000-0000-4000-8000-000000000001"`, no model and no deny rules: Claude fresh, `accept_edits = false` is exactly `["--add-dir", ctx, "--session-id", id, "--permission-mode", "manual", <prompt>]`; Claude resume, `accept_edits = true` is `["--add-dir", ctx, "--resume", id, "--permission-mode", "acceptEdits"]`; Codex fresh, false is `["--no-alt-screen", "--no-daemon", "-s", "read-only", "-a", "on-request", <prompt>]`; Codex resume, true is `["resume", "--last", "--no-alt-screen", "--no-daemon", "-s", "workspace-write", "-a", "on-request"]`. With `model = Some("opus")`: Claude fresh is `["--add-dir", ctx, "--session-id", id, "--model", "opus", "--permission-mode", "manual", <prompt>]`, and both Codex lists are unchanged. With `deny = ["Bash(x *)", "PowerShell(x *)"]`: Claude fresh starts `["--add-dir", ctx, "--disallowedTools", "Bash(x *)", "PowerShell(x *)", "--session-id", id, …]`, Claude resume starts `["--add-dir", ctx, "--disallowedTools", "Bash(x *)", "PowerShell(x *)", "--resume", id, …]`, the argument right after the last rule is never the prompt, and both Codex lists are unchanged. |
 | `the_prompt_is_one_line_without_quotes` | `pointer_prompt` contains the briefing path, contains no `"` and no line break, and starts with `Read the file `. In the Claude fresh list the prompt is the last item and the item before it is not a folder (it is `manual` or `acceptEdits`). |
 | `login_command_lines` | Claude: `["auth", "login"]`. Codex: `["login"]`. |
-| `environment_adds_colour_and_strips_a_nested_session` | `environment(&["PATH", "CLAUDE_CONFIG_DIR"])` sets `TERM` and `COLORTERM` and removes nothing. `environment(&["PATH", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CONFIG_DIR", "NO_COLOR"])` removes those four and not `PATH`. |
+| `engine_serialises_in_lowercase` (`agent/mod.rs`) | `serde_json::to_value(Engine::Codex) == json!("codex")`; `Engine::Claude` is `"claude"`; `Engine::default() == Engine::Claude`; `Engine::of("codex") == Codex`; `Engine::of("claude-code") == Claude`; `Engine::of("claude") == Claude`; `Engine::Claude.adapter_name() == "claude-code"`; `Engine::Codex.label() == "Codex"`. |
+| `start_mode_reads_lowercase` (`term/mod.rs`) | `serde_json::from_value::<StartMode>(json!("fresh")) == Fresh`; `"resume"` is `Resume`; `"other"` is an error. |
+| `environment_adds_colour_and_strips_a_nested_session` | `environment(&["PATH", "CLAUDE_CONFIG_DIR"], None)` sets `TERM` and `COLORTERM`, does not set `LIVING_MEMORY_ROOT`, and removes nothing. `environment(&["PATH", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CONFIG_DIR", "NO_COLOR"], None)` removes those four and not `PATH`. |
+| `environment_names_the_store_the_app_uses` | `environment(&["PATH"], Some(Path::new("C:/demo/store")))` sets `LIVING_MEMORY_ROOT` to `C:/demo/store` beside the two colour variables. `LIVING_MEMORY_ROOT` is never in the remove list, also when `own` contains it. |
 | `build_number_is_read_from_ver` | `parse_build("\r\nMicrosoft Windows [Version 10.0.26100.9711]\r\n") == Some(26100)`; `parse_build("Microsoft Windows [version 10.0.19045.5131]") == Some(19045)`; `parse_build("nothing") == None`. |
 | `capture_shortcut_defaults_and_can_be_turned_off` (`settings.rs`, extended) | An old settings file gives `codex_path == None`. |
 
 ### Commit 4: `feat(agent): terminal sessions in the session history`
 
-Contains: everything in section 6.6: in `agent/mod.rs`, `Engine`, `Interface`, `CODEX_CHAT`, the `interface` field, the two `StartOptions` fields, `info` and `amend` (only when Phase 4 has not added them), `session_info`, `first_text`, `register`, `check_combination`, the `start_task` branch and its `terminals` parameter (so `lib.rs` gains `terminals_dir` here), the three guards, the `free_slot` rule; in `agent/store.rs`, `recover`. Also `src/lib/agent.ts` types and `draft.ts`. The `start_task` branch calls `term::write_briefing` and `term::launch::program`, so this commit also adds `write_briefing` and `session_dir` to `term/mod.rs`.
+Contains: everything in section 6.6 except `Engine`, which commit 3 added: in `agent/mod.rs`, `Interface`, `CODEX_CHAT`, the `interface` field, the two `StartOptions` fields, `info` and `amend` (only when Phase 4 has not added them), `session_info`, `first_text`, `register`, `check_combination`, the `start_task` branch and its `terminals` parameter (so `lib.rs` gains `terminals_dir` here), the three guards, the `free_slot` rule; in `agent/store.rs`, `recover`. Also, in `src/lib/agent.ts`, the types `Engine` and `Interface`, `SessionInfo.interface`, `engineOf` and the two `StartOptions` fields (not `EngineInfo`, `agentEngines` and `enginesQuery`, which are commit 8's, and not `engineSession`, which is Part C's), and `draft.ts`. The `start_task` branch calls `term::write_briefing` and `term::launch::program`, so this commit also adds `write_briefing` and `session_dir` to `term/mod.rs`.
 
 | Test (file) | Assertions |
 | --- | --- |
 | `an_index_from_before_interfaces_still_loads` (`store.rs`) | Write an `index.json` whose one entry has every field Phase 2 (and 4, if merged) writes but no `interface`. `load_index` returns one session with `interface == Interface::Chat`. |
-| `interface_and_engine_serialise_in_lowercase` (`mod.rs`) | `serde_json::to_value(Interface::Terminal) == json!("terminal")`; `Engine::Codex` is `"codex"`; `Engine::of("codex") == Codex`; `Engine::of("claude-code") == Claude`; `Engine::of("claude") == Claude`. |
+| `interface_serialises_in_lowercase` (`mod.rs`) | `serde_json::to_value(Interface::Terminal) == json!("terminal")`; `Interface::default() == Interface::Chat`; a `StartOptions` parsed from `{}` has `engine == Engine::Claude` and `interface == Interface::Chat`; parsed from `{"engine":"codex","interface":"terminal"}` it has those two. |
 | `recovery_ends_a_terminal_session_left_running` (`store.rs`) | Save an index with a terminal session `Running`, a terminal session `Idle` and an interactive chat session `Running`. After `recover(dir, 9_000)`: the first is `Ended`, `ended_at == Some(9_000)`, `error == None`, and its log has no records. The second is unchanged. The chat session is `Idle` and its log ends with a `TurnFinished` record, exactly as Phase 2's own recovery test asserts. |
 | `a_terminal_session_is_registered_without_a_process` (`mod.rs`) | With the test rig: `register(info)` for a terminal `SessionInfo` returns it; `sessions()` contains it with `status == Idle`; a `SessionsChanged` was emitted; its log has no records. `amend(id, …)` changes it and persists (a new `Manager::new` on the same folder sees the change). |
 | `terminal_sessions_do_not_hold_a_slot` (`mod.rs`) | Register `MAX_RUNNING` terminal sessions and `amend` each to `status: Running`. A headless `start` with the lingering fake still succeeds, and none of the terminal sessions was changed by `free_slot`. |
@@ -2193,17 +2294,20 @@ Contains: everything in section 6.6: in `agent/mod.rs`, `Engine`, `Interface`, `
 
 ### Commit 5: `feat(term): terminal manager and commands`
 
-Contains: the rest of `term/mod.rs`; `lib.rs` (state, commands except `agent_engines`, sink, `stop_all`, handler list).
+Contains: the rest of `term/mod.rs` (`Manager`, `TermInfo`, `TermExit`, `Emit`, `Output`, `MAX_TERMINALS`, `QUIET_EXITS`); `lib.rs` (`AppState.terminals`, the six `term_*` commands including `term_login`, the sink, `stop_all`, the handler list; not `agent_engines`, which is commit 8's). Remove `#[allow(dead_code)]` from `mod term;`.
 
 Test rig: a temp folder; an `agent::Manager` on `temp/sessions` with the fake adapter; a `term::Manager` on `temp/terminals`; a terminal session added with `register`, whose `worktree` is a Phase 2 `Worktree { repo, path, branch, base_branch, base_sha }` over a temp git repository with one commit (`path` and `repo` are that folder, `base_sha` its `HEAD`). Skip the files-changed assertions when `git` is not installed, as `git.rs`'s tests do. Tests call the private `spawn` with a harmless `Cli`.
 
 | Test | Assertions |
 | --- | --- |
 | `a_terminal_runs_and_ends_its_session` | `spawn` with `echo hello`. The returned `TermInfo` has `running == true`. Within 10 s: one `Emit::Exit` with `code == Some(0)`; the session is `Ended` with `ended_at` set and no error; `list()` is empty; the output closure received bytes containing `hello`; `scrollback.bin` contains `hello`. |
+| `a_terminal_program_gets_the_store_root` | `spawn` with `memory_root = Some(<a temp folder>)` and a program that prints the variable (`echo %LIVING_MEMORY_ROOT%`, or `echo $LIVING_MEMORY_ROOT`). The output contains that folder's path. With `memory_root = None` and the test process's own `LIVING_MEMORY_ROOT` unset, the output does not contain a path. |
 | `a_bad_exit_fails_the_session` | `spawn` with `exit 3`. The session ends `Failed` with `error == Some("The program exited with code 3.")`. |
 | `files_changed_follows_the_worktree` | `spawn` a program that appends a line to a tracked file and then waits 4 s. Within 4 s of the write (the quiet refresh) the session's `files_changed` is `Some(Totals { files: 1, added: 1, removed: 0 })` and a `SessionsChanged` was emitted. With Phase 4 merged: a session whose `review` was `Approved` before the write has `review.state == Pending` after it. |
 | `closing_is_not_a_failure` | `spawn` a 60 s program; `close(id)`; the session ends `Ended` whatever the exit code; `close(id)` again does nothing; `write` returns `This terminal is not running`. |
-| `open_refuses_what_it_must` | `open` with `"../x"`: `Invalid session id`. With an unknown UUID: `Unknown session`. With a chat session's id: `This session is not a terminal session`. With `worktree: None`: `This session has no worktree`. With the worktree folder deleted: starts with `The session's worktree folder is missing: `. |
+| `open_refuses_what_it_must` | `open` with `"../x"`: `Invalid session id`. With an unknown UUID: `Unknown session`. With a chat session's id: `This session is not a terminal session`. With `worktree: None` and `start: Some(Fresh)`: `This session has no worktree`, and the output received nothing. With the worktree folder deleted and `start: Some(Resume)`: starts with `The session's worktree folder is missing: `. |
+| `a_session_without_a_worktree_can_still_be_viewed` | After a terminal has run and ended, set the session's `worktree` to `None` with `amend`. `open(id, 80, 24, None, true, output)` is `Ok` with `running == false`, and the output received exactly the saved bytes. |
+| `a_reserved_session_cannot_be_started` (only with Phase 4 merged) | Hold a `Manager::reserve(id)` reservation. `open(id, 80, 24, Some(Resume), false, output)` is `Err("A review action is running for this session")`, no process was started and the status is unchanged. `open(id, 80, 24, None, true, output)` (the view) is `Ok`. After the reservation is dropped the start succeeds. |
 | `open_without_start_only_replays` | After `a_terminal_runs…`, `open(id, 80, 24, None, true, output)`: the output received exactly the saved bytes, the `TermInfo` has `running == false`, no process was started (`list()` is empty), the session's status is unchanged. With `replay == false` the output received nothing. |
 | `attaching_swaps_the_output_and_loses_nothing` | `spawn` a program that prints a line every 200 ms for 3 s. After 1 s call `open(id, 80, 24, None, true, second_output)`. Joined, what the second output received equals the final content of `scrollback.bin`. The first output received nothing after the swap. |
 | `a_dead_output_does_not_stop_the_terminal` | `spawn` with an output closure that returns `false`; the program still runs to its exit and the scrollback holds its output. |
@@ -2226,11 +2330,11 @@ Contains: `package.json` and the lock file; `src/lib/term.ts`; `theme.ts`, `keys
 | `routes the terminal's own keys` (`keys.test.ts`) | `keyAction`: Ctrl+C with a selection is `copy`, without is `pass`; Ctrl+Shift+C is `copy`; Ctrl+V and Ctrl+Shift+V are `paste`; Ctrl+Shift+K is `leave`; Ctrl+K is `pass`; Shift+Enter is `newline`; Enter, Ctrl+Enter and Alt+Shift+Enter are `pass`; any `keyup` is `pass`. |
 | `swallows the app's shortcuts but not AltGr or paste` (`keys.test.ts`) | `swallow` is true for Ctrl+P, Ctrl+O, Ctrl+N, Ctrl+G, Ctrl+W, Ctrl+K, Ctrl+Shift+A, Ctrl+Shift+F, Cmd+P and Alt+ArrowLeft. It is false for Ctrl+V, Ctrl+Alt+Q (AltGr), a plain `a`, `Enter`, `F5`, Alt+ArrowRight. |
 | `sends input in order, one call at a time` (`writer.test.ts`) | With a `send` that records its argument and resolves when the test releases it: write `"a"`, `"b"`, `"c"` before the first call resolves. Exactly one call is in flight with `"a"`. After release, one more call with `"bc"`. A `send` that rejects does not stop later writes. |
-| `labels and lists the terminal tabs` (`tabs.test.ts`) | `tabLabel` of a session with `adapter: "codex"` and `task.repo = "C:\\src\\ingestion-service"` is `"Codex · ingestion-service"`; with `adapter: "claude-code"` and `/src/app/` it is `"Claude Code · app"`; it does not read `worktree`, so a session whose worktree was removed has the same label. `terminalTabs` returns idle and running terminal sessions of the project oldest first, leaves out chat sessions, other projects and ended ones, and includes an ended one when it is `selected`. With `project = null` it returns all projects'. `latestOf(…, "terminal")` is the newest terminal session of the project. `accessLabel` gives the four strings of section 6.10. `statusLine` gives the five cases of section 6.10. |
+| `labels and lists the terminal tabs` (`tabs.test.ts`) | `tabLabel` of a session with `adapter: "codex"` and `task.repo = "C:\\src\\ingestion-service"` is `"Codex · ingestion-service"`; with `adapter: "claude-code"` and `/src/app/` it is `"Claude Code · app"`; it does not read `worktree`, so a session whose worktree was removed has the same label. `terminalTabs` returns idle and running terminal sessions of the project oldest first, leaves out chat sessions, other projects and ended ones, and includes an ended one when it is `selected`. With `project = null` it returns all projects'. `latestOf(…, "terminal")` is the newest terminal session of the project. `accessLabel` gives the four strings of section 6.10. `statusLine`: with `running` true it is `Session active` whatever the status; with `running` false it is `Starting…` for `idle` and for `running`, `Session ended` for `ended`, and `Session failed · <error>` for `failed`. |
 
 ### Commit 7: `feat(terminal): the terminal view in Agent Workspace`
 
-Contains: `registry.ts`, `TerminalView.tsx`, `TerminalWorkspace.tsx`, the view choice and session-list icon in `AgentWorkspace.tsx`, `StopSession` in the header, `RemoveWorktree` moved into `Chat.tsx` (section 6.11), `App.tsx` (`term-exit`), `App.css`.
+Contains: `registry.ts`, `TerminalView.tsx`, `TerminalWorkspace.tsx`, the view choice and session-list icon in `AgentWorkspace.tsx`, `StopSession` in the header, `RemoveWorktree` moved into `Chat.tsx` (section 6.11), `App.css`.
 
 No new unit tests (vitest has no DOM). Checks before moving on: section 11, steps V1 to V6, with the stand-in program. A terminal session can be created at this point only through `agentStart` options, so until commit 8 start it from the page's console:
 
@@ -2242,7 +2346,7 @@ python scripts/drive_ui.py --out <scratch>\shots "eval:window.__TAURI_INTERNALS_
 
 ### Commit 8: `feat(agents): engine and interface on the Start screen`
 
-Contains: `agent_engines` in `lib.rs`; `agentEngines` and `enginesQuery`; everything in section 7.1 (`StartSession.tsx`: the Engine and Interface sections, the subtitle, and the banner, model, limit, path and "Tools, MCP & hooks" lines that follow the choice); `ConnectionDialog.tsx`; `term_login` (the Rust side exists since commit 5; this commit uses it).
+Contains: `agent_engines` and `EngineInfo` in `lib.rs`; in `src/lib/agent.ts`, `EngineInfo`, `agentEngines` and `enginesQuery`; everything in section 7.1 (`StartSession.tsx`: the Engine and Interface sections, the subtitle, and the banner, model, limit, path and "Tools, MCP & hooks" lines that follow the choice); `ConnectionDialog.tsx`; `term_login` (the Rust side exists since commit 5; this commit uses it).
 
 | Test (file) | Assertions |
 | --- | --- |
@@ -2260,14 +2364,14 @@ Checks: section 11, steps V8 and V9. Parts A and B are complete here. Run the wh
 
 Run the go/no-go check (section 5.9) first. On "no-go", stop after commit 9.
 
-**Commit 10: `refactor(agent): a per-session driver behind the adapter`.** The trait split of section 4.11 with `ClaudeDriver`; `Session.driver`; `step_of` in place of `events_of`; the pump, `start`, `send`, `answer`, `interrupt`, `set_policy` and `session` go through the driver. No behaviour change. Tests: every Phase 2 and Phase 4 agent test passes, changed only where it called `user_line`, `parse_line`, `outcome`, `answer_line`, `refusal`, `interrupt_line`, `mode_line` or `mode_of` on an adapter (make a driver with `driver(cwd, PolicyMode::Ask, None)` and call `send`, `read`, `answer`, `interrupt` or `set_mode`). The test module's fake adapter returns `ClaudeCode.driver(...)`. Phase 2's replay test (`session_runs_to_success_and_replays_exactly` and its interactive counterpart) must pass unchanged: that is the proof that `step_of` numbers events as `events_of` did.
+**Commit 10: `refactor(agent): a per-session driver behind the adapter`.** The trait split of section 4.11 with `ClaudeDriver`; `RunEvent::ProcessStarted`, `Adapter::marks_process_start` and the place the manager records it (no adapter returns `true` yet, so nothing is recorded); `Session.driver`; `step_of` in place of `events_of`; the pump, `start`, `send`, `answer`, `interrupt`, `set_policy` and `session` go through the driver; `SessionInfo.engine_session` in Rust and `engineSession` in TypeScript (the pump stores `Step.engine_session` in it, so the field belongs to this commit; add `an_index_from_before_engine_sessions_still_loads` beside commit 4's old-index test). No behaviour change. Tests: every Phase 2 and Phase 4 agent test passes, changed only where it called `user_line`, `parse_line`, `outcome`, `answer_line`, `refusal`, `interrupt_line`, `mode_line` or `mode_of` on an adapter (make a driver with `driver(cwd, PolicyMode::Ask, None)` and call `send`, `read`, `answer`, `interrupt` or `set_mode`). The test module's fake adapter returns `ClaudeCode.driver(...)`. Phase 2's replay test (`session_runs_to_success_and_replays_exactly` and its interactive counterpart) must pass unchanged: that is the proof that `step_of` numbers events as `events_of` did.
 
-**Commit 11: `feat(agent): Codex app-server driver`.** `agent/codex.rs`; `program_args` on Phase 2's `Launch` and `Spec`; `engine_session`. Tests, in `codex.rs`, feed the verbatim lines of section 5.8 (put them in `const`s, with `…` parts filled in from `spikes/codex-interfaces.md`). `d` is `Codex.driver(cwd, PolicyMode::Ask, None)` unless a row says otherwise:
+**Commit 11: `feat(agent): Codex app-server driver`.** `agent/codex.rs`, with `#![allow(dead_code)]` at its top until commit 12 registers the adapter; `program_args` on Phase 2's `Launch` and `Spec`. Tests, in `codex.rs`, feed the verbatim lines of section 5.8 (put them in `const`s, with `…` parts filled in from `spikes/codex-interfaces.md`). `d` is `Codex.driver(cwd, PolicyMode::Ask, None)` unless a row says otherwise:
 
 | Test | Assertions |
 | --- | --- |
-| `handshake_then_thread_then_the_kept_prompt` | `open()` is one line that parses as `{"method":"initialize","id":1,…}` with `clientInfo.name == "hivemind"`. `send("hi")` before the handshake ends returns no lines. `read(INIT_RESULT)` writes `{"method":"initialized"}` and a `thread/start` with `cwd` = the spec's cwd, `approvalPolicy` and `sandbox` per policy, and no `model`. `read(THREAD_RESULT)` gives a `Started` event with `model == "gpt-6-luna"` and `cli_version == "0.166.0"`, `engine_session == Some("01a1c541-d126-7731-9bb7-1f2d114bb6fe")`, and writes a `turn/start` whose `input[0].text == "hi"` and `threadId` is that id. |
-| `resume_uses_the_thread_id` | `Codex.driver(cwd, PolicyMode::Ask, Some("T"))`: after `INIT_RESULT` the second written line is a `thread/resume` naming `T` (field names from the go/no-go check, step 9). |
+| `handshake_then_thread_then_the_kept_prompt` | A new driver: `open()` before any record returns nothing. After `note(&ProcessStarted { resume: false })`, `open()` is one line that parses as `{"method":"initialize","id":1,…}` with `clientInfo.name == "hivemind"`. `send("hi")` before the handshake ends returns no lines. `read(INIT_RESULT)` writes `{"method":"initialized"}` and a `thread/start` with `cwd` = the driver's cwd, `approvalPolicy` and `sandbox` per policy, and no `model`. `read(THREAD_RESULT)` gives a `Started` event with `model == "gpt-6-luna"` and `cli_version == "0.166.0"`, `engine_session == Some("01a1c541-d126-7731-9bb7-1f2d114bb6fe")`, and writes a `turn/start` whose `input[0].text == "hi"` and `threadId` is that id. |
+| `resume_uses_the_thread_id` | `Codex.driver(cwd, PolicyMode::Ask, Some("T"))`: after `note(&ProcessStarted { resume: true })` and `INIT_RESULT` the second written line is a `thread/resume` naming `T` (field names from the go/no-go check, step 9). |
 | `a_command_approval_round_trip` | `read(ITEM_STARTED_COMMAND)` gives `ToolUse { id: "exec-5facabe0-…", name: "Shell", summary: "Set-Content -LiteralPath as-shell.txt -Value hi" }`. `read(REQUEST_COMMAND)` gives `ApprovalRequest` with `request_id == "exec-5facabe0-…"`, `tool == "Shell"`, `can_always == false`, `always_label == None`, and writes nothing. `answer("exec-5facabe0-…", REQUEST_COMMAND, Decision::Allow)` is exactly `Some({"id":0,"result":{"decision":"accept"}})`; `Decision::AllowAlways` gives the same line; `Decision::Deny` on a second request (server id 2) gives `{"id":2,"result":{"decision":"decline"}}`; `Decision::Withdrawn` and an unknown request id give `None`. `read(ITEM_COMPLETED_COMMAND)` gives `ToolResult { ok: true, .. }`; the declined one gives `ToolResult { ok: false, summary: "Declined" }`. |
 | `a_governed_memory_command_is_declined_without_asking` | A command request whose command is `python living_memory.py apply --plan p.json` gives a `Denied` event with Phase 2's `GOVERNED` text, no `ApprovalRequest`, and one written line `{"id":<its id>,"result":{"decision":"decline"}}`. |
 | `tool_results_can_be_read_back` | `Codex.tool_result(ITEM_COMPLETED_COMMAND, "exec-5facabe0-…")` is `Some((true, _))`; with another id, and for a non-command line, `None`. |
@@ -2276,9 +2380,11 @@ Run the go/no-go check (section 5.9) first. On "no-go", stop after commit 9.
 | `turn_completed_closes_the_turn` | `read(TURN_COMPLETED)` gives `turn == Some(Outcome { ok: true, cost_usd: None, duration_ms: Some(9986), result: Some("done."), .. })`. The interrupted line gives `ok == false`. The failed line gives the reason containing `not supported when using Codex`. With one approval request still open, the step's events start with `ApprovalResolved { decision: "withdrawn", .. }`. |
 | `unknown_requests_are_answered_and_noise_is_ignored` | A line `{"method":"item/tool/requestUserInput","id":5,"params":{}}` gives a `Denied` event and one written line with `"id":5` and an `error`. `thread/status/changed`, `thread/tokenUsage/updated`, `account/rateLimits/updated`, `serverRequest/resolved`, `not json`, `""` give an empty step. |
 | `an_old_codex_is_refused` | An `initialize` result whose `userAgent` is `hivemind/0.150.0 (…)` gives a failed `Outcome` with the "not supported for Chat" reason and writes nothing. `agent_version("hivemind_spike/0.166.0 (Windows 10.0.26100; x86_64) …") == Some((0, 166, 0))`. |
-| `replay_rebuilds_open_requests` | Feed a fresh driver the same lines with `read` and, where the live run answered, `note(&RunEvent::ApprovalResolved { .. })`; never call `answer`. The events equal the live run's, and a request that was answered is not reported as `withdrawn` at `turn/completed`. |
+| `replay_rebuilds_open_requests` | Feed a fresh driver the records of a live run with `note` and `read` only (`note(&ProcessStarted { .. })` first, `note(&RunEvent::ApprovalResolved { .. })` where the live run answered); never call `open`, `send` or `answer`. The events equal the live run's, and a request that was answered is not reported as `withdrawn` at `turn/completed`. |
+| `a_log_that_spans_two_processes_replays_the_same` | Build the record list of section 4.11's two-process table with the section 5.8 lines: `ProcessStarted { resume: false }`, `UserMessage`, `INIT_RESULT`, `THREAD_RESULT`, a turn with one answered command approval, `TURN_COMPLETED`, then `ProcessStarted { resume: true }`, `UserMessage`, `INIT_RESULT` again, `THREAD_RESULT` again, `ITEM_COMPLETED_MESSAGE`, `TURN_COMPLETED`. Live: one driver, driven as the manager drives it (`step_of` for every record, plus `open`, `send` and `answer` at the manager's moments). Replay: a second, fresh `Codex.driver(cwd, PolicyMode::Ask, None)` folded over the same records with `step_of` alone. Assert: the two event lists are equal; there is exactly one `Started`; the second `INIT_RESULT` and `THREAD_RESULT` give no event in either run; after the second `INIT_RESULT` the live driver wrote a `thread/resume` naming the first run's thread id (it was read from the first `THREAD_RESULT`), not a `thread/start`. |
+| `a_process_that_died_with_an_open_request_withdraws_it_once` | Records: `ProcessStarted`, handshake, a turn with an unanswered approval request, then `note(&TurnFinished { ok: false, .. })` (what Phase 2's pump records when the process dies), then `ProcessStarted { resume: true }`, handshake, a turn, `TURN_COMPLETED`. Live and replay give the same events, and the second `TURN_COMPLETED` gives no `ApprovalResolved`. |
 
-**Commit 12: `feat(agent): start Codex chat sessions`.** `Manager::new(dir, claude, codex, sink)` and the adapter lookup; `start_task` and `send_task` for Codex and Chat; `CODEX_CHAT = true`. Test with Phase 2's "printing" rig: the Codex adapter and the stdout lines of one whole turn; assert the emitted events, and that `SessionInfo.adapter == "codex"`, `engine_session` is set, `cost_usd == None`, and the turn ends in Phase 2's `TurnFinished` with `outcome: Completed`.
+**Commit 12: `feat(agent): start Codex chat sessions`.** `Manager::new(dir, claude, codex, sink)` and the adapter lookup; `start_task` and `send_task` for Codex and Chat; `CODEX_CHAT = true`. Test with Phase 2's "printing" rig: the Codex adapter and the stdout lines of one whole turn; assert the emitted events (the first is `ProcessStarted { resume: false }`, then Phase 2's `UserMessage`), that `Manager::session` replays exactly the same numbered events from the log, and that `SessionInfo.adapter == "codex"`, `engine_session` is set, `cost_usd == None`, and the turn ends in Phase 2's `TurnFinished` with `outcome: Completed`.
 
 **Commit 13: `feat(agents): Codex in Chat on the Start screen`.** The frontend items of section 6.12: the cost line in the chat rail, the disabled permissions select for a Codex session, the `changes` branch of `ApprovalCard`, and `"Shell"` in Phase 4's `SHELL` set with its test case. The Start screen enables "Chat" for Codex by itself, because `chat` is now true. Checks: section 11, step V10.
 
@@ -2310,9 +2416,11 @@ Run the go/no-go check (section 5.9) first. On "no-go", stop after commit 9.
 | `agent_send` or Phase 4's "Request changes" on a terminal session | The error "This session runs in the terminal. Resume it there and type your request." | The guard at the top of `Manager::send`. Hivemind never types into the CLI for the user. |
 | Phase 4's Approve, Request changes or Discard while the terminal's program is running | The Review page shows the files and "The agent is working"; the three buttons are disabled with Phase 4's title "The session is still working. Wait for the turn to finish, or stop it first." | Nothing new: the session's status is `running`, and Phase 4 refuses a `running` session. The user stops the terminal (it can be resumed), then approves. The rail says so under "Review diff". |
 | Files change in an approved terminal session after it was resumed | It is back in the review queue: "Waiting for review" once the program has stopped | `refresh_files` calls Phase 4's `review_after_turn` in the same `amend` that stores the new totals. |
-| The agent in a terminal tries a Living Memory plan, apply or undo command | The CLI's own permission prompt, like for any other command | Phase 2's refusal lives in Hivemind's answer to a headless permission request; a terminal has none. The briefing tells the agent not to run them; the Start screen says Hivemind cannot refuse them there (section 7.1). |
+| The agent in a Claude Code terminal tries a Living Memory plan, apply or undo command | Claude Code refuses the call itself and says so in the terminal | The terminal was started with `--disallowedTools` and `scope::governed_rules()`; a deny rule wins over any allow rule in the user's settings. Hivemind sees nothing and answers nothing. |
+| The agent in a Codex terminal tries one | Codex's own approval prompt, like for any other command | Not enforceable: Codex has no deny-rule flag and Hivemind does not see its prompts. The briefing tells the agent not to run them, and the Start screen tells the user not to approve one (section 7.1). Report this limit to the user. |
 | `agent_end` or `agent_set_policy` reaches a terminal session (a stale button, another phase's code) | The guard's error as a toast | Section 6.6. Without the `end` guard Phase 2 would record `finished`, set `ended` under a live program, and remove a clean worktree. |
-| "Remove worktree" in the terminal rail | Phase 2's confirmation; then the rail says "The worktree was removed." and the resume buttons are gone | Phase 2's `agent_remove_worktree`. It is only offered when the session is `ended` or `failed`; Phase 2 refuses it for any other status. `term_open(start: …)` then answers `This session has no worktree`. |
+| "Remove worktree" in the terminal rail | Phase 2's confirmation; then the rail says "The worktree was removed." and the resume buttons are gone | Phase 2's `agent_remove_worktree`. It is only offered when the session is `ended` or `failed`; Phase 2 refuses it for any other status. `term_open(start: …)` then answers `This session has no worktree`; `term_open(start: null)` still replays the saved screen, read-only. |
+| The user clicks "Resume in terminal" at the moment Phase 4 is committing that session's edits | "A review action is running for this session" in the terminal box, with "Try again" | `term_open` checks Phase 4's reservation before it starts or attaches anything, so a CLI is never started in a worktree that `git commit`, `git reset` or a "Request changes" send is working in. Phase 4 refuses to reserve a session whose terminal is running (`running` status), so the two cannot overlap in the other direction either. |
 | Three chat sessions are working and the user starts a terminal, or four terminals run and the user starts a chat | Both start | Terminal sessions never hold one of Phase 2's `MAX_RUNNING` slots (section 6.6); chat sessions do not count towards `MAX_TERMINALS`. |
 | A session is pruned from the history (more than 50) | Its terminal folder disappears at the next start | Phase 2 never prunes a session that still has a worktree, so this only happens after "Remove worktree". `term::Manager::new` removes folders whose id is not in the history. |
 | The scrollback holds something sensitive that was on screen | It is in the app data folder until the session is pruned | Said in the final report. Input is never logged separately; only what the program printed is saved. |
@@ -2321,10 +2429,12 @@ Run the go/no-go check (section 5.9) first. On "no-go", stop after commit 9.
 | The `Channel` is dropped by Rust (terminal exited) | Nothing | Tauri unregisters the callback; the registry keeps the xterm instance so the last screen stays visible. |
 | Windows: the located Claude Code is the bare name `claude` | It starts | `launch::claude` spells it `claude.exe`, so the PTY's PATH search cannot pick an extensionless npm shim (os error 193). |
 | Windows: Codex is installed only through a `.cmd` shim of another package manager | "Codex was not found…" | The user sets `codex_path` to the native `codex.exe` or to `codex.js`. Hivemind never goes through `cmd.exe`. |
+| The app is connected to a store that is not Living Memory's default (a demo store in development, a second store) | The agent's Living Memory hooks read and write the store the app shows | Every PTY program gets `LIVING_MEMORY_ROOT` (section 5.4). Without it the hooks would pick the user's default store and write a demo session's state into the real one. |
 | Hivemind was started from a Claude Code terminal (development) | The nested CLI behaves normally | `environment` removes `CLAUDE*` and `NO_COLOR` only when `CLAUDECODE` is present. |
 | Codex prints "To reconnect, run: codex resume <id>" and the user runs that in another terminal | Works; it is their own Codex | Nothing. Hivemind's "Resume in terminal" uses `--last` in the worktree and finds the same conversation. |
 | Part C: Codex asks for something Hivemind cannot answer (`item/tool/requestUserInput`, MCP elicitation) | A "Not allowed" banner in the transcript | The driver answers with an error and emits `denied` (section 5.10). |
-| Part C: the app-server dies | Phase 2's handling of a dead process | Nothing new: the pump sees stdout close. |
+| Part C: the app-server dies | Phase 2's handling of a dead process | Nothing new: the pump sees stdout close and records Phase 2's `turnFinished`, which also tells the driver to forget its open requests. |
+| Part C: a Codex chat session is continued after an app restart | The earlier transcript, then the new turn | The manager folds the log into a fresh driver, records `processStarted { resume: true }`, and the driver starts a new handshake and sends `thread/resume` with the stored `engine_session`. A reopened view replays the same records and shows the same events (section 4.11). |
 | Part C: a newer Codex changed a message shape | The session fails with a clear reason, or shows less | Unknown lines are ignored; a missing thread id in the `thread/start` reply fails the session with "Codex did not start a conversation. Use Terminal, or update Hivemind." |
 
 ---
@@ -2348,7 +2458,7 @@ From the spikes, the README and the reading done for this document. Each with it
 13. **Resize repaints everything.** Fix: the 80 ms debounce before `fit`.
 14. **The session outlives the webview's channel.** Fix: a failed send drops the output and keeps the PTY; `term_open` attaches again.
 15. **Commands that can block must not be plain `fn` commands.** Fix: `async fn` with `blocking(...)` for `term_open`, `term_login`, `term_write`, `term_resize`, `term_close`.
-16. **Claude Code's `--add-dir` swallows a following positional argument.** It takes a list. Fix: the prompt comes last, after an option that takes exactly one value (section 5.4).
+16. **Claude Code's `--add-dir` and `--disallowedTools` swallow a following positional argument.** Each takes a list. Fix: the prompt comes last, after an option that takes exactly one value (section 5.4).
 17. **The bundled JetBrains Mono has no box-drawing glyphs.** Its subsets cover Latin, Cyrillic, Greek and Vietnamese ranges only. Box drawing, blocks, braille and symbols such as `❯` come from the next font in `--font-mono` (`Cascadia Code` or `Consolas` on Windows). The DOM renderer places every cell itself, so the grid stays aligned. Fix: none needed; do not shorten `--font-mono`. Check it in V3.
 18. **xterm measures the cell when it opens.** Fix: `await document.fonts.load(...)` before `term.open()` (INFERRED in the spike; V3 checks the columns line up).
 19. **ConPTY starts the child in `%USERPROFILE%` when the working directory is missing.** Fix: check `is_dir()` first.
@@ -2372,7 +2482,8 @@ From the spikes, the README and the reading done for this document. Each with it
 37. **Phase 4 treats `running` as "a turn is in progress".** For a terminal it means "the program is open". Fix: none in code; the rail tells the user to stop the session before approving.
 38. **The crate has two structs named `Launch` after Phase 2** (`settings::Launch`, `agent::Launch`). Fix: the terminal's is `term::launch::Cli`.
 39. **Phase 2's Start screen assumes Claude Code** in its banner, its Model select, its spending-limit line and its "Tools, MCP & hooks" text. Fix: section 7.1's table.
-40. **Phase 2's toolbar is rendered only for an interactive session.** The terminal empty state has no session. Fix: `Toolbar`'s `info` becomes optional (section 7.2).
+40. **Part C: a replay calls `read` and `note` only.** A driver whose state moved in `open` or `send` would replay differently from the live run, and a log with two processes would leave it in the wrong state at the second handshake. Fix: the replay rule and the `processStarted` record (section 4.11); the two-process test in commit 11.
+41. **Phase 2's toolbar is rendered only for an interactive session.** The terminal empty state has no session. Fix: `Toolbar`'s `info` becomes optional (section 7.2).
 
 ---
 
@@ -2382,6 +2493,8 @@ From the spikes, the README and the reading done for this document. Each with it
 
 ```powershell
 python scripts/seed_demo_store.py --out <scratch>\demo        # prints HIVEMIND_LM_ROOT, HIVEMIND_LM_SCRIPT, HIVEMIND_PYTHON
+# the newest change under the REAL store, to compare after the real-CLI steps (V8 to V10)
+Get-ChildItem <your real store> -Recurse -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1 FullName, LastWriteTime
 ```
 
 The demo project is "PayStream" (slug `paystream`); its repository is `<scratch>\demo\repos\paystream`, a real git repository with commits.
@@ -2399,19 +2512,23 @@ A stand-in program, so that most checks cost nothing and need no sign-in. Save a
 @echo off
 echo FAKE CLI in %CD%
 echo ARGS: %*
+echo LM_ROOT: %LIVING_MEMORY_ROOT%
 cmd /d /k
 ```
 
 Start the app:
 
 ```powershell
-$env:HIVEMIND_LM_ROOT = "<scratch>\demo\store"; $env:HIVEMIND_LM_SCRIPT = "<path>\living_memory.py"; $env:HIVEMIND_PYTHON = "<python.exe>"
+$env:HIVEMIND_LM_ROOT = "<scratch>\demo\store"; $env:LIVING_MEMORY_ROOT = "<scratch>\demo\store"   # README section 6: both
+$env:HIVEMIND_LM_SCRIPT = "<path>\living_memory.py"; $env:HIVEMIND_PYTHON = "<python.exe>"
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
 $env:WEBVIEW2_USER_DATA_FOLDER = "<scratch>\webview-profile"
 npm run tauri dev
 ```
 
 In the app's Settings set "Claude Code" to `<scratch>\fake-cli.cmd` and save. (`claude::locate` accepts any saved path that is a file.)
+
+`drive_ui.py` hands the text after `eval:` to JavaScript unchanged, and PowerShell does not treat a backslash as an escape. An escape such as a backslash followed by `r`, written on the command line, can therefore reach JavaScript as the two characters backslash and `r`, and Enter is never sent. Every example below that sends Enter builds it with `String.fromCharCode(13)` and has no backslash in its JavaScript. Do the same for Esc (`String.fromCharCode(27)`) if you script it.
 
 Two helpers used below. `SID` reads the selected session's id from the saved route; `SCREEN` reads the terminal's text (the DOM renderer keeps it in `.xterm-rows`):
 
@@ -2428,14 +2545,14 @@ SCREEN = document.querySelector('.term-host .xterm-rows').innerText
 python scripts/drive_ui.py --out <scratch>\shots "nav:Agent Workspace" "click:New session" "type:.start-task=Say hello from the terminal" "click:Terminal" "click:Start session" wait:4 shot:v1-terminal "eval:document.querySelector('.term-host .xterm-rows').innerText" errors
 ```
 
-Must show: the terminal view, one tab "Claude Code · paystream", the hint line, "Session active", the "Stop session" button. The `eval` output contains `FAKE CLI in`, a path that ends with the first 8 characters of the session id (the worktree), `--session-id`, `--permission-mode manual` and `Read the file`. `errors` prints nothing. Compare `v1-terminal.png` with mock 04: header, toolbar order (engine, switch, shield label, branch), tab strip above a bordered dark box, status line bottom right, "Workspace" rail with "Source", "Attached context", "Files changed".
+Must show: the terminal view, one tab "Claude Code · paystream", the hint line, "Session active", the "Stop session" button. The `eval` output contains `FAKE CLI in`, a path that ends with the first 8 characters of the session id (the worktree), `--disallowedTools` followed by Phase 2's deny rules, `--session-id`, `--permission-mode manual`, `Read the file`, and the line `LM_ROOT: <scratch>\demo\store` (the store the app is connected to, not your real one). `errors` prints nothing. Compare `v1-terminal.png` with mock 04: header, toolbar order (engine, switch, shield label, branch), tab strip above a bordered dark box, status line bottom right, "Workspace" rail with "Source", "Attached context", "Files changed".
 
 **V2. The briefing file.** In PowerShell: `Get-Content "$env:APPDATA\dev.hivemind.app\terminals\<session id>\context\briefing.md"`. Must contain the task text and the project briefing.
 
 **V3. Rendering.** Send text that needs the fallback font and colours:
 
 ```sh
-python scripts/drive_ui.py --out <scratch>\shots "eval:window.__TAURI_INTERNALS__.invoke('term_write',{id:JSON.parse(localStorage.getItem('hivemind.nav')).state.route.session,data:'chcp 65001 >nul & echo ┌──┐ café ✓ & echo │  │ & echo └──┘\\r'})" wait:2 shot:v3-render "css:.term-host .xterm-rows"
+python scripts/drive_ui.py --out <scratch>\shots "eval:window.__TAURI_INTERNALS__.invoke('term_write',{id:JSON.parse(localStorage.getItem('hivemind.nav')).state.route.session,data:'chcp 65001 >nul & echo ┌──┐ café ✓ & echo │  │ & echo └──┘'+String.fromCharCode(13)})" wait:2 shot:v3-render "css:.term-host .xterm-rows"
 ```
 
 Must show: a closed box (corners and sides line up), `café ✓` intact, mono text in JetBrains Mono, the background `#170d24`.
@@ -2443,12 +2560,18 @@ Must show: a closed box (corners and sides line up), `café ✓` intact, mono te
 **V4. Input, files changed, quiet refresh.**
 
 ```sh
-python scripts/drive_ui.py --out <scratch>\shots "eval:window.__TAURI_INTERNALS__.invoke('term_write',{id:JSON.parse(localStorage.getItem('hivemind.nav')).state.route.session,data:'echo changed>> README.md\\r'})" wait:5 shot:v4-files text
+python scripts/drive_ui.py --out <scratch>\shots "eval:window.__TAURI_INTERNALS__.invoke('term_write',{id:JSON.parse(localStorage.getItem('hivemind.nav')).state.route.session,data:'echo changed>> README.md'+String.fromCharCode(13)})" wait:5 shot:v4-files text
 ```
 
 Must show: within about 3 s of the command, the rail's "Files changed" lists `README.md` and "Review diff" appears (if Phase 4 is merged). `click:Review diff` then opens Phase 4's Review page for this session (`openReview`) with the one-line change. While the terminal runs, its bottom bar reads "The agent is working" and Approve is disabled; that is expected. Go back with `key:Alt+ArrowLeft` (focus is not in the terminal now, so Back works).
 
-**V5. Resize.** `size:1100x760 wait:1 shot:v5-small size:1487x1058 wait:1 shot:v5-large`. Must show: no clipped last row or column; at 1100 wide the rail is hidden and the terminal fills the width. Then `eval:` a `term_write` of `mode con\\r` and check the reported columns changed between the two sizes.
+**V5. Resize.** `size:1100x760 wait:1 shot:v5-small size:1487x1058 wait:1 shot:v5-large`. Must show: no clipped last row or column; at 1100 wide the rail is hidden and the terminal fills the width. After each size, ask the console for its width and read the screen:
+
+```sh
+python scripts/drive_ui.py --out <scratch>\shots "eval:window.__TAURI_INTERNALS__.invoke('term_write',{id:JSON.parse(localStorage.getItem('hivemind.nav')).state.route.session,data:'mode con'+String.fromCharCode(13)})" wait:2 "eval:document.querySelector('.term-host .xterm-rows').innerText"
+```
+
+The `Columns:` value must differ between the two sizes.
 
 **V6. Keyboard (by hand, in the window; this decides U4).** Click in the terminal. Check each: typing appears; Ctrl+P does **not** open the palette and Ctrl+K does **not** focus the search; Alt+Left does not navigate; select text with the mouse and press Ctrl+C, then paste it elsewhere (copied); copy a two-line text elsewhere and press Ctrl+V in the terminal (pasted once, as typed text at the `cmd` prompt); Ctrl+Shift+K moves focus to the search field; from there Ctrl+P opens the palette again. AltGr characters type, if the keyboard has them.
 
@@ -2459,6 +2582,8 @@ python scripts/drive_ui.py --out <scratch>\shots "click:Stop session" wait:2 sho
 ```
 
 Must show: "Session ended", "Resume in terminal", "Start over"; no "Stop session" button; the last screen still visible; "Waiting for review" in the status line (the README.md change from V4); "Remove worktree" in the rail. With Phase 4 merged, the Review page's Approve is now enabled for this session (do not approve yet; V7 resumes it). Close the app completely (tray menu "Quit Hivemind"), start it again, open Agent Workspace and the session: the saved screen is repainted and the status is "Session ended". `click:Resume in terminal`, `wait:3`, read `SCREEN`: it contains `FAKE CLI` again and `--resume <session id>`. Check no stray processes: `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*fake-cli*' }` lists exactly one tree while running and none after "Stop session".
+
+**Before V8 (the first real CLI): the store check.** V1 proved with the stand-in that a terminal program gets `LIVING_MEMORY_ROOT` for the demo store. Do not run a real CLI until that line was seen. After V8, V9 and V10, repeat the `Get-ChildItem` line from Setup on your real store: the newest file and its time must be the same as before (no real CLI session wrote into it), and the demo store's hook state must have changed (`Get-ChildItem <scratch>\demo\store -Recurse -File | Sort-Object LastWriteTime -Descending | Select-Object -First 3`). If the real store changed, stop and tell the user.
 
 **V8. Start screen and Codex (Part B; decides U3).** Restore the real Claude Code path in Settings (clear the field). Open "New session". Must show (compare with mock 02): "Engine" with "Claude Code" selected and a check mark, "Codex", "Use existing local sign-in.", "Manage connection →"; "Interface" with "Chat" and "Terminal". Click "Codex": "Chat" becomes disabled with "Chat with Codex is not available yet. Use Terminal." and "Terminal" is selected. Start a session with the task `Create a file named codex-check.txt containing the word ok.`, permission "Review edits". In the terminal: answer Codex's own prompts yourself (trust; hooks if any). Codex reads the briefing and, **before writing the file, shows its own approval prompt** (U3 b). Approve it there. "Files changed" lists `codex-check.txt` after the output goes quiet. Quit Codex with Ctrl+C: "Session ended" (not "failed"). Click "Resume in terminal": **the earlier exchange is on screen** (U3 a). This uses a little of the Codex plan's quota and no money. Take `shot:v8-codex` while it runs and compare with mock 04.
 
@@ -2494,6 +2619,8 @@ Stop every test session. Remove each test session's worktree with "Remove worktr
 - [ ] "Stop session", closing a tab, quitting the CLI, and closing the app all end in "Session ended"; a non-zero exit ends in "Session failed".
 - [ ] After an app restart the session shows its saved screen and can be resumed.
 - [ ] No orphan processes after any of the above (checked with `Get-CimInstance Win32_Process`).
+- [ ] Every program in a PTY gets `LIVING_MEMORY_ROOT` for the store the app is connected to; the real store did not change during verification.
+- [ ] A Claude Code terminal is started with `--disallowedTools` and `scope::governed_rules()`; `term_open` refuses to start or attach while Phase 4 holds a reservation, and still shows the saved screen of a session whose worktree was removed.
 - [ ] A running terminal does not use one of Phase 2's `MAX_RUNNING` slots, and Phase 2's chat sessions, their toolbar and their Start screen behave as before for Claude Code with Chat.
 - [ ] `agent_send`, `agent_end` and `agent_set_policy` refuse a terminal session; "Remove worktree" works from the terminal rail.
 - [ ] The Engine and Interface controls, the engine menu, the Chat | Terminal switch and the connection dialog work; unavailable combinations are disabled with a reason.
@@ -2520,7 +2647,7 @@ Stop every test session. Remove each test session's worktree with "Remove worktr
   - any new `[projects.'…'] trust_level = "trusted"` entry in `~/.codex/config.toml`, and any folder the user trusted in Claude Code;
   - whether a Codex daemon is running that was not running before (`Get-CimInstance Win32_Process -Filter "Name='codex.exe'" | Select-Object CommandLine`); if so, that `codex app-server daemon stop` stops it, and that you did not run it;
   - the scrollback files under the app data folder, and that they hold what was on screen.
-- Known limits to state plainly: approvals in the terminal are the CLI's own; Hivemind cannot see or count them, and cannot refuse Living Memory plan, apply and undo commands there as it does in Chat; no spending limit applies in the terminal; a terminal session must be stopped before its edits can be approved on the Review page; a terminal session has no transcript in Hivemind, only its last screen; "Request changes" does not work for a terminal session; both CLIs may ask about folder trust in every new session.
+- Known limits to state plainly: approvals in the terminal are the CLI's own; Hivemind cannot see or count them; Living Memory plan, apply and undo commands are denied by rule in a Claude Code terminal but cannot be refused in a Codex terminal; no spending limit applies in the terminal; a terminal session must be stopped before its edits can be approved on the Review page; a terminal session has no transcript in Hivemind, only its last screen; "Request changes" does not work for a terminal session; both CLIs may ask about folder trust in every new session.
 
 ### What to record in the project's memory system
 
