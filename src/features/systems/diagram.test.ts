@@ -30,4 +30,14 @@ describe("architecture diagram shaping", () => {
     expect(chain(loose).linked).toEqual([false, true]);
     expect(chain(null)).toEqual({ nodes: [], linked: [] });
   });
+
+  it("keeps the named container among the boxes", () => {
+    const four: ArchModel = { elements: [el("a"), el("b"), el("c"), el("d")], relationships: [rel("a", "b"), rel("b", "c"), rel("c", "d")] };
+    expect(names(four)).toEqual(["a", "b", "c"]);
+    const kept = chain(four, 3, "d");
+    expect(kept.nodes.map((n) => n.id)).toEqual(["a", "b", "d"]);
+    expect(kept.linked).toHaveLength(2);
+    expect(chain(four, 3, "a")).toEqual(chain(four));
+    expect(chain(four, 3, "nope")).toEqual(chain(four));
+  });
 });
