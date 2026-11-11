@@ -215,3 +215,23 @@ Folder `<SCRATCH>\spike-claude`. Run each script from there with Python 3.15 aft
 | `f1_scope.py` | F (needs `..\spike-claude-wt`, `..\spike-extra`, `..\spike-plugin`) |
 | `g1_windows.py [session-id]`, `g4_newlines.py` | G |
 | `h1_edges.py`, `h8_persist.py` | edge cases; delete `.claude\settings.local.json` after h8 |
+
+## Step 0 results (Phase 2)
+
+Run on 2026-11-10 (UTC 2026-11-11) for `docs/plans/phase-2-interactive-sessions.md`, section 8, step 0. Claude Code 2.1.322, git 2.56.0.windows.4, Windows 11 Home 10.0.26100, model `haiku`. `LIVING_MEMORY_ROOT` pointed at a throwaway demo store built with `scripts/seed_demo_store.py`. The step 0 script is the one in the phase document, with three small additions: a raw-line log kept in the scratch folder, a guard in check B for a process that ends before its prompt, and a switch to run check E in its `--settings` form (not needed). Spend: a few cents.
+
+| Check | Result | Pass? |
+| --- | --- | --- |
+| 0a: "Generate with agent" from the app | Refused before any CLI started: `The Architecture Suite's one-time setup has not been run: there is no interpreter at C:\Users\<user>\.architecture-suite\runtime\Scripts\python.exe`. This is today's code; the suite is not installed on this machine. The rest of 0a (streaming, Stop, restart) could not run. | Not run (scope check) |
+| A: `system/init` lines per turn | `1 1` | Yes |
+| A: prompts | `['Write']` | Yes |
+| A: results | `success success`, second result `notes.txt` | Yes |
+| A: exit code after stdin EOF | `0` | Yes |
+| B: resume after `taskkill /T /F` mid-turn | `success 'resumed'` | Yes: no fallback needed |
+| C: launch with `--permission-mode acceptEdits` plus host prompts | prompts `['Bash']`, no `Write` | Yes: no fallback needed |
+| `claude --help`, `--model` | "Provide an alias for the latest model (e.g. 'fable', 'opus', or 'sonnet')" | Yes: Opus option stays |
+| `claude --help`, `--disallowedTools` | `--disallowedTools, --disallowed-tools <tools...>` | Yes |
+| D: Living Memory hook in a worktree outside the bound folder | hook text names no session and no domain; it says the folder "is not bound to a memory domain" and offers the bind command; the agent then declined to search (no prompt) | **No**: worktree sessions are not bound to the project's domain. Per the document nothing in the design changes: the briefing names the project and domain for captures. |
+| E: `--disallowedTools "Bash(*living_memory.py* undo *)" …` with a `--settings` allow rule `Bash(*living_memory.py*)` | prompts `[]`, 1 denial in `result.permission_denials`, Living Memory did not answer | Yes: the flag form works; the `--settings` deny fallback was not needed |
+
+Real store isolation. The first full run (A to E, run in the background) read `real store untouched: False`. The only real-store file that changed was `logs/log-<date>.jsonl` (plus `.turns/` state). Every entry written in that window came from the developer's own Claude Code session (its tool-call, Stop and capture-finalize hooks; that session kept working while the run was in the background). The four sessions the script started appear only in the demo store's log. Check E, rerun in the foreground with nothing else running: `real store untouched: True`, `demo store written: True`. Lesson: take both readings in one command **and** do nothing else in the same Claude Code session until that command ends; a background run is not enough.
