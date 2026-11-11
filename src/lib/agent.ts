@@ -54,7 +54,15 @@ export interface SessionLog { info: SessionInfo; events: SeqEvent[] }
 
 /** The path of the CLI that would be launched; rejects with a reason the user can act on. */
 export const agentAvailable = () => invoke<string>("agent_available");
-export const agentStart = (task: AgentTask, prompt: string) => invoke<SessionInfo>("agent_start", { task, prompt });
+export const agentStart = (task: AgentTask, prompt: string, options?: StartOptions) => invoke<SessionInfo>("agent_start", { task, prompt, options: options ?? null });
+export const agentSend = (sessionId: string, text: string, options?: SendOptions) => invoke<void>("agent_send", { sessionId, text, options: options ?? null });
+export const agentAnswer = (sessionId: string, requestId: string, decision: Exclude<Decision, "withdrawn">) => invoke<void>("agent_answer", { sessionId, requestId, decision });
+export const agentInterrupt = (sessionId: string) => invoke<void>("agent_interrupt", { sessionId });
+export const agentEnd = (sessionId: string) => invoke<void>("agent_end", { sessionId });
+export const agentFiles = (sessionId: string) => invoke<ChangedFiles>("agent_files", { sessionId });
+export const agentSetPolicy = (sessionId: string, policy: Policy) => invoke<void>("agent_set_policy", { sessionId, policy });
+export const agentRemoveWorktree = (sessionId: string) => invoke<void>("agent_remove_worktree", { sessionId });
+export const repoBranches = (project: string, repo: string) => invoke<RepoBranches>("repo_branches", { project, repo });
 export const agentCancel = (sessionId: string) => invoke<void>("agent_cancel", { sessionId });
 export const agentSessions = () => invoke<SessionInfo[]>("agent_sessions");
 export const agentSession = (sessionId: string, fromSeq = 0) => invoke<SessionLog>("agent_session", { sessionId, fromSeq });
