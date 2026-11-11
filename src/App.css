@@ -444,6 +444,9 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .work { overflow: auto; height: 100%; }
 .work-list { padding: .7rem 0; display: flex; flex-direction: column; gap: .6rem; }
 .work-group { border: 1px solid var(--border); border-radius: .5rem; padding: .5rem .8rem; background: var(--bg-alt); display: flex; flex-direction: column; gap: .25rem; }
+/* One field per line in the learning review (domain switches, proposal editor, step evidence). */
+.learning-field { display: block; }
+.learning-field textarea { width: 100%; }
 .work-head { display: flex; align-items: center; gap: .5rem; min-width: 0; }
 .work-head.retired { opacity: .6; }
 .work-head .link-row { width: auto; font-weight: 600; }

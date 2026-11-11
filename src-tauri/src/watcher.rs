@@ -16,15 +16,15 @@ pub fn note_domain(domains_dir: &Path, path: &Path) -> Option<String> {
         })
         .collect();
     let is_note = parts.len() >= 3
-        && (parts[1] == "notes" || parts[1] == "archive")
-        && parts.last().is_some_and(|name| name.ends_with(".md"));
+        && ((parts[1] == "notes" || parts[1] == "archive") && parts.last().is_some_and(|name| name.ends_with(".md"))
+            || parts[1] == "learning" && parts.last().is_some_and(|name| name.ends_with(".json")));
     is_note.then(|| parts[0].clone())
 }
 
 /// Store-level config files the UI cares about, when a changed path is one of them directly under the store root.
 pub fn store_file(root: &Path, path: &Path) -> Option<String> {
     let name = path.file_name()?.to_str()?;
-    (path.parent()? == root && matches!(name, "projects.json" | "systems.json" | "tag_taxonomy.json")).then(|| name.to_string())
+    (path.parent()? == root && matches!(name, "projects.json" | "systems.json" | "tag_taxonomy.json" | "learning.json")).then(|| name.to_string())
 }
 
 /// Watch note folders (recursively) and the store root (non-recursively, for config files).
@@ -75,6 +75,7 @@ mod tests {
         assert_eq!(note_domain(&base, &base.join("demo").join("search.sqlite3")), None);
         assert_eq!(note_domain(&base, &base.join("demo").join("staged").join("a.md")), None);
         assert_eq!(note_domain(&base, &base.join("demo").join("INDEX.md")), None);
+        assert_eq!(note_domain(&base, &base.join("demo").join("learning").join("candidates").join("a.json")).as_deref(), Some("demo"));
     }
 
     #[test]
@@ -83,6 +84,7 @@ mod tests {
         assert_eq!(store_file(&root, &root.join("projects.json")).as_deref(), Some("projects.json"));
         assert_eq!(store_file(&root, &root.join("systems.json")).as_deref(), Some("systems.json"));
         assert_eq!(store_file(&root, &root.join("tag_taxonomy.json")).as_deref(), Some("tag_taxonomy.json"));
+        assert_eq!(store_file(&root, &root.join("learning.json")).as_deref(), Some("learning.json"));
         assert_eq!(store_file(&root, &root.join(".projects.json.tmp")), None);
         assert_eq!(store_file(&root, &root.join(".tag_taxonomy.json")), None);
         assert_eq!(store_file(&root, &root.join("projects.json.bak")), None);
