@@ -6,6 +6,7 @@ mod drafts;
 mod git;
 mod settings;
 mod watcher;
+mod worktree;
 
 use bridge::{Bridge, Reply};
 use serde::Serialize;
@@ -19,6 +20,7 @@ struct AppState {
     bridge: Arc<Bridge>,
     settings_path: PathBuf,
     drafts_dir: PathBuf,
+    worktrees_dir: PathBuf,
     agents: agent::Manager,
     watcher: Mutex<Option<notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>>,
     /// Why the quick-capture hotkey could not be registered, for the settings screen.
@@ -127,9 +129,74 @@ async fn agent_available(state: State<'_, AppState>) -> Result<String, String> {
 
 /// Start an agent session for a task; what it may touch is worked out here, not by the webview.
 #[tauri::command]
-async fn agent_start(state: State<'_, AppState>, task: agent::scope::AgentTask, prompt: String) -> Result<agent::SessionInfo, String> {
+async fn agent_start(
+    state: State<'_, AppState>,
+    task: agent::scope::AgentTask,
+    prompt: String,
+    options: Option<agent::StartOptions>,
+) -> Result<agent::SessionInfo, String> {
+    let (agents, bridge, path, worktrees) = (state.agents.clone(), state.bridge.clone(), state.settings_path.clone(), state.worktrees_dir.clone());
+    blocking(move || agent::start_task(&agents, &bridge, &settings::load(&path), &worktrees, task, &prompt, options.unwrap_or_default())).await
+}
+
+/// Send a message to an idle interactive session.
+#[tauri::command]
+async fn agent_send(state: State<'_, AppState>, session_id: String, text: String, options: Option<agent::SendOptions>) -> Result<(), String> {
     let (agents, bridge, path) = (state.agents.clone(), state.bridge.clone(), state.settings_path.clone());
-    blocking(move || agent::start_task(&agents, &bridge, &settings::load(&path), task, &prompt)).await
+    blocking(move || agent::send_task(&agents, &bridge, &settings::load(&path), &session_id, &text, options.unwrap_or_default())).await
+}
+
+/// Answer a permission request a session is waiting on.
+#[tauri::command]
+async fn agent_answer(state: State<'_, AppState>, session_id: String, request_id: String, decision: agent::events::Decision) -> Result<(), String> {
+    let agents = state.agents.clone();
+    blocking(move || agents.answer(&session_id, &request_id, decision)).await
+}
+
+/// Stop the turn a session is working on.
+#[tauri::command]
+async fn agent_interrupt(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    let agents = state.agents.clone();
+    blocking(move || agents.interrupt(&session_id)).await
+}
+
+/// End an interactive session.
+#[tauri::command]
+async fn agent_end(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    let agents = state.agents.clone();
+    blocking(move || agents.end(&session_id)).await
+}
+
+/// The files changed in a session's worktree, with their patches.
+#[tauri::command]
+async fn agent_files(state: State<'_, AppState>, session_id: String) -> Result<worktree::ChangedFiles, String> {
+    let agents = state.agents.clone();
+    blocking(move || agents.files(&session_id)).await
+}
+
+/// Change the permission mode of an interactive session.
+#[tauri::command]
+async fn agent_set_policy(state: State<'_, AppState>, session_id: String, policy: agent::scope::PolicyMode) -> Result<(), String> {
+    let agents = state.agents.clone();
+    blocking(move || agents.set_policy(&session_id, policy)).await
+}
+
+/// Remove the worktree of a session that has ended.
+#[tauri::command]
+async fn agent_remove_worktree(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    let agents = state.agents.clone();
+    blocking(move || agents.remove_worktree(&session_id)).await
+}
+
+/// The local branches of one of a project's repositories (the repository must be registered for the project).
+#[tauri::command]
+async fn repo_branches(state: State<'_, AppState>, project: String, repo: String) -> Result<git::Branches, String> {
+    let bridge = state.bridge.clone();
+    blocking(move || {
+        let entry = git::project_entry(&bridge, &project)?;
+        git::branches(&agent::scope::project_repo(&entry, &repo)?)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -221,6 +288,7 @@ pub fn run() {
             let settings_path = app.path().app_config_dir()?.join("settings.json");
             let drafts_dir = app.path().app_data_dir()?.join("drafts");
             let sessions_dir = app.path().app_data_dir()?.join("agent-sessions");
+            let worktrees_dir = app.path().app_data_dir()?.join("worktrees");
             let saved = settings::load(&settings_path);
             let launch = settings::resolve(&saved, |k| std::env::var(k).ok());
             // A taken or invalid hotkey must not stop the app; the settings screen shows why.
@@ -243,6 +311,7 @@ pub fn run() {
                 bridge: Arc::new(Bridge::new(launch)),
                 settings_path,
                 drafts_dir,
+                worktrees_dir,
                 agents,
                 watcher: Mutex::new(None),
                 shortcut_error: Mutex::new(shortcut_error),
@@ -257,7 +326,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, draft_put, draft_get, draft_delete, draft_list,
-            agent_available, agent_start, agent_cancel, agent_sessions, agent_session
+            agent_available, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_remove_worktree, repo_branches,
+            agent_cancel, agent_sessions, agent_session
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

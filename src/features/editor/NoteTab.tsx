@@ -1,12 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, CircleCheck, SquarePen } from "lucide-react";
+import { Check, CircleCheck, Play, SquarePen } from "lucide-react";
 import { useState } from "react";
 import { classify } from "../../lib/errors";
 import { confirm } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
+import { startSession } from "../../store";
 import { toast } from "../../ui/toast";
 import { dayMonth, Tabs } from "../../ui/Page";
 import { useWorkspace, type Tab } from "../../workspace/store";
+import { useSessionDraft } from "../agents/draft";
 import { HistoryPanel } from "../history/HistoryViews";
 import { NoteMenu } from "../plans/NoteMenu";
 import { NoteTags, NoteView, noteQuery } from "../viewer/NoteView";
@@ -49,9 +51,14 @@ export function NoteTab({ tab }: { tab: Tab }) {
             <SquarePen size="1.15em" aria-hidden />{mode === "live" ? "Done editing" : "Edit"}
           </button>
           {n?.status === "active" && !editing && (
-            <button className="primary" onClick={() => still.mutate()} disabled={still.isPending} title="Confirm this note still holds (pushes its review date out)">
-              <Check size="1.15em" aria-hidden />Still true
-            </button>
+            <>
+              <button className="text" onClick={() => still.mutate()} disabled={still.isPending} title="Confirm this note still holds (pushes its review date out)">
+                <Check size="1.15em" aria-hidden />Still true
+              </button>
+              <button className="primary" onClick={() => { useSessionDraft.getState().addContext(refId); startSession(); }}>
+                <Play size="1.15em" aria-hidden />Use in agent session
+              </button>
+            </>
           )}
           <NoteMenu refId={refId} />
         </div>

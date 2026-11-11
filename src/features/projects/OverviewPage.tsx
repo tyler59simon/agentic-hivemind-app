@@ -1,19 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Bookmark, CircleCheck, CircleEllipsis, Clock, Ellipsis, Laptop, Layers, Link as LinkIcon, Network, Plus } from "lucide-react";
+import { ArrowRight, Bookmark, CircleCheck, CircleEllipsis, Clock, Ellipsis, Laptop, Layers, Link as LinkIcon, Network, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { sessionsQuery } from "../../lib/agent";
 import { useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import type { RepoActivity } from "../../lib/git";
 import { list, openWork, projectPlan, review, type NoteRow, type Project } from "../../lib/lm";
 import { sections } from "../../lib/note";
 import { shortDate } from "../../lib/text";
-import { openSystem, useApp } from "../../store";
+import { openSession, openSystem, startSession, useApp } from "../../store";
 import { Menu } from "../../ui/Menu";
 import { Modal } from "../../ui/Modal";
 import { ArrowLink, dayMonth, PageHeader, Row, Section, Split } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
+import { sessionForNote, waitingForReview } from "../agents/session";
 import { PlanDialog } from "../plans/PlanDialog";
 import { HoverPreview } from "../preview/HoverPreview";
 import { MiniDiagram } from "../systems/MiniDiagram";
@@ -131,6 +133,8 @@ function ProjectOverview({ project }: { project: Project }) {
   const next = groupOpenItems(open.data?.items ?? []).slice(0, 5);
   const recent = useMemo(() => [...members].filter((r) => r.ref !== project.charter && r.status === "active").sort((a, b) => b.updated.localeCompare(a.updated)).slice(0, 5), [members, project.charter]);
   const summary = charter.data ? sections(charter.data.body).summary : undefined;
+  const sessions = useQuery(sessionsQuery());
+  const session = plan && sessionForNote(sessions.data ?? [], project.slug, plan.ref);
 
   const copy = async () => {
     const text = buildBriefing({ project, charter: charter.data, rows: members, open: open.data?.items ?? [], commits });
@@ -147,6 +151,7 @@ function ProjectOverview({ project }: { project: Project }) {
           <Menu label="Project actions" align="right" button={<Ellipsis size="1.3em" aria-hidden />} className="icon-menu">
             {(close) => (
               <>
+                <li role="none"><button role="menuitem" onClick={() => { close(); newNote(); }}>New note</button></li>
                 {project.charter && <li role="none"><button role="menuitem" onClick={() => { close(); openNote({ ref: project.charter!, title: `${project.name} charter` }); }}>Open charter</button></li>}
                 <li role="none"><button role="menuitem" onClick={() => { close(); setEditing(true); }}>Edit project…</button></li>
                 <li role="none"><button role="menuitem" onClick={() => { close(); setTriage(true); }}>Find notes for this project…</button></li>
@@ -154,7 +159,7 @@ function ProjectOverview({ project }: { project: Project }) {
               </>
             )}
           </Menu>
-          <button className="primary big" onClick={newNote} title="New note in this project (Ctrl+N)"><Plus size="1.2em" aria-hidden />New note</button>
+          <button className="primary big" onClick={startSession} title="Start an agent session in this project"><Plus size="1.2em" aria-hidden />Start a session</button>
         </>} />
       <Split rail={<>
         <SystemContext project={project} commits={commits} />
@@ -174,10 +179,15 @@ function ProjectOverview({ project }: { project: Project }) {
                 <CircleCheck size="1.2em" aria-hidden />
                 {steps ? (steps.total ? `${steps.done} of ${steps.total} steps done` : "No action items yet") : `Latest status · ${dayMonth(focus.updated)}`}
                 {dueRefs.has(focus.ref) && <span className="status-chip waiting">Needs review</span>}
+                {session && waitingForReview(session) && <span className="status-chip waiting">Waiting for review</span>}
               </p>
               {focus.summary && <p className="clamp">{oneLine(focus.summary)}</p>}
+              {session && waitingForReview(session) && (
+                <p>Claude Code proposed {session.filesChanged!.files} file change{session.filesChanged!.files === 1 ? "" : "s"}. Review before continuing.</p>
+              )}
               <p className="focus-meta"><LinkIcon size="1.1em" aria-hidden /><span className="cap">{focus.type}</span><span>Updated {dayMonth(focus.updated)}</span>{!!parts.decisions.length && <span>{parts.decisions.length} decision{parts.decisions.length === 1 ? "" : "s"}</span>}</p>
               <div className="focus-actions">
+                {session && <button className="outline" onClick={() => openSession(session.id)}>Resume session<ArrowRight size="1.1em" aria-hidden /></button>}
                 <button className="outline" onClick={() => openNote(focus)}>{plan ? "Open plan" : "Open note"}</button>
                 {plan && <ArrowLink onClick={() => go({ page: "changes", ref: plan.ref })}>Open change</ArrowLink>}
               </div>

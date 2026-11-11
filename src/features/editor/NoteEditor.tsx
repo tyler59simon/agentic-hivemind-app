@@ -160,8 +160,9 @@ export function NoteEditor({ tab, live, head }: { tab: Tab; live: boolean; head:
       deleteDraft(ref).catch(() => {});
       setBanner(null);
       ["list", "links", "preview", "history", "activity"].forEach((k) => client.invalidateQueries({ queryKey: [k] }));
-      toast("Saved.");
-      if (payload.title) offerLinkRewrite(s.base.title, payload.title);
+      toast(r.status === 'proposed' ? 'Saved as a learning proposal. The approved procedure is unchanged.' : 'Saved.');
+      if (r.status === 'proposed') client.invalidateQueries({ queryKey: ['learning'] });
+      if (payload.title && r.status !== 'proposed') offerLinkRewrite(s.base.title, payload.title);
     } catch (e) {
       const problem = classify(e);
       if (problem.kind === "stale") {

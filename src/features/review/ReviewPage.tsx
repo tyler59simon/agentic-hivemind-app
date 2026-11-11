@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
+import { useProjectsEnabled, useSystemsEnabled, useConnection } from "../../lib/connection";
+import { learningList, scopeLearning } from '../../lib/learning';
 import { classify } from "../../lib/errors";
 import { review, systemPlan, type System, type SystemUpdate } from "../../lib/lm";
 import { openSession, openSystem } from "../../store";
@@ -11,8 +12,9 @@ import { systemsForProject } from "../projects/scope";
 import { useCurrentProject, useProject } from "../projects/useProject";
 import { systemsQuery, useSystemProposals } from "../systems/useSystem";
 import { ReviewQueue } from "../work/ReviewQueue";
+import { LearningReview } from './LearningReview';
 
-type Kind = "all" | "memory" | "architecture";
+type Kind = "all" | "memory" | "architecture" | "learning";
 
 /** Review: what waits for you before it counts as accepted. Today that is notes due for confirmation and
  *  registry changes an agent proposed; agent code edits join them with the diff review. */
@@ -21,6 +23,9 @@ export function ReviewPage() {
   const projectsOn = useProjectsEnabled();
   const systemsOn = useSystemsEnabled();
   const { project } = useCurrentProject();
+  const learningOn = useConnection(s => (s.capabilities?.learning ?? 0) >= 1);
+  const learning = useQuery({ queryKey: ['learning', 'candidates'], queryFn: () => learningList('candidate'), enabled: learningOn });
+  const learningCount = scopeLearning(learning.data?.records ?? [], project?.slug).filter(r => r.state === 'draft' || r.state === 'deferred').length;
   const mine = useProject(project?.slug).due;
   const everything = useQuery({ queryKey: ["review", "*"], queryFn: () => review({ allDomains: true, limit: 100 }), enabled: projectsOn && !project });
   const due = project ? mine : everything;
@@ -32,16 +37,16 @@ export function ReviewPage() {
   const [kind, setKind] = useState<Kind>("all");
   const [reviewing, setReviewing] = useState<{ system: System; update: SystemUpdate } | null>(null);
   const notes = due.data?.notes ?? [];
-  const total = notes.length + proposals.length;
+  const total = notes.length + proposals.length + learningCount;
 
   return (
     <div className="page">
       <PageHeader title="Review" subtitle={project ? "What waits for you in this project before it counts as accepted." : "What waits for you before it counts as accepted."} />
       <Tabs pill label="Kind" value={kind} onChange={setKind}
-        items={[{ id: "all", label: "All", count: total }, { id: "memory", label: "Memory", count: notes.length }, { id: "architecture", label: "Architecture", count: proposals.length }]} />
+        items={[{ id: "all", label: "All", count: total }, { id: "memory", label: "Memory", count: notes.length }, { id: "architecture", label: "Architecture", count: proposals.length }, { id: 'learning', label: 'Learning', count: learningCount }]} />
       {!projectsOn && <p className="muted">Review needs a newer Living Memory (API 2 with the <code>review</code> command).</p>}
-      {due.data && registry.data && !total && <p className="muted">Nothing is waiting for you.</p>}
-      {kind !== "memory" && !!proposals.length && (
+      {due.data && registry.data && (!learningOn || learning.data) && !total && <p className="muted">Nothing is waiting for you.</p>}
+      {(kind === 'all' || kind === 'architecture') && !!proposals.length && (
         <Section title="Architecture" count={proposals.length}>
           {proposals.map(({ system, update, fields, proposer }) => (
             <div key={system.slug} className="work-group">
@@ -56,12 +61,13 @@ export function ReviewPage() {
           ))}
         </Section>
       )}
-      {kind !== "architecture" && projectsOn && (
+      {(kind === 'all' || kind === 'memory') && projectsOn && (
         <Section title="Memory" count={due.data?.due} loading={due.isLoading} error={due.error && classify(due.error).message}
           empty={due.data && !notes.length ? "No notes are due for review." : undefined}>
           <ReviewQueue rows={notes} />
         </Section>
       )}
+      {(kind === 'all' || kind === 'learning') && <LearningReview />}
       {reviewing && (
         <PlanDialog title={`Update system ${reviewing.system.name}`} applyLabel="Update system"
           intro={<p>These are the registry fields the agent proposed. Nothing changes until you apply the plan.</p>}

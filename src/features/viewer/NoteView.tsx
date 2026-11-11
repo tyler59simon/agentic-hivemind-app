@@ -142,6 +142,9 @@ export function NoteView({ refId, tabId }: { refId: string; tabId: string }) {
   if (!n) return null;
   return (
     <article className="note">
+      {n.learning_procedure && <p className="banner">Approved procedure version {n.learning_version} · {n.learning_state}.
+        {n.learning_pending_edit && ' An external edit is waiting to be captured as a proposal.'}
+        {' '}Evidence and version history are available in Review → Learning.</p>}
       <div className="markdown">
         <Markdown remarkPlugins={[remarkGfm, remarkWikilinks]} components={components}
           urlTransform={(url) => (url.startsWith(WIKI_PREFIX) ? url : defaultUrlTransform(url))}>

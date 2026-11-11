@@ -1,7 +1,7 @@
 //! Claude Code in headless mode: one JSON object per stdout line, the prompt as one JSON line on stdin.
 use super::Adapter;
-use super::events::{Outcome, RunEvent, clip};
-use super::scope::{Policy, Spec};
+use super::events::{Decision, Outcome, RunEvent, clip};
+use super::scope::{Policy, PolicyMode, Spec, governed_memory_command};
 use crate::settings::Settings;
 use serde_json::{Value, json};
 use std::path::Path;
@@ -10,6 +10,11 @@ use std::time::Duration;
 
 const TOOL_SUMMARY: usize = 300;
 const RESULT_SUMMARY: usize = 500;
+const APPROVAL_INPUT: usize = 4000;
+const GOVERNED: &str = "Hivemind does not let agent sessions run Living Memory plan, apply or undo commands. Describe the change and let the user apply it.";
+const DECLINED: &str = "The user declined this action in Hivemind.";
+/// What the CLI's accept-edits mode allows, as the label of an always-allow that has no rule to show.
+const EDITS_LABEL: &str = "file edits and simple file commands in the worktree";
 /// The tool input fields worth showing, most telling first.
 const INPUT_KEYS: [&str; 9] = ["command", "file_path", "pattern", "skill", "description", "url", "query", "path", "prompt"];
 
@@ -53,6 +58,74 @@ fn failure(subtype: &str, result: Option<&str>) -> String {
     }
 }
 
+/// Every string inside a JSON value cut to `max` characters.
+fn clip_strings(value: &Value, max: usize) -> Value {
+    match value {
+        Value::String(text) => Value::String(clip(text, max)),
+        Value::Array(items) => Value::Array(items.iter().map(|item| clip_strings(item, max)).collect()),
+        Value::Object(fields) => Value::Object(fields.iter().map(|(key, field)| (key.clone(), clip_strings(field, max))).collect()),
+        other => other.clone(),
+    }
+}
+
+/// The permission updates "always allow" sends for this request, and what they allow in words.
+fn always(request: &Value) -> (Vec<Value>, Option<String>) {
+    if request.get("suppress_always_allow_rule").and_then(Value::as_bool) == Some(true) {
+        return (vec![], None);
+    }
+    let suggestions: Vec<&Value> = request.get("permission_suggestions").and_then(Value::as_array).into_iter().flatten().collect();
+    // Never the CLI's own destination: `localSettings` would write a settings file into the worktree.
+    let for_session = |entry: &Value| {
+        let mut entry = entry.clone();
+        entry["destination"] = json!("session");
+        entry
+    };
+    let rules: Vec<&Value> =
+        suggestions.iter().copied().filter(|s| text_of(s, "type") == Some("addRules") && text_of(s, "behavior") == Some("allow")).collect();
+    if !rules.is_empty() {
+        let label = rules
+            .iter()
+            .filter_map(|entry| entry.get("rules").and_then(Value::as_array))
+            .flatten()
+            .map(|rule| {
+                let tool = text_of(rule, "toolName").unwrap_or_default();
+                match text_of(rule, "ruleContent") {
+                    Some(content) => format!("{tool}({content})"),
+                    None => tool.to_string(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        return (rules.into_iter().map(for_session).collect(), Some(label).filter(|label| !label.is_empty()));
+    }
+    match suggestions.iter().find(|s| text_of(s, "type") == Some("setMode") && text_of(s, "mode") == Some("acceptEdits")) {
+        Some(entry) => (vec![for_session(entry)], Some(EDITS_LABEL.to_string())),
+        None => (vec![], None),
+    }
+}
+
+/// The `request` of a `control_request` line that asks whether a tool may run.
+fn tool_request(line: &Value) -> Option<&Value> {
+    let request = line.get("request")?;
+    (text_of(line, "type") == Some("control_request") && text_of(request, "subtype") == Some("can_use_tool")).then_some(request)
+}
+
+/// A shell call that would change the Living Memory store through a plan.
+fn governed(request: &Value) -> bool {
+    matches!(text_of(request, "tool_name"), Some("Bash" | "PowerShell"))
+        && request.get("input").and_then(|input| text_of(input, "command")).is_some_and(governed_memory_command)
+}
+
+/// A stdin line that answers the CLI's request `request_id`.
+fn envelope(request_id: &str, response: Value) -> String {
+    json!({"type": "control_response", "response": {"subtype": "success", "request_id": request_id, "response": response}}).to_string()
+}
+
+/// A stdin line that asks the CLI for something, under an id of our own.
+fn control_request(request: Value) -> String {
+    json!({"type": "control_request", "request_id": format!("hivemind-{}", uuid::Uuid::new_v4()), "request": request}).to_string()
+}
+
 impl Adapter for ClaudeCode {
     fn name(&self) -> &'static str {
         "claude-code"
@@ -61,14 +134,28 @@ impl Adapter for ClaudeCode {
     fn command(&self, spec: &Spec) -> Command {
         let mut command = Command::new(&spec.program);
         command.current_dir(&spec.cwd).args(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]);
-        let Policy::PreApproved { allow } = &spec.policy;
-        command.args(["--permission-mode", "dontAsk", "--permission-prompts", "none"]);
-        command.args(["--session-id", &spec.session_id, "--max-budget-usd", &spec.budget_usd.to_string()]);
+        match &spec.policy {
+            Policy::PreApproved { .. } => command.args(["--permission-mode", "dontAsk", "--permission-prompts", "none"]),
+            Policy::Ask { .. } => {
+                command.args(["--permission-mode", "manual", "--permission-prompts", "host", "--permission-prompt-tool", "stdio"])
+            }
+            Policy::AcceptEdits { .. } => {
+                command.args(["--permission-mode", "acceptEdits", "--permission-prompts", "host", "--permission-prompt-tool", "stdio"])
+            }
+        };
+        command.args([if spec.resume { "--resume" } else { "--session-id" }, &spec.session_id]);
+        command.args(["--max-budget-usd", &spec.budget_usd.to_string()]);
+        if let Some(model) = &spec.model {
+            command.args(["--model", model]);
+        }
         if let Some(schema) = &spec.schema {
             command.arg("--json-schema").arg(schema.to_string());
         }
-        if !allow.is_empty() {
-            command.arg("--allowedTools").args(allow);
+        if !spec.policy.allow().is_empty() {
+            command.arg("--allowedTools").args(spec.policy.allow());
+        }
+        if !spec.deny.is_empty() {
+            command.arg("--disallowedTools").args(&spec.deny);
         }
         if !spec.add_dirs.is_empty() {
             command.arg("--add-dir").args(&spec.add_dirs);
@@ -76,16 +163,43 @@ impl Adapter for ClaudeCode {
         for dir in &spec.plugin_dirs {
             command.arg("--plugin-dir").arg(dir);
         }
+        if let Some(root) = &spec.memory_root {
+            command.env("LIVING_MEMORY_ROOT", root);
+        }
         command
     }
 
-    fn first_message(&self, prompt: &str) -> String {
-        json!({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": prompt}]}}).to_string()
+    fn user_line(&self, text: &str) -> String {
+        json!({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}}).to_string()
     }
 
     fn parse_line(&self, line: &str) -> Vec<RunEvent> {
         let Ok(value) = serde_json::from_str::<Value>(line) else { return vec![] };
         match (text_of(&value, "type"), text_of(&value, "subtype")) {
+            (Some("control_request"), _) => {
+                let Some(request) = tool_request(&value) else { return vec![] };
+                let tool = text_of(request, "tool_name").unwrap_or_default().to_string();
+                if governed(request) {
+                    return vec![RunEvent::Denied { tool, summary: GOVERNED.into() }];
+                }
+                let summary = match text_of(request, "description").filter(|text| !text.trim().is_empty()) {
+                    Some(description) => clip(description, TOOL_SUMMARY),
+                    None => input_summary(request.get("input")),
+                };
+                let (updates, always_label) = always(request);
+                vec![RunEvent::ApprovalRequest {
+                    request_id: text_of(&value, "request_id").unwrap_or_default().to_string(),
+                    tool,
+                    summary,
+                    input: request.get("input").map_or(Value::Null, |input| clip_strings(input, APPROVAL_INPUT)),
+                    can_always: !updates.is_empty(),
+                    always_label,
+                }]
+            }
+            (Some("control_cancel_request"), _) => vec![RunEvent::ApprovalResolved {
+                request_id: text_of(&value, "request_id").unwrap_or_default().to_string(),
+                decision: Decision::Withdrawn,
+            }],
             (Some("system"), Some("init")) => vec![RunEvent::Started {
                 model: text_of(&value, "model").map(str::to_string),
                 cli_version: text_of(&value, "claude_code_version").map(str::to_string),
@@ -132,17 +246,66 @@ impl Adapter for ClaudeCode {
         }
         let subtype = text_of(&value, "subtype").unwrap_or_default();
         let result = text_of(&value, "result");
+        let error = value.get("errors").and_then(Value::as_array).and_then(|all| all.first()).and_then(Value::as_str);
         let ok = subtype == "success" && value.get("is_error").and_then(Value::as_bool) != Some(true);
         Some(Outcome {
             ok,
-            reason: (!ok).then(|| failure(subtype, result)),
+            reason: (!ok).then(|| failure(subtype, result.or(error))),
             cost_usd: value.get("total_cost_usd").and_then(Value::as_f64),
             duration_ms: value.get("duration_ms").and_then(Value::as_u64),
             turns: value.get("num_turns").and_then(Value::as_u64),
             result: result.map(str::to_string),
             structured: value.get("structured_output").filter(|s| !s.is_null()).cloned(),
             denials: value.get("permission_denials").and_then(Value::as_array).map_or(0, |all| all.len() as u64),
+            budget: subtype == "error_max_budget_usd",
         })
+    }
+
+    fn answer_line(&self, request: &str, decision: Decision) -> Option<String> {
+        let line: Value = serde_json::from_str(request).ok()?;
+        let asked = tool_request(&line)?;
+        let response = match decision {
+            Decision::Withdrawn => return None,
+            Decision::Allow => json!({"behavior": "allow"}),
+            Decision::AllowAlways => match always(asked).0 {
+                updates if updates.is_empty() => json!({"behavior": "allow"}),
+                updates => json!({"behavior": "allow", "updatedPermissions": updates}),
+            },
+            Decision::Deny => json!({"behavior": "deny", "message": DECLINED}),
+        };
+        Some(envelope(text_of(&line, "request_id")?, response))
+    }
+
+    fn refusal(&self, line: &str) -> Option<String> {
+        let line: Value = serde_json::from_str(line).ok()?;
+        tool_request(&line).filter(|request| governed(request))?;
+        Some(envelope(text_of(&line, "request_id")?, json!({"behavior": "deny", "message": GOVERNED})))
+    }
+
+    fn interrupt_line(&self) -> String {
+        control_request(json!({"subtype": "interrupt"}))
+    }
+
+    fn mode_line(&self, mode: PolicyMode) -> String {
+        // PreApproved is only ever a launch mode; `dontAsk` is what the launch flags call it.
+        let mode = match mode {
+            PolicyMode::Ask => "default",
+            PolicyMode::AcceptEdits => "acceptEdits",
+            PolicyMode::PreApproved => "dontAsk",
+        };
+        control_request(json!({"subtype": "set_permission_mode", "mode": mode}))
+    }
+
+    fn mode_of(&self, line: &str) -> Option<PolicyMode> {
+        let value: Value = serde_json::from_str(line).ok()?;
+        if text_of(&value, "type") != Some("system") || text_of(&value, "subtype") != Some("status") {
+            return None;
+        }
+        match text_of(&value, "permissionMode")? {
+            "acceptEdits" => Some(PolicyMode::AcceptEdits),
+            "default" => Some(PolicyMode::Ask),
+            _ => None,
+        }
     }
 }
 
@@ -322,6 +485,7 @@ mod tests {
                 result: Some("All done.".into()),
                 structured: Some(json!({"summary": "Billing takes payments."})),
                 denials: 1,
+                budget: false,
             }
         );
         let over = ClaudeCode
@@ -331,7 +495,22 @@ mod tests {
             .unwrap();
         assert!(!over.ok);
         assert_eq!(over.reason.as_deref(), Some("Claude Code reached the budget limit for this session"));
-        assert_eq!((over.cost_usd, over.structured, over.denials), (Some(5.02), None, 0));
+        assert_eq!((over.cost_usd, over.structured, over.denials, over.budget), (Some(5.02), None, 0, true));
+        let capped = ClaudeCode
+            .outcome(
+                r#"{"type":"result","subtype":"error_max_budget_usd","is_error":true,"num_turns":1,"total_cost_usd":0.0092,
+                "errors":["Reached maximum budget ($0.004)"],"terminal_reason":"budget_exhausted"}"#,
+            )
+            .unwrap();
+        assert!(!capped.ok && capped.budget && capped.result.is_none());
+        assert!(capped.reason.as_deref().is_some_and(|reason| reason.contains("Reached maximum budget")), "{:?}", capped.reason);
+        let unknown = ClaudeCode
+            .outcome(
+                r#"{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":0,"errors":["No conversation found with session ID: 0f9e8d7c"]}"#,
+            )
+            .unwrap();
+        assert!(unknown.reason.as_deref().is_some_and(|reason| reason.contains("No conversation found")), "{:?}", unknown.reason);
+        assert!(!unknown.budget);
         let flagged =
             ClaudeCode.outcome(r#"{"type":"result","subtype":"success","is_error":true,"result":"Credit balance is too low"}"#).unwrap();
         assert_eq!(flagged.reason.as_deref(), Some("Claude Code reported an error: Credit balance is too low"));
@@ -339,20 +518,181 @@ mod tests {
         assert_eq!(new.reason.as_deref(), Some("Claude Code stopped (error something new)"));
     }
 
+    // Verbatim from the spike (section 5.1 B of the Phase 2 document).
+    const WRITE_REQUEST: &str = r#"{"type":"control_request","request_id":"a09f3229-53c0-4a3d-9b4b-bfa4cb890730","request":{"subtype":"can_use_tool","tool_name":"Write","display_name":"Write","input":{"file_path":"<SCRATCH>\\spike-claude\\a.txt","content":"x"},"description":"a.txt","permission_suggestions":[{"type":"setMode","mode":"acceptEdits","destination":"session"}],"tool_use_id":"toolu_01JDdQ12vozJ8B3vPpSdHovj"}}"#;
+    const BASH_REQUEST: &str = r#"{"type":"control_request","request_id":"6c738ff4-3b35-4894-acec-1b2806f0b2f4","request":{"subtype":"can_use_tool","tool_name":"Bash","display_name":"Bash","input":{"command":"mkdir spike_dir_1","description":"Create directory spike_dir_1"},"description":"Create directory spike_dir_1","permission_suggestions":[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"mkdir spike_dir_1"}],"behavior":"allow","destination":"localSettings"},{"type":"addDirectories","directories":["<SCRATCH>\\spike-claude"],"destination":"session"},{"type":"setMode","mode":"acceptEdits","destination":"session"}],"blocked_path":"<SCRATCH>\\spike-claude\\spike_dir_1","tool_use_id":"toolu_01BaUp77S1XfWQ94cYZZXe5W"}}"#;
+    const GOVERNED_REQUEST: &str = r#"{"type":"control_request","request_id":"r-gov","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"python living_memory.py apply x --expected-plan-sha256 y"},"permission_suggestions":[]}}"#;
+
+    fn json_of(line: &str) -> Value {
+        serde_json::from_str(line).unwrap()
+    }
+
     #[test]
-    fn command_carries_the_spec() {
-        let spec = Spec {
+    fn permission_requests_become_approval_requests() {
+        let RunEvent::ApprovalRequest { request_id, tool, summary, input, can_always, always_label } = parse(WRITE_REQUEST).remove(0) else {
+            panic!("not an approval request")
+        };
+        assert_eq!((request_id.as_str(), tool.as_str(), summary.as_str()), ("a09f3229-53c0-4a3d-9b4b-bfa4cb890730", "Write", "a.txt"));
+        assert_eq!(input["content"], "x");
+        assert!(can_always);
+        assert_eq!(always_label.as_deref(), Some("file edits and simple file commands in the worktree"));
+        assert_eq!(parse(WRITE_REQUEST).len(), 1);
+
+        let RunEvent::ApprovalRequest { tool, summary, always_label, can_always, .. } = parse(BASH_REQUEST).remove(0) else {
+            panic!("not an approval request")
+        };
+        assert_eq!((tool.as_str(), summary.as_str()), ("Bash", "Create directory spike_dir_1"));
+        assert!(can_always);
+        assert_eq!(always_label.as_deref(), Some("Bash(mkdir spike_dir_1)"));
+
+        let bare = r#"{"type":"control_request","request_id":"r2","request":{"subtype":"can_use_tool","tool_name":"Read","input":{"file_path":"/work/app/a.md"}}}"#;
+        let RunEvent::ApprovalRequest { summary, can_always, always_label, .. } = parse(bare).remove(0) else { panic!("not an approval request") };
+        assert_eq!((summary.as_str(), can_always, always_label), ("/work/app/a.md", false, None));
+
+        let long = json!({"type": "control_request", "request_id": "r3", "request": {"subtype": "can_use_tool", "tool_name": "Write",
+            "input": {"file_path": "a.txt", "content": "é".repeat(10_000), "more": ["é".repeat(5_000)]}}});
+        let RunEvent::ApprovalRequest { input, .. } = parse(&long.to_string()).remove(0) else { panic!("not an approval request") };
+        assert_eq!(input["content"].as_str().unwrap().chars().count(), 4000);
+        assert_eq!(input["more"][0].as_str().unwrap().chars().count(), 4000);
+        assert_eq!(input["file_path"], "a.txt");
+    }
+
+    #[test]
+    fn governed_memory_requests_are_denied_without_asking() {
+        assert_eq!(parse(GOVERNED_REQUEST), vec![RunEvent::Denied { tool: "Bash".into(), summary: GOVERNED.into() }]);
+        let refused = json_of(&ClaudeCode.refusal(GOVERNED_REQUEST).unwrap());
+        assert_eq!(
+            refused,
+            json!({"type": "control_response", "response": {"subtype": "success", "request_id": "r-gov",
+                "response": {"behavior": "deny", "message": GOVERNED}}})
+        );
+        let powershell = GOVERNED_REQUEST.replace("\"Bash\"", "\"PowerShell\"");
+        assert!(matches!(parse(&powershell)[..], [RunEvent::Denied { .. }]));
+        assert!(ClaudeCode.refusal(&powershell).is_some());
+        assert_eq!(ClaudeCode.refusal(BASH_REQUEST), None);
+        assert_eq!(ClaudeCode.refusal(WRITE_REQUEST), None);
+        assert_eq!(ClaudeCode.refusal("not json"), None);
+    }
+
+    #[test]
+    fn answers_are_one_json_line_in_the_envelope() {
+        let allow = ClaudeCode.answer_line(BASH_REQUEST, Decision::Allow).unwrap();
+        assert!(!allow.contains('\n'));
+        assert_eq!(
+            json_of(&allow),
+            json!({"type": "control_response", "response": {"subtype": "success", "request_id": "6c738ff4-3b35-4894-acec-1b2806f0b2f4",
+                "response": {"behavior": "allow"}}})
+        );
+        let deny = ClaudeCode.answer_line(BASH_REQUEST, Decision::Deny).unwrap();
+        assert!(!deny.contains('\n'));
+        let deny = json_of(&deny);
+        assert_eq!(deny["response"]["response"]["behavior"], "deny");
+        assert!(!deny["response"]["response"]["message"].as_str().unwrap().is_empty());
+        assert_eq!(ClaudeCode.answer_line(BASH_REQUEST, Decision::Withdrawn), None);
+        assert_eq!(ClaudeCode.answer_line(r#"{"type":"control_cancel_request","request_id":"r1"}"#, Decision::Allow), None);
+        assert_eq!(ClaudeCode.answer_line(r#"{"type":"system","subtype":"init"}"#, Decision::Allow), None);
+        assert_eq!(ClaudeCode.answer_line("not json", Decision::Allow), None);
+    }
+
+    #[test]
+    fn always_allow_is_rewritten_to_the_session() {
+        let line = ClaudeCode.answer_line(BASH_REQUEST, Decision::AllowAlways).unwrap();
+        assert!(!line.contains("localSettings") && !line.contains("addDirectories"), "{line}");
+        let response = json_of(&line)["response"]["response"].clone();
+        assert_eq!(response["behavior"], "allow");
+        assert_eq!(
+            response["updatedPermissions"],
+            json!([{"type": "addRules", "rules": [{"toolName": "Bash", "ruleContent": "mkdir spike_dir_1"}], "behavior": "allow",
+                "destination": "session"}])
+        );
+
+        let response = json_of(&ClaudeCode.answer_line(WRITE_REQUEST, Decision::AllowAlways).unwrap())["response"]["response"].clone();
+        assert_eq!(response["updatedPermissions"], json!([{"type": "setMode", "mode": "acceptEdits", "destination": "session"}]));
+
+        // Nothing to remember, or a request that forbids it: a plain allow.
+        let none = r#"{"type":"control_request","request_id":"r4","request":{"subtype":"can_use_tool","tool_name":"Read","input":{}}}"#;
+        let suppressed = BASH_REQUEST.replace(r#""description":"Create directory spike_dir_1","permission_suggestions""#, r#""suppress_always_allow_rule":true,"permission_suggestions""#);
+        for request in [none, suppressed.as_str()] {
+            let response = json_of(&ClaudeCode.answer_line(request, Decision::AllowAlways).unwrap())["response"]["response"].clone();
+            assert_eq!(response, json!({"behavior": "allow"}), "{request}");
+        }
+        let RunEvent::ApprovalRequest { can_always, always_label, .. } = parse(&suppressed).remove(0) else { panic!("not an approval request") };
+        assert_eq!((can_always, always_label), (false, None));
+
+        // A rule without content is written as the bare tool name; several rules are joined.
+        let rules = r#"{"type":"control_request","request_id":"r5","request":{"subtype":"can_use_tool","tool_name":"WebFetch","input":{},
+            "permission_suggestions":[{"type":"addRules","rules":[{"toolName":"WebFetch"},{"toolName":"Read","ruleContent":"//c/x/**"}],
+            "behavior":"allow","destination":"localSettings"},{"type":"addRules","rules":[{"toolName":"Bash"}],"behavior":"deny","destination":"session"}]}}"#;
+        let RunEvent::ApprovalRequest { always_label, .. } = parse(rules).remove(0) else { panic!("not an approval request") };
+        assert_eq!(always_label.as_deref(), Some("WebFetch, Read(//c/x/**)"));
+    }
+
+    #[test]
+    fn withdrawn_requests_resolve() {
+        assert_eq!(
+            parse(r#"{"type":"control_cancel_request","request_id":"r1"}"#),
+            vec![RunEvent::ApprovalResolved { request_id: "r1".into(), decision: Decision::Withdrawn }]
+        );
+        assert!(parse(r#"{"type":"control_response","response":{"subtype":"success","request_id":"r1","response":{}}}"#).is_empty());
+        assert!(parse(r#"{"type":"control_request","request_id":"r6","request":{"subtype":"something_else"}}"#).is_empty());
+    }
+
+    #[test]
+    fn control_lines_are_valid_and_never_initialize() {
+        let (first, second) = (json_of(&ClaudeCode.interrupt_line()), json_of(&ClaudeCode.interrupt_line()));
+        assert_eq!((first["type"].as_str(), first["request"]["subtype"].as_str()), (Some("control_request"), Some("interrupt")));
+        assert!(first["request_id"].as_str().unwrap().starts_with("hivemind-"));
+        assert_ne!(first["request_id"], second["request_id"]);
+        let mode = |mode: PolicyMode| json_of(&ClaudeCode.mode_line(mode))["request"].clone();
+        assert_eq!(mode(PolicyMode::Ask), json!({"subtype": "set_permission_mode", "mode": "default"}));
+        assert_eq!(mode(PolicyMode::AcceptEdits), json!({"subtype": "set_permission_mode", "mode": "acceptEdits"}));
+        assert_eq!(mode(PolicyMode::PreApproved), json!({"subtype": "set_permission_mode", "mode": "dontAsk"}));
+        let mut lines = vec![ClaudeCode.interrupt_line(), ClaudeCode.user_line("hello")];
+        lines.extend([PolicyMode::PreApproved, PolicyMode::Ask, PolicyMode::AcceptEdits].map(|mode| ClaudeCode.mode_line(mode)));
+        lines.extend([Decision::Allow, Decision::AllowAlways, Decision::Deny].map(|d| ClaudeCode.answer_line(BASH_REQUEST, d).unwrap()));
+        lines.extend(ClaudeCode.refusal(GOVERNED_REQUEST));
+        for line in lines {
+            assert!(!line.contains('\n') && !line.contains("initialize") && !line.contains("get_status"), "{line}");
+        }
+    }
+
+    #[test]
+    fn status_lines_report_the_mode() {
+        let status = |mode: &str| ClaudeCode.mode_of(&format!(r#"{{"type":"system","subtype":"status","status":null,"permissionMode":"{mode}"}}"#));
+        assert_eq!(status("acceptEdits"), Some(PolicyMode::AcceptEdits));
+        assert_eq!(status("default"), Some(PolicyMode::Ask));
+        assert_eq!(status("plan"), None);
+        assert_eq!(ClaudeCode.mode_of(r#"{"type":"system","subtype":"status","status":"requesting"}"#), None);
+        assert_eq!(ClaudeCode.mode_of(r#"{"type":"system","subtype":"init","permissionMode":"acceptEdits"}"#), None);
+        assert_eq!(ClaudeCode.mode_of("not json"), None);
+    }
+
+    fn spec(policy: Policy) -> Spec {
+        Spec {
             session_id: "00000000-0000-4000-8000-000000000001".into(),
             cwd: PathBuf::from("/work/app"),
             add_dirs: vec![PathBuf::from("/work/api"), PathBuf::from("/work/arch")],
-            policy: Policy::PreApproved { allow: vec!["Edit(//work/arch/**)".into(), "Bash(*architecture-suite.py *)".into()] },
+            policy,
             plugin_dirs: vec![PathBuf::from("/plugins/suite")],
             budget_usd: 5.0,
             schema: Some(json!({"type": "object"})),
             program: "claude".into(),
-        };
-        let command = ClaudeCode.command(&spec);
-        let args: Vec<String> = command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
+            resume: false,
+            model: None,
+            deny: vec![],
+            memory_root: None,
+        }
+    }
+
+    fn args_of(command: &Command) -> Vec<String> {
+        command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn command_carries_the_spec() {
+        let allow = vec!["Edit(//work/arch/**)".to_string(), "Bash(*architecture-suite.py *)".to_string()];
+        let mut passport = spec(Policy::PreApproved { allow });
+        let command = ClaudeCode.command(&passport);
         #[rustfmt::skip]
         let expected = [
             "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
@@ -361,15 +701,64 @@ mod tests {
             "--allowedTools", "Edit(//work/arch/**)", "Bash(*architecture-suite.py *)",
             "--add-dir", "/work/api", "/work/arch", "--plugin-dir", "/plugins/suite",
         ];
-        assert_eq!(args, expected);
+        assert_eq!(args_of(&command), expected);
         assert_eq!(command.get_program(), "claude");
         assert_eq!(command.get_current_dir(), Some(Path::new("/work/app")));
-        let line = ClaudeCode.first_message("Say \"hi\"\nthen stop");
+
+        // The deny rules go between the allow rules and --add-dir, each as its own argument.
+        passport.deny = vec!["Bash(*living_memory.py* apply *)".into(), "Bash(*living_memory.py* apply)".into()];
+        #[rustfmt::skip]
+        let expected = [
+            "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+            "--permission-mode", "dontAsk", "--permission-prompts", "none",
+            "--session-id", "00000000-0000-4000-8000-000000000001", "--max-budget-usd", "5", "--json-schema", r#"{"type":"object"}"#,
+            "--allowedTools", "Edit(//work/arch/**)", "Bash(*architecture-suite.py *)",
+            "--disallowedTools", "Bash(*living_memory.py* apply *)", "Bash(*living_memory.py* apply)",
+            "--add-dir", "/work/api", "/work/arch", "--plugin-dir", "/plugins/suite",
+        ];
+        assert_eq!(args_of(&ClaudeCode.command(&passport)), expected);
+
+        let ask = args_of(&ClaudeCode.command(&spec(Policy::Ask { allow: vec![] })));
+        #[rustfmt::skip]
+        let head = [
+            "--verbose", "--permission-mode", "manual", "--permission-prompts", "host", "--permission-prompt-tool", "stdio",
+            "--session-id", "00000000-0000-4000-8000-000000000001", "--max-budget-usd", "5",
+        ];
+        assert_eq!(ask[5..5 + head.len()], head);
+        assert!(!ask.contains(&"--allowedTools".to_string()) && !ask.contains(&"--disallowedTools".to_string()));
+
+        let mut resumed = spec(Policy::AcceptEdits { allow: vec![] });
+        resumed.resume = true;
+        resumed.model = Some("haiku".into());
+        let resumed = args_of(&ClaudeCode.command(&resumed));
+        #[rustfmt::skip]
+        let head = [
+            "--verbose", "--permission-mode", "acceptEdits", "--permission-prompts", "host", "--permission-prompt-tool", "stdio",
+            "--resume", "00000000-0000-4000-8000-000000000001", "--max-budget-usd", "5", "--model", "haiku",
+        ];
+        assert_eq!(resumed[5..5 + head.len()], head);
+        assert!(!resumed.contains(&"--session-id".to_string()));
+
+        let line = ClaudeCode.user_line("Say \"hi\"\nthen stop");
         assert!(!line.contains('\n'), "one line on stdin");
         assert_eq!(
             serde_json::from_str::<Value>(&line).unwrap(),
             json!({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Say \"hi\"\nthen stop"}]}})
         );
+    }
+
+    #[test]
+    fn command_points_living_memory_at_the_apps_store() {
+        let stored = |command: &Command| {
+            command.get_envs().find(|(name, _)| *name == "LIVING_MEMORY_ROOT").map(|(_, value)| value.map(|v| v.to_string_lossy().into_owned()))
+        };
+        for policy in [Policy::PreApproved { allow: vec![] }, Policy::Ask { allow: vec![] }] {
+            let mut with_root = spec(policy.clone());
+            with_root.memory_root = Some(PathBuf::from("/stores/demo"));
+            assert_eq!(stored(&ClaudeCode.command(&with_root)), Some(Some("/stores/demo".to_string())));
+            // No root: the variable is neither set nor removed, so the CLI inherits the app's own.
+            assert_eq!(stored(&ClaudeCode.command(&spec(policy))), None);
+        }
     }
 
     #[test]

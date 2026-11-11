@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { openProject, openSession, openSystem, useApp } from "./store";
+import { openProject, openSession, openSystem, startSession, useApp } from "./store";
 
 const app = () => useApp.getState();
 
@@ -49,5 +49,10 @@ describe("navigation", () => {
     expect(app().route).toEqual({ page: "agents", session: "s1" });
     openProject(null);
     expect(app().project).toBeNull();
+  });
+
+  it("opens the New session screen", () => {
+    startSession();
+    expect(app().route).toEqual({ page: "agents", view: "new" });
   });
 });

@@ -25,7 +25,7 @@ function useCrumbs(): Crumb[] {
   if (route.page === "overview") return route.view === "work" ? [root, { label: "Open work" }] : [{ label: "Projects" }, { label: root.label }];
   const section: Crumb = { label: SECTIONS.find((s) => s.page === route.page)?.label ?? route.page, go: () => go({ page: route.page }) };
   const leaf = route.page === "memory" ? (route.view === "notes" ? noteTitle : route.view && MEMORY_VIEWS[route.view])
-    : route.page === "agents" ? sessions.data?.find((s) => s.id === route.session)?.title
+    : route.page === "agents" ? (route.view === "new" ? "New session" : sessions.data?.find((s) => s.id === route.session)?.title)
     : route.page === "architecture" ? systems.data?.systems.find((s) => s.slug === route.system)?.name
     : undefined;
   return leaf ? [root, section, { label: leaf }] : [root, section];

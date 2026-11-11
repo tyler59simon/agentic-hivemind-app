@@ -27,10 +27,11 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
   const client = useQueryClient();
   const systemsOn = useSystemsEnabled();
   const sessions = useQuery({ ...sessionsQuery(), enabled: systemsOn });
+  const waiting = sessions.data?.some((s) => s.status === "waiting");
   const running = sessions.data?.some((s) => s.status === "running");
   const unsaved = useWorkspace((s) => Object.values(s.dirty).some(Boolean));
   const user = info.user || "You";
-  const mark = (p: Page) => (p === "agents" && running ? "An agent session is running" : p === "memory" && unsaved ? "A note has unsaved edits" : null);
+  const mark = (p: Page) => (p === "agents" && waiting ? "An agent session is waiting for you" : p === "agents" && running ? "An agent session is running" : p === "memory" && unsaved ? "A note has unsaved edits" : null);
 
   return (
     <aside className="sidebar">
@@ -40,7 +41,7 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
         {SECTIONS.map(({ page: p, label, icon: Icon }) => (
           <button key={p} className={`nav-item ${page === p ? "on" : ""}`} aria-current={page === p ? "page" : undefined} onClick={() => go({ page: p })}>
             <Icon size="1.35em" aria-hidden /><span className="grow">{label}</span>
-            {mark(p) && <span className="nav-dot" title={mark(p)!} aria-label={mark(p)!} />}
+            {mark(p) && <span className={`nav-dot ${p === "agents" && waiting ? "waiting" : ""}`} title={mark(p)!} aria-label={mark(p)!} />}
           </button>
         ))}
       </nav>

@@ -140,18 +140,45 @@ pub fn activity_for_repos(repos: &[PathBuf]) -> Vec<RepoActivity> {
         .collect()
 }
 
-/// Look up the project's repo paths in Living Memory, then collect their activity.
-pub fn git_activity(bridge: &Bridge, slug: &str) -> Result<Vec<RepoActivity>, String> {
+/// One project's registry entry from Living Memory (`projects`), by slug.
+pub fn project_entry(bridge: &Bridge, slug: &str) -> Result<Value, String> {
     let reply = bridge.call(&["projects".into(), "--actor".into(), "viewer".into()], None)?;
     if reply.exit_code != 0 {
         return Err(format!("Living Memory could not list projects (is it up to date?): {}", reply.error));
     }
-    let project = reply
+    reply
         .result
         .get("projects")
         .and_then(Value::as_array)
         .and_then(|all| all.iter().find(|p| p.get("slug").and_then(Value::as_str) == Some(slug)))
-        .ok_or_else(|| format!("Unknown project: {slug}"))?;
+        .cloned()
+        .ok_or_else(|| format!("Unknown project: {slug}"))
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+pub struct Branches {
+    pub current: Option<String>,
+    pub branches: Vec<String>,
+}
+
+/// The local branches of a repository and the one checked out (None on a detached HEAD).
+pub fn branches(repo: &Path) -> Result<Branches, String> {
+    let run = |args: &[&str]| {
+        let mut command = Command::new("git");
+        command.args(["--no-optional-locks", "-C"]).arg(repo).args(args);
+        run_with_timeout(command, TIMEOUT)
+    };
+    if run(&["rev-parse", "--is-inside-work-tree"]).map(|s| s.trim() == "true") != Ok(true) {
+        return Err(format!("Not a git repository: {}", repo.display()));
+    }
+    let current = run(&["symbolic-ref", "--quiet", "--short", "HEAD"]).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let list = run(&["for-each-ref", "--format=%(refname:short)", "refs/heads"])?;
+    Ok(Branches { current, branches: list.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect() })
+}
+
+/// Look up the project's repo paths in Living Memory, then collect their activity.
+pub fn git_activity(bridge: &Bridge, slug: &str) -> Result<Vec<RepoActivity>, String> {
+    let project = project_entry(bridge, slug)?;
     let repos: Vec<PathBuf> = project
         .get("repos")
         .and_then(Value::as_array)
@@ -249,6 +276,35 @@ mod tests {
         assert_eq!(commits[0].subject, "commit 2");
         assert_eq!(commits[0].author, "Tester");
         assert!(a.prs.is_some() || a.prs_error.is_some());
+    }
+
+    #[test]
+    fn lists_branches_and_the_current_one() {
+        if !git_available() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("hivemind-branches-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        git(&dir, &["init", "-q"]);
+        git(&dir, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+        git(&dir, &["config", "user.name", "Tester"]);
+        git(&dir, &["config", "user.email", "t@example.com"]);
+        git(&dir, &["config", "commit.gpgsign", "false"]);
+        std::fs::write(dir.join("f.txt"), "1").unwrap();
+        git(&dir, &["add", "."]);
+        git(&dir, &["commit", "-q", "-m", "first"]);
+        git(&dir, &["branch", "feature/x"]);
+        let attached = branches(&dir);
+        git(&dir, &["checkout", "-q", "--detach"]);
+        let detached = branches(&dir);
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(attached, Ok(Branches { current: Some("main".into()), branches: vec!["feature/x".into(), "main".into()] }));
+        assert_eq!(detached.unwrap().current, None);
+        let plain = std::env::temp_dir().join(format!("hivemind-branches-plain-{}", std::process::id()));
+        std::fs::create_dir_all(&plain).unwrap();
+        let error = branches(&plain);
+        std::fs::remove_dir_all(&plain).ok();
+        assert_eq!(error, Err(format!("Not a git repository: {}", plain.display())));
     }
 
     #[test]

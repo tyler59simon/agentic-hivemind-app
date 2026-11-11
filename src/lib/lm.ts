@@ -41,7 +41,7 @@ export async function run<T>(argv: string[], stdin?: string): Promise<T> {
 const view = (argv: string[]) => [...argv, "--actor", "viewer"];
 
 export interface ConnectInfo {
-  version: { api: number; python: string; commands: string[] };
+  version: { api: number; python: string; commands: string[]; capabilities?: { learning?: number } };
   root: string;
   program: string;
   script: string;
@@ -99,6 +99,7 @@ export interface Note {
   context?: string; files?: string[]; created?: string; updated?: string; review_by?: string;
   confirmed?: string[]; supersedes?: string[]; superseded_by?: string; origin?: string;
   revision: string; body: string; truncated: boolean;
+  learning_procedure?: string; learning_version?: number; learning_state?: string; learning_pending_edit?: boolean;
 }
 /** LM's own default is 16,000 characters; Hivemind asks for the most it allows (64,000). */
 export const read = (ref: string, opts: { domain?: string; maxChars?: number } = {}) =>
@@ -141,6 +142,7 @@ export interface WriteResult {
   ok: true; operation_id?: string; state?: string; id: string; status: string; domain?: string; ref?: string;
   quality_warnings?: string[]; similar?: { ref: string; title: string }[]; inferred_tags?: string[];
   redacted?: { kind: string; field: string }[]; warning?: string; hint?: string;
+  candidate_id?: string;
 }
 
 /** Fields `update` accepts; send only the ones that changed. */
