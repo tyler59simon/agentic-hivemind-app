@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Layers, Search } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
+import { displayId } from "../features/changes/changes";
 import { useCurrentProject } from "../features/projects/useProject";
 import { systemsQuery } from "../features/systems/useSystem";
 import { sessionsQuery } from "../lib/agent";
@@ -27,6 +28,7 @@ function useCrumbs(): Crumb[] {
   const leaf = route.page === "memory" ? (route.view === "notes" ? noteTitle : route.view && MEMORY_VIEWS[route.view])
     : route.page === "agents" ? (route.view === "new" ? "New session" : sessions.data?.find((s) => s.id === route.session)?.title)
     : route.page === "architecture" ? systems.data?.systems.find((s) => s.slug === route.system)?.name
+    : route.page === "changes" && route.view === "detail" && route.id ? displayId(route.id)
     : undefined;
   return leaf ? [root, section, { label: leaf }] : [root, section];
 }
