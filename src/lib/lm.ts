@@ -291,3 +291,50 @@ export interface SystemUpdate {
 }
 export const systemPlan = (action: "create" | "update" | "retire", payload: SystemCreate | SystemUpdate | { slug: string }) =>
   run<Plan>(["system-plan", action], JSON.stringify(payload));
+
+// ---- Changes (an LM that has the `changes` command). ----
+
+export const STAGES = ["explore", "design", "implement", "validate"] as const;
+export type ChangeStage = (typeof STAGES)[number];
+export type ChangeStatus = "active" | "done" | "cancelled";
+
+/** One row of `changes`: the registry entry plus `display`, `brief_status` and `actions`. */
+export interface Change {
+  id: number; display: string; title: string; project: string;
+  /** `domain:id` of the brief where it lives now. */
+  brief: string;
+  stage: ChangeStage; status: ChangeStatus;
+  repo: string | null; branch: string | null; system: string | null; element: string | null;
+  created: string; updated: string;
+  /** The brief note's status, whatever it is: an archived or superseded note still resolves and reports that status.
+   *  Null only when no note with the brief's id exists any more (deleted, or the stored ref is broken). */
+  brief_status: Status | null;
+  actions: { open: number; done: number };
+}
+export interface ChangesResult { ok: boolean; changes: Change[]; warnings: string[] }
+
+export interface ChangeCreate {
+  project: string; title: string;
+  /** A new brief to write, or the ref of an existing active plan note to adopt. */
+  brief: { domain?: string; title?: string; body: string } | string;
+  stage?: ChangeStage; repo?: string | null; branch?: string | null; system?: string | null; element?: string | null;
+}
+export interface ChangeUpdate {
+  id: number | string; title?: string; stage?: ChangeStage; status?: ChangeStatus;
+  repo?: string | null; branch?: string | null; system?: string | null; element?: string | null;
+}
+export interface ChangeClose { id: number | string; status?: "done" | "cancelled" }
+export interface ChangePlanSummary {
+  id: number; display: string; title: string; fields: string[]; files: number;
+  brief?: string; adopted?: boolean; brief_action?: "resolve" | "reopen" | null;
+}
+export type ChangePlan = Plan & { summary: ChangePlanSummary };
+
+export const changesArgs = (o: { status?: ChangeStatus | "any"; project?: string } = {}) =>
+  view(["changes", ...(o.status ? ["--status", o.status] : []), ...(o.project ? ["--project", o.project] : [])]);
+export const changes = (o: { status?: ChangeStatus | "any"; project?: string } = {}) => run<ChangesResult>(changesArgs(o));
+export const changePlan = (action: "create" | "update" | "close", payload: ChangeCreate | ChangeUpdate | ChangeClose) =>
+  run<ChangePlan>(["change-plan", action], JSON.stringify(payload));
+/** Append one open Action Item; the rest of the body is kept. */
+export const addAction = (ref: string, text: string) =>
+  run<WriteResult>(["update", ref, "--domain", domainOf(ref), "--add-action", text]);

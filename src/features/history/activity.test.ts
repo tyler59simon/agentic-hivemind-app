@@ -47,4 +47,10 @@ describe("activity", () => {
     expect(verbOf("project_archive")).toBe("archived project");
     expect(actorOf({ operation_id: "x", kind: "project_create" }, new Set()).label).toBe("Approved plan");
   });
+
+  it("knows change journal kinds", () => {
+    expect(verbOf("change_create")).toBe("started change");
+    expect(verbOf("change_close")).toBe("closed change");
+    expect(actorOf({ operation_id: "x", kind: "change_update" }, new Set()).kind).toBe("plan");
+  });
 });
