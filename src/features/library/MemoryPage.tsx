@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, FileText, Link as LinkIcon, Minus, Plus, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useChangesEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { domains, list, search, taxonomy, type SearchOptions } from "../../lib/lm";
 import { sections } from "../../lib/note";
 import { highlight, terms } from "../../lib/text";
-import { useApp, type Shelf } from "../../store";
+import { openChange, useApp, type Shelf } from "../../store";
 import { Markdown } from "../../ui/Markdown";
 import { ArrowLink, dayMonth, PageHeader, Tabs } from "../../ui/Page";
 import { toast } from "../../ui/toast";
@@ -13,6 +14,8 @@ import { NoteRail } from "../../workspace/RightSidebar";
 import { hasTabs, railShown, useWorkspace } from "../../workspace/store";
 import { OpenTabs, Workspace } from "../../workspace/Workspace";
 import { useSessionDraft } from "../agents/draft";
+import { changesFor } from "../changes/changes";
+import { changesQuery } from "../changes/useChanges";
 import { GraphView } from "../graph/GraphView";
 import { ActivityView } from "../history/HistoryViews";
 import { useNoteLinks } from "../links/useLinks";
@@ -43,6 +46,8 @@ function Preview({ item }: { item: Item }) {
   const n = note.data;
   const summary = n ? sections(n.body).summary : undefined;
   const linked = [...(links?.outgoing ?? []), ...(links?.incoming ?? [])].filter((e, i, all) => all.findIndex((x) => x.node.ref === e.node.ref) === i).slice(0, 6);
+  const all = useQuery({ ...changesQuery(), enabled: useChangesEnabled() });
+  const changes = links ? changesFor(item.ref, links, all.data?.changes ?? []) : [];
   const confirmed = n?.confirmed?.length ? n.confirmed[n.confirmed.length - 1] : undefined;
   const added = useSessionDraft((s) => s.context.includes(item.ref));
   const toggle = () => {
@@ -61,9 +66,10 @@ function Preview({ item }: { item: Item }) {
       {note.isLoading && <p className="muted">Loading…</p>}
       {note.error && <p className="error">{classify(note.error).message}</p>}
       {summary && <><h3>Summary</h3><div className="markdown"><Markdown>{summary}</Markdown></div></>}
-      {!!linked.length && (
+      {(!!linked.length || !!changes.length) && (
         <>
           <h3>Connections</h3>
+          {changes.map((c) => <button key={c.id} className="conn-link" onClick={() => openChange(c.id)}><LinkIcon size="1.1em" aria-hidden />{c.display} · {c.title}</button>)}
           {linked.map((e) => (
             <HoverPreview key={e.node.ref} refId={e.node.ref}>
               <button className="conn-link" onClick={(ev) => openNote(e.node, ev.ctrlKey || ev.metaKey)}><LinkIcon size="1.1em" aria-hidden />{e.node.title}</button>

@@ -3,19 +3,22 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowRight, Bookmark, CircleCheck, CircleEllipsis, Clock, Ellipsis, Laptop, Layers, Link as LinkIcon, Network, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { sessionsQuery } from "../../lib/agent";
-import { useSystemsEnabled } from "../../lib/connection";
+import { useChangesEnabled, useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import type { RepoActivity } from "../../lib/git";
 import { list, openWork, projectPlan, review, type NoteRow, type Project } from "../../lib/lm";
 import { sections } from "../../lib/note";
 import { shortDate } from "../../lib/text";
-import { openSession, openSystem, startSession, useApp } from "../../store";
+import { openChange, openSession, openSystem, startSession, useApp } from "../../store";
 import { Menu } from "../../ui/Menu";
 import { Modal } from "../../ui/Modal";
 import { ArrowLink, dayMonth, PageHeader, Row, Section, Split } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
-import { sessionForNote, waitingForReview } from "../agents/session";
+import { isEnded, sessionForNote, waitingForReview } from "../agents/session";
+import { engineName, topChange } from "../changes/changes";
+import { useChangeIntent } from "../changes/intent";
+import { startSessionFor, useChangeViews } from "../changes/useChanges";
 import { PlanDialog } from "../plans/PlanDialog";
 import { HoverPreview } from "../preview/HoverPreview";
 import { MiniDiagram } from "../systems/MiniDiagram";
@@ -135,6 +138,12 @@ function ProjectOverview({ project }: { project: Project }) {
   const summary = charter.data ? sections(charter.data.body).summary : undefined;
   const sessions = useQuery(sessionsQuery());
   const session = plan && sessionForNote(sessions.data ?? [], project.slug, plan.ref);
+  const changesOn = useChangesEnabled();
+  const { views } = useChangeViews();
+  const top = changesOn ? topChange(views.filter((v) => v.change.project === project.slug)) : undefined;
+  const topWaiting = !!top?.latest && waitingForReview(top.latest);
+  const topFiles = top?.latest?.filesChanged?.files ?? 0;
+  const topBrief = top && members.find((r) => r.ref === top.change.brief);
 
   const copy = async () => {
     const text = buildBriefing({ project, charter: charter.data, rows: members, open: open.data?.items ?? [], commits });
@@ -159,6 +168,7 @@ function ProjectOverview({ project }: { project: Project }) {
               </>
             )}
           </Menu>
+          {changesOn && <button className="text underline" onClick={() => useChangeIntent.getState().open()}>New change</button>}
           <button className="primary big" onClick={startSession} title="Start an agent session in this project"><Plus size="1.2em" aria-hidden />Start a session</button>
         </>} />
       <Split rail={<>
@@ -171,8 +181,21 @@ function ProjectOverview({ project }: { project: Project }) {
         </Section>
       </>}>
         <Section title="Continue your work" loading={rows.isLoading} error={rows.error}
-          empty={rows.data && !focus ? "Nothing is in progress. A plan note with action items shows up here." : undefined}>
-          {focus && (
+          empty={rows.data && !focus && !top ? "Nothing is in progress. A plan note with action items shows up here." : undefined}>
+          {top ? (
+            <div className="focus-card">
+              <h3>{top.change.title}</h3>
+              <p className="focus-status"><CircleCheck size="1.2em" aria-hidden />{top.chip.label}</p>
+              <p className="clamp">{topWaiting ? `${engineName(top.latest!.adapter)} proposed ${topFiles} file change${topFiles === 1 ? "" : "s"}. Review before continuing.` : oneLine(topBrief?.summary)}</p>
+              <p className="focus-meta"><LinkIcon size="1.1em" aria-hidden /><span>{top.change.display}</span>{top.change.branch && <span>{top.change.branch}</span>}{!!top.decisions.length && <span>{top.decisions.length} decision{top.decisions.length === 1 ? "" : "s"}</span>}</p>
+              <div className="focus-actions">
+                {top.latest && !isEnded(top.latest)
+                  ? <button className="outline" onClick={() => openSession(top.latest!.id)}>Resume session<ArrowRight size="1.1em" aria-hidden /></button>
+                  : <button className="outline" onClick={() => startSessionFor(top)}>Start session</button>}
+                <ArrowLink onClick={() => openChange(top.change.id)}>Open change</ArrowLink>
+              </div>
+            </div>
+          ) : focus && (
             <div className="focus-card">
               <h3>{focus.title}</h3>
               <p className="focus-status">
