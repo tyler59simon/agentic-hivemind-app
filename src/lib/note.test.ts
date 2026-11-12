@@ -1,29 +1,75 @@
 import { describe, expect, it } from "vitest";
 import fixtures from "./__fixtures__/note-format.json";
-import { actionItems, addEvidence, defaultTags, evidenceItems, outline, rewriteWikilinks, sectionKey, sections, setEvidence, stepParts, template, wikilinks } from "./note";
+import {
+  actionItems, addEvidence, defaultTags, evidenceItems, formatBody, outline, parts, rewriteWikilinks, sectionKey, sections,
+  setEvidence, stepParts, stripTitle, template, TEMPLATE_PROMPTS, wikilinks,
+} from "./note";
 
 describe("parity with Living Memory's note_format", () => {
   for (const c of fixtures.cases) {
     it(c.name, () => {
+      expect(formatBody(c.raw)).toBe(c.body);
+      expect(formatBody(c.body)).toBe(c.body);
       expect(actionItems(c.body).map((a) => [a.done, a.text])).toEqual(c.actions);
       expect(sections(c.body)).toEqual(c.sections);
+      expect(parts(c.body).map((p) => [p.key, p.heading, p.text])).toEqual(c.parts);
     });
   }
 
   it("numbers ticked items too, 1-based, with their line", () => {
-    const body = "## 📌 Executive Summary\nS\n\n## 🟩 Action Items\n- [x] done\n- [ ] open";
+    const body = "S\n\n## Action items\n- [x] done\n- [ ] open";
     expect(actionItems(body)).toEqual([
-      { index: 1, line: 4, done: true, text: "done" },
-      { index: 2, line: 5, done: false, text: "open" },
+      { index: 1, line: 3, done: true, text: "done" },
+      { index: 2, line: 4, done: false, text: "open" },
     ]);
   });
 });
 
 describe("section keys", () => {
-  it("match on letters only", () => {
+  it("match on letters only, with the legacy headings as aliases", () => {
+    expect(sectionKey("Action items")).toBe("actions");
     expect(sectionKey("🟩 Action Items")).toBe("actions");
     expect(sectionKey("action  items!")).toBe("actions");
-    expect(sectionKey("Summary")).toBeNull();
+    expect(sectionKey("📌 Executive Summary")).toBe("summary");
+    expect(sectionKey("Summary")).toBe("summary");
+    expect(sectionKey("📝 Key Details")).toBe("details");
+    expect(sectionKey("🗂️ Resource Links")).toBe("links");
+    expect(sectionKey("Why")).toBeNull();
+  });
+});
+
+describe("layout", () => {
+  it("reads a legacy body and writes it in the current layout", () => {
+    const legacy = "# 🎯 Cache\n\n## 📌 Executive Summary\nRebuildable.\n\n---\n\n## 📝 Key Details\n* a\n\n## 🟩 Action Items\n- [ ] x\n\n> ℹ️ **Important Note:** careful";
+    expect(sections(legacy)).toEqual({ summary: "Rebuildable.", details: "* a", actions: "- [ ] x", important: "careful" });
+    expect(formatBody(legacy)).toBe("Rebuildable.\n\n> **Important:** careful\n\n## Details\n* a\n\n## Action items\n- [ ] x");
+  });
+
+  it("takes the text before the first heading as the summary", () => {
+    expect(sections("Headless summary.\n\n## Links\n- [[a]]")).toEqual({ summary: "Headless summary.", links: "- [[a]]" });
+    expect(sections("Just text.")).toEqual({ summary: "Just text." });
+  });
+
+  it("gives a body that starts with a named section no summary", () => {
+    expect(sections("## Why\nBecause.")).toEqual({});
+    expect(formatBody("## Why\nBecause.")).toBe("## Why\nBecause.");
+  });
+
+  it("moves the callout after the summary and keeps typed and other sections in written order", () => {
+    const body = "Chose A.\n\n## Why\nFast.\n\n## Details\n- d\n\n> **Important:** check B first\n\n## Alternatives considered\n- B";
+    expect(parts(body).map((p) => p.key ?? p.heading)).toEqual(["summary", "important", "Why", "details", "Alternatives considered"]);
+  });
+
+  it("keeps a quote that only starts with the word Important", () => {
+    expect(sections("S\n\n> Important things").important).toBeUndefined();
+    expect(sections("S\n\n> Important: things").important).toBe("things");
+  });
+
+  it("strips a plain title heading only from note file text", () => {
+    expect(stripTitle("# 🎯 Old\nBody")).toBe("Body");
+    expect(stripTitle("# Title\nBody")).toBe("# Title\nBody");
+    expect(stripTitle("# Title\nBody", true)).toBe("Body");
+    expect(stripTitle("## Why\nBody", true)).toBe("## Why\nBody");
   });
 });
 
@@ -49,10 +95,16 @@ describe("outline", () => {
 });
 
 describe("new notes", () => {
-  it("templates include Action Items only for plan, bug and risk", () => {
-    expect(template("plan")).toContain("Action Items");
-    expect(template("decision")).not.toContain("Action Items");
-    expect(template("decision")).toMatch(/^## 📌 Executive Summary/);
+  it("templates follow LM's per-type Obsidian templates", () => {
+    expect(template("decision")).toBe(`${TEMPLATE_PROMPTS.decision}\n\n> **Important:** \n\n## Why\n\n## Alternatives considered\n\n## Links\n- \n`);
+    expect(template("plan")).toBe(`${TEMPLATE_PROMPTS.plan}\n\n> **Important:** \n\n## Details\n- \n\n## Links\n- \n\n## Action items\n- [ ] \n`);
+    expect(template("knowledge")).toBe(`${TEMPLATE_PROMPTS.knowledge}\n\n> **Important:** \n\n## Links\n- \n`);
+    expect(template("bug")).toContain("## Cause\n\n## Fix\n\n## How to check\n\n## Links\n- \n\n## Action items");
+    expect(template("runbook")).toContain("## Roll back");
+    expect(template("runbook")).not.toContain("If it fails");
+    expect(template("decision")).not.toContain("Action items");
+    // Only the prompt survives formatting: it is the summary, the empty sections drop out.
+    expect(sections(template("research"))).toEqual({ summary: TEMPLATE_PROMPTS.research });
   });
 
   it("default tags mirror LM's inference and respect the taxonomy", () => {
@@ -65,11 +117,10 @@ describe("new notes", () => {
 });
 
 describe("acceptance evidence", () => {
-  const callout = "> ℹ️ **Important Note:** Mind the replay window.";
+  const callout = "> **Important:** Mind the replay window.";
   const body = [
-    "Executive summary.", "", "---", "", "## Key Details", "- Detail", "", "## Action Items",
-    "- [ ] Define a durable event key", "- [x] Add the dedupe store", "",
-    "## Acceptance evidence", "- [ ] Replay produces no duplicate alert", "- [x] Suppression survives a restart", "", callout, "",
+    "Summary.", "", callout, "", "## Acceptance evidence", "- [ ] Replay produces no duplicate alert", "- [x] Suppression survives a restart", "",
+    "## Details", "- Detail", "", "## Action items", "- [ ] Define a durable event key", "- [x] Add the dedupe store", "",
   ].join("\n");
 
   it("lists the section's task lines and nothing else", () => {
@@ -102,14 +153,20 @@ describe("acceptance evidence", () => {
     const items = evidenceItems(next);
     expect(items).toHaveLength(3);
     expect(items[2]).toMatchObject({ done: false, text: "Third item" });
-    expect(next.indexOf(callout)).toBeGreaterThan(next.indexOf("- [ ] Third item"));
+    expect(next.indexOf("## Details")).toBeGreaterThan(next.indexOf("- [ ] Third item"));
   });
 
-  it("creates the section before the callout, or at the end", () => {
-    const bare = ["Summary.", "", "## Action Items", "- [ ] One", "", callout].join("\n");
-    const lines = addEvidence(bare, "X").split("\n");
-    expect(lines.indexOf("## Acceptance evidence")).toBeGreaterThan(-1);
-    expect(lines.indexOf("## Acceptance evidence")).toBeLessThan(lines.indexOf(callout));
+  it("creates the section where LM's set_section would: before Details, Links or Action items, else at the end", () => {
+    const bare = ["Summary.", "", callout, "", "## Why", "Because.", "", "## Links", "- [[a]]", "", "## Action items", "- [ ] One"].join("\n");
+    const next = addEvidence(bare, "X");
+    const lines = next.split("\n");
+    expect(lines.indexOf("## Acceptance evidence")).toBeGreaterThan(lines.indexOf("Because."));
+    expect(lines.indexOf("## Acceptance evidence")).toBeLessThan(lines.indexOf("## Links"));
+    expect(parts(next).map((p) => p.key ?? p.heading)).toEqual(["summary", "important", "Why", "Acceptance evidence", "links", "actions"]);
+    // A legacy body with the callout last: the section still goes before Action items.
+    const legacy = ["## 📌 Executive Summary", "S", "", "## 🟩 Action Items", "- [ ] One", "", "> ℹ️ **Important Note:** careful"].join("\n");
+    const old = addEvidence(legacy, "X").split("\n");
+    expect(old.indexOf("## Acceptance evidence")).toBeLessThan(old.indexOf("## 🟩 Action Items"));
     expect(addEvidence("Summary.\n", "X").endsWith("## Acceptance evidence\n- [ ] X")).toBe(true);
   });
 

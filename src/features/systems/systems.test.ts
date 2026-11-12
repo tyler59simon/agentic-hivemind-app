@@ -25,10 +25,9 @@ describe("wizard", () => {
   });
 
   it("builds the passport note body in LM's layout", () => {
-    expect(passportBody({ purpose: " Takes payments. " })).toBe("## 📌 Executive Summary\nTakes payments.");
+    expect(passportBody({ purpose: " Takes payments. " })).toBe("Takes payments.");
     const body = passportBody({ purpose: "P", boundaries: "API and ledger\nnot the bank", guidance: "Ask before migrations" });
-    expect(body).toContain("* **Boundaries:** API and ledger; not the bank");
-    expect(body).toContain("* **Agent guidance:** Ask before migrations");
+    expect(body).toBe("P\n\n## Details\n- **Boundaries:** API and ledger; not the bank\n- **Agent guidance:** Ask before migrations");
     expect(body).not.toContain("Operations");
   });
 

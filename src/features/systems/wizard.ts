@@ -31,13 +31,13 @@ const oneLine = (s: string) => s.split("\n").map((l) => l.trim()).filter(Boolean
 
 export interface PassportParts { purpose: string; boundaries?: string; operations?: string; guidance?: string }
 
-/** The passport note body in LM's layout: the purpose is the Executive Summary; the rest are Key Details lines. */
+/** The passport note body in LM's layout: the purpose is the summary; the rest are Details lines. */
 export function passportBody({ purpose, boundaries, operations, guidance }: PassportParts): string {
   const lines = ([["Boundaries", boundaries], ["Operations", operations], ["Agent guidance", guidance]] as const)
     .map(([label, text]) => [label, oneLine(text ?? "")] as const)
     .filter(([, text]) => text)
-    .map(([label, text]) => `* **${label}:** ${text}`);
-  return [`## ${HEADINGS.summary}\n${purpose.trim()}`, ...(lines.length ? [`---\n\n## ${HEADINGS.details}\n${lines.join("\n")}`] : [])].join("\n\n");
+    .map(([label, text]) => `- **${label}:** ${text}`);
+  return [purpose.trim(), ...(lines.length ? [`## ${HEADINGS.details}\n${lines.join("\n")}`] : [])].join("\n\n");
 }
 
 export interface SystemForm {
@@ -54,7 +54,7 @@ export function validateSystem(form: SystemForm, create?: { slug: string; existi
   if (create) {
     if (!SLUG_RE.test(create.slug)) problems.push("The slug needs lowercase letters, digits and dashes, starting with a letter or digit (40 characters at most).");
     else if (create.existingSlugs.includes(create.slug)) problems.push(`A system with the slug "${create.slug}" already exists.`);
-    if (!form.purpose.trim()) problems.push("Describe the purpose of the system: it becomes the passport's Executive Summary.");
+    if (!form.purpose.trim()) problems.push("Describe the purpose of the system: it becomes the passport's summary.");
   }
   if (form.purpose.trim().length > MAX_DESCRIPTION) problems.push(`The purpose is limited to ${MAX_DESCRIPTION} characters.`);
   const { repos, invalid } = parseRepos(form.repos);

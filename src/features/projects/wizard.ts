@@ -67,13 +67,13 @@ export interface CharterParts { purpose: string; objectives?: string; convention
 
 const oneLine = (s: string) => s.split("\n").map((l) => l.trim()).filter(Boolean).join("; ");
 
-/** The charter note body in LM's layout: the purpose is the Executive Summary; the rest are Key Details lines. */
+/** The charter note body in LM's layout: the purpose is the summary; the rest are Details lines. */
 export function charterBody({ purpose, objectives, conventions, guidance }: CharterParts): string {
   const lines = ([["Objectives", objectives], ["Conventions", conventions], ["Agent guidance", guidance]] as const)
     .map(([label, text]) => [label, oneLine(text ?? "")] as const)
     .filter(([, text]) => text)
-    .map(([label, text]) => `* **${label}:** ${text}`);
-  return [`## ${HEADINGS.summary}\n${purpose.trim()}`, ...(lines.length ? [`---\n\n## ${HEADINGS.details}\n${lines.join("\n")}`] : [])].join("\n\n");
+    .map(([label, text]) => `- **${label}:** ${text}`);
+  return [purpose.trim(), ...(lines.length ? [`## ${HEADINGS.details}\n${lines.join("\n")}`] : [])].join("\n\n");
 }
 
 export interface CreateForm { name: string; slug: string; repos: string; aliases: string; description: string; purpose: string }
@@ -88,7 +88,7 @@ export function validateCreate(form: CreateForm, existingSlugs: string[] = []): 
   else if (existingSlugs.includes(form.slug)) problems.push(`A project with the slug "${form.slug}" already exists.`);
   problems.push(...repoProblems(form.repos, true), ...aliasProblems(form.aliases));
   if (form.description.trim().length > MAX_DESCRIPTION) problems.push(`The description is limited to ${MAX_DESCRIPTION} characters.`);
-  if (!form.purpose.trim()) problems.push("Describe the purpose of the project: it becomes the charter's Executive Summary.");
+  if (!form.purpose.trim()) problems.push("Describe the purpose of the project: it becomes the charter's summary.");
   return problems;
 }
 

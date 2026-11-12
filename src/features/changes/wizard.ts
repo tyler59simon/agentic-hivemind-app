@@ -1,6 +1,5 @@
 // Pure helpers for the change wizard; the limits mirror Living Memory's `change-plan` validation.
 import type { Change, ChangeCreate, ChangeStage, ChangeUpdate } from "../../lib/lm";
-import { HEADINGS } from "../../lib/note";
 
 export const MAX_TITLE = 120;
 export const MAX_BRANCH = 200;
@@ -19,14 +18,14 @@ export function validateChange(form: ChangeFields, mode: "create" | "adopt" | "e
   if (!title) problems.push("Give the change a title.");
   if (title.length > MAX_TITLE) problems.push(`The title is limited to ${MAX_TITLE} characters.`);
   if (/[[\]|#]/.test(title)) problems.push("The title cannot contain [ ] | or #: other notes link to the brief by its title.");
-  if (mode === "create" && !form.outcome.trim()) problems.push("Describe the outcome: it becomes the brief's Executive Summary.");
+  if (mode === "create" && !form.outcome.trim()) problems.push("Describe the outcome: it becomes the brief's summary.");
   if (form.branch.trim().length > MAX_BRANCH) problems.push(`The branch name is limited to ${MAX_BRANCH} characters.`);
   if (form.element.trim() && !form.system.trim()) problems.push("Pick a system before an element.");
   return problems;
 }
 
-/** The brief of a new change: the outcome is its Executive Summary. */
-export const briefBody = (outcome: string) => `## ${HEADINGS.summary}\n${outcome.trim()}`;
+/** The brief of a new change: the outcome is its summary. */
+export const briefBody = (outcome: string) => outcome.trim();
 
 /** The create payload; `adopt` is the ref of an existing plan note to use as the brief. */
 export function createPayload(form: ChangeFields, adopt?: string): ChangeCreate {

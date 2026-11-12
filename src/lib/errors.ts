@@ -23,7 +23,8 @@ export function classify(error: unknown): Problem {
   if (/^Potential credential/.test(message)) return { kind: "credential", message };
   const tags = /^Unknown tags require an approved taxonomy plan: (.*)$/s.exec(message);
   if (tags) return { kind: "unknown-tags", message, tags: tags[1].split(",").map((t) => t.trim()).filter(Boolean) };
-  if (/^(Note needs an Executive Summary|Action Items are only for)/.test(message)) return { kind: "layout", message };
+  // Also matches the wording of Living Memory versions before the current note layout ("an Executive Summary", "Action Items").
+  if (/^(Note needs a summary|Note needs an Executive Summary|Action items are only for)/i.test(message)) return { kind: "layout", message };
   if (/^ambiguous_/.test(message)) return { kind: "ambiguous", message };
   if (/^private_content/.test(message)) return { kind: "private", message };
   if (/^Undo conflicts with later edits/.test(message)) return { kind: "undo-conflict", message };
