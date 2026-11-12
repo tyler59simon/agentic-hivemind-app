@@ -89,6 +89,12 @@ def body(summary, details=(), links=()):
     return "\n\n---\n\n".join(parts)
 
 
+def add_section(ref, text):
+    """Append a custom section to a note's body (there is no flag for one; the whole body is sent)."""
+    current = lm("read", ref, "--max-chars", "64000")
+    lm("update", ref, "--domain", ref.split(":")[0], payload={"body": current["body"] + "\n\n" + text})
+
+
 def remove(path):
     def retry(function, target, _exc):  # git objects are read-only on Windows
         os.chmod(target, stat.S_IWRITE); function(target)
@@ -166,6 +172,7 @@ def main():
         "src/delivery/retry.py": "import random\n\ndef delay(attempt, base=2.0, cap=300.0):\n    return random.uniform(0, min(cap, base * 2 ** attempt))\n"})
     commit("Add restart recovery runbook", 0.2, {
         "docs/runbooks/restart-recovery.md": "# Restart recovery\n\n1. Pause delivery.\n2. Replay from the last committed offset.\n3. Resume delivery.\n"})
+    git("branch", "feature/idempotency")
     if ARCH_SOURCE: shutil.copytree(ARCH_SOURCE, ARCH_DIR)
     else: ARCH_DIR.mkdir(parents=True)
     write_model(ARCH_DIR)
@@ -274,7 +281,7 @@ def main():
          "[[Retry policy: exponential backoff with jitter]]"],
         actions=["Send the idempotency header to the provider", "Extend key retention to cover late redeliveries",
                  "Alert on-call when the duplicate rate exceeds 0.1%"],
-        done=["Dedupe by event ID in ingestion", "Add duplicate counters to the delivery dashboard"], **PS)
+        done=["Dedupe by event ID in ingestion — decided in [[Use event ID as the idempotency key]]", "Add duplicate counters to the delivery dashboard"], **PS)
     refs["plan_extract"] = note("paystream", "plan", "Extract notification delivery",
         "Move notification delivery out of the ingestion service into its own deployable, behind the alert topic.", "planning",
         ["**Why:** delivery incidents should not stop ingestion, and the two release on different cadences",
@@ -364,7 +371,20 @@ def main():
 
     # ---- Lifecycle: finish and resolve a plan, archive a note, make two notes due for review.
     for _ in range(2): lm("check", refs["plan_review"], "--index", "1", "--domain", "paystream")
-    lm("resolve", refs["plan_review"], "--domain", "paystream")
+    if "changes" in lm("version")["commands"]:
+        adopt = lambda key, title, **kw: apply(lm("change-plan", "create", payload={"project": "paystream", "title": title, "brief": refs[key], **kw}))
+        adopt("plan_review", "Review retry policy", stage="validate")                                              # CHG-001
+        adopt("plan_extract", "Extract notification delivery", stage="design", repo=repo, system="paystream", element="Delivery")   # CHG-002
+        adopt("plan_dupes", "Prevent duplicate payment alerts", stage="implement", repo=repo, branch="feature/idempotency",
+              system="paystream", element="Ingestion")                                                             # CHG-003
+        add_section(refs["plan_dupes"], "## Acceptance evidence\n- [ ] Replay produces no duplicate alert\n- [ ] Suppression survives a restart")
+        made = lm("change-plan", "create", payload={"project": "paystream", "title": "Decide the key retention window", "repo": repo,
+                  "brief": {"body": body("Choose between a 30-day key window and rejecting late events.", links=["[[Key retention period]]"])}})
+        apply(made)                                                                                                # CHG-004
+        lm("update", made["summary"]["brief"], "--domain", "paystream", "--review-by", (date.today() - timedelta(days=2)).isoformat())
+        apply(lm("change-plan", "close", payload={"id": 1}))                                                       # resolves the brief too
+    else:
+        lm("resolve", refs["plan_review"], "--domain", "paystream")
     apply(lm("plan", "archive", refs["archived"], "--domain", "paystream"))
     today = date.today()
     lm("update", refs["map"], "--domain", "paystream", "--review-by", (today - timedelta(days=12)).isoformat())
@@ -391,6 +411,8 @@ def main():
     print(f"links (active): {len(links['nodes'])} nodes, {len(links['edges'])} edges, {len(links['unresolved'])} unresolved "
           f"{sorted({u['target'] for u in links['unresolved']})} | any status: {len(links_any['nodes'])} nodes, {len(links_any['edges'])} edges")
     print("doctor:", json.dumps(doctor, ensure_ascii=False)[:700])
+    if "changes" in version["commands"]:
+        print("changes:", ", ".join(f"{c['display']} [{c['status']}/{c['stage']}]" for c in lm("changes")["changes"]))
     print("version: api", version["api"], "python", version["python"], "commands", len(version["commands"]))
     for label, key in (("superseded", "old_retry"), ("superseded by", "retry"), ("resolved plan", "plan_review"), ("archived", "archived"),
                        ("due for review", "map"), ("due for review", "risk")):

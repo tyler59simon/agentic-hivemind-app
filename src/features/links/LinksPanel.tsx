@@ -1,7 +1,13 @@
+import { useQuery } from "@tanstack/react-query";
+import { GitBranch } from "lucide-react";
 import { useMemo, useState } from "react";
-import { useConnection } from "../../lib/connection";
+import { useChangesEnabled, useConnection } from "../../lib/connection";
 import { domainOf, type LinkNode } from "../../lib/lm";
+import { openChange } from "../../store";
+import { Row } from "../../ui/Page";
 import { useWorkspace, type Tab } from "../../workspace/store";
+import { changesFor } from "../changes/changes";
+import { changesQuery } from "../changes/useChanges";
 import { GraphCanvas } from "../graph/GraphCanvas";
 import { neighborhood, TYPE_COLORS } from "../graph/graphData";
 import { HoverPreview } from "../preview/HoverPreview";
@@ -27,6 +33,7 @@ export function LinksPanel({ tab }: { tab: Tab }) {
   const supported = useConnection((c) => c.commands.includes("links"));
   const openTab = useWorkspace((s) => s.openTab);
   const { note: links, isLoading } = useNoteLinks(tab.ref);
+  const all = useQuery({ ...changesQuery(), enabled: useChangesEnabled() });
   if (!supported) return needsUpdate;
   if (isLoading || !links) return <p className="muted pad">Loading…</p>;
   const section = (title: string, rows: { node: LinkNode }[]) => (
@@ -37,6 +44,9 @@ export function LinksPanel({ tab }: { tab: Tab }) {
   );
   return (
     <div className="links-panel">
+      {changesFor(tab.ref!, links, all.data?.changes ?? []).map((c) => (
+        <Row key={c.id} icon={<GitBranch size="1.3em" aria-hidden />} onClick={() => openChange(c.id)}><strong>{c.display}</strong> · {c.title}</Row>
+      ))}
       {section("Linked from", links.incoming.filter((e) => e.kind === "link"))}
       {section("Links to", links.outgoing.filter((e) => e.kind === "link"))}
       {links.outgoing.some((e) => e.kind === "supersedes") && section("Replaces", links.outgoing.filter((e) => e.kind === "supersedes"))}

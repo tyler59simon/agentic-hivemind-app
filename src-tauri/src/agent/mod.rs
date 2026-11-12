@@ -1071,7 +1071,7 @@ pub fn start_task(
     let program = claude::available(saved)?;
     let id = uuid::Uuid::new_v4().to_string();
     let launch = |scope| Launch { scope, program: program.clone(), budget_usd: saved.agent_budget_usd(), memory_root: bridge.launch().root };
-    let AgentTask::Work { project, repo, branch, .. } = &task else {
+    let AgentTask::Work { project, repo, branch, change } = &task else {
         let home = dirs::home_dir().ok_or("Could not find your home folder")?;
         let scope = scope::for_task(bridge, &task, saved, &home)?;
         return manager.start(id, task, launch(scope), prompt, &options);
@@ -1085,6 +1085,9 @@ pub fn start_task(
     let policy = options.policy.unwrap_or(PolicyMode::Ask);
     let entry = crate::git::project_entry(bridge, project)?;
     let repo = scope::project_repo(&entry, repo)?;
+    if let Some(id) = change {
+        scope::check_change(&scope::change_entry(bridge, *id)?, project, &repo.to_string_lossy())?;
+    }
     let tree = worktree::create(worktrees, &repo, branch.as_deref(), &id)?;
     let started = scope::work(tree.clone(), policy, prompt).and_then(|scope| manager.start(id, task.clone(), launch(scope), prompt, &options));
     if started.is_err() {

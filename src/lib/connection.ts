@@ -12,3 +12,6 @@ export const useProjectsEnabled = () => useConnection((s) => s.api >= 2 && s.com
 
 /** The systems registry needs an LM that has the `systems` command. */
 export const useSystemsEnabled = () => useConnection((s) => s.commands.includes("systems"));
+
+/** Numbered changes need an LM that has the `changes` command. */
+export const useChangesEnabled = () => useConnection((s) => s.commands.includes("changes"));

@@ -87,6 +87,7 @@ export function PlanDialog({ title, intro, make, applyLabel = "Apply", danger, o
 function explain(e: unknown): string {
   const p = classify(e);
   if (p.kind === "undo-conflict") return "This change can't be undone automatically: the note was edited again afterwards. Undo the later change first, or edit the note by hand.";
+  if (/^Stale revision: changes\.json/.test(p.message)) return "Another change was created or updated while this plan was open. Close this and review a fresh plan.";
   if (/^stale plan|^Stale revision/.test(p.message)) return "The note changed while this plan was open. Close this and try again.";
   return p.message;
 }

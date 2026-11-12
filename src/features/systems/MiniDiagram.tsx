@@ -5,7 +5,7 @@ import { chain } from "./diagram";
 
 /** A system's containers as a row of boxes, in the order data flows; `selected` highlights one by name. */
 export function MiniDiagram({ model, selected }: { model: ArchModel | null; selected?: string }) {
-  const { nodes, linked } = chain(model);
+  const { nodes, linked } = chain(model, 3, selected);
   if (!nodes.length) return null;
   return (
     <div className="mini-diagram" role="img" aria-label={`Containers: ${nodes.map((n) => n.name).join(", ")}`}>

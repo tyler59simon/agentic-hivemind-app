@@ -108,6 +108,79 @@ export function actionItems(body: string): ActionItem[] {
   return found;
 }
 
+export const EVIDENCE_HEADING = "Acceptance evidence";
+export interface EvidenceItem { index: number; line: number; done: boolean; text: string }
+
+/** Lines of the body, and the line range [start, end) of the evidence section: its heading line up to the next
+ *  `##` heading or Important Note callout outside a code fence, or the end. `start` is -1 when there is no such section.
+ *  `fenced[i]` says line i is part of a code fence. */
+function evidenceRange(body: string): { lines: string[]; fenced: boolean[]; start: number; end: number } {
+  const lines = body.replace(/\r\n/g, "\n").split("\n");
+  const fenced: boolean[] = [];
+  let fence: string | null = null;
+  let start = -1;
+  let end = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const mark = FENCE.exec(line);
+    fenced.push(fence !== null || !!mark);
+    if (fence) {
+      if (mark && mark[1][0] === fence[0] && mark[1].length >= fence.length && !stripChar(line.trim(), fence[0])) fence = null;
+      continue;
+    }
+    if (mark) { fence = mark[1]; continue; }
+    const heading = H2.exec(line);
+    if (heading && start < 0 && letters(heading[1]) === letters(EVIDENCE_HEADING)) start = i;
+    else if (start >= 0 && (heading || (line.startsWith(">") && CALLOUT_LINE.test(line)))) { end = i; break; }
+  }
+  return { lines, fenced, start, end };
+}
+
+/** Task-list lines of the brief's custom "## Acceptance evidence" section, numbered from 1. */
+export function evidenceItems(body: string): EvidenceItem[] {
+  const range = evidenceRange(body);
+  if (range.start < 0) return [];
+  const found: EvidenceItem[] = [];
+  for (let i = range.start + 1; i < range.end; i++) {
+    const m = range.fenced[i] ? null : ACTION.exec(range.lines[i]);
+    if (m) found.push({ index: found.length + 1, line: i, done: m[2] !== " ", text: m[3].trim() });
+  }
+  return found;
+}
+
+/** The body with evidence item `index` (1-based) ticked or unticked; no other line changes. Throws RangeError when there is no such item. */
+export function setEvidence(body: string, index: number, done: boolean): string {
+  const item = evidenceItems(body).find((e) => e.index === index);
+  if (!item) throw new RangeError(`No acceptance evidence item ${index}`);
+  const { lines } = evidenceRange(body);
+  const m = ACTION.exec(lines[item.line])!;
+  lines[item.line] = m[1] + "[" + (done ? "x" : " ") + "]" + m[3];
+  return lines.join("\n");
+}
+
+/** The body with one unchecked evidence item added at the end of the section, which is created when missing. */
+export function addEvidence(body: string, text: string): string {
+  const item = "- [ ] " + text.replace(/\s+/g, " ").trim();
+  const { lines, fenced, start, end } = evidenceRange(body);
+  if (start >= 0) {
+    let last = end - 1;
+    while (last > start && !lines[last].trim()) last--;
+    lines.splice(last + 1, 0, item);
+    return lines.join("\n");
+  }
+  const callout = lines.findIndex((line, i) => !fenced[i] && line.startsWith(">") && CALLOUT_LINE.test(line));
+  if (callout < 0) return body.replace(/\s+$/, "") + "\n\n## " + EVIDENCE_HEADING + "\n" + item;
+  lines.splice(callout, 0, ...(callout > 0 && lines[callout - 1].trim() ? [""] : []), "## " + EVIDENCE_HEADING, item, "");
+  return lines.join("\n");
+}
+
+/** An Action Item's text as a title and a detail line: split at the first " — " outside a [[link]]; links shown as their text. */
+export function stepParts(text: string): { title: string; detail: string } {
+  const plain = text.replace(WIKILINK_FULL, (_, target: string, _heading, alias: string) => alias || target.trim());
+  const i = plain.indexOf(" — ");
+  return i > 0 ? { title: plain.slice(0, i).trim(), detail: plain.slice(i + 3).trim() } : { title: plain.trim(), detail: "" };
+}
+
 /** A [[link]] as written: the target LM resolves (text before | or #), plus where it sits. */
 export interface WikiLink { target: string; from: number; to: number; alias?: string; heading?: string }
 const WIKILINK_FULL = /\[\[([^\]|#]+)(#[^\]|]*)?(?:\|([^\]]*))?\]\]/g;

@@ -9,8 +9,9 @@ export function ownContainers(model: ArchModel | null): ArchElement[] {
 }
 
 /** A few containers in the order data flows through them, for a one-line diagram.
+ *  `include` names a container that must be among the boxes.
  *  `linked[i]` says whether the model has a relationship from `nodes[i]` to `nodes[i + 1]`. */
-export function chain(model: ArchModel | null, max = 3): { nodes: ArchElement[]; linked: boolean[] } {
+export function chain(model: ArchModel | null, max = 3, include?: string): { nodes: ArchElement[]; linked: boolean[] } {
   const all = ownContainers(model);
   const ids = new Set(all.map((e) => e.id));
   const edges = (model?.relationships ?? []).filter((r) => ids.has(r.source_id) && ids.has(r.destination_id) && r.source_id !== r.destination_id);
@@ -26,5 +27,7 @@ export function chain(model: ArchModel | null, max = 3): { nodes: ArchElement[];
     nodes.push(next);
     left.splice(left.indexOf(next), 1);
   }
+  const wanted = include ? all.find((e) => e.name === include) : undefined;
+  if (wanted && !nodes.includes(wanted)) nodes[nodes.length - 1] = wanted;
   return { nodes, linked: nodes.slice(1).map((n, i) => flows(nodes[i].id, n.id)) };
 }

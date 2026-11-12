@@ -1,10 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useChangesEnabled } from "../../lib/connection";
 import { domainOf, mergePlan, plan, read, type Note, type NoteRow } from "../../lib/lm";
 import { sections } from "../../lib/note";
 import { Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
+import { useChangeIntent } from "../changes/intent";
+import { changesQuery } from "../changes/useChanges";
 import { noteQuery } from "../viewer/NoteView";
 import { NotePicker } from "./NotePicker";
 import { PlanDialog } from "./PlanDialog";
@@ -37,6 +40,8 @@ function MergeComposer({ source, target, onClose }: { source: Note; target: Note
 /** Lifecycle actions for a note. Every one is a reviewed Living Memory plan. */
 export function NoteMenu({ refId }: { refId: string }) {
   const note = useQuery(noteQuery(refId));
+  const changesOn = useChangesEnabled();
+  const all = useQuery({ ...changesQuery(), enabled: changesOn });
   const [open, setOpen] = useState(false);
   const [dialog, setDialog] = useState<ReactNode>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -52,6 +57,7 @@ export function NoteMenu({ refId }: { refId: string }) {
   }, [open]);
   const n = note.data;
   if (!n) return null;
+  const adoptable = changesOn && n.type === "plan" && n.status === "active" && !(all.data?.changes ?? []).some((c) => c.brief === refId);
   const close = () => setDialog(null);
   const run = (node: ReactNode) => { setOpen(false); setDialog(node); };
   const items: { label: string; show: boolean; act: () => void; danger?: boolean }[] = [
@@ -70,6 +76,7 @@ export function NoteMenu({ refId }: { refId: string }) {
     { label: "Merge into…", show: n.status === "active", act: () => run(
       <NotePicker title="Merge this note into…" domain={n.domain} exclude={refId} onClose={close}
         onPick={(t) => setDialog(<MergeComposer source={n} target={t} onClose={close} />)} />) },
+    { label: "Adopt as change…", show: adoptable, act: () => { setOpen(false); useChangeIntent.getState().open({ mode: "adopt", ref: refId, title: n.title }); } },
     { label: "Copy reference", show: true, act: () => { setOpen(false); navigator.clipboard.writeText(refId).then(() => toast(`Copied ${refId}`)); } },
     { label: "Delete…", show: true, danger: true, act: () => run(
       <PlanDialog title={`Delete “${n.title}”`} make={() => plan("delete", refId)} applyLabel="Delete" danger onClose={close}

@@ -78,4 +78,20 @@ describe("sessionBriefing", () => {
     expect(long).toContain("x".repeat(1200));
     expect(long).not.toContain("x".repeat(1201));
   });
+
+  it("the briefing describes the change", () => {
+    const change = { display: "CHG-014", title: "Prevent duplicate payment alerts", stage: "Implement", briefTitle: "CHG-014 Prevent duplicate payment alerts", steps: ["Verify replay"], evidence: ["Replay produces no duplicate alert"] };
+    const text = sessionBriefing({ ...input, change });
+    expect(text).toContain("## Change");
+    expect(text).toContain("CHG-014 Prevent duplicate payment alerts (stage: Implement)");
+    expect(text).toContain("Open steps: Verify replay");
+    expect(text).toContain("Acceptance evidence still to show: Replay produces no duplicate alert");
+    expect(text).toContain("`--link '[[CHG-014 Prevent duplicate payment alerts]]'`");
+    expect(text.indexOf("## Workspace")).toBeLessThan(text.indexOf("## Change"));
+    expect(text.indexOf("## Change")).toBeLessThan(text.indexOf("## Included memory"));
+    const empty = sessionBriefing({ ...input, change: { ...change, steps: [], evidence: [] } });
+    expect(empty).not.toContain("Open steps");
+    expect(empty).not.toContain("Acceptance evidence still to show");
+    expect(sessionBriefing({ ...input, change: null })).toBe(sessionBriefing(input));
+  });
 });

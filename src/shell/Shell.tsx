@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { AgentWorkspace } from "../features/agents/AgentWorkspace";
+import { ChangeWizardHost } from "../features/changes/ChangeWizard";
 import { ChangesPage } from "../features/changes/ChangesPage";
 import { MemoryPage } from "../features/library/MemoryPage";
 import { OverviewPage } from "../features/projects/OverviewPage";
@@ -30,6 +31,7 @@ export function Shell({ info, onSettings, onReconnect }: { info: ConnectInfo; on
         <Topbar />
         <main className="page-host">{PAGES[page]()}</main>
       </div>
+      <ChangeWizardHost />
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { LmError, list, listArgs, openArgs, projectPlan, projects, projectsArgs, read, reviewArgs, run, searchArgs, setTransport, systemPlan, systemsArgs, timelineArgs, type Invoke } from "./lm";
+import { LmError, addAction, changePlan, changesArgs, list, listArgs, openArgs, projectPlan, projects, projectsArgs, read, reviewArgs, run, searchArgs, setTransport, systemPlan, systemsArgs, timelineArgs, type Invoke } from "./lm";
 
 afterEach(() => setTransport(invoke as Invoke));
 
@@ -79,5 +79,15 @@ describe("run", () => {
     expect(calls[0]).toEqual(["lm", { argv: ["system-plan", "retire"], stdin: JSON.stringify({ slug: "billing" }) }]);
     expect(systemsArgs({ status: "active" })).toEqual(["systems", "--status", "active", "--actor", "viewer"]);
     expect(systemsArgs()).toEqual(["systems", "--actor", "viewer"]);
+  });
+
+  it("changes read as viewer and change plans carry the payload", async () => {
+    expect(changesArgs()).toEqual(["changes", "--actor", "viewer"]);
+    expect(changesArgs({ status: "active", project: "paystream" })).toEqual(["changes", "--status", "active", "--project", "paystream", "--actor", "viewer"]);
+    const calls = fake({ exit_code: 0, result: { ok: true }, error: null });
+    await changePlan("update", { id: 14, stage: "design" });
+    expect(calls[0]).toEqual(["lm", { argv: ["change-plan", "update"], stdin: '{"id":14,"stage":"design"}' }]);
+    await addAction("demo:abc", "Ship it");
+    expect(calls[1]).toEqual(["lm", { argv: ["update", "demo:abc", "--domain", "demo", "--add-action", "Ship it"], stdin: null }]);
   });
 });

@@ -1,13 +1,17 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FileText, Layers, Link as LinkIcon, Play, Plus } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { agentAvailable, agentStart, repoBranches, type Policy } from "../../lib/agent";
-import { useSystemsEnabled } from "../../lib/connection";
+import { useChangesEnabled, useSystemsEnabled } from "../../lib/connection";
+import { classify } from "../../lib/errors";
 import { domainOf, getSettings, type Project } from "../../lib/lm";
-import { openSession, openSystem, useApp } from "../../store";
+import { actionItems, evidenceItems, stepParts } from "../../lib/note";
+import { openChange, openSession, openSystem, useApp } from "../../store";
 import { Modal } from "../../ui/Modal";
 import { ArrowLink, dayMonth, PageHeader, Row, Section, Split } from "../../ui/Page";
 import { toast } from "../../ui/toast";
+import { briefState, displayId, linkState, STAGE_LABELS } from "../changes/changes";
+import { changesQuery } from "../changes/useChanges";
 import { NotePicker } from "../plans/NotePicker";
 import { buildBriefing, isoDay } from "../projects/briefing";
 import { systemsForProject } from "../projects/scope";
@@ -58,9 +62,37 @@ function StartForm({ project }: { project: Project }) {
   const [picking, setPicking] = useState(false);
   // Every note that was in the draft when the screen opened or was added since, ticked or not.
   const [listed, setListed] = useState(draft.context);
+  const touched = useRef(false);
 
   const branches = useQuery({ queryKey: ["repo", "branches", project.slug, repo], queryFn: () => repoBranches(project.slug, repo), retry: false });
   const branch = pickedBranch ?? branches.data?.current ?? branches.data?.branches[0] ?? "";
+  const changesOn = useChangesEnabled();
+  const registry = useQuery({ ...changesQuery(), enabled: changesOn && draft.change !== null });
+  const linked = draft.change === null ? undefined : registry.data?.changes.find((c) => c.id === draft.change);
+  // The brief itself, loaded on its own so nothing below depends on it staying ticked under "Included memory".
+  const brief = useQuery({ ...noteQuery(linked?.brief ?? ""), enabled: !!linked && briefState(linked) !== "missing" });
+  const briefNote = brief.data;
+  const openSteps = briefNote ? actionItems(briefNote.body).filter((s) => !s.done).map((s) => stepParts(s.text).title) : [];
+  // The change whose repository and branch have been put into the two selects; null until that is done.
+  const [appliedFor, setAppliedFor] = useState<number | null>(null);
+  const link = linkState({
+    change: draft.change, changesOn,
+    registryLoading: registry.isLoading, registryError: registry.error ? classify(registry.error).message : null, linked,
+    branchesLoading: branches.isLoading, branchesError: branches.error ? String(branches.error) : null,
+    applied: appliedFor === draft.change,
+    briefLoading: brief.isLoading, briefError: brief.error ? classify(brief.error).message : null,
+  });
+  const norm = (path: string) => path.split("\\").join("/").replace(/\/+$/, "").toLowerCase();
+  const branchList = branches.data?.branches;
+  useEffect(() => {
+    if (!linked) return;
+    if (touched.current) { setAppliedFor(linked.id); return; }
+    const entry = linked.repo ? project.repos.find((r) => norm(r) === norm(linked.repo!)) : undefined;
+    if (entry && entry !== repo) { setRepo(entry); setPickedBranch(null); return; }
+    if (!branchList) return;
+    if (linked.branch && branchList.includes(linked.branch)) setPickedBranch(linked.branch);
+    setAppliedFor(linked.id);
+  }, [linked, repo, branchList, project.repos]);
   const available = useQuery({ queryKey: ["agent", "available"], queryFn: agentAvailable, retry: false, staleTime: 60_000 });
   const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
 
@@ -90,19 +122,21 @@ function StartForm({ project }: { project: Project }) {
   const task = draft.task.trim();
   const briefing = sessionBriefing({
     project, domain, repo, branch, policy, notes, pack: buildBriefing({ project, charter: charter.data, rows: rows.data?.notes ?? [], open: open.data?.items ?? [], commits, maxChars: 5000 }),
+    change: linked && briefNote ? { display: linked.display, title: linked.title, stage: STAGE_LABELS[linked.stage], briefTitle: briefNote.title, steps: openSteps, evidence: evidenceItems(briefNote.body).filter((e) => !e.done).map((e) => e.text) } : null,
     architecture: system && {
       system: system.name, generated: arch?.generatedAt ? isoDay(new Date(arch.generatedAt)) : null, behind: git.data && arch?.generatedAt ? behind : null,
       element: draft.element, containers: (archModel?.elements ?? []).filter((e) => e.type === "container").map((e) => e.name),
     },
   });
-  const blocked = !!branches.error || available.isError;
+  const blocked = !!branches.error || available.isError || link.kind === "loading" || link.kind === "failed";
   const canStart = !!task && !loading && !starting && !branches.isLoading && !blocked && !!branch;
 
   const add = (ref: string) => { draft.addContext(ref); setListed((l) => (l.includes(ref) ? l : [...l, ref])); };
   const start = async () => {
+    if (blocked) return;
     setStarting(true);
     try {
-      const info = await agentStart({ kind: "work", project: project.slug, repo, branch }, task, { policy, context: draft.context, briefing, model: model || undefined, system: system?.slug });
+      const info = await agentStart({ kind: "work", project: project.slug, repo, branch, ...(draft.change !== null ? { change: draft.change } : {}) }, task, { policy, context: draft.context, briefing, model: model || undefined, system: system?.slug });
       useSessionDraft.getState().reset();
       client.invalidateQueries({ queryKey: ["agent", "sessions"] });
       openSession(info.id);
@@ -118,6 +152,13 @@ function StartForm({ project }: { project: Project }) {
     <>
       <div className="start-body">
         {available.isError && <div className="banner warn">{String(available.error)}</div>}
+        {link.kind === "failed" && (
+          <div className="banner warn" role="alert">
+            <strong>{link.message}</strong>
+            <span className="small">Start is disabled so a session is not started without its change. Unlink the change to start a plain session, or go back and try again.</span>
+            <div className="actions"><button onClick={() => useSessionDraft.setState({ change: null })}>Unlink the change</button></div>
+          </div>
+        )}
         <Split rail={
           <>
             <Section title="Briefing preview"><p className="muted">Scope: {project.name} / {repoName(repo)}</p></Section>
@@ -151,6 +192,7 @@ function StartForm({ project }: { project: Project }) {
             <Section title="Task boundaries">
               <ul>
                 <li>Limit edits to {repoName(repo)}</li>
+                {openSteps.slice(0, 3).map((step) => <li key={step}>{step}</li>)}
                 <li>Work on a new branch from {branch}; nothing is pushed or merged</li>
                 <li>{permissionLines(policy)[0]}</li>
               </ul>
@@ -167,24 +209,30 @@ function StartForm({ project }: { project: Project }) {
               <textarea className="start-task" aria-label="Task" autoFocus placeholder="What should the agent do?" value={draft.task}
                 onChange={(e) => draft.setTask(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && canStart) start(); }} />
-              {draft.change !== null && <button className="linked-chip"><LinkIcon size="1.2em" aria-hidden />CHG-{draft.change}</button>}
+              {draft.change !== null && (
+                <span>
+                  <button className="linked-chip" onClick={() => openChange(draft.change!)}><LinkIcon size="1.2em" aria-hidden />{displayId(draft.change)}{linked ? " · " + linked.title : ""}</button>
+                  <button type="button" className="tag-x" aria-label="Unlink the change" title="Start the session without the change" onClick={() => useSessionDraft.setState({ change: null })}>×</button>
+                </span>
+              )}
             </section>
             {/* Phase 5: Engine and Interface sections go here */}
             <section className="start-section">
               <h2>Workspace</h2>
               <div className="start-row">
                 <label className="field"><span>Repo</span>
-                  <select aria-label="Repo" value={repo} onChange={(e) => { setRepo(e.target.value); setPickedBranch(null); }}>
+                  <select aria-label="Repo" value={repo} onChange={(e) => { touched.current = true; setRepo(e.target.value); setPickedBranch(null); }}>
                     {project.repos.map((r) => <option key={r} value={r} title={r}>{repoName(r)}</option>)}
                   </select>
                 </label>
                 <label className="field"><span>Start branch</span>
-                  <select aria-label="Start branch" value={branch} disabled={branches.isLoading || !!branches.error} onChange={(e) => setPickedBranch(e.target.value)}>
+                  <select aria-label="Start branch" value={branch} disabled={branches.isLoading || !!branches.error} onChange={(e) => { touched.current = true; setPickedBranch(e.target.value); }}>
                     {branches.isLoading ? <option value="">Loading…</option> : (branches.data?.branches ?? []).map((b) => <option key={b} value={b}>{b}</option>)}
                   </select>
                 </label>
               </div>
               {!!branches.error && <p className="error small">{String(branches.error)}</p>}
+              {linked?.branch && branchList && !branchList.includes(linked.branch) && <p className="muted small">The change names the branch {linked.branch}, which this repository does not have.</p>}
               <p className="muted small">The session works in a new git worktree on its own branch. Uncommitted changes, ignored files and submodules of your checkout are not in it.</p>
             </section>
             <section className="start-section">
@@ -222,8 +270,9 @@ function StartForm({ project }: { project: Project }) {
         <Layers size="1.4em" aria-hidden />
         <span>{draftCounts(draft.context.length, archModel ? 1 : 0)}</span>
         <span className="fill" />
+        {link.kind === "loading" && <span className="muted small" role="status">{link.what}</span>}
         <button className="outline" onClick={cancel}>Cancel</button>
-        <button className="primary big" disabled={!canStart} title={task ? undefined : "Write a task first"} onClick={start}>
+        <button className="primary big" disabled={!canStart} title={link.kind === "loading" ? link.what : link.kind === "failed" ? link.message : task ? undefined : "Write a task first"} onClick={start}>
           <Play size="1.2em" aria-hidden />{starting ? "Starting…" : "Start session"}
         </button>
       </footer>
