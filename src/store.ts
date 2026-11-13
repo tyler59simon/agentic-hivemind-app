@@ -11,6 +11,7 @@ export type Route =
   | { page: "agents"; session?: string; view?: "new" }
   | { page: "changes"; id?: number; view?: "detail"; ref?: string }
   | { page: "architecture"; system?: string }
+  | { page: "dashboards"; ref?: string }
   | { page: "memory"; view?: "notes" | "graph" | "activity" | "history" | "tags"; q?: string }
   | { page: "review" };
 export type Page = Route["page"];
