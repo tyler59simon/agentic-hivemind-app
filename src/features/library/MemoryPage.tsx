@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, FileText, Link as LinkIcon, Minus, Plus, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { useChangesEnabled } from "../../lib/connection";
+import { useChangesEnabled, useLogEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { domains, list, search, taxonomy, type SearchOptions } from "../../lib/lm";
 import { sections } from "../../lib/note";
@@ -18,6 +18,7 @@ import { changesFor } from "../changes/changes";
 import { changesQuery } from "../changes/useChanges";
 import { GraphView } from "../graph/GraphView";
 import { ActivityView } from "../history/HistoryViews";
+import { LogView } from "../history/LogView";
 import { useNoteLinks } from "../links/useLinks";
 import { HoverPreview } from "../preview/HoverPreview";
 import { Triage } from "../projects/TriageDialog";
@@ -94,6 +95,7 @@ const SHELVES: { id: Shelf; label: string }[] = [{ id: "active", label: "Active"
 /** Mock 08: search, type tabs, and Status / Scope / Tag filters over the notes; a preview of the selected one. */
 function Library() {
   const { domain, shelf, setShelf, setDomain, go } = useApp();
+  const logOn = useLogEnabled();
   const routeQuery = useApp((s) => (s.route.page === "memory" ? s.route.q ?? "" : ""));
   const { project } = useCurrentProject();
   const [query, setQuery] = useState(routeQuery);
@@ -145,6 +147,7 @@ function Library() {
         actions={<>
           <button className="text" onClick={() => go({ page: "memory", view: "graph" })}>Graph</button>
           <button className="text" onClick={() => go({ page: "memory", view: "activity" })}>Activity</button>
+          {logOn && <button className="text" onClick={() => go({ page: "memory", view: "history" })}>History</button>}
           <button className="text" onClick={() => go({ page: "memory", view: "tags" })}>Tags</button>
           <button className="primary big" onClick={newNote} title="New note (Ctrl+N)"><Plus size="1.2em" aria-hidden />Capture a note</button>
         </>} />
@@ -222,6 +225,7 @@ function Library() {
 const VIEWS = {
   graph: { title: "Graph", subtitle: "Notes and the links between them.", body: (tag?: string) => <GraphView key={tag} tag={tag} /> },
   activity: { title: "Activity", subtitle: "Who changed what, newest first.", body: () => <ActivityView /> },
+  history: { title: "History", subtitle: "Notes, changes and agent sessions, newest first.", body: () => <LogView /> },
   tags: { title: "Tags", subtitle: "The taxonomy every note is filed under.", body: () => <TaxonomyView /> },
 };
 
@@ -229,6 +233,7 @@ const VIEWS = {
 export function MemoryPage() {
   const route = useApp((s) => s.route);
   const go = useApp((s) => s.go);
+  const logOn = useLogEnabled();
   const open = useWorkspace(hasTabs);
   const rail = useWorkspace(railShown);
   const { project } = useCurrentProject();
@@ -237,7 +242,7 @@ export function MemoryPage() {
   if (view === "notes" && open) {
     return <div className="notes-area"><Workspace />{rail && <NoteRail />}</div>;
   }
-  const sub = view && view !== "notes" ? VIEWS[view] : null;
+  const sub = view && view !== "notes" && (view !== "history" || logOn) ? VIEWS[view] : null;
   return (
     <div className="memory">
       {open && <OpenTabs />}

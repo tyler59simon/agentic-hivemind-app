@@ -12,7 +12,7 @@ import { SECTIONS } from "./Sidebar";
 
 interface Crumb { label: string; go?: () => void }
 
-const MEMORY_VIEWS = { graph: "Graph", activity: "Activity", tags: "Tags" } as const;
+const MEMORY_VIEWS = { graph: "Graph", activity: "Activity", history: "History", tags: "Tags" } as const;
 
 function useCrumbs(): Crumb[] {
   const route = useApp((s) => s.route);
