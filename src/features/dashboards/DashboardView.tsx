@@ -89,7 +89,7 @@ async function openHtml(path: string) {
  *  `list` is the page's view list, drawn beside the dashboard. */
 export function DashboardView({ row, list }: { row: ViewRow; list: ReactNode }) {
   const ref = viewRef(row);
-  const query = useQuery(viewModelQuery(ref));
+  const query = useQuery(viewModelQuery(row));
   const { note: links } = useNoteLinks(ref);
   const model = query.data;
   const banner = model && noteBanner(model);

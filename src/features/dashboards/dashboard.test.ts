@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
 import type { ViewItem } from "../../lib/lm";
-import { badgeClass, chipGroups, defaultTab, liveTags, linkParts, noteBanner, passes, priorityOf, sortItems, tagKind, visibleItems, type Filters } from "./dashboard";
+import { badgeClass, chipGroups, defaultTab, liveTags, linkParts, missingModel, noteBanner, noteId, passes, priorityOf, sortItems, tagKind, visibleItems, type Filters } from "./dashboard";
+
+describe("deleted and moved notes", () => {
+  const row = { note: "3a562a09-2b34-4a43-8901-c7a1801168e6", domain: "old", title: "Plan", note_title: null, path: "x.html", fresh: false, artifact_url: null, artifact_current: false, exists: true };
+  it("builds the missing-note model from the registry row", () => {
+    const m = missingModel(row);
+    expect(m.status).toBe("missing");
+    expect(m.counts.total).toBe(0);
+    expect(noteBanner(m)).toMatch(/not found/);
+  });
+  it("takes the note ID from a ref in any domain", () => {
+    expect(noteId("new:3a562a09-2b34-4a43-8901-c7a1801168e6")).toBe(row.note);
+    expect(noteId(row.note)).toBe(row.note);
+  });
+});
 
 const item = (index: number, over: Partial<ViewItem> = {}): ViewItem =>
   ({ index, done: false, text: `item ${index}`, tags: [], id: null, detail: null, ...over });
