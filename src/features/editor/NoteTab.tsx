@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, CircleCheck, Play, SquarePen } from "lucide-react";
 import { useState } from "react";
 import { classify } from "../../lib/errors";
+import { useViewsEnabled } from "../../lib/connection";
 import { confirm } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
 import { startSession } from "../../store";
@@ -9,6 +10,7 @@ import { toast } from "../../ui/toast";
 import { dayMonth, Tabs } from "../../ui/Page";
 import { useWorkspace, type Tab } from "../../workspace/store";
 import { useSessionDraft } from "../agents/draft";
+import { DashboardToggle } from "../dashboards/DashboardToggle";
 import { HistoryPanel } from "../history/HistoryViews";
 import { NoteMenu } from "../plans/NoteMenu";
 import { NoteTags, NoteView, noteQuery } from "../viewer/NoteView";
@@ -38,6 +40,7 @@ export function NoteTab({ tab }: { tab: Tab }) {
     },
     onError: (e) => toast(classify(e).message, "error"),
   });
+  const viewsOn = useViewsEnabled();
   const confirmed = n?.confirmed?.length ? n.confirmed[n.confirmed.length - 1] : undefined;
 
   return (
@@ -60,6 +63,7 @@ export function NoteTab({ tab }: { tab: Tab }) {
               </button>
             </>
           )}
+          {viewsOn && n && !editing && <DashboardToggle refId={refId} title={n.title} />}
           <NoteMenu refId={refId} />
         </div>
         {editing ? <div ref={setHead} /> : n && (
