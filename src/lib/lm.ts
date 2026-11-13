@@ -258,7 +258,7 @@ export type ReviewKind = (typeof REVIEW_KINDS)[number];
 export type ReviewAction = "confirm" | "update" | "supersede" | "resolve" | "merge-plan" | "archive-plan";
 export interface ReviewResult {
   ok: boolean; domain: string | null; due: number; notes: ReviewRow[]; hint?: string;
-  items?: ReviewRow[]; counts?: Record<ReviewKind, number>; total?: number;
+  counts?: Record<ReviewKind, number>;
 }
 export const reviewArgs = (o: ScopeOptions) => scopeArgs("review", o);
 export const review = (o: ScopeOptions) => run<ReviewResult>(reviewArgs(o));
@@ -288,7 +288,7 @@ export interface LogRow {
   time: string; event: string; ref: string; title: string; type: string; domain: string; projects: string[]; op?: string;
   detail?: string;
   /** Session rows only. */
-  harness?: string; notes?: string[]; files?: string[];
+  harness?: string; notes?: string[]; /** How many files the session changed (a count, not paths). */ files?: number;
 }
 export interface LogResult { ok: boolean; count: number; rows: LogRow[] }
 export interface LogOptions {

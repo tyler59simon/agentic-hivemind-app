@@ -6,10 +6,8 @@ const row = (over: Partial<ReviewRow> = {}): ReviewRow => ({ ref: "d:a", title: 
 const base: ReviewResult = { ok: true, domain: null, due: 1, notes: [row({ ref: "d:old" })] };
 
 describe("review worklist", () => {
-  it("uses items when present, else notes", () => {
+  it("reads the rows from notes", () => {
     expect(worklistRows(base).map((r) => r.ref)).toEqual(["d:old"]);
-    expect(worklistRows({ ...base, items: [row({ ref: "d:new" })] }).map((r) => r.ref)).toEqual(["d:new"]);
-    expect(worklistRows({ ...base, items: [] })).toEqual([]);
     expect(worklistRows(undefined)).toEqual([]);
   });
 

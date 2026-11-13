@@ -66,7 +66,7 @@ export function ReviewPage() {
         </Section>
       )}
       {(kind === 'all' || kind === 'memory') && projectsOn && (
-        <Section title="Memory" count={due.data?.total ?? due.data?.due} loading={due.isLoading} error={due.error && classify(due.error).message}
+        <Section title="Memory" count={due.data?.due} loading={due.isLoading} error={due.error && classify(due.error).message}
           empty={due.data && !rows.length ? (counts ? "Nothing needs review." : "No notes are due for review.") : undefined}>
           {counts && (
             <>

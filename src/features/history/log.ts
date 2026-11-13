@@ -29,6 +29,6 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 
 /** "Claude, 3 notes saved, 5 files changed" for a session row. */
 export function sessionLine(row: Pick<LogRow, "harness" | "notes" | "files">): string {
-  return [row.harness, plural(row.notes?.length ?? 0, "note saved", "notes saved"), plural(row.files?.length ?? 0, "file changed", "files changed")]
+  return [row.harness, plural(row.notes?.length ?? 0, "note saved", "notes saved"), plural(row.files ?? 0, "file changed", "files changed")]
     .filter(Boolean).join(", ");
 }

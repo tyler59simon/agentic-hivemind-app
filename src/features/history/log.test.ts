@@ -20,7 +20,7 @@ describe("log view", () => {
   });
 
   it("summarizes a session", () => {
-    expect(sessionLine({ harness: "claude", notes: ["a", "b"], files: ["x"] })).toBe("claude, 2 notes saved, 1 file changed");
+    expect(sessionLine({ harness: "claude", notes: ["a", "b"], files: 1 })).toBe("claude, 2 notes saved, 1 file changed");
     expect(sessionLine({})).toBe("0 notes saved, 0 files changed");
   });
 });

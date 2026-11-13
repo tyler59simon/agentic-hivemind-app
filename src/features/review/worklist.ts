@@ -2,7 +2,7 @@
 import { REVIEW_KINDS, type ReviewKind, type ReviewResult, type ReviewRow } from "../../lib/lm";
 
 /** The rows to show: the richer worklist when the store sends one, else the notes that are due. */
-export const worklistRows = (result: ReviewResult | undefined): ReviewRow[] => result?.items ?? result?.notes ?? [];
+export const worklistRows = (result: ReviewResult | undefined): ReviewRow[] => result?.notes ?? [];
 
 /** Kinds that have at least one row, in the store's order. Empty for an old store (no `counts`). */
 export function kindCounts(counts: ReviewResult["counts"]): { kind: ReviewKind; count: number }[] {
