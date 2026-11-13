@@ -9,10 +9,10 @@ import { toast } from "../../ui/toast";
 export const viewsQuery = () => ({ queryKey: ["views"], queryFn: () => views() });
 export const viewModelQuery = (ref: string) => ({ queryKey: ["views", "model", ref], queryFn: () => viewModel(ref) });
 
-/** The registered views, or an empty list while loading and when this Living Memory has no `views` command. */
-export function useViews() {
+/** The registered views (`fresh`: refetch when the page opens, since views.json is not watched), or an empty list while loading and when this Living Memory has no `views` command. */
+export function useViews({ fresh = false } = {}) {
   const enabled = useViewsEnabled();
-  const query = useQuery({ ...viewsQuery(), enabled });
+  const query = useQuery({ ...viewsQuery(), enabled, ...(fresh ? { refetchOnMount: "always" as const } : {}) });
   return { enabled, query, rows: query.data?.views ?? [] };
 }
 

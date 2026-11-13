@@ -691,7 +691,9 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .dash-chips { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .25rem; }
 .dash-body .banner .eyebrow { font-size: .86rem; }
 .dash-body .lib-bar select { margin-bottom: .4rem; }
-.dash-body .lib-search { flex: 0 1 18rem; height: 2.35rem; margin-bottom: .4rem; }
+.dash-body .lib-bar { flex-wrap: nowrap; gap: .4rem .8rem; }
+.dash-body .lib-bar .line-tabs { flex: 0 0 auto; }
+.dash-body .lib-search { flex: 0 1 14rem; min-width: 8rem; margin-left: auto; height: 2.35rem; margin-bottom: .4rem; }
 .dash-body .chips { gap: .25rem .4rem; }
 .chip-group { display: contents; }
 .chip-gap { width: 1px; align-self: stretch; background: var(--border-strong); margin: 0 .2rem; }

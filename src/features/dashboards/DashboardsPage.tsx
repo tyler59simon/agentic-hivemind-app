@@ -24,7 +24,7 @@ function List({ rows, current }: { rows: ViewRow[]; current?: ViewRow }) {
               <span className="lib-row-main">
                 <span className="lib-row-title">{r.title || r.note_title || r.note.slice(0, 8)}</span>
                 <span className="lib-row-meta">
-                  <span>{r.note_title ?? "Note not found"}</span>
+                  {r.note_title !== r.title && <span>{r.note_title ?? "Note not found"}</span>}
                   {counts && <span>{counts.open} open of {counts.total}</span>}
                 </span>
                 <span className="dash-chips">
@@ -44,7 +44,7 @@ function List({ rows, current }: { rows: ViewRow[]; current?: ViewRow }) {
 /** Dashboards: notes kept as live dashboards by Living Memory, drawn natively. A dashboard is added from a note's page. */
 export function DashboardsPage() {
   const enabled = useViewsEnabled();
-  const { query, rows } = useViews();
+  const { query, rows } = useViews({ fresh: true });
   const picked = useApp((s) => (s.route.page === "dashboards" ? s.route.ref : undefined));
   const current = rows.find((r) => viewRef(r) === picked) ?? rows[0];
   if (!enabled) {
