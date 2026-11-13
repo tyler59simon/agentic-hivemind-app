@@ -4,7 +4,7 @@ import { useState, type FormEvent } from "react";
 import { useChangesEnabled, useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import {
-  addAction, capture, changePlan, check, domainOf, STAGES, update,
+  addAction, changePlan, check, LmError, read, setDetail, STAGES, update,
   type Change, type ChangeStage, type Note,
 } from "../../lib/lm";
 import { actionItems, addEvidence, evidenceItems, sections, setEvidence, stepParts, wikilinks } from "../../lib/note";
@@ -25,7 +25,7 @@ import { MiniDiagram } from "../systems/MiniDiagram";
 import { useSystem } from "../systems/useSystem";
 import { noteQuery } from "../viewer/NoteView";
 import {
-  briefState, checkpointBody, checkpointTitle, engineName, nextStage, sessionLine, stageStates, STAGE_LABELS, type ChangeView,
+  briefState, checkpointText, engineName, nextStage, sessionLine, stageStates, STAGE_LABELS, whereItStands, type ChangeView,
 } from "./changes";
 import { useChangeIntent } from "./intent";
 import { moveStage, startSessionFor, useChangeViews } from "./useChanges";
@@ -164,19 +164,23 @@ function Evidence({ change, note, writable }: { change: Change; note: Note; writ
 function CheckpointDialog({ change, note, onClose }: { change: Change; note: Note; onClose: () => void }) {
   const client = useQueryClient();
   const [summary, setSummary] = useState("");
+  const record = (n: Note) => {
+    const steps = actionItems(n.body), evidence = evidenceItems(n.body);
+    return setDetail(change.brief, checkpointText({
+      summary, stage: change.stage, branch: change.branch,
+      steps: { done: steps.filter((s) => s.done).length, total: steps.length },
+      evidence: { done: evidence.filter((s) => s.done).length, total: evidence.length },
+    }), n.revision);
+  };
   const save = useMutation({
-    mutationFn: () => {
-      const steps = actionItems(note.body), evidence = evidenceItems(note.body);
-      return capture(domainOf(change.brief), {
-        type: "status", title: checkpointTitle(change.display),
-        body: checkpointBody({
-          summary: summary.trim(), briefTitle: note.title, stage: change.stage, branch: change.branch,
-          steps: { done: steps.filter((s) => s.done).length, total: steps.length },
-          evidence: { done: evidence.filter((s) => s.done).length, total: evidence.length },
-        }),
-        tags: ["subject/project", "concern/workflow", `project/${change.project}`, ...(change.system ? [`system/${change.system}`] : [])],
-        allow_similar: true,
-      });
+    // The brief may have changed since it was loaded: read it again and retry once.
+    mutationFn: async () => {
+      try {
+        return await record(note);
+      } catch (e) {
+        if (e instanceof LmError && e.stale) return record(await read(change.brief));
+        throw e;
+      }
     },
     onSuccess: (r) => { recordOperation(r.operation_id); refreshStore(client); toast("Checkpoint recorded"); onClose(); },
   });
@@ -184,12 +188,10 @@ function CheckpointDialog({ change, note, onClose }: { change: Change; note: Not
   return (
     <Modal title="Record checkpoint" onClose={onClose} locked={save.isPending}>
       <form className="settings" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
-        <p className="muted">Saves a status note linked to {change.display}, so the next session starts from where this stands.</p>
+        <p className="muted">Saves where {change.display} stands in its brief, so the next session starts from here. It replaces the earlier checkpoint.</p>
         <label className="field"><span>Where it stands</span>
           <textarea rows={4} autoFocus value={summary} onChange={(e) => setSummary(e.target.value)} /></label>
-        {problem && <p className="error">{problem.kind === "unknown-tags"
-          ? `This store's taxonomy lacks a tag the checkpoint needs (${problem.tags.join(", ")}). Add it under Memory, Tags, then record the checkpoint again.`
-          : problem.message}</p>}
+        {problem && <p className="error">{problem.message}</p>}
         <div className="actions">
           <button type="button" onClick={onClose} disabled={save.isPending}>Cancel</button>
           <button className="primary" disabled={!summary.trim() || save.isPending}>Record checkpoint</button>
@@ -199,13 +201,16 @@ function CheckpointDialog({ change, note, onClose }: { change: Change; note: Not
   );
 }
 
-function Checkpoint({ view, note }: { view: ChangeView; note: Note }) {
+function Checkpoint({ view, note, writable }: { view: ChangeView; note: Note; writable: boolean }) {
   const [open, setOpen] = useState(false);
+  const stands = whereItStands(note.body);
+  // Changes from before checkpoints lived in the brief keep their status notes.
   const last = view.checkpoints[0];
   return (
     <div className="checkpoint-line">
-      <button className="text underline" onClick={() => setOpen(true)}><Bookmark size="1.2em" aria-hidden />Record checkpoint</button>
-      {last && <><span className="muted small">Last checkpoint: </span><button className="link" onClick={() => openNote(last.ref, last.title)}>{last.title}</button></>}
+      <button className="text underline" disabled={!writable} title={writable ? undefined : "The change is closed or its brief is not available"} onClick={() => setOpen(true)}><Bookmark size="1.2em" aria-hidden />Record checkpoint</button>
+      {stands ? <><span className="muted small">Where it stands: </span><span className="small">{stands}</span></>
+        : last && <><span className="muted small">Last checkpoint: </span><button className="link" onClick={() => openNote(last.ref, last.title)}>{last.title}</button></>}
       {open && <CheckpointDialog change={view.change} note={note} onClose={() => setOpen(false)} />}
     </div>
   );
@@ -338,7 +343,7 @@ export function ChangeDetail({ id }: { id: number }) {
             <Section title="Acceptance evidence" loading={note.isLoading} error={note.error}>
               {note.data && <Evidence change={change} note={note.data} writable={writable} />}
             </Section>
-            {writable && note.data && <Checkpoint view={view} note={note.data} />}
+            {note.data && <Checkpoint view={view} note={note.data} writable={writable} />}
           </>
         )}
       </Split>

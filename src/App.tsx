@@ -69,6 +69,7 @@ function useLiveRefresh(enabled: boolean) {
         client.invalidateQueries({ queryKey: ["taxonomy"] });
         client.invalidateQueries({ queryKey: ["changes"] });
         client.invalidateQueries({ queryKey: ["learning"] }); // learning.json: the collection switches
+        client.invalidateQueries({ queryKey: ["log"] });
       }),
       listen("agent-sessions-changed", () => client.invalidateQueries({ queryKey: ["agent", "sessions"] })),
       listen<{ ref: string }>("open-note", (e) => useWorkspace.getState().openNote(e.payload.ref)),

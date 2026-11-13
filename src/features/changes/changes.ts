@@ -1,7 +1,6 @@
-// Pure helpers for changes: the view model, the status chip, the Start screen's gate and the checkpoint note.
+// Pure helpers for changes: the view model, the status chip, the Start screen's gate and the checkpoint line.
 import type { SessionInfo } from "../../lib/agent";
 import { STAGES, type Change, type ChangeStage, type LinkGraph, type LinkNode, type NoteRow, type System } from "../../lib/lm";
-import { HEADINGS } from "../../lib/note";
 import { isEnded, waitingForReview } from "../agents/session";
 import type { NoteLinks } from "../links/useLinks";
 
@@ -193,18 +192,24 @@ export function contextRefs(view: ChangeView): string[] {
   return [...new Set(refs)];
 }
 
-export function checkpointTitle(display: string, now = new Date()): string {
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${display} checkpoint ${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())} ${p(now.getHours())}:${p(now.getMinutes())}`;
+/** The brief detail label a checkpoint is recorded under; setting it again replaces the earlier line. */
+export const CHECKPOINT_LABEL = "Where it stands";
+
+/** The detail line for `update --set-detail`: "**Where it stands:** 2026-11-10 14:32, Implement, feature/x, steps 2/5, evidence 0/2: Halfway." */
+export function checkpointText(p: { summary: string; stage: ChangeStage; branch: string | null;
+  steps: { done: number; total: number }; evidence: { done: number; total: number } }, now = new Date()): string {
+  const n = (x: number) => String(x).padStart(2, "0");
+  const when = `${now.getFullYear()}-${n(now.getMonth() + 1)}-${n(now.getDate())} ${n(now.getHours())}:${n(now.getMinutes())}`;
+  const facts = [when, STAGE_LABELS[p.stage],
+    ...(p.branch !== null ? [p.branch] : []),
+    ...(p.steps.total > 0 ? [`steps ${p.steps.done}/${p.steps.total}`] : []),
+    ...(p.evidence.total > 0 ? [`evidence ${p.evidence.done}/${p.evidence.total}`] : [])];
+  // A detail is one bullet, so the summary is folded onto one line.
+  return `**${CHECKPOINT_LABEL}:** ${facts.join(", ")}: ${p.summary.replace(/\s+/g, " ").trim()}`;
 }
 
-export function checkpointBody(p: { summary: string; briefTitle: string; stage: ChangeStage; branch: string | null;
-  steps: { done: number; total: number }; evidence: { done: number; total: number } }): string {
-  const details = [
-    `- **Stage:** ${STAGE_LABELS[p.stage]}`,
-    ...(p.steps.total > 0 ? [`- **Steps:** ${p.steps.done} of ${p.steps.total} done`] : []),
-    ...(p.evidence.total > 0 ? [`- **Evidence:** ${p.evidence.done} of ${p.evidence.total} verified`] : []),
-    ...(p.branch !== null ? [`- **Branch:** ${p.branch}`] : []),
-  ];
-  return `${p.summary}\n\n## ${HEADINGS.details}\n${details.join("\n")}\n\n## ${HEADINGS.links}\n- [[${p.briefTitle}]]`;
+/** The recorded checkpoint text of a brief (everything after the label), or null when it has none. */
+export function whereItStands(body: string): string | null {
+  const m = /^\s*[-*]\s+\*\*Where it stands:\*\*\s*(.+?)\s*$/m.exec(body);
+  return m ? m[1] : null;
 }

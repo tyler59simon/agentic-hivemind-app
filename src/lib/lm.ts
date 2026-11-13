@@ -169,6 +169,11 @@ export const check = (ref: string, index: number, done: boolean) =>
 export const confirm = (ref: string) =>
   run<WriteResult & { confirmed?: string[]; review_by?: string }>(["confirm", ref, "--domain", domainOf(ref)]);
 
+/** Replace (or add) the detail bullet with this label. LM ignores stdin when a section flag is given,
+ *  so the expected revision goes in argv and no payload is sent. */
+export const setDetail = (ref: string, text: string, expectedRevision?: string) =>
+  run<WriteResult>(["update", ref, "--domain", domainOf(ref), "--set-detail", text, ...(expectedRevision ? ["--expected-revision", expectedRevision] : [])]);
+
 // ---- Plans: make, inspect (as a diff), apply with the digest. ----
 
 export interface Plan { ok: true; plan_id: string; digest: string; kind: string; summary: Record<string, unknown> }
@@ -226,12 +231,13 @@ export interface ProjectUpdate {
 export const projectPlan = (action: "create" | "update" | "archive", payload: ProjectCreate | ProjectUpdate | { slug: string }) =>
   run<Plan>(["project-plan", action], JSON.stringify(payload));
 
-interface ScopeOptions { domain?: string; allDomains?: boolean; tags?: string[]; limit?: number }
+interface ScopeOptions { domain?: string; allDomains?: boolean; tags?: string[]; limit?: number; kind?: string[] }
 function scopeArgs(name: string, o: ScopeOptions): string[] {
   const argv = [name];
   if (o.allDomains) argv.push("--all-domains");
   else if (o.domain) argv.push("--domain", o.domain);
   for (const t of o.tags ?? []) argv.push("--tag", t);
+  for (const k of o.kind ?? []) argv.push("--kind", k);
   if (o.limit) argv.push("--limit", String(o.limit));
   return view(argv);
 }
@@ -244,8 +250,16 @@ export const openWork = (o: ScopeOptions) => run<OpenWork>(openArgs(o));
 export interface ReviewRow {
   ref: string; title: string; type: NoteType; updated: string;
   review_by?: string; confirmed?: string; revision?: string; domain?: string;
+  /** From the richer worklist only; older stores send none of these. */
+  kinds?: ReviewKind[]; reason?: string; action?: ReviewAction; pair?: { ref: string; title: string; score: number };
 }
-export interface ReviewResult { ok: boolean; domain: string | null; due: number; notes: ReviewRow[]; hint?: string }
+export const REVIEW_KINDS = ["stale", "due", "interim", "duplicate", "warned", "noisy"] as const;
+export type ReviewKind = (typeof REVIEW_KINDS)[number];
+export type ReviewAction = "confirm" | "update" | "supersede" | "resolve" | "merge-plan" | "archive-plan";
+export interface ReviewResult {
+  ok: boolean; domain: string | null; due: number; notes: ReviewRow[]; hint?: string;
+  counts?: Record<ReviewKind, number>;
+}
 export const reviewArgs = (o: ScopeOptions) => scopeArgs("review", o);
 export const review = (o: ScopeOptions) => run<ReviewResult>(reviewArgs(o));
 
@@ -268,6 +282,31 @@ export function timelineArgs(o: TimelineOptions): string[] {
   return view(argv);
 }
 export const timeline = (o: TimelineOptions) => run<TimelineResult>(timelineArgs(o));
+
+/** One line of the `log` command: a journaled note event, a change event or an agent session. */
+export interface LogRow {
+  time: string; event: string; ref: string; title: string; type: string; domain: string; projects: string[]; op?: string;
+  detail?: string;
+  /** Session rows only. */
+  harness?: string; notes?: string[]; /** How many files the session changed (a count, not paths). */ files?: number;
+}
+export interface LogResult { ok: boolean; count: number; rows: LogRow[] }
+export interface LogOptions {
+  domain?: string; project?: string; since?: string; until?: string; note?: string; type?: string; event?: string; limit?: number;
+}
+export function logArgs(o: LogOptions): string[] {
+  const argv = ["log"];
+  if (o.domain) argv.push("--domain", o.domain);
+  if (o.project) argv.push("--project", o.project);
+  if (o.since) argv.push("--since", o.since);
+  if (o.until) argv.push("--until", o.until);
+  if (o.note) argv.push("--note", o.note);
+  if (o.type) argv.push("--type", o.type);
+  if (o.event) argv.push("--event", o.event);
+  if (o.limit) argv.push("--limit", String(o.limit));
+  return view(argv);
+}
+export const log = (o: LogOptions = {}) => run<LogResult>(logArgs(o));
 
 // ---- Systems (an LM that has the `systems` command). ----
 
