@@ -117,7 +117,7 @@ function ChangeWizard({ form, onClose }: { form: ChangeForm; onClose: () => void
           <label className="field"><span>Outcome</span>
             <textarea name="outcome" rows={3} value={fields.outcome} placeholder="What will be true when this is done? One or two sentences."
               onChange={(e) => set({ outcome: e.target.value })} />
-            <span className="muted small">Becomes the Executive Summary of the brief.</span></label>
+            <span className="muted small">Becomes the summary of the brief.</span></label>
         )}
         {form.mode !== "create" && (
           <label className="field"><span>Stage</span>

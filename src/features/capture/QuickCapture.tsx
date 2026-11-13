@@ -12,8 +12,8 @@ import { mergeTags } from "../projects/wizard";
 
 /** The note body from the quick form: a summary, plus details as bullets. */
 export function captureBody(summary: string, details: string): string {
-  const bullets = details.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => (/^[-*+]\s/.test(l) ? l : `* ${l}`));
-  return [`## ${HEADINGS.summary}\n${summary.trim()}`, ...(bullets.length ? [`---\n\n## ${HEADINGS.details}\n${bullets.join("\n")}`] : [])].join("\n\n");
+  const bullets = details.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => (/^[-*+]\s/.test(l) ? l : `- ${l}`));
+  return [summary.trim(), ...(bullets.length ? [`## ${HEADINGS.details}\n${bullets.join("\n")}`] : [])].join("\n\n");
 }
 
 const hide = () => getCurrentWindow().hide();
@@ -97,7 +97,7 @@ export function QuickCapture() {
         </select>
       )}
       <input ref={titleRef} autoFocus className="title-input small-title" value={title} placeholder="Title" onChange={(e) => setTitle(e.target.value)} />
-      <textarea rows={3} value={summary} placeholder="Executive Summary: one or two sentences" onChange={(e) => setSummary(e.target.value)} />
+      <textarea rows={3} value={summary} placeholder="Summary: one or two sentences" onChange={(e) => setSummary(e.target.value)} />
       <textarea rows={3} value={details} placeholder="Key details (optional, one per line)" onChange={(e) => setDetails(e.target.value)} />
       <TagPicker tags={tags} taxonomy={tax.data?.tags ?? []} onChange={(t) => { setTagsTouched(true); setTags(t); }} />
       {problem?.kind === "similar" ? (

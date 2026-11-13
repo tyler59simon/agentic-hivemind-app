@@ -45,7 +45,7 @@ describe("defaultCharterDomain", () => {
 describe("charterBody", () => {
   it("round-trips the summary and details", () => {
     const body = charterBody({ purpose: " Ship it. ", objectives: "one\ntwo", guidance: "Be careful" });
-    expect(sections(body)).toEqual({ summary: "Ship it.", details: "* **Objectives:** one; two\n* **Agent guidance:** Be careful" });
+    expect(sections(body)).toEqual({ summary: "Ship it.", details: "- **Objectives:** one; two\n- **Agent guidance:** Be careful" });
   });
   it("leaves details out when empty", () => {
     expect(sections(charterBody({ purpose: "Only." }))).toEqual({ summary: "Only." });

@@ -83,10 +83,10 @@ def note(domain, kind, title, summary, concern, details=(), links=(), actions=()
 
 def body(summary, details=(), links=()):
     """A charter or passport body in the standard layout (project-plan and system-plan take a body)."""
-    parts = ["## 📌 Executive Summary\n" + summary]
-    if details: parts.append("## 📝 Key Details\n" + "\n".join("* " + d for d in details))
-    if links: parts.append("## 🗂️ Resource Links\n" + "\n".join("* " + l for l in links))
-    return "\n\n---\n\n".join(parts)
+    parts = [summary]
+    if details: parts.append("## Details\n" + "\n".join("- " + d for d in details))
+    if links: parts.append("## Links\n" + "\n".join("- " + l for l in links))
+    return "\n\n".join(parts)
 
 
 def add_section(ref, text):

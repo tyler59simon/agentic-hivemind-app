@@ -53,7 +53,7 @@ describe("sessionBriefing", () => {
   const note = (body: string) => ({ ref: "paystream:abc12345", title: "Use event ID as the idempotency key", type: "decision", body });
   const input = {
     project, domain: "paystream", repo: "C:/code/ingestion", branch: "main", policy: "ask" as const, pack,
-    notes: [note("## 📌 Executive Summary\nEvent ID is the key.\n\n---\n## 📝 Key Details\n* Replays are safe\n")],
+    notes: [note("Event ID is the key.\n\n## Details\n- Replays are safe\n")],
     architecture: { system: "Ingestion", generated: "2026-11-06", behind: 2, element: null, containers: ["API", "Worker"] },
     now: new Date("2026-11-09T12:00:00Z"),
   };
@@ -74,7 +74,7 @@ describe("sessionBriefing", () => {
     expect(bare).not.toContain("## Included memory");
     expect(bare).not.toContain("## Architecture");
 
-    const long = sessionBriefing({ ...input, notes: [note("## 📌 Executive Summary\n" + "x".repeat(5000))] });
+    const long = sessionBriefing({ ...input, notes: [note("x".repeat(5000))] });
     expect(long).toContain("x".repeat(1200));
     expect(long).not.toContain("x".repeat(1201));
   });

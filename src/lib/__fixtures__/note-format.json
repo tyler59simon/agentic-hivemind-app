@@ -3,22 +3,58 @@
   "cases": [
     {
       "name": "plain",
-      "body": "## 📌 Executive Summary\nThe cache is rebuildable.",
+      "raw": "The cache is rebuildable.",
+      "body": "The cache is rebuildable.",
       "sections": {
         "summary": "The cache is rebuildable."
       },
+      "parts": [
+        [
+          "summary",
+          null,
+          "The cache is rebuildable."
+        ]
+      ],
       "actions": []
     },
     {
       "name": "full",
-      "body": "## 📌 Executive Summary\nShort summary.\n\n---\n\n## 📝 Key Details\n* **Why:** speed\n\n## 🗂️ Resource Links\n* [[Other note]]\n\n## 🟩 Action Items\n- [ ] first\n- [x] second\n  - [ ] nested\n* [X] star bullet\n\n> ℹ️ **Important Note:**\n> careful",
+      "raw": "## Executive Summary\nShort summary.\n\n## Key Details\n* **Why:** speed\n\n## Resource Links\n* [[Other note]]\n\n## Action Items\n- [ ] first\n- [x] second\n  - [ ] nested\n* [X] star bullet\n\n> ℹ️ **Important Note:**\n> careful",
+      "body": "Short summary.\n\n> **Important:** careful\n\n## Details\n* **Why:** speed\n\n## Links\n* [[Other note]]\n\n## Action items\n- [ ] first\n- [x] second\n  - [ ] nested\n* [X] star bullet",
       "sections": {
         "summary": "Short summary.",
+        "important": "careful",
         "details": "* **Why:** speed",
         "links": "* [[Other note]]",
-        "actions": "- [ ] first\n- [x] second\n  - [ ] nested\n* [X] star bullet",
-        "important": "careful"
+        "actions": "- [ ] first\n- [x] second\n  - [ ] nested\n* [X] star bullet"
       },
+      "parts": [
+        [
+          "summary",
+          null,
+          "Short summary."
+        ],
+        [
+          "important",
+          null,
+          "careful"
+        ],
+        [
+          "details",
+          "Details",
+          "* **Why:** speed"
+        ],
+        [
+          "links",
+          "Links",
+          "* [[Other note]]"
+        ],
+        [
+          "actions",
+          "Action items",
+          "- [ ] first\n- [x] second\n  - [ ] nested\n* [X] star bullet"
+        ]
+      ],
       "actions": [
         [
           false,
@@ -40,26 +76,71 @@
     },
     {
       "name": "callout_ends_actions",
-      "body": "## 📌 Executive Summary\nS\n\n---\n\n## 🟩 Action Items\n- [ ] one\n\n> ℹ️ **Important Note:**\n> two\n\n- [ ] after callout",
+      "raw": "## 📌 Executive Summary\nS\n\n## 🟩 Action Items\n- [ ] one\n> **Important Note:** two\n- [ ] after callout",
+      "body": "S\n\n> **Important:** two\n\n## Action items\n- [ ] one\n\n- [ ] after callout",
       "sections": {
         "summary": "S",
-        "actions": "- [ ] one",
-        "important": "two"
+        "important": "two",
+        "actions": "- [ ] one\n\n- [ ] after callout"
       },
+      "parts": [
+        [
+          "summary",
+          null,
+          "S"
+        ],
+        [
+          "important",
+          null,
+          "two"
+        ],
+        [
+          "actions",
+          "Action items",
+          "- [ ] one\n\n- [ ] after callout"
+        ]
+      ],
       "actions": [
         [
           false,
           "one"
+        ],
+        [
+          false,
+          "after callout"
         ]
       ]
     },
     {
       "name": "custom_sections",
-      "body": "## 📌 Executive Summary\nLead text.\n\n---\n\n## Notes\n- [ ] not an action item\n\n## 🟩 Action Items\n- [ ] real one\n\n## Later\n- [ ] not either",
+      "raw": "Lead text.\n\n## Notes\n- [ ] not an action item\n\n## action items\n- [ ] real one\n\n## Later\n- [ ] not either",
+      "body": "Lead text.\n\n## Notes\n- [ ] not an action item\n\n## Action items\n- [ ] real one\n\n## Later\n- [ ] not either",
       "sections": {
         "summary": "Lead text.",
         "actions": "- [ ] real one"
       },
+      "parts": [
+        [
+          "summary",
+          null,
+          "Lead text."
+        ],
+        [
+          null,
+          "Notes",
+          "- [ ] not an action item"
+        ],
+        [
+          "actions",
+          "Action items",
+          "- [ ] real one"
+        ],
+        [
+          null,
+          "Later",
+          "- [ ] not either"
+        ]
+      ],
       "actions": [
         [
           false,
@@ -69,11 +150,24 @@
     },
     {
       "name": "fence_heading",
-      "body": "## 📌 Executive Summary\nS\n\n```md\n## Action Items\n- [ ] in a fence\n```\n\n---\n\n## 🟩 Action Items\n- [ ] real",
+      "raw": "## 📌 Executive Summary\nS\n\n```md\n## Action Items\n- [ ] in a fence\n```\n\n## 🟩 Action Items\n- [ ] real",
+      "body": "S\n\n```md\n## Action Items\n- [ ] in a fence\n```\n\n## Action items\n- [ ] real",
       "sections": {
         "summary": "S\n\n```md\n## Action Items\n- [ ] in a fence\n```",
         "actions": "- [ ] real"
       },
+      "parts": [
+        [
+          "summary",
+          null,
+          "S\n\n```md\n## Action Items\n- [ ] in a fence\n```"
+        ],
+        [
+          "actions",
+          "Action items",
+          "- [ ] real"
+        ]
+      ],
       "actions": [
         [
           false,
@@ -87,34 +181,300 @@
     },
     {
       "name": "empty_sections",
-      "body": "## 📌 Executive Summary\nS",
+      "raw": "## 📌 Executive Summary\nS\n\n## 📝 Key Details\n* \n\n## 🗂️ Resource Links\n\n## 🟩 Action Items\n- [ ] ",
+      "body": "S",
       "sections": {
         "summary": "S"
       },
+      "parts": [
+        [
+          "summary",
+          null,
+          "S"
+        ]
+      ],
       "actions": []
     },
     {
       "name": "crlf_and_rules",
-      "body": "## 📌 Executive Summary\nSummary line.\n\n---\n\n## 📝 Key Details\n* a\n* b",
+      "raw": "## 📌 Executive Summary\r\n\r\nSummary line.\r\n\r\n---\r\n\r\n## 📝 Key Details\r\n* a\r\n* b",
+      "body": "Summary line.\n\n## Details\n* a\n* b",
       "sections": {
         "summary": "Summary line.",
         "details": "* a\n* b"
       },
+      "parts": [
+        [
+          "summary",
+          null,
+          "Summary line."
+        ],
+        [
+          "details",
+          "Details",
+          "* a\n* b"
+        ]
+      ],
       "actions": []
     },
     {
       "name": "quote_not_callout",
-      "body": "## 📌 Executive Summary\nS\n\n> just a quote\n\n---\n\n## 🟩 Action Items\n- [ ] x",
+      "raw": "## 📌 Executive Summary\nS\n\n> just a quote\n\n## 🟩 Action Items\n- [ ] x",
+      "body": "S\n\n> just a quote\n\n## Action items\n- [ ] x",
       "sections": {
         "summary": "S\n\n> just a quote",
         "actions": "- [ ] x"
       },
+      "parts": [
+        [
+          "summary",
+          null,
+          "S\n\n> just a quote"
+        ],
+        [
+          "actions",
+          "Action items",
+          "- [ ] x"
+        ]
+      ],
       "actions": [
         [
           false,
           "x"
         ]
       ]
+    },
+    {
+      "name": "legacy_layout",
+      "raw": "# 🎯 Cache\n\n## 📌 Executive Summary\nThe cache is rebuildable.\n\n---\n\n## 📝 Key Details\n* **Why:** speed\n\n## 🗂️ Resource Links\n* [[Other note]]\n\n## 🟩 Action Items\n- [ ] rebuild\n\n> ℹ️ **Important Note:**\n> never edit by hand",
+      "body": "The cache is rebuildable.\n\n> **Important:** never edit by hand\n\n## Details\n* **Why:** speed\n\n## Links\n* [[Other note]]\n\n## Action items\n- [ ] rebuild",
+      "sections": {
+        "summary": "The cache is rebuildable.",
+        "important": "never edit by hand",
+        "details": "* **Why:** speed",
+        "links": "* [[Other note]]",
+        "actions": "- [ ] rebuild"
+      },
+      "parts": [
+        [
+          "summary",
+          null,
+          "The cache is rebuildable."
+        ],
+        [
+          "important",
+          null,
+          "never edit by hand"
+        ],
+        [
+          "details",
+          "Details",
+          "* **Why:** speed"
+        ],
+        [
+          "links",
+          "Links",
+          "* [[Other note]]"
+        ],
+        [
+          "actions",
+          "Action items",
+          "- [ ] rebuild"
+        ]
+      ],
+      "actions": [
+        [
+          false,
+          "rebuild"
+        ]
+      ]
+    },
+    {
+      "name": "new_layout",
+      "raw": "The cache is rebuildable.\n\n> **Important:** never edit by hand\n> it is rebuilt on start\n\n## Details\n- **Why:** speed\n\n## Links\n- [[Other note]]\n\n## Action items\n- [ ] rebuild",
+      "body": "The cache is rebuildable.\n\n> **Important:** never edit by hand\n> it is rebuilt on start\n\n## Details\n- **Why:** speed\n\n## Links\n- [[Other note]]\n\n## Action items\n- [ ] rebuild",
+      "sections": {
+        "summary": "The cache is rebuildable.",
+        "important": "never edit by hand\nit is rebuilt on start",
+        "details": "- **Why:** speed",
+        "links": "- [[Other note]]",
+        "actions": "- [ ] rebuild"
+      },
+      "parts": [
+        [
+          "summary",
+          null,
+          "The cache is rebuildable."
+        ],
+        [
+          "important",
+          null,
+          "never edit by hand\nit is rebuilt on start"
+        ],
+        [
+          "details",
+          "Details",
+          "- **Why:** speed"
+        ],
+        [
+          "links",
+          "Links",
+          "- [[Other note]]"
+        ],
+        [
+          "actions",
+          "Action items",
+          "- [ ] rebuild"
+        ]
+      ],
+      "actions": [
+        [
+          false,
+          "rebuild"
+        ]
+      ]
+    },
+    {
+      "name": "callout_moves_up",
+      "raw": "Summary first.\n\n## Details\n- a\n\n> **Important:** read this\n\n## Links\n- [[x]]",
+      "body": "Summary first.\n\n> **Important:** read this\n\n## Details\n- a\n\n## Links\n- [[x]]",
+      "sections": {
+        "summary": "Summary first.",
+        "important": "read this",
+        "details": "- a",
+        "links": "- [[x]]"
+      },
+      "parts": [
+        [
+          "summary",
+          null,
+          "Summary first."
+        ],
+        [
+          "important",
+          null,
+          "read this"
+        ],
+        [
+          "details",
+          "Details",
+          "- a"
+        ],
+        [
+          "links",
+          "Links",
+          "- [[x]]"
+        ]
+      ],
+      "actions": []
+    },
+    {
+      "name": "typed_sections",
+      "raw": "We use event IDs as the key.\n\n## Why\nReplays are safe.\n\n## Alternatives considered\n- Hash of the payload\n\n## Details\n- d",
+      "body": "We use event IDs as the key.\n\n## Why\nReplays are safe.\n\n## Alternatives considered\n- Hash of the payload\n\n## Details\n- d",
+      "sections": {
+        "summary": "We use event IDs as the key.",
+        "details": "- d"
+      },
+      "parts": [
+        [
+          "summary",
+          null,
+          "We use event IDs as the key."
+        ],
+        [
+          null,
+          "Why",
+          "Replays are safe."
+        ],
+        [
+          null,
+          "Alternatives considered",
+          "- Hash of the payload"
+        ],
+        [
+          "details",
+          "Details",
+          "- d"
+        ]
+      ],
+      "actions": []
+    },
+    {
+      "name": "callout_before_summary",
+      "raw": "> **Important:** read this\n\nSummary after the callout.\n\n## Details\n- d",
+      "body": "Summary after the callout.\n\n> **Important:** read this\n\n## Details\n- d",
+      "sections": {
+        "summary": "Summary after the callout.",
+        "important": "read this",
+        "details": "- d"
+      },
+      "parts": [
+        [
+          "summary",
+          null,
+          "Summary after the callout."
+        ],
+        [
+          "important",
+          null,
+          "read this"
+        ],
+        [
+          "details",
+          "Details",
+          "- d"
+        ]
+      ],
+      "actions": []
+    },
+    {
+      "name": "starts_with_why",
+      "raw": "## Why\nReplays are safe.\n\n## Details\n- d",
+      "body": "## Why\nReplays are safe.\n\n## Details\n- d",
+      "sections": {
+        "details": "- d"
+      },
+      "parts": [
+        [
+          "summary",
+          null,
+          ""
+        ],
+        [
+          null,
+          "Why",
+          "Replays are safe."
+        ],
+        [
+          "details",
+          "Details",
+          "- d"
+        ]
+      ],
+      "actions": []
+    },
+    {
+      "name": "quote_starting_important",
+      "raw": "S\n\n> Important things happen here\n\n## Details\n- d",
+      "body": "S\n\n> Important things happen here\n\n## Details\n- d",
+      "sections": {
+        "summary": "S\n\n> Important things happen here",
+        "details": "- d"
+      },
+      "parts": [
+        [
+          "summary",
+          null,
+          "S\n\n> Important things happen here"
+        ],
+        [
+          "details",
+          "Details",
+          "- d"
+        ]
+      ],
+      "actions": []
     }
   ]
 }

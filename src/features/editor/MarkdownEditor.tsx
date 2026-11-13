@@ -89,7 +89,7 @@ export function MarkdownEditor(props: EditorProps) {
             ...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab,
           ]),
           preview.current.of(props.live ? livePreview : []),
-          placeholder("Write the Executive Summary first…"),
+          placeholder("Write the summary first…"),
           theme,
           EditorView.updateListener.of((u) => { if (u.docChanged) latest.current.onChange(u.state.doc.toString()); }),
           EditorView.domEventHandlers({

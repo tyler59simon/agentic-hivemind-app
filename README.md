@@ -21,7 +21,7 @@ It runs on Tauri 2 with React and TypeScript, on Windows, macOS and Linux. It is
   - unsaved edits kept as drafts that survive a crash
   - a three-way merge when an agent saved the same note meanwhile
 - **Lifecycle:** archive, resolve, reopen, supersede, merge and delete, each as a reviewed Living Memory plan whose diff you see before it applies.
-- **Action Items:** tick them in reading view.
+- **Action items:** tick them in reading view.
 - **Renames:** a renamed note offers to rewrite `[[Old Title]]` links elsewhere.
 - **Graph** (Ctrl+G, under Memory): every note and link, coloured by type, with filters.
 - **Activity** (Ctrl+Shift+A, under Memory): who changed what, with diffs and Undo. Who acted is inferred, because Living Memory's journal does not record it.

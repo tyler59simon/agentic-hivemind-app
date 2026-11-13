@@ -41,7 +41,7 @@ function Detail({ row, chip }: { row: NoteRow; chip: { label: string; tone: stri
         <div className="page-meta"><span className={`status-chip ${chip.tone}`}>{chip.label}</span><span className="muted">Updated {dayMonth(row.updated)}</span></div>
       </Section>
       <Section title="Implementation plan" loading={note.isLoading} error={note.error}
-        empty={note.data && !steps.length ? "This plan has no action items yet. Add them under Action Items in the note." : undefined}>
+        empty={note.data && !steps.length ? "This plan has no action items yet. Add them under Action items in the note." : undefined}>
         {!!p.total && (
           <span className="progress-line">
             <span className="progress" role="progressbar" aria-valuenow={p.pct} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${p.pct}%` }} /></span>

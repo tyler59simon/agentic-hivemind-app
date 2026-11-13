@@ -38,7 +38,7 @@ export function PropertiesForm({ fields, note, taxonomy, onChange }: {
     <dl className="properties editable">
       <div><dt>Type</dt><dd>
         <select value={fields.type} onChange={(e) => onChange({ type: e.target.value as NoteType })}>
-          {NOTE_TYPES.map((t) => <option key={t} value={t} disabled={typeBlocked(t)}>{t}{typeBlocked(t) ? " (has Action Items)" : ""}</option>)}
+          {NOTE_TYPES.map((t) => <option key={t} value={t} disabled={typeBlocked(t)}>{t}{typeBlocked(t) ? " (has Action items)" : ""}</option>)}
         </select>
       </dd></div>
       {note && <div><dt>Status</dt><dd><span className={`badge status-${note.status}`}>{note.status}</span> <span className="muted small">change it from the ⋯ menu</span></dd></div>}

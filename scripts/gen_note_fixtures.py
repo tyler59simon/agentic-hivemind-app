@@ -21,12 +21,22 @@ CASES = {
     'empty_sections': '## 📌 Executive Summary\nS\n\n## 📝 Key Details\n* \n\n## 🗂️ Resource Links\n\n## 🟩 Action Items\n- [ ] ',
     'crlf_and_rules': '## 📌 Executive Summary\r\n\r\nSummary line.\r\n\r\n---\r\n\r\n## 📝 Key Details\r\n* a\r\n* b',
     'quote_not_callout': '## 📌 Executive Summary\nS\n\n> just a quote\n\n## 🟩 Action Items\n- [ ] x',
+    'legacy_layout': '# 🎯 Cache\n\n## 📌 Executive Summary\nThe cache is rebuildable.\n\n---\n\n## 📝 Key Details\n* **Why:** speed\n\n'
+                     '## 🗂️ Resource Links\n* [[Other note]]\n\n## 🟩 Action Items\n- [ ] rebuild\n\n> ℹ️ **Important Note:**\n> never edit by hand',
+    'new_layout': 'The cache is rebuildable.\n\n> **Important:** never edit by hand\n> it is rebuilt on start\n\n## Details\n- **Why:** speed\n\n'
+                  '## Links\n- [[Other note]]\n\n## Action items\n- [ ] rebuild',
+    'callout_moves_up': 'Summary first.\n\n## Details\n- a\n\n> **Important:** read this\n\n## Links\n- [[x]]',
+    'typed_sections': 'We use event IDs as the key.\n\n## Why\nReplays are safe.\n\n## Alternatives considered\n- Hash of the payload\n\n## Details\n- d',
+    'callout_before_summary': '> **Important:** read this\n\nSummary after the callout.\n\n## Details\n- d',
+    'starts_with_why': '## Why\nReplays are safe.\n\n## Details\n- d',
+    'quote_starting_important': 'S\n\n> Important things happen here\n\n## Details\n- d',
 }
 
 out = []
 for name, raw in CASES.items():
     body = nf.format_body(raw)
-    out.append({'name': name, 'body': body, 'sections': nf.sections(body),
+    out.append({'name': name, 'raw': raw, 'body': body, 'sections': nf.sections(body),
+                'parts': [[key, heading, text] for key, heading, text in nf.parts(body)],
                 'actions': [[done, text] for done, text in nf.action_items(body)]})
 target = Path(__file__).resolve().parents[1] / 'src/lib/__fixtures__/note-format.json'
 target.parent.mkdir(parents=True, exist_ok=True)

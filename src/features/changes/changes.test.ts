@@ -217,12 +217,13 @@ describe("change view model", () => {
     expect(checkpointTitle("CHG-014", new Date(2026, 10, 10, 14, 32))).toBe("CHG-014 checkpoint 2026-11-10 14:32");
     const p = { summary: "Halfway.", briefTitle: "CHG-014 Prevent duplicate payment alerts", stage: "implement" as const, branch: "feature/x", steps: { done: 2, total: 5 }, evidence: { done: 0, total: 2 } };
     const body = checkpointBody(p);
-    expect(body.startsWith("## 📌 Executive Summary")).toBe(true);
-    expect(body).toContain("* **Stage:** Implement");
-    expect(body).toContain("* **Steps:** 2 of 5 done");
-    expect(body).toContain("* **Evidence:** 0 of 2 verified");
-    expect(body).toContain("* **Branch:** feature/x");
-    expect(body.endsWith("* [[CHG-014 Prevent duplicate payment alerts]]")).toBe(true);
+    expect(body.startsWith("Halfway.\n\n## Details\n")).toBe(true);
+    expect(body).not.toContain("---");
+    expect(body).toContain("- **Stage:** Implement");
+    expect(body).toContain("- **Steps:** 2 of 5 done");
+    expect(body).toContain("- **Evidence:** 0 of 2 verified");
+    expect(body).toContain("- **Branch:** feature/x");
+    expect(body.endsWith("## Links\n- [[CHG-014 Prevent duplicate payment alerts]]")).toBe(true);
     expect(checkpointBody({ ...p, evidence: { done: 0, total: 0 }, branch: null })).not.toMatch(/Evidence|Branch/);
   });
 

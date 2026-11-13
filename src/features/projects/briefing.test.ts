@@ -6,7 +6,7 @@ const project: Project = {
   slug: "hivemind", name: "Hivemind", status: "active", repos: ["C:/Sandbox/agentic-hivemind"], aliases: [],
   description: "Desktop app over LM.", charter: "sandbox:c1", created: "", updated: "", tag: "project/hivemind", tag_registered: true,
 };
-const charter = { title: "Charter", body: "## 📌 Executive Summary\nBuild the cockpit.\n\n---\n## 📝 Key Details\n* Tauri 2\n" };
+const charter = { title: "Charter", body: "Build the cockpit.\n\n## Details\n- Tauri 2\n" };
 let n = 0;
 const row = (o: Partial<NoteRow>): NoteRow => ({
   ref: `sandbox:id${++n}`, id: `id${n}`, domain: "sandbox", title: `Note ${n}`, type: "knowledge", status: "active",
@@ -48,7 +48,7 @@ describe("buildBriefing", () => {
   });
   it("has content", () => {
     expect(text).toContain("Build the cockpit.");
-    expect(text).toContain("* Tauri 2");
+    expect(text).toContain("- Tauri 2");
     expect(text).toContain("- [ ] Do it (Plan A · p1)");
     expect(text.indexOf("New decision")).toBeLessThan(text.indexOf("Old decision"));
     expect(text).toContain("- **Old decision** (2026-01-01, sandbox:id1) — Chose A.");

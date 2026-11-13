@@ -1,7 +1,7 @@
 // What a save sends. LM's `update` writes even when nothing changed and resets review_by on body saves
 // unless review_by is sent, so the payload carries only fields the user changed.
 import type { Note, NoteType, UpdatePayload } from "../../lib/lm";
-import { ACTION_TYPES, split } from "../../lib/note";
+import { ACTION_TYPES, sections, TEMPLATE_PROMPTS } from "../../lib/note";
 
 export interface Fields {
   title: string; body: string; type: NoteType; tags: string[]; context: string; review_by: string; files: string[];
@@ -32,23 +32,22 @@ export function changedPayload(base: Fields, now: Fields): UpdatePayload {
 export const isEmpty = (p: object) => Object.keys(p).length === 0;
 export const isDirty = (base: Fields, now: Fields) => !isEmpty(changedPayload(base, now));
 
-/** The Executive Summary LM would see after formatting (text before the first heading joins it). */
-export function summaryOf(body: string): string {
-  const parts = split(body);
-  const preamble = parts[0]?.text ?? "";
-  const summary = parts.find((p) => p.key === "summary");
-  if (summary) return `${preamble}\n\n${summary.text}`.trim();
-  if (preamble.trim()) return preamble;
-  return parts[1]?.key === null ? parts[1].text : "";
-}
+/** The summary LM would see after formatting: the text before the first heading or callout (or a legacy
+ *  Executive Summary section). */
+export const summaryOf = (body: string): string => sections(body).summary ?? "";
+
+const PROMPTS = new Set(Object.values(TEMPLATE_PROMPTS));
 
 /** Problems LM would reject, caught before the round trip. LM stays the authority. */
 export function precheck(f: Fields, taxonomy: string[], isNew: boolean): string[] {
   const problems: string[] = [];
   if (!f.title.trim()) problems.push("The note needs a title.");
-  if (!summaryOf(f.body).replace(/[\s*>#-]|\[[ xX]\]/g, "")) problems.push("Write an Executive Summary: start the body with a short summary.");
-  const hasActions = split(f.body).some((p) => p.key === "actions" && /\[[ xX]\]\s*\S/.test(p.text));
-  if (hasActions && !ACTION_TYPES.has(f.type)) problems.push("Action Items are only for plan, bug and risk notes; move them to Key Details or change the type.");
+  const found = sections(f.body);
+  const summary = (found.summary ?? "").trim();
+  if (!summary) problems.push("Write a summary: start the body with one or two sentences.");
+  // LM's Obsidian sync refuses a note whose summary is still the template's prompt; the app's templates use the same prompts.
+  else if (PROMPTS.has(summary)) problems.push("Replace the template's first line with a summary of the note.");
+  if (found.actions && !ACTION_TYPES.has(f.type)) problems.push("Action items are only for plan, bug and risk notes; record lasting facts in the body instead, or change the type.");
   const known = new Set(taxonomy);
   const unknown = f.tags.filter((t) => !known.has(t));
   if (taxonomy.length && unknown.length) problems.push(`Tags not in the taxonomy yet: ${unknown.join(", ")}.`);

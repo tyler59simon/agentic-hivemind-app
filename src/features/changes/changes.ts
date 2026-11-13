@@ -201,10 +201,10 @@ export function checkpointTitle(display: string, now = new Date()): string {
 export function checkpointBody(p: { summary: string; briefTitle: string; stage: ChangeStage; branch: string | null;
   steps: { done: number; total: number }; evidence: { done: number; total: number } }): string {
   const details = [
-    `* **Stage:** ${STAGE_LABELS[p.stage]}`,
-    ...(p.steps.total > 0 ? [`* **Steps:** ${p.steps.done} of ${p.steps.total} done`] : []),
-    ...(p.evidence.total > 0 ? [`* **Evidence:** ${p.evidence.done} of ${p.evidence.total} verified`] : []),
-    ...(p.branch !== null ? [`* **Branch:** ${p.branch}`] : []),
+    `- **Stage:** ${STAGE_LABELS[p.stage]}`,
+    ...(p.steps.total > 0 ? [`- **Steps:** ${p.steps.done} of ${p.steps.total} done`] : []),
+    ...(p.evidence.total > 0 ? [`- **Evidence:** ${p.evidence.done} of ${p.evidence.total} verified`] : []),
+    ...(p.branch !== null ? [`- **Branch:** ${p.branch}`] : []),
   ];
-  return `## ${HEADINGS.summary}\n${p.summary}\n\n---\n\n## ${HEADINGS.details}\n${details.join("\n")}\n\n## ${HEADINGS.links}\n* [[${p.briefTitle}]]`;
+  return `${p.summary}\n\n## ${HEADINGS.details}\n${details.join("\n")}\n\n## ${HEADINGS.links}\n- [[${p.briefTitle}]]`;
 }
