@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { LmError, addAction, changePlan, changesArgs, list, listArgs, openArgs, projectPlan, projects, projectsArgs, read, reviewArgs, run, searchArgs, setTransport, systemPlan, systemsArgs, timelineArgs, type Invoke } from "./lm";
+import { LmError, addAction, changePlan, changesArgs, list, listArgs, logArgs, openArgs, projectPlan, projects, projectsArgs, read, reviewArgs, run, searchArgs, setDetail, setTransport, systemPlan, systemsArgs, timelineArgs, type Invoke } from "./lm";
 
 afterEach(() => setTransport(invoke as Invoke));
 
@@ -59,6 +59,8 @@ describe("run", () => {
     expect(openArgs({ allDomains: true, domain: "ignored" })).toEqual(["open", "--all-domains", "--actor", "viewer"]);
     expect(reviewArgs({ allDomains: true, tags: ["project/a"] })).toEqual(["review", "--all-domains", "--tag", "project/a", "--actor", "viewer"]);
     expect(reviewArgs({ domain: "d" })).toEqual(["review", "--domain", "d", "--actor", "viewer"]);
+    expect(reviewArgs({ allDomains: true, kind: ["stale", "duplicate"], limit: 50 }))
+      .toEqual(["review", "--all-domains", "--kind", "stale", "--kind", "duplicate", "--limit", "50", "--actor", "viewer"]);
     expect(timelineArgs({ ref: "d:abc", domain: "d", date: "2026-01-02", before: 3, after: 0, type: "bug", by: "created", all: true }))
       .toEqual(["timeline", "d:abc", "--domain", "d", "--date", "2026-01-02", "--before", "3", "--after", "0", "--type", "bug", "--by", "created", "--all", "--actor", "viewer"]);
     expect(timelineArgs({})).toEqual(["timeline", "--actor", "viewer"]);
@@ -89,5 +91,19 @@ describe("run", () => {
     expect(calls[0]).toEqual(["lm", { argv: ["change-plan", "update"], stdin: '{"id":14,"stage":"design"}' }]);
     await addAction("demo:abc", "Ship it");
     expect(calls[1]).toEqual(["lm", { argv: ["update", "demo:abc", "--domain", "demo", "--add-action", "Ship it"], stdin: null }]);
+  });
+
+  it("log reads as viewer and only sends the filters given", () => {
+    expect(logArgs({})).toEqual(["log", "--actor", "viewer"]);
+    expect(logArgs({ domain: "d", project: "hive", since: "2026-11-01", until: "2026-11-09", note: "CHG-014", type: "decision", event: "created", limit: 20 }))
+      .toEqual(["log", "--domain", "d", "--project", "hive", "--since", "2026-11-01", "--until", "2026-11-09", "--note", "CHG-014", "--type", "decision", "--event", "created", "--limit", "20", "--actor", "viewer"]);
+  });
+
+  it("set-detail puts the revision in argv and sends no stdin", async () => {
+    const calls = fake({ exit_code: 0, result: { ok: true }, error: null });
+    await setDetail("demo:abc", "**Where it stands:** now", "rev1");
+    await setDetail("demo:abc", "**Where it stands:** now");
+    expect(calls[0]).toEqual(["lm", { argv: ["update", "demo:abc", "--domain", "demo", "--set-detail", "**Where it stands:** now", "--expected-revision", "rev1"], stdin: null }]);
+    expect(calls[1]).toEqual(["lm", { argv: ["update", "demo:abc", "--domain", "demo", "--set-detail", "**Where it stands:** now"], stdin: null }]);
   });
 });
