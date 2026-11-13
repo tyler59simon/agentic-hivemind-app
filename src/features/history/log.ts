@@ -2,7 +2,7 @@
 import type { LogRow } from "../../lib/lm";
 import { dayLabel } from "./activity";
 
-export const LOG_EVENTS = ["created", "updated", "confirmed", "superseded", "resolved", "archived", "deleted", "promoted", "undone", "session"] as const;
+export const LOG_EVENTS = ["created", "updated", "confirmed", "superseded", "resolved", "archived", "reopened", "deleted", "promoted", "moved", "undone", "stage", "closed", "session"] as const;
 
 /** Rows grouped by local day, in the order given (the store sends newest first). */
 export function groupByDay(rows: LogRow[], now = new Date()): { label: string; rows: LogRow[] }[] {

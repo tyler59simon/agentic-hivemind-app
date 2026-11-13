@@ -4,19 +4,16 @@ import { REVIEW_KINDS, type ReviewKind, type ReviewResult, type ReviewRow } from
 /** The rows to show: the richer worklist when the store sends one, else the notes that are due. */
 export const worklistRows = (result: ReviewResult | undefined): ReviewRow[] => result?.notes ?? [];
 
-/** Kinds that have at least one row, in the store's order. Empty for an old store (no `counts`). */
-export function kindCounts(counts: ReviewResult["counts"]): { kind: ReviewKind; count: number }[] {
+/** Kinds that have at least one row, in the store's order, plus any in `keep` so a picked kind stays visible at zero.
+ *  Empty for an old store (no `counts`). */
+export function kindCounts(counts: ReviewResult["counts"], keep: ReviewKind[] = []): { kind: ReviewKind; count: number }[] {
   if (!counts) return [];
-  return REVIEW_KINDS.filter((k) => counts[k] > 0).map((kind) => ({ kind, count: counts[kind] }));
+  return REVIEW_KINDS.filter((k) => counts[k] > 0 || keep.includes(k)).map((kind) => ({ kind, count: counts[kind] }));
 }
 
 /** "2 stale, 3 due, 1 duplicate"; empty when nothing is counted. */
 export const countLine = (counts: ReviewResult["counts"]): string =>
   kindCounts(counts).map(({ kind, count }) => `${count} ${kind}`).join(", ");
-
-/** Rows with at least one of the picked kinds; no kinds picked shows everything. */
-export const filterByKind = (rows: ReviewRow[], picked: ReviewKind[]): ReviewRow[] =>
-  picked.length ? rows.filter((r) => r.kinds?.some((k) => picked.includes(k))) : rows;
 
 export type PrimaryKind = "confirm" | "open" | "resolve" | "archive" | "merge";
 export interface Primary { kind: PrimaryKind; label: string }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ReviewResult, ReviewRow } from "../../lib/lm";
-import { countLine, filterByKind, kindCounts, primaryAction, worklistRows } from "./worklist";
+import { countLine, kindCounts, primaryAction, worklistRows } from "./worklist";
 
 const row = (over: Partial<ReviewRow> = {}): ReviewRow => ({ ref: "d:a", title: "A", type: "knowledge", updated: "2026-11-01", ...over });
 const base: ReviewResult = { ok: true, domain: null, due: 1, notes: [row({ ref: "d:old" })] };
@@ -17,13 +17,7 @@ describe("review worklist", () => {
     expect(countLine(counts)).toBe("2 stale, 1 duplicate, 3 noisy");
     expect(kindCounts(undefined)).toEqual([]);
     expect(countLine(undefined)).toBe("");
-  });
-
-  it("filters rows by any picked kind", () => {
-    const rows = [row({ ref: "d:1", kinds: ["stale", "due"] }), row({ ref: "d:2", kinds: ["duplicate"] }), row({ ref: "d:3" })];
-    expect(filterByKind(rows, []).length).toBe(3);
-    expect(filterByKind(rows, ["due"]).map((r) => r.ref)).toEqual(["d:1"]);
-    expect(filterByKind(rows, ["due", "duplicate"]).map((r) => r.ref)).toEqual(["d:1", "d:2"]);
+    expect(kindCounts(counts, ["due", "stale"]).map((c) => [c.kind, c.count])).toEqual([["stale", 2], ["due", 0], ["duplicate", 1], ["noisy", 3]]);
   });
 
   it("maps an action to the first button", () => {

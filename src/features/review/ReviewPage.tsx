@@ -13,7 +13,7 @@ import { useCurrentProject, useProject } from "../projects/useProject";
 import { systemsQuery, useSystemProposals } from "../systems/useSystem";
 import { ReviewQueue } from "../work/ReviewQueue";
 import { LearningReview } from './LearningReview';
-import { countLine, filterByKind, kindCounts, worklistRows } from './worklist';
+import { countLine, kindCounts, worklistRows } from './worklist';
 
 type Kind = "all" | "memory" | "architecture" | "learning";
 
@@ -38,8 +38,14 @@ export function ReviewPage() {
   const [kind, setKind] = useState<Kind>("all");
   const [reviewing, setReviewing] = useState<{ system: System; update: SystemUpdate } | null>(null);
   const [picked, setPicked] = useState<ReviewKind[]>([]);
+  // The unfiltered result gives the counts and the chips; picked kinds are asked of the store so its 100-row limit applies to them.
+  const filtered = useQuery({
+    queryKey: ["review", "kinds", project?.slug ?? "*", picked],
+    queryFn: () => review({ allDomains: true, ...(project ? { tags: [project.tag] } : {}), kind: picked, limit: 100 }),
+    enabled: projectsOn && !!picked.length,
+  });
   const rows = worklistRows(due.data);
-  const notes = filterByKind(rows, picked);
+  const notes = picked.length ? worklistRows(filtered.data) : rows;
   const counts = due.data?.counts;
   const total = rows.length + proposals.length + learningCount;
 
@@ -72,7 +78,7 @@ export function ReviewPage() {
             <>
               <p className="muted small">{countLine(counts)}</p>
               <div className="chips">
-                {kindCounts(counts).map(({ kind, count }) => (
+                {kindCounts(counts, picked).map(({ kind, count }) => (
                   <button key={kind} className={`chip ${picked.includes(kind) ? "on" : ""}`} aria-pressed={picked.includes(kind)}
                     onClick={() => setPicked(picked.includes(kind) ? picked.filter((k) => k !== kind) : [...picked, kind])}>{kind} {count}</button>
                 ))}
