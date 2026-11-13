@@ -3,8 +3,8 @@ import type { SessionInfo, SessionStatus } from "../../lib/agent";
 import type { Change, LinkGraph, LinkNode, NoteRow, Status, System, NoteType } from "../../lib/lm";
 import type { NoteLinks } from "../links/useLinks";
 import {
-  briefState, changeChip, changesFor, checkpointBody, checkpointTitle, connected, contextRefs, displayId, engineName, linkState,
-  metaLines, nextStage, sessionLine, sessionsOf, stageStates, topChange, unadopted, viewOf, type ChangeView, type ViewContext,
+  briefState, changeChip, changesFor, checkpointText, connected, contextRefs, displayId, engineName, linkState,
+  metaLines, nextStage, sessionLine, sessionsOf, stageStates, topChange, unadopted, viewOf, whereItStands, type ChangeView, type ViewContext,
 } from "./changes";
 
 const change = (o: Partial<Change> = {}): Change => ({
@@ -213,18 +213,20 @@ describe("change view model", () => {
     expect(unadopted(rows, [change()], "demo:charter").map((r) => r.ref)).toEqual(["demo:b", "demo:a"]);
   });
 
-  it("checkpoint title and body", () => {
-    expect(checkpointTitle("CHG-014", new Date(2026, 10, 10, 14, 32))).toBe("CHG-014 checkpoint 2026-11-10 14:32");
-    const p = { summary: "Halfway.", briefTitle: "CHG-014 Prevent duplicate payment alerts", stage: "implement" as const, branch: "feature/x", steps: { done: 2, total: 5 }, evidence: { done: 0, total: 2 } };
-    const body = checkpointBody(p);
-    expect(body.startsWith("Halfway.\n\n## Details\n")).toBe(true);
-    expect(body).not.toContain("---");
-    expect(body).toContain("- **Stage:** Implement");
-    expect(body).toContain("- **Steps:** 2 of 5 done");
-    expect(body).toContain("- **Evidence:** 0 of 2 verified");
-    expect(body).toContain("- **Branch:** feature/x");
-    expect(body.endsWith("## Links\n- [[CHG-014 Prevent duplicate payment alerts]]")).toBe(true);
-    expect(checkpointBody({ ...p, evidence: { done: 0, total: 0 }, branch: null })).not.toMatch(/Evidence|Branch/);
+  it("checkpoint text", () => {
+    const p = { summary: "Halfway.", stage: "implement" as const, branch: "feature/x", steps: { done: 2, total: 5 }, evidence: { done: 0, total: 2 } };
+    const at = new Date(2026, 10, 10, 14, 32);
+    expect(checkpointText(p, at)).toBe("**Where it stands:** 2026-11-10 14:32, Implement, feature/x, steps 2/5, evidence 0/2: Halfway.");
+    expect(checkpointText({ ...p, branch: null, steps: { done: 0, total: 0 }, evidence: { done: 0, total: 0 }, summary: "Line one.\n\n  Line two. " }, at))
+      .toBe("**Where it stands:** 2026-11-10 14:32, Implement: Line one. Line two.");
+  });
+
+  it("reads where it stands from a brief body", () => {
+    const body = "Outcome.\n\n## Details\n- **Branch:** x\n- **Where it stands:** 2026-11-10 14:32, Design: Ready to build.\n\n## Links\n";
+    expect(whereItStands(body)).toBe("2026-11-10 14:32, Design: Ready to build.");
+    expect(whereItStands(body.replace(/\n/g, "\r\n"))).toBe("2026-11-10 14:32, Design: Ready to build.");
+    expect(whereItStands("Outcome.\n\n## Details\n- **Branch:** x\n")).toBeNull();
+    expect(whereItStands("Mentions **Where it stands:** in prose.")).toBeNull();
   });
 
   it("context refs", () => {
