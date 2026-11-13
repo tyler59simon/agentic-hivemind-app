@@ -1,41 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useChangesEnabled } from "../../lib/connection";
-import { domainOf, mergePlan, plan, read, type Note, type NoteRow } from "../../lib/lm";
-import { sections } from "../../lib/note";
-import { Modal } from "../../ui/Modal";
+import { domainOf, plan } from "../../lib/lm";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
 import { useChangeIntent } from "../changes/intent";
 import { changesQuery } from "../changes/useChanges";
 import { noteQuery } from "../viewer/NoteView";
+import { MergeComposer } from "./MergeComposer";
 import { NotePicker } from "./NotePicker";
 import { PlanDialog } from "./PlanDialog";
-
-/** Merge into another note: the target keeps its ID; this note is superseded and archived. */
-function MergeComposer({ source, target, onClose }: { source: Note; target: NoteRow; onClose: () => void }) {
-  const [body, setBody] = useState<string | null>(null);
-  const [ready, setReady] = useState(false);
-  useEffect(() => {
-    read(target.ref).then((t) => {
-      const summary = sections(source.body).summary ?? source.title;
-      setBody(`${t.body}\n\n## Merged from ${source.title}\n${summary}`);
-    }).catch((e) => toast(String(e), "error"));
-  }, [source, target.ref]);
-  if (ready && body !== null) {
-    return (
-      <PlanDialog title={`Merge into “${target.title}”`} make={() => mergePlan({ target: target.ref, sources: [`${source.domain}:${source.id}`], body })}
-        applyLabel="Merge" onClose={onClose} />
-    );
-  }
-  return (
-    <Modal title={`Merge into “${target.title}”`} onClose={onClose} wide>
-      <p>The merged note keeps “{target.title}”. “{source.title}” is marked superseded and moves to the archive. Edit the merged text, then review the plan.</p>
-      {body === null ? <p className="muted">Loading…</p> : <textarea className="merge-body" value={body} onChange={(e) => setBody(e.target.value)} />}
-      <div className="actions"><button onClick={onClose}>Cancel</button><button className="primary" disabled={body === null} onClick={() => setReady(true)}>Review plan…</button></div>
-    </Modal>
-  );
-}
 
 /** Lifecycle actions for a note. Every one is a reviewed Living Memory plan. */
 export function NoteMenu({ refId }: { refId: string }) {
@@ -75,7 +49,7 @@ export function NoteMenu({ refId }: { refId: string }) {
           intro={<p>“{n.title}” is marked superseded and moves to the archive; “{t.title}” records that it replaces it.</p>} />)} />) },
     { label: "Merge into…", show: n.status === "active", act: () => run(
       <NotePicker title="Merge this note into…" domain={n.domain} exclude={refId} onClose={close}
-        onPick={(t) => setDialog(<MergeComposer source={n} target={t} onClose={close} />)} />) },
+        onPick={(t) => setDialog(<MergeComposer source={{ ref: refId, title: n.title }} target={t} onClose={close} />)} />) },
     { label: "Adopt as change…", show: adoptable, act: () => { setOpen(false); useChangeIntent.getState().open({ mode: "adopt", ref: refId, title: n.title }); } },
     { label: "Copy reference", show: true, act: () => { setOpen(false); navigator.clipboard.writeText(refId).then(() => toast(`Copied ${refId}`)); } },
     { label: "Delete…", show: true, danger: true, act: () => run(

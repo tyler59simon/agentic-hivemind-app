@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { useProjectsEnabled, useSystemsEnabled, useConnection } from "../../lib/connection";
 import { learningList, scopeLearning } from '../../lib/learning';
 import { classify } from "../../lib/errors";
-import { review, systemPlan, type System, type SystemUpdate } from "../../lib/lm";
+import { review, systemPlan, type ReviewKind, type System, type SystemUpdate } from "../../lib/lm";
 import { openSession, openSystem } from "../../store";
 import { ArrowLink, PageHeader, Section, Tabs } from "../../ui/Page";
 import { toast } from "../../ui/toast";
@@ -13,6 +13,7 @@ import { useCurrentProject, useProject } from "../projects/useProject";
 import { systemsQuery, useSystemProposals } from "../systems/useSystem";
 import { ReviewQueue } from "../work/ReviewQueue";
 import { LearningReview } from './LearningReview';
+import { countLine, filterByKind, kindCounts, worklistRows } from './worklist';
 
 type Kind = "all" | "memory" | "architecture" | "learning";
 
@@ -36,14 +37,17 @@ export function ReviewPage() {
   const proposals = items.filter((i) => i.update && i.proposer);
   const [kind, setKind] = useState<Kind>("all");
   const [reviewing, setReviewing] = useState<{ system: System; update: SystemUpdate } | null>(null);
-  const notes = due.data?.notes ?? [];
-  const total = notes.length + proposals.length + learningCount;
+  const [picked, setPicked] = useState<ReviewKind[]>([]);
+  const rows = worklistRows(due.data);
+  const notes = filterByKind(rows, picked);
+  const counts = due.data?.counts;
+  const total = rows.length + proposals.length + learningCount;
 
   return (
     <div className="page">
       <PageHeader title="Review" subtitle={project ? "What waits for you in this project before it counts as accepted." : "What waits for you before it counts as accepted."} />
       <Tabs pill label="Kind" value={kind} onChange={setKind}
-        items={[{ id: "all", label: "All", count: total }, { id: "memory", label: "Memory", count: notes.length }, { id: "architecture", label: "Architecture", count: proposals.length }, { id: 'learning', label: 'Learning', count: learningCount }]} />
+        items={[{ id: "all", label: "All", count: total }, { id: "memory", label: "Memory", count: rows.length }, { id: "architecture", label: "Architecture", count: proposals.length }, { id: 'learning', label: 'Learning', count: learningCount }]} />
       {!projectsOn && <p className="muted">Review needs a newer Living Memory (API 2 with the <code>review</code> command).</p>}
       {due.data && registry.data && (!learningOn || learning.data) && !total && <p className="muted">Nothing is waiting for you.</p>}
       {(kind === 'all' || kind === 'architecture') && !!proposals.length && (
@@ -62,8 +66,19 @@ export function ReviewPage() {
         </Section>
       )}
       {(kind === 'all' || kind === 'memory') && projectsOn && (
-        <Section title="Memory" count={due.data?.due} loading={due.isLoading} error={due.error && classify(due.error).message}
-          empty={due.data && !notes.length ? "No notes are due for review." : undefined}>
+        <Section title="Memory" count={due.data?.total ?? due.data?.due} loading={due.isLoading} error={due.error && classify(due.error).message}
+          empty={due.data && !rows.length ? (counts ? "Nothing needs review." : "No notes are due for review.") : undefined}>
+          {counts && (
+            <>
+              <p className="muted small">{countLine(counts)}</p>
+              <div className="chips">
+                {kindCounts(counts).map(({ kind, count }) => (
+                  <button key={kind} className={`chip ${picked.includes(kind) ? "on" : ""}`} aria-pressed={picked.includes(kind)}
+                    onClick={() => setPicked(picked.includes(kind) ? picked.filter((k) => k !== kind) : [...picked, kind])}>{kind} {count}</button>
+                ))}
+              </div>
+            </>
+          )}
           <ReviewQueue rows={notes} />
         </Section>
       )}

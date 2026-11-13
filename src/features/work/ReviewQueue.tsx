@@ -6,8 +6,10 @@ import { recordOperation } from "../../lib/oplog";
 import { shortDate } from "../../lib/text";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
+import { MergeComposer } from "../plans/MergeComposer";
 import { PlanDialog } from "../plans/PlanDialog";
 import { HoverPreview } from "../preview/HoverPreview";
+import { primaryAction } from "../review/worklist";
 import { snoozeDate } from "./work";
 
 const SNOOZES = [7, 30, 90];
@@ -25,7 +27,7 @@ async function snooze(row: ReviewRow, days: number) {
 
 function ReviewItem({ row }: { row: ReviewRow }) {
   const client = useQueryClient();
-  const [archiving, setArchiving] = useState(false);
+  const [dialog, setDialog] = useState<"archive" | "resolve" | "merge" | null>(null);
   const done = (operationId?: string) => {
     recordOperation(operationId);
     for (const key of [["review"], ["list"], ["note", row.ref]]) client.invalidateQueries({ queryKey: key });
@@ -41,27 +43,45 @@ function ReviewItem({ row }: { row: ReviewRow }) {
     onError: (e) => toast(classify(e).message, "error"),
   });
   const busy = still.isPending || snoozed.isPending;
+  const primary = primaryAction(row);
+  const open = () => useWorkspace.getState().openNote(row.ref, { title: row.title });
+  const stillTrue = <button key="still" disabled={busy} onClick={() => still.mutate()} title="Confirm this note still holds">Still true</button>;
+  const first = {
+    confirm: stillTrue,
+    open: <button key="open" disabled={busy} onClick={open}>Open</button>,
+    resolve: <button key="resolve" disabled={busy} onClick={() => setDialog("resolve")}>{primary.label}</button>,
+    archive: <button key="archive" disabled={busy} onClick={() => setDialog("archive")}>{primary.label}</button>,
+    merge: <button key="merge" disabled={busy} onClick={() => setDialog("merge")} title={`Merge “${row.pair?.title}” into this note`}>{primary.label}</button>,
+  }[primary.kind];
   return (
     <div className="work-group">
       <div className="work-head">
         <span className={`badge type-${row.type}`}>{row.type}</span>
         <HoverPreview refId={row.ref}>
-          <button className="link-row" onClick={() => useWorkspace.getState().openNote(row.ref, { title: row.title })}>{row.title}</button>
+          <button className="link-row" onClick={open}>{row.title}</button>
         </HoverPreview>
+        {row.kinds?.map((k) => <span key={k} className="badge">{k}</span>)}
       </div>
+      {row.reason && <div className="small">{row.reason}</div>}
       <div className="muted small">
         Updated {shortDate(row.updated)}{row.review_by && <> · review by {shortDate(row.review_by)}</>}
       </div>
       <div className="work-actions">
-        <button disabled={busy} onClick={() => still.mutate()} title="Confirm this note still holds">Still true</button>
+        {first}
+        {primary.kind !== "confirm" && stillTrue}
         {SNOOZES.map((d) => <button key={d} disabled={busy} onClick={() => snoozed.mutate(d)} title={`Review again in ${d} days`}>Snooze {d}d</button>)}
-        <button disabled={busy} onClick={() => setArchiving(true)}>Archive…</button>
+        {primary.kind !== "archive" && <button disabled={busy} onClick={() => setDialog("archive")}>Archive…</button>}
       </div>
-      {archiving && (
+      {dialog === "archive" && (
         <PlanDialog title={`Archive “${row.title}”`} make={() => plan("archive", row.ref)} applyLabel="Archive" danger
-          onApplied={done} onClose={() => setArchiving(false)}
+          onApplied={done} onClose={() => setDialog(null)}
           intro={<p>The note moves to the archive. Undoing this change restores it.</p>} />
       )}
+      {dialog === "resolve" && (
+        <PlanDialog title={`Resolve “${row.title}”`} make={() => plan("resolve", row.ref)} applyLabel="Resolve"
+          onApplied={done} onClose={() => setDialog(null)} />
+      )}
+      {dialog === "merge" && row.pair && <MergeComposer source={row.pair} target={row} onClose={() => setDialog(null)} />}
     </div>
   );
 }
