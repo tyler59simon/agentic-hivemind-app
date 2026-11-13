@@ -45,7 +45,8 @@ export function ReviewPage() {
     enabled: projectsOn && !!picked.length,
   });
   const rows = worklistRows(due.data);
-  const notes = picked.length ? worklistRows(filtered.data) : rows;
+  const active = picked.length ? filtered : due;
+  const notes = worklistRows(active.data);
   const counts = due.data?.counts;
   const total = rows.length + proposals.length + learningCount;
 
@@ -72,21 +73,23 @@ export function ReviewPage() {
         </Section>
       )}
       {(kind === 'all' || kind === 'memory') && projectsOn && (
-        <Section title="Memory" count={due.data?.due} loading={due.isLoading} error={due.error && classify(due.error).message}
-          empty={due.data && !rows.length ? (counts ? "Nothing needs review." : "No notes are due for review.") : undefined}>
-          {counts && (
-            <>
-              <p className="muted small">{countLine(counts)}</p>
-              <div className="chips">
-                {kindCounts(counts, picked).map(({ kind, count }) => (
-                  <button key={kind} className={`chip ${picked.includes(kind) ? "on" : ""}`} aria-pressed={picked.includes(kind)}
-                    onClick={() => setPicked(picked.includes(kind) ? picked.filter((k) => k !== kind) : [...picked, kind])}>{kind} {count}</button>
-                ))}
-              </div>
-            </>
-          )}
+        <>
+        {counts && (
+          <div>
+            <p className="muted small">{countLine(counts)}</p>
+            <div className="chips">
+              {kindCounts(counts, picked).map(({ kind, count }) => (
+                <button key={kind} className={`chip ${picked.includes(kind) ? "on" : ""}`} aria-pressed={picked.includes(kind)}
+                  onClick={() => setPicked(picked.includes(kind) ? picked.filter((k) => k !== kind) : [...picked, kind])}>{kind} {count}</button>
+              ))}
+            </div>
+          </div>
+        )}
+        <Section title="Memory" count={due.data?.due} loading={active.isLoading} error={active.error && classify(active.error).message}
+          empty={active.data && !notes.length ? (counts ? "Nothing needs review." : "No notes are due for review.") : undefined}>
           <ReviewQueue rows={notes} />
         </Section>
+        </>
       )}
       {(kind === 'all' || kind === 'learning') && <LearningReview />}
       {reviewing && (

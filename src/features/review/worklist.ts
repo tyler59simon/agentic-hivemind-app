@@ -1,7 +1,7 @@
-// Pure helpers for the review worklist. Older stores send only `notes` and `due`; newer ones add `items`, `counts` and `total`.
+// Pure helpers for the review worklist. Every store sends `notes` and `due`; newer ones add `counts` and give each row its kinds, reason and action.
 import { REVIEW_KINDS, type ReviewKind, type ReviewResult, type ReviewRow } from "../../lib/lm";
 
-/** The rows to show: the richer worklist when the store sends one, else the notes that are due. */
+/** The rows to show (a newer store's rows carry kinds, reason and action). */
 export const worklistRows = (result: ReviewResult | undefined): ReviewRow[] => result?.notes ?? [];
 
 /** Kinds that have at least one row, in the store's order, plus any in `keep` so a picked kind stays visible at zero.
