@@ -41,7 +41,7 @@ export async function run<T>(argv: string[], stdin?: string): Promise<T> {
 const view = (argv: string[]) => [...argv, "--actor", "viewer"];
 
 export interface ConnectInfo {
-  version: { api: number; python: string; commands: string[]; capabilities?: { learning?: number } };
+  version: { api: number; python: string; commands: string[]; capabilities?: { learning?: number; history?: number } };
   root: string;
   program: string;
   script: string;
@@ -198,7 +198,8 @@ export const applyPlan = (p: Pick<Plan, "plan_id" | "digest">) =>
 
 // ---- History and links (read-only). ----
 
-export interface Operation { operation_id: string; kind: string; state: string; created: string; files: string[] }
+/** `summary` and `actor` come from Living Memory with history level 3; older versions omit them. */
+export interface Operation { operation_id: string; kind: string; state: string; created: string; files: string[]; summary?: string; actor?: string }
 export const history = (o: { note?: string; limit?: number } = {}) =>
   run<Operation[]>(view(["history", ...(o.note ? ["--note", o.note] : []), "--limit", String(o.limit ?? 50)]));
 export const diff = (operationId: string) => run<{ path: string; diff: string }[]>(view(["diff", operationId]));
@@ -287,6 +288,8 @@ export const timeline = (o: TimelineOptions) => run<TimelineResult>(timelineArgs
 export interface LogRow {
   time: string; event: string; ref: string; title: string; type: string; domain: string; projects: string[]; op?: string;
   detail?: string;
+  /** Note and change rows: what changed, and who did it (maintenance, auto_resolve, obsidian, undo, plan, agent:HARNESS or command). */
+  summary?: string; actor?: string;
   /** Session rows only. */
   harness?: string; notes?: string[]; /** How many files the session changed (a count, not paths). */ files?: number;
 }
@@ -412,3 +415,30 @@ export interface ViewWriteResult { ok: true; note: string; domain?: string; titl
 export const addView = (ref: string, title?: string) =>
   run<ViewWriteResult>(["views", "add", ref, "--domain", domainOf(ref), ...(title ? ["--title", title] : [])]);
 export const removeView = (ref: string) => run<ViewWriteResult>(["views", "remove", ref, "--domain", domainOf(ref)]);
+
+// ---- Recap (LM `recap` command). ----
+
+export type RecapGroup = "created" | "updated" | "resolved" | "superseded" | "archived" | "restored" | "deleted";
+export interface RecapChange { ref: string; title: string | null; type: string | null; summary: string | null; actor: string | null; time: string; count: number }
+export interface Recap {
+  ok: boolean; since: string; until: string; days: number; domains: string[];
+  counts: Record<string, number>;
+  changes: Partial<Record<RecapGroup, RecapChange[]>>;
+  maintenance: {
+    runs: number; reviewed: number; kept: number; deferred: number; updated: number; confirmed: number; retired: number; charged_usd: string;
+    retired_notes: { ref: string; action: string; rule?: string | null; reason?: string | null; title?: string | null }[];
+  };
+  sessions: { count: number; by_harness: Record<string, number>; notes_saved: number };
+  open_work: { notes: number; items: number; top: { ref: string; title: string; open: number }[] };
+  review: { due: number; by_kind: Record<string, number> };
+  markdown: string;
+}
+export interface RecapOptions { days?: number; project?: string }
+/** Hivemind has no bound domain, so recap always covers every domain; a project narrows it. */
+export function recapArgs(o: RecapOptions): string[] {
+  const argv = ["recap", "--all-domains"];
+  if (o.days) argv.push("--days", String(o.days));
+  if (o.project) argv.push("--project", o.project);
+  return view(argv);
+}
+export const recap = (o: RecapOptions = {}) => run<Recap>(recapArgs(o));

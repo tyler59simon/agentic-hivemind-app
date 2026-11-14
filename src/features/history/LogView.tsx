@@ -7,7 +7,8 @@ import { openChange } from "../../store";
 import { useWorkspace } from "../../workspace/store";
 import { HoverPreview } from "../preview/HoverPreview";
 import { projectsQuery } from "../projects/useProject";
-import { groupByDay, LOG_EVENTS, sessionLine, targetOf } from "./log";
+import { serverActor } from "./activity";
+import { groupByDay, LOG_EVENTS, rowSummary, sessionLine, targetOf } from "./log";
 
 const time = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 
@@ -68,9 +69,10 @@ export function LogView() {
                   <span className="badge">{r.event}</span>
                   {r.type && r.event !== "session" && <span className={`badge type-${r.type}`}>{r.type}</span>}
                   <Title row={r} />
+                  {r.actor && <span className={`actor actor-${serverActor(r.actor).kind}`}>{serverActor(r.actor).label}</span>}
                   {r.event === "session" && r.title && <span className="muted small">{r.title}</span>}
                 </div>
-                {r.detail && <div className="muted small">{r.detail}</div>}
+                {rowSummary(r) && <div className="muted small">{rowSummary(r)}</div>}
               </div>
             ))}
           </section>

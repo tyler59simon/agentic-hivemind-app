@@ -5,7 +5,7 @@ import { myOperations } from "../../lib/oplog";
 import { useWorkspace } from "../../workspace/store";
 import { DiffView, PlanDialog } from "../plans/PlanDialog";
 import { HoverPreview } from "../preview/HoverPreview";
-import { actorOf, dayLabel, noteIdsOf, verbOf, type Actor } from "./activity";
+import { actorOf, dayLabel, noteIdsOf, serverActor, verbOf, type Actor } from "./activity";
 
 /** Every note in the store by its 8-character ID prefix (archived and superseded included). */
 export function useNotesById() {
@@ -20,7 +20,8 @@ export function useActors(ops: Operation[], notes: Map<string, NoteRow>) {
     .map((o) => notes.get(noteIdsOf(o)[0] ?? "")?.ref).filter((r): r is string => !!r))];
   const origins = useQueries({ queries: captured.map((ref) => ({ queryKey: ["meta", ref], queryFn: () => meta(ref), staleTime: Infinity })) });
   const originOf = new Map(captured.map((ref, i) => [ref, origins[i].data?.origin]));
-  return (op: Operation): Actor => actorOf(op, mine, originOf.get(notes.get(noteIdsOf(op)[0] ?? "")?.ref ?? ""));
+  // The server's own actor (history level 3) wins over the guess.
+  return (op: Operation): Actor => op.actor ? serverActor(op.actor, mine.has(op.operation_id)) : actorOf(op, mine, originOf.get(notes.get(noteIdsOf(op)[0] ?? "")?.ref ?? ""));
 }
 
 function OperationDiff({ id }: { id: string }) {
@@ -54,6 +55,7 @@ export function OperationList({ ops, notes, actorFor, showNotes = true }: {
               <span className="muted small">{new Date(op.created).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
               <span className={`actor actor-${actor.kind}`}>{actor.label}</span>
               <span>{verbOf(op.kind)}</span>
+              {op.summary && <span className="muted small">{op.summary}</span>}
               {showNotes && touched.map((n) => (
                 <HoverPreview key={n.ref} refId={n.ref}>
                   <a href="#" className="wikilink" onClick={(e) => { e.preventDefault(); openNote(n.ref, { split: e.ctrlKey || e.metaKey, title: n.title }); }}>{n.title}</a>

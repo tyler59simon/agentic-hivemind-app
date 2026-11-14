@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 /** What the connected Living Memory supports (from `version`), so features can degrade gracefully. */
-export const useConnection = create<{ commands: string[]; api: number; capabilities?: { learning?: number }; set: (v: { commands: string[]; api: number; capabilities?: { learning?: number } }) => void }>((set) => ({
+export const useConnection = create<{ commands: string[]; api: number; capabilities?: { learning?: number; history?: number }; set: (v: { commands: string[]; api: number; capabilities?: { learning?: number; history?: number } }) => void }>((set) => ({
   commands: [],
   api: 0,
   set: (v) => set(v),
@@ -21,3 +21,9 @@ export const useLogEnabled = () => useConnection((s) => s.commands.includes("log
 
 /** Note dashboards need an LM that has the `views` command. */
 export const useViewsEnabled = () => useConnection((s) => s.commands.includes("views"));
+
+/** The `history` capability level: 2 adds `log` summaries, 3 adds summary and actor to `history` rows. */
+export const useHistoryLevel = () => useConnection((s) => s.capabilities?.history ?? 0);
+
+/** The Recap page needs history level 2 and the `recap` command. */
+export const useRecapEnabled = () => useConnection((s) => (s.capabilities?.history ?? 0) >= 2 && s.commands.includes("recap"));

@@ -63,3 +63,19 @@ export function dayLabel(iso: string, now = new Date()): string {
 }
 
 export const visible = (op: Operation) => !BOOKKEEPING.has(op.kind) && op.state === "committed";
+
+const HARNESS = (h: string) => (h ? h.charAt(0).toUpperCase() + h.slice(1) : "Agent");
+
+/** A server-recorded actor (history level 3, `log`, `recap`) as a label and kind. `mine` marks a Hivemind operation, which the server records as "command". */
+export function serverActor(raw: string, mine = false): Actor {
+  if (raw.startsWith("agent:")) return { kind: "agent", label: HARNESS(raw.slice(6)) };
+  switch (raw) {
+    case "maintenance": return { kind: "agent", label: "Maintenance" };
+    case "auto_resolve": return { kind: "agent", label: "Auto-resolve" };
+    case "obsidian": return { kind: "obsidian", label: "You · Obsidian" };
+    case "plan": return { kind: "plan", label: "Approved plan" };
+    case "undo": return { kind: "plan", label: "Undo" };
+    case "command": return mine ? { kind: "you", label: "You · Hivemind" } : { kind: "agent", label: "Command line" };
+    default: return { kind: "agent", label: raw };
+  }
+}
