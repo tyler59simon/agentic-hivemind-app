@@ -48,7 +48,7 @@ function Body({ r }: { r: Recap }) {
             <h4 className="work-day">{group} ({total})</h4>
             {(open.has(group) ? items : items.slice(0, GROUP_SHOWN)).map((c) => (
               <div key={c.ref}>
-                <div className="work-head">
+                <div className="work-head wraps">
                   {c.type && <span className={`badge type-${c.type}`}>{c.type}</span>}
                   <NoteLink refId={c.ref} title={c.title} />
                   {c.actor && <span className={`actor actor-${serverActor(c.actor).kind}`}>{serverActor(c.actor).label}</span>}
@@ -70,7 +70,7 @@ function Body({ r }: { r: Recap }) {
             <p>{m.runs} runs reviewed {m.reviewed} notes: {m.updated} updated, {m.confirmed} confirmed, {m.retired} retired, {m.kept} kept, {m.deferred} deferred. Charged {m.charged_usd} USD for these runs, across every domain they covered.</p>
             {m.retired_notes.map((n) => (
               <div key={n.ref}>
-                <div className="work-head"><span className="badge">{n.action}</span><NoteLink refId={n.ref} title={n.title} /></div>
+                <div className="work-head wraps"><span className="badge">{n.action}</span><NoteLink refId={n.ref} title={n.title} /></div>
                 {(n.rule || n.reason) && <div className="muted small">{[n.rule, n.reason].filter(Boolean).join(": ")}</div>}
               </div>
             ))}
@@ -84,7 +84,7 @@ function Body({ r }: { r: Recap }) {
       <section className="section">
         <div className="section-head"><h2>Open work</h2></div>
         {!r.open_work.top.length ? <p className="muted">Nothing open.</p> : r.open_work.top.map((t) => (
-          <div key={t.ref} className="work-head"><NoteLink refId={t.ref} title={t.title} /><span className="muted small">{t.open} open</span></div>
+          <div key={t.ref} className="work-head wraps"><NoteLink refId={t.ref} title={t.title} /><span className="muted small">{t.open} open</span></div>
         ))}
       </section>
       <section className="section">

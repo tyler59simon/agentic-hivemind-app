@@ -64,7 +64,7 @@ export function LogView() {
             <h4 className="work-day">{d.label}</h4>
             {d.rows.map((r, i) => (
               <div key={`${r.time}-${r.event}-${r.ref}-${i}`}>
-                <div className="work-head">
+                <div className="work-head wraps">
                   <span className="muted small">{time(r.time)}</span>
                   <span className="badge">{r.event}</span>
                   {r.type && r.event !== "session" && <span className={`badge type-${r.type}`}>{r.type}</span>}

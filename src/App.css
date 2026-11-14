@@ -459,6 +459,9 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .work-head { display: flex; align-items: center; gap: .5rem; min-width: 0; }
 .work-head.retired { opacity: .6; }
 .work-head .link-row { width: auto; font-weight: 600; }
+/* Log and recap rows: long titles wrap the badges after them to a new line instead of pushing them off the edge. */
+.work-head.wraps { flex-wrap: wrap; row-gap: .1rem; }
+.work-head.wraps > * { white-space: nowrap; max-width: 100%; min-width: 0; }
 .work-item { display: flex; align-items: flex-start; gap: .5rem; padding-left: .25rem; }
 .work-item input { margin-top: .35rem; }
 .work-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
