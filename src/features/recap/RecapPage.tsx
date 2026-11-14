@@ -24,9 +24,13 @@ function NoteLink({ refId, title }: { refId: string; title?: string | null }) {
   );
 }
 
+/** Notes a change group lists before "Show all" (a busy week has hundreds of created notes). */
+const GROUP_SHOWN = 10;
+
 function Body({ r }: { r: Recap }) {
   const groups = changeGroups(r);
   const m = r.maintenance;
+  const [open, setOpen] = useState<Set<string>>(new Set());
   return (
     <>
       <div className="status-strip">
@@ -42,7 +46,7 @@ function Body({ r }: { r: Recap }) {
         {groups.map(({ group, items, total }) => (
           <div key={group} className="work-group">
             <h4 className="work-day">{group} ({total})</h4>
-            {items.map((c) => (
+            {(open.has(group) ? items : items.slice(0, GROUP_SHOWN)).map((c) => (
               <div key={c.ref}>
                 <div className="work-head">
                   {c.type && <span className={`badge type-${c.type}`}>{c.type}</span>}
@@ -53,6 +57,9 @@ function Body({ r }: { r: Recap }) {
                 {c.summary && <div className="muted small">{c.summary}</div>}
               </div>
             ))}
+            {items.length > GROUP_SHOWN && !open.has(group) && (
+              <button className="link small" onClick={() => setOpen(new Set(open).add(group))}>Show all {items.length}</button>
+            )}
           </div>
         ))}
       </section>
