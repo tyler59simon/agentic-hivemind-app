@@ -377,3 +377,38 @@ export const changePlan = (action: "create" | "update" | "close", payload: Chang
 /** Append one open Action Item; the rest of the body is kept. */
 export const addAction = (ref: string, text: string) =>
   run<WriteResult>(["update", ref, "--domain", domainOf(ref), "--add-action", text]);
+
+// ---- Note views (an LM that has the `views` command): a note kept as an HTML dashboard. ----
+
+/** One row of `views`: a registered view and the state of its local page and published copy. */
+export interface ViewRow {
+  /** The note's ID (not a ref): the ref is `${domain}:${note}`. */
+  note: string; domain: string;
+  /** The view's short title. */
+  title: string | null;
+  /** Null when the note no longer exists. */
+  note_title: string | null;
+  /** Absolute path of the local HTML page. */
+  path: string; fresh: boolean; artifact_url: string | null; artifact_current: boolean; exists: boolean;
+}
+export interface ViewsResult { ok: boolean; views: ViewRow[] }
+
+export interface ViewItem { index: number; done: boolean; text: string; tags: string[]; id: string | null; detail: string | null }
+/** The model `views render --format json` prints: what the HTML page and Hivemind's dashboard both draw. */
+export interface ViewModel {
+  id: string; domain: string; title: string; type: string; status: string; updated: string; revision: string;
+  summary: string; important: string | null; items: ViewItem[]; sections: { heading: string; text: string }[];
+  counts: { open: number; done: number; total: number };
+  /** The replacing note's title, else its short ID. */
+  superseded_by: string | null; view_title?: string;
+}
+
+export const viewRef = (v: Pick<ViewRow, "domain" | "note">) => `${v.domain}:${v.note}`;
+export const views = () => run<ViewsResult>(view(["views", "--all-domains"]));
+export const viewModel = (ref: string) =>
+  run<{ ok: boolean; model: ViewModel }>(view(["views", "render", ref, "--format", "json", "--domain", domainOf(ref)])).then((r) => r.model);
+export interface ViewWriteResult { ok: true; note: string; domain?: string; title?: string; path?: string; status: string; operation_id?: string }
+/** Register a view (the page is rendered at once). Without a title LM uses the note's own. */
+export const addView = (ref: string, title?: string) =>
+  run<ViewWriteResult>(["views", "add", ref, "--domain", domainOf(ref), ...(title ? ["--title", title] : [])]);
+export const removeView = (ref: string) => run<ViewWriteResult>(["views", "remove", ref, "--domain", domainOf(ref)]);

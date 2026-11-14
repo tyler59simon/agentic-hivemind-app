@@ -61,7 +61,7 @@ export function NoteDetails({ note }: { note: Note }) {
 }
 
 /** A [[link]] in reading view: resolved through the `links` graph, previewed on hover, opened on click. */
-function WikiLink({ target, links, children }: { target: string; links: NoteLinks | null; children: ReactNode }) {
+export function WikiLink({ target, links, children }: { target: string; links: NoteLinks | null; children: ReactNode }) {
   const openNote = useWorkspace((s) => s.openNote);
   const openTab = useWorkspace((s) => s.openTab);
   const key = target.trim().toLowerCase();

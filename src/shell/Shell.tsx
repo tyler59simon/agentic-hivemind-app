@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { AgentWorkspace } from "../features/agents/AgentWorkspace";
 import { ChangeWizardHost } from "../features/changes/ChangeWizard";
 import { ChangesPage } from "../features/changes/ChangesPage";
+import { DashboardsPage } from "../features/dashboards/DashboardsPage";
 import { MemoryPage } from "../features/library/MemoryPage";
 import { OverviewPage } from "../features/projects/OverviewPage";
 import { ReviewPage } from "../features/review/ReviewPage";
@@ -18,6 +19,7 @@ const PAGES: Record<Page, () => ReactNode> = {
   changes: () => <ChangesPage />,
   architecture: () => <ArchitecturePage />,
   memory: () => <MemoryPage />,
+  dashboards: () => <DashboardsPage />,
   review: () => <ReviewPage />,
 };
 

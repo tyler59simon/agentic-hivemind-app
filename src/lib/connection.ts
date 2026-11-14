@@ -18,3 +18,6 @@ export const useChangesEnabled = () => useConnection((s) => s.commands.includes(
 
 /** The History view needs an LM that has the `log` command. */
 export const useLogEnabled = () => useConnection((s) => s.commands.includes("log"));
+
+/** Note dashboards need an LM that has the `views` command. */
+export const useViewsEnabled = () => useConnection((s) => s.commands.includes("views"));
