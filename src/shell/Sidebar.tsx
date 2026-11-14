@@ -1,9 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Database, GitBranch, House, LayoutDashboard, Network, SquareCheck, Terminal, type LucideIcon } from "lucide-react";
+import { ChevronDown, Database, GitBranch, House, LayoutDashboard, Network, ScrollText, SquareCheck, Terminal, type LucideIcon } from "lucide-react";
 import logo from "../assets/logo.png";
 import { ProjectSwitcher } from "../features/projects/ProjectSwitcher";
 import { sessionsQuery } from "../lib/agent";
-import { useSystemsEnabled, useViewsEnabled } from "../lib/connection";
+import { useRecapEnabled, useSystemsEnabled, useViewsEnabled } from "../lib/connection";
 import type { ConnectInfo } from "../lib/lm";
 import { refreshStore } from "../lib/refresh";
 import { useApp, type Page } from "../store";
@@ -18,6 +18,7 @@ export const SECTIONS: { page: Page; label: string; icon: LucideIcon }[] = [
   { page: "architecture", label: "Architecture", icon: Network },
   { page: "memory", label: "Memory", icon: Database },
   { page: "dashboards", label: "Dashboards", icon: LayoutDashboard },
+  { page: "recap", label: "Recap", icon: ScrollText },
   { page: "review", label: "Review", icon: SquareCheck },
 ];
 
@@ -28,6 +29,7 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
   const client = useQueryClient();
   const systemsOn = useSystemsEnabled();
   const viewsOn = useViewsEnabled();
+  const recapOn = useRecapEnabled();
   const sessions = useQuery({ ...sessionsQuery(), enabled: systemsOn });
   const waiting = sessions.data?.some((s) => s.status === "waiting");
   const running = sessions.data?.some((s) => s.status === "running");
@@ -40,7 +42,7 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
       <div className="brand-block"><img src={logo} alt="" /><span>Hivemind</span></div>
       <ProjectSwitcher />
       <nav className="nav" aria-label="Sections">
-        {SECTIONS.filter((s) => s.page !== "dashboards" || viewsOn).map(({ page: p, label, icon: Icon }) => (
+        {SECTIONS.filter((s) => (s.page !== "dashboards" || viewsOn) && (s.page !== "recap" || recapOn)).map(({ page: p, label, icon: Icon }) => (
           <button key={p} className={`nav-item ${page === p ? "on" : ""}`} aria-current={page === p ? "page" : undefined} onClick={() => go({ page: p })}>
             <Icon size="1.35em" aria-hidden /><span className="grow">{label}</span>
             {mark(p) && <span className={`nav-dot ${p === "agents" && waiting ? "waiting" : ""}`} title={mark(p)!} aria-label={mark(p)!} />}
