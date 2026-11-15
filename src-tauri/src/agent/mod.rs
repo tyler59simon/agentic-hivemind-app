@@ -39,6 +39,39 @@ const RESERVED: &str = "A review action is running for this session";
 const BUSY: &str = "This session is busy";
 const ALREADY_RESERVED: &str = "A review action is already running for this session";
 
+/// Which coding-agent CLI a session uses. `SessionInfo.adapter` stores the adapter's name; this is the same fact as a type.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+#[allow(dead_code)] // used from commit 4
+pub enum Engine {
+    #[default]
+    Claude,
+    Codex,
+}
+
+#[allow(dead_code)] // used from commit 4 (`of`, `adapter_name`) and commit 8 (`label`)
+impl Engine {
+    /// The engine of a stored session. Anything that is not Codex is Claude Code, whatever name Phase 1 or 2 stored.
+    pub fn of(adapter: &str) -> Engine {
+        if adapter == "codex" { Engine::Codex } else { Engine::Claude }
+    }
+
+    /// What `SessionInfo.adapter` holds for a new session.
+    pub fn adapter_name(self) -> &'static str {
+        match self {
+            Engine::Claude => claude::ClaudeCode.name(),
+            Engine::Codex => "codex",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Engine::Claude => "Claude Code",
+            Engine::Codex => "Codex",
+        }
+    }
+}
+
 /// One coding-agent CLI: how to start it and how to read what it prints.
 pub trait Adapter: Send + Sync {
     fn name(&self) -> &'static str;
@@ -1307,6 +1340,18 @@ mod tests {
     use scope::Policy;
     use serde_json::json;
     use std::time::Instant;
+
+    #[test]
+    fn engine_serialises_in_lowercase() {
+        assert_eq!(serde_json::to_value(Engine::Codex).unwrap(), json!("codex"));
+        assert_eq!(serde_json::to_value(Engine::Claude).unwrap(), json!("claude"));
+        assert_eq!(Engine::default(), Engine::Claude);
+        assert_eq!(Engine::of("codex"), Engine::Codex);
+        assert_eq!(Engine::of("claude-code"), Engine::Claude);
+        assert_eq!(Engine::of("claude"), Engine::Claude);
+        assert_eq!(Engine::Claude.adapter_name(), "claude-code");
+        assert_eq!(Engine::Codex.label(), "Codex");
+    }
 
     const INIT: &str = r#"{"type":"system","subtype":"init","session_id":"00000000-0000-4000-8000-000000000001","model":"claude-test-1","claude_code_version":"2.1.321","plugins":[{"name":"architecture-suite","path":"/plugins/architecture-suite","source":"architecture-suite@local"}]}"#;
     const BARE_INIT: &str = r#"{"type":"system","subtype":"init","model":"claude-test-1","claude_code_version":"2.1.321","plugins":[{"name":"something-else","path":"/plugins/else","source":"else@local"}]}"#;

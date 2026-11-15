@@ -17,6 +17,8 @@ pub struct Settings {
     pub close_to_tray: Option<bool>,
     /// The Claude Code program for agent sessions; None looks in the usual places.
     pub claude_path: Option<String>,
+    /// The Codex program for terminals and Codex sessions; None looks in the usual places.
+    pub codex_path: Option<String>,
     /// Spending limit for one agent session, in US dollars; None means the default.
     pub agent_budget_usd: Option<f64>,
     /// Folder of the Architecture Suite plugin, for when Claude Code does not have it installed.
@@ -128,6 +130,7 @@ mod tests {
         let old: Settings = serde_json::from_str(r#"{"python":null,"script":null,"root":null}"#).unwrap();
         assert_eq!(old.close_to_tray, None);
         assert_eq!((old.claude_path, old.agent_budget_usd, old.architecture_suite_plugin), (None, None, None));
+        assert_eq!(old.codex_path, None);
     }
 
     #[test]
