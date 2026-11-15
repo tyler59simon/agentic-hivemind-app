@@ -25,12 +25,12 @@ async function snooze(row: ReviewRow, days: number) {
   }
 }
 
-function ReviewItem({ row }: { row: ReviewRow }) {
+function ReviewItem({ row, snooze: snoozing = true }: { row: ReviewRow; snooze?: boolean }) {
   const client = useQueryClient();
   const [dialog, setDialog] = useState<"archive" | "resolve" | "merge" | null>(null);
   const done = (operationId?: string) => {
     recordOperation(operationId);
-    for (const key of [["review"], ["list"], ["note", row.ref]]) client.invalidateQueries({ queryKey: key });
+    for (const key of [["review"], ["list"], ["note", row.ref], ["meta", row.ref]]) client.invalidateQueries({ queryKey: key });
   };
   const still = useMutation({
     mutationFn: () => confirm(row.ref),
@@ -69,7 +69,7 @@ function ReviewItem({ row }: { row: ReviewRow }) {
       <div className="work-actions">
         {first}
         {primary.kind !== "confirm" && stillTrue}
-        {SNOOZES.map((d) => <button key={d} disabled={busy} onClick={() => snoozed.mutate(d)} title={`Review again in ${d} days`}>Snooze {d}d</button>)}
+        {snoozing && SNOOZES.map((d) => <button key={d} disabled={busy} onClick={() => snoozed.mutate(d)} title={`Review again in ${d} days`}>Snooze {d}d</button>)}
         {primary.kind !== "archive" && <button disabled={busy} onClick={() => setDialog("archive")}>Archive…</button>}
       </div>
       {dialog === "archive" && (
@@ -86,8 +86,8 @@ function ReviewItem({ row }: { row: ReviewRow }) {
   );
 }
 
-/** Notes due for re-confirmation. */
-export function ReviewQueue({ rows }: { rows: ReviewRow[] }) {
+/** Notes due for re-confirmation. Snoozing sets a review date and does not confirm, so a caller listing unconfirmed notes turns it off. */
+export function ReviewQueue({ rows, snooze }: { rows: ReviewRow[]; snooze?: boolean }) {
   if (!rows.length) return <p className="muted pad">Nothing is due for review</p>;
-  return <div className="work-list">{rows.map((r) => <ReviewItem key={r.ref} row={r} />)}</div>;
+  return <div className="work-list">{rows.map((r) => <ReviewItem key={r.ref} row={r} snooze={snooze} />)}</div>;
 }
