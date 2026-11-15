@@ -1,13 +1,16 @@
 //! Coding-agent sessions: a CLI run as a background child process whose output is logged,
 //! normalised into events for the UI, and kept as history. The unit is a session: an unattended one is a single
 //! prompt, an interactive one takes messages until it is ended, and either may use a process of its own at a time.
+pub mod access;
 pub mod claude;
 pub mod direct;
 pub mod events;
+pub mod models;
 pub mod scope;
 pub mod store;
 
 use crate::bridge::Bridge;
+use access::Access;
 use crate::settings::Settings;
 use crate::worktree::{self, ChangedFiles, FileChange, Totals, Worktree};
 use direct::Direct;
@@ -175,6 +178,12 @@ pub struct SessionInfo {
     /// A terminal session started with an empty task: the CLI gets no first prompt.
     #[serde(default)]
     pub no_task: bool,
+    /// What a terminal session may do without asking. None (a session from before the modes): the old `policy` decides.
+    #[serde(default)]
+    pub access: Option<Access>,
+    /// The reasoning effort a terminal session was started with; None leaves it to the CLI.
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 
 /// What the user decided about a work session's edits.
@@ -223,6 +232,7 @@ pub struct ToolOutput {
 
 /// What `agent_start` may be told besides the task and the prompt.
 #[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct StartOptions {
     #[serde(default)]
     pub policy: Option<PolicyMode>,
@@ -242,6 +252,15 @@ pub struct StartOptions {
     /// Where a work session runs. None: the checkout for a terminal, a worktree for a chat.
     #[serde(default)]
     pub place: Option<Place>,
+    /// Terminal only: the CLI's own permission settings. None: the ones `policy` stands for.
+    #[serde(default)]
+    pub access: Option<Access>,
+    /// Terminal only: the reasoning effort.
+    #[serde(default)]
+    pub effort: Option<String>,
+    /// The user ticked the box that starts a session whose settings never ask.
+    #[serde(default)]
+    pub confirmed_risky: bool,
 }
 
 /// Where a work session runs.
@@ -531,6 +550,8 @@ fn session_info(id: &str, adapter: &str, task: AgentTask, scope: &Scope, options
         cli_title: None,
         direct: None,
         no_task: false,
+        access: None,
+        effort: None,
     }
 }
 
@@ -1397,6 +1418,25 @@ impl Inner {
     }
 }
 
+/// Refuse a model, effort or permission setting the engine does not have; a terminal session gets its access resolved.
+/// A chat session takes none of the terminal's settings, and a system passport keeps the model check it always had.
+fn check_launch_options(saved: &Settings, mut options: StartOptions) -> Result<StartOptions, String> {
+    if options.interface == Interface::Terminal {
+        // Codex's list comes from running Codex, so it is only asked for when there is something to check.
+        if options.model.is_some() || options.effort.is_some() {
+            models::check(&models::list(options.engine, saved), options.model.as_deref(), options.effort.as_deref())?;
+        }
+        let policy = options.policy.unwrap_or(PolicyMode::Ask);
+        options.access = Some(Access::resolve(options.engine, options.access, policy, options.confirmed_risky)?);
+    } else {
+        if options.access.is_some() || options.effort.is_some() {
+            return Err("Permission modes and effort are for terminal sessions.".into());
+        }
+        models::check(&models::list(Engine::Claude, saved), options.model.as_deref(), None)?;
+    }
+    Ok(options)
+}
+
 /// Where a work session runs, from what the user asked for and the interface.
 fn place_of(options: &StartOptions) -> Result<Place, String> {
     match (options.place, options.interface) {
@@ -1429,9 +1469,8 @@ fn register_terminal(
     info.interface = Interface::Terminal;
     info.direct = direct;
     info.no_task = prompt.trim().is_empty();
-    if options.engine == Engine::Codex {
-        info.model = None;
-    }
+    info.access = options.access;
+    info.effort = options.effort.clone();
     let context = crate::term::write_briefing(terminals, id, &first_text(options.briefing.as_deref(), prompt))?;
     info.workspace.push(context.display().to_string());
     manager.register(info)
@@ -1464,6 +1503,7 @@ pub fn start_task(
 ) -> Result<SessionInfo, String> {
     check_combination(&task, options.engine, options.interface)?;
     let terminal = options.interface == Interface::Terminal;
+    let options = check_launch_options(saved, options)?;
     // A terminal session starts no process here; the lookup only reports a missing CLI on the Start screen.
     let program = if terminal { crate::term::launch::program(options.engine, saved).map(|_| String::new())? } else { claude::available(saved)? };
     let id = uuid::Uuid::new_v4().to_string();
@@ -1484,9 +1524,6 @@ pub fn start_task(
     // A terminal can start bare; a chat session needs its first message.
     if prompt.trim().is_empty() && !terminal {
         return Err("Write a task for the session first".into());
-    }
-    if let Some(model) = options.model.as_deref().filter(|model| !matches!(*model, "sonnet" | "opus" | "haiku")) {
-        return Err(format!("Unknown model: {model}"));
     }
     let policy = options.policy.unwrap_or(PolicyMode::Ask);
     let entry = crate::git::project_entry(bridge, project)?;
@@ -2739,6 +2776,8 @@ mod tests {
             cli_title: None,
             direct: None,
             no_task: false,
+            access: None,
+            effort: None,
         }
     }
 
@@ -2957,8 +2996,53 @@ mod tests {
         let mut old = info.as_object().unwrap().clone();
         old.remove("direct");
         old.remove("noTask");
+        old.remove("access");
+        old.remove("effort");
         let loaded: SessionInfo = serde_json::from_value(Value::Object(old)).unwrap();
-        assert_eq!((loaded.direct, loaded.no_task), (None, false));
+        assert_eq!((loaded.direct, loaded.no_task, loaded.access, loaded.effort), (None, false, None, None));
+    }
+
+    #[test]
+    fn start_task_checks_access_model_and_effort() {
+        use access::{ClaudeMode, Sandbox, Approval};
+        let rig = Rig::new("access", Fake::scripted("access", &[]));
+        let folder = rig.dir.join("picked");
+        std::fs::create_dir_all(&folder).unwrap();
+        let harmless = if cfg!(windows) { std::env::var("ComSpec").unwrap_or_else(|_| "C:\\Windows\\System32\\cmd.exe".into()) } else { "/bin/sh".into() };
+        let spelled = folder.display().to_string();
+        let saved = Settings { claude_path: Some(harmless), other_folders: Some(vec![spelled.clone()]), ..Default::default() };
+        let bridge = Bridge::new(crate::settings::resolve(&saved, |_| None));
+        let (worktrees, terminals) = (rig.dir.join("worktrees"), rig.dir.join("terminals"));
+        let start = |options: StartOptions| {
+            start_task(&rig.manager, &bridge, &saved, &worktrees, &terminals, AgentTask::Folder { path: spelled.clone() }, "Do it", options)
+        };
+        let claude = |mode| Some(Access::Claude { mode });
+        let with = |access: Option<Access>, confirmed_risky: bool| StartOptions { access, confirmed_risky, ..terminal_options(Engine::Claude) };
+        if !cfg!(windows) {
+            return; // the picked folder is only accepted on Windows spellings in this rig
+        }
+
+        // Nothing asked for: the old policy decides, and the session records it.
+        assert_eq!(start(terminal_options(Engine::Claude)).unwrap().access, claude(ClaudeMode::Manual));
+        assert_eq!(start(StartOptions { policy: Some(PolicyMode::AcceptEdits), ..terminal_options(Engine::Claude) }).unwrap().access, claude(ClaudeMode::AcceptEdits));
+        // A mode that never asks needs the tick.
+        let refused = start(with(claude(ClaudeMode::BypassPermissions), false)).unwrap_err();
+        assert!(refused.contains("Tick the box to start without asking"), "{refused}");
+        assert_eq!(start(with(claude(ClaudeMode::BypassPermissions), true)).unwrap().access, claude(ClaudeMode::BypassPermissions));
+        assert_eq!(start(with(claude(ClaudeMode::Plan), false)).unwrap().access, claude(ClaudeMode::Plan));
+        // The engine's own settings only.
+        let codex_access = Some(Access::Codex { sandbox: Sandbox::ReadOnly, approval: Approval::OnRequest });
+        assert!(start(with(codex_access, true)).is_err());
+        // Model and effort come from the engine's list.
+        let info = start(StartOptions { model: Some("fable".into()), effort: Some("max".into()), ..terminal_options(Engine::Claude) }).unwrap();
+        assert_eq!((info.model.as_deref(), info.effort.as_deref()), (Some("fable"), Some("max")));
+        let bad_model = start(StartOptions { model: Some("gpt-6".into()), ..terminal_options(Engine::Claude) });
+        assert_eq!(bad_model.unwrap_err(), "Unknown model: gpt-6");
+        let bad_effort = start(StartOptions { effort: Some("ultra".into()), ..terminal_options(Engine::Claude) });
+        assert_eq!(bad_effort.unwrap_err(), "Unknown effort: ultra");
+        // A chat session takes none of this.
+        let chat = start_task(&rig.manager, &bridge, &saved, &worktrees, &terminals, work_task(), "x", StartOptions { access: claude(ClaudeMode::Plan), ..Default::default() });
+        assert_eq!(chat.unwrap_err(), "Permission modes and effort are for terminal sessions.");
     }
 
     #[test]

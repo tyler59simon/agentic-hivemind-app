@@ -395,6 +395,8 @@ mod tests {
             cli_title: None,
             direct: None,
             no_task: false,
+            access: None,
+            effort: None,
         }
     }
 

@@ -1,5 +1,7 @@
 //! Which program to start in a terminal, with which arguments and environment. Pure functions, except the thin
 //! wrappers over the real machine (`codex`, `claude`, `windows_build`).
+use crate::agent::access::{Access, Approval, Sandbox};
+use crate::agent::scope::PolicyMode;
 use crate::agent::Engine;
 use crate::settings::Settings;
 use crate::term::StartMode;
@@ -122,8 +124,9 @@ pub fn pointer_prompt(briefing: &Path) -> String {
 pub fn session_args(
     engine: Engine,
     mode: StartMode,
-    accept_edits: bool,
+    access: &Access,
     model: Option<&str>,
+    effort: Option<&str>,
     deny: &[String],
     name: Option<&str>,
     session_id: &str,
@@ -134,6 +137,9 @@ pub fn session_args(
     let prompt = pointer_prompt(&context_dir.join("briefing.md"));
     // Without a task the CLI starts bare: the briefing file exists, but nothing points the CLI at it.
     let fresh = mode == StartMode::Fresh && !no_task;
+    // Another engine's settings cannot be launched; the start checks make that unreachable, and the safe default stands in.
+    let own = Access::from_policy(engine, PolicyMode::Ask);
+    let access = if access.engine() == engine { access } else { &own };
     match engine {
         Engine::Claude => {
             let mut args = vec![text("--add-dir"), context_dir.display().to_string()];
@@ -146,7 +152,12 @@ pub fn session_args(
             if let Some(model) = model {
                 args.extend([text("--model"), text(model)]);
             }
-            args.extend([text("--permission-mode"), text(if accept_edits { "acceptEdits" } else { "manual" })]);
+            if let Some(effort) = effort {
+                args.extend([text("--effort"), text(effort)]);
+            }
+            if let Access::Claude { mode } = access {
+                args.extend([text("--permission-mode"), text(mode.name())]);
+            }
             if let Some(name) = name {
                 args.extend([text("--name"), text(name)]);
             }
@@ -160,14 +171,22 @@ pub fn session_args(
             if mode == StartMode::Resume {
                 args.extend([text("resume"), text("--last")]);
             }
-            args.extend([
-                text("--no-alt-screen"),
-                text("--no-daemon"),
-                text("-s"),
-                text(if accept_edits { "workspace-write" } else { "read-only" }),
-                text("-a"),
-                text("on-request"),
-            ]);
+            args.extend([text("--no-alt-screen"), text("--no-daemon")]);
+            if let Some(model) = model {
+                args.extend([text("-m"), text(model)]);
+            }
+            if let Some(effort) = effort {
+                // The value is a TOML string. The PTY quotes the argument for the Windows command line, so the inner
+                // quotes arrive at Codex as they are written here.
+                args.extend([text("-c"), format!("model_reasoning_effort=\"{effort}\"")]);
+            }
+            if let Access::Codex { sandbox, approval } = access {
+                match approval {
+                    // Approvals go to Codex's automatic reviewer, which only exists in the workspace-write sandbox.
+                    Approval::ApproveForMe => args.extend([text("--approve-for-me"), text("-s"), text(Sandbox::WorkspaceWrite.name())]),
+                    approval => args.extend([text("-s"), text(sandbox.name()), text("-a"), text(approval.name())]),
+                }
+            }
             if fresh {
                 args.push(prompt);
             }
@@ -229,6 +248,7 @@ pub fn windows_build() -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::access::ClaudeMode;
 
     const ID: &str = "00000000-0000-4000-8000-000000000001";
 
@@ -307,63 +327,137 @@ mod tests {
         std::fs::remove_dir_all(root).ok();
     }
 
+    fn claude(mode: ClaudeMode) -> Access {
+        Access::Claude { mode }
+    }
+
+    fn codex(sandbox: Sandbox, approval: Approval) -> Access {
+        Access::Codex { sandbox, approval }
+    }
+
+    fn manual() -> Access {
+        Access::from_policy(Engine::Claude, PolicyMode::Ask)
+    }
+
+    fn read_only() -> Access {
+        Access::from_policy(Engine::Codex, PolicyMode::Ask)
+    }
+
     #[test]
     fn session_command_lines() {
         let ctx = Path::new("C:/data/terminals/ID/context");
         let c = ctx.display().to_string();
         let prompt = pointer_prompt(&ctx.join("briefing.md"));
-        let args = |engine, mode, edits, model: Option<&str>, deny: &[String]| session_args(engine, mode, edits, model, deny, None, ID, ctx, false);
+        let args = |engine, mode, access: &Access, model: Option<&str>, effort: Option<&str>, deny: &[String]| {
+            session_args(engine, mode, access, model, effort, deny, None, ID, ctx, false)
+        };
         let (fresh, resume) = (StartMode::Fresh, StartMode::Resume);
         let none: Vec<String> = vec![];
+        let edits = Access::from_policy(Engine::Claude, PolicyMode::AcceptEdits);
+        let writes = Access::from_policy(Engine::Codex, PolicyMode::AcceptEdits);
 
         assert_eq!(
-            args(Engine::Claude, fresh, false, None, &none),
+            args(Engine::Claude, fresh, &manual(), None, None, &none),
             vec!["--add-dir", &c, "--session-id", ID, "--permission-mode", "manual", &prompt]
         );
-        assert_eq!(args(Engine::Claude, resume, true, None, &none), vec!["--add-dir", &c, "--resume", ID, "--permission-mode", "acceptEdits"]);
+        assert_eq!(args(Engine::Claude, resume, &edits, None, None, &none), vec!["--add-dir", &c, "--resume", ID, "--permission-mode", "acceptEdits"]);
         assert_eq!(
-            args(Engine::Codex, fresh, false, None, &none),
+            args(Engine::Codex, fresh, &read_only(), None, None, &none),
             vec!["--no-alt-screen", "--no-daemon", "-s", "read-only", "-a", "on-request", &prompt]
         );
         assert_eq!(
-            args(Engine::Codex, resume, true, None, &none),
+            args(Engine::Codex, resume, &writes, None, None, &none),
             vec!["resume", "--last", "--no-alt-screen", "--no-daemon", "-s", "workspace-write", "-a", "on-request"]
         );
 
-        // A model is for Claude Code only.
+        // A Claude model and effort come before the permission mode.
         assert_eq!(
-            args(Engine::Claude, fresh, false, Some("opus"), &none),
-            vec!["--add-dir", &c, "--session-id", ID, "--model", "opus", "--permission-mode", "manual", &prompt]
+            args(Engine::Claude, fresh, &manual(), Some("fable"), Some("xhigh"), &none),
+            vec!["--add-dir", &c, "--session-id", ID, "--model", "fable", "--effort", "xhigh", "--permission-mode", "manual", &prompt]
         );
-        assert_eq!(args(Engine::Codex, fresh, false, Some("opus"), &none), args(Engine::Codex, fresh, false, None, &none));
-        assert_eq!(args(Engine::Codex, resume, true, Some("opus"), &none), args(Engine::Codex, resume, true, None, &none));
+        assert_eq!(
+            args(Engine::Claude, resume, &manual(), None, Some("low"), &none),
+            vec!["--add-dir", &c, "--resume", ID, "--effort", "low", "--permission-mode", "manual"]
+        );
+        // A Codex model is `-m`; its effort is one `-c` argument holding a TOML string.
+        assert_eq!(
+            args(Engine::Codex, fresh, &read_only(), Some("gpt-6.1-sol"), Some("high"), &none),
+            vec![
+                "--no-alt-screen", "--no-daemon", "-m", "gpt-6.1-sol", "-c", "model_reasoning_effort=\"high\"", "-s", "read-only", "-a", "on-request",
+                &prompt
+            ]
+        );
+        assert_eq!(
+            args(Engine::Codex, resume, &writes, None, Some("low"), &none),
+            vec!["resume", "--last", "--no-alt-screen", "--no-daemon", "-c", "model_reasoning_effort=\"low\"", "-s", "workspace-write", "-a", "on-request"]
+        );
 
         // Deny rules follow `--add-dir` and never sit directly before the prompt.
         let deny = strings(&["Bash(x *)", "PowerShell(x *)"]);
-        let fresh_deny = args(Engine::Claude, fresh, false, None, &deny);
+        let fresh_deny = args(Engine::Claude, fresh, &manual(), None, None, &deny);
         assert_eq!(fresh_deny[..6], strings(&["--add-dir", &c, "--disallowedTools", "Bash(x *)", "PowerShell(x *)", "--session-id"])[..]);
         assert_eq!(fresh_deny[6], ID);
-        let resume_deny = args(Engine::Claude, resume, true, None, &deny);
+        let resume_deny = args(Engine::Claude, resume, &edits, None, None, &deny);
         assert_eq!(resume_deny[..6], strings(&["--add-dir", &c, "--disallowedTools", "Bash(x *)", "PowerShell(x *)", "--resume"])[..]);
         for list in [&fresh_deny, &resume_deny] {
             let after = list.iter().position(|a| a == "PowerShell(x *)").unwrap() + 1;
             assert_ne!(list[after], prompt);
         }
-        assert_eq!(args(Engine::Codex, fresh, false, None, &deny), args(Engine::Codex, fresh, false, None, &none));
-        assert_eq!(args(Engine::Codex, resume, true, None, &deny), args(Engine::Codex, resume, true, None, &none));
+        assert_eq!(args(Engine::Codex, fresh, &read_only(), None, None, &deny), args(Engine::Codex, fresh, &read_only(), None, None, &none));
+        assert_eq!(args(Engine::Codex, resume, &writes, None, None, &deny), args(Engine::Codex, resume, &writes, None, None, &none));
+    }
+
+    #[test]
+    fn every_permission_setting_has_its_flags() {
+        let ctx = Path::new("C:/data/terminals/ID/context");
+        let prompt = pointer_prompt(&ctx.join("briefing.md"));
+        let build = |engine, mode, access: &Access| session_args(engine, mode, access, None, None, &[], None, ID, ctx, false);
+        for (mode, name) in [
+            (ClaudeMode::Manual, "manual"),
+            (ClaudeMode::AcceptEdits, "acceptEdits"),
+            (ClaudeMode::Plan, "plan"),
+            (ClaudeMode::Auto, "auto"),
+            (ClaudeMode::DontAsk, "dontAsk"),
+            (ClaudeMode::BypassPermissions, "bypassPermissions"),
+        ] {
+            let fresh = build(Engine::Claude, StartMode::Fresh, &claude(mode));
+            assert_eq!(fresh[fresh.len() - 3..], strings(&["--permission-mode", name, &prompt])[..]);
+            let resume = build(Engine::Claude, StartMode::Resume, &claude(mode));
+            assert_eq!(resume[resume.len() - 2..], strings(&["--permission-mode", name])[..]);
+        }
+        for sandbox in [Sandbox::ReadOnly, Sandbox::WorkspaceWrite, Sandbox::DangerFullAccess] {
+            for approval in [Approval::OnRequest, Approval::Never] {
+                let access = codex(sandbox, approval);
+                let want = strings(&["--no-alt-screen", "--no-daemon", "-s", sandbox.name(), "-a", approval.name()]);
+                let fresh = build(Engine::Codex, StartMode::Fresh, &access);
+                assert_eq!(fresh, [want.clone(), vec![prompt.clone()]].concat());
+                let resume = build(Engine::Codex, StartMode::Resume, &access);
+                assert_eq!(resume, [strings(&["resume", "--last"]), want].concat());
+            }
+        }
+        // Approve for me has no `-a`, and always runs in workspace-write.
+        for sandbox in [Sandbox::WorkspaceWrite, Sandbox::ReadOnly] {
+            let access = codex(sandbox, Approval::ApproveForMe);
+            let want = strings(&["--no-alt-screen", "--no-daemon", "--approve-for-me", "-s", "workspace-write"]);
+            assert_eq!(build(Engine::Codex, StartMode::Fresh, &access), [want.clone(), vec![prompt.clone()]].concat());
+            assert_eq!(build(Engine::Codex, StartMode::Resume, &access), [strings(&["resume", "--last"]), want].concat());
+        }
+        // Settings of the other engine fall back to the safe default.
+        assert_eq!(build(Engine::Codex, StartMode::Fresh, &claude(ClaudeMode::BypassPermissions)), build(Engine::Codex, StartMode::Fresh, &read_only()));
+        assert_eq!(build(Engine::Claude, StartMode::Fresh, &codex(Sandbox::DangerFullAccess, Approval::Never)), build(Engine::Claude, StartMode::Fresh, &manual()));
     }
 
     #[test]
     fn a_session_name_goes_to_claude_only() {
         let ctx = Path::new("C:/data/terminals/ID/context");
         let prompt = pointer_prompt(&ctx.join("briefing.md"));
-        let named = |engine, mode| session_args(engine, mode, false, None, &[], Some("Fix login"), ID, ctx, false);
+        let named = |engine, mode| session_args(engine, mode, &Access::from_policy(engine, PolicyMode::Ask), None, None, &[], Some("Fix login"), ID, ctx, false);
         let fresh = named(Engine::Claude, StartMode::Fresh);
         assert_eq!(fresh[fresh.len() - 3..], strings(&["--name", "Fix login", &prompt])[..]);
         let resume = named(Engine::Claude, StartMode::Resume);
         assert_eq!(resume[resume.len() - 2..], strings(&["--name", "Fix login"])[..]);
         for mode in [StartMode::Fresh, StartMode::Resume] {
-            assert_eq!(named(Engine::Codex, mode), session_args(Engine::Codex, mode, false, None, &[], None, ID, ctx, false));
+            assert_eq!(named(Engine::Codex, mode), session_args(Engine::Codex, mode, &read_only(), None, None, &[], None, ID, ctx, false));
         }
     }
 
@@ -372,13 +466,14 @@ mod tests {
         let ctx = Path::new("C:/data/terminals/ID/context");
         let prompt = pointer_prompt(&ctx.join("briefing.md"));
         for engine in [Engine::Claude, Engine::Codex] {
-            let with = session_args(engine, StartMode::Fresh, false, None, &[], None, ID, ctx, false);
-            let bare = session_args(engine, StartMode::Fresh, false, None, &[], None, ID, ctx, true);
+            let access = Access::from_policy(engine, PolicyMode::Ask);
+            let with = session_args(engine, StartMode::Fresh, &access, None, None, &[], None, ID, ctx, false);
+            let bare = session_args(engine, StartMode::Fresh, &access, None, None, &[], None, ID, ctx, true);
             assert_eq!(with.last(), Some(&prompt));
             assert_eq!(bare, with[..with.len() - 1], "only the prompt is left out");
         }
         // The briefing folder stays readable to Claude, and a fresh Claude session still gets its id.
-        let bare = session_args(Engine::Claude, StartMode::Fresh, false, None, &[], None, ID, ctx, true);
+        let bare = session_args(Engine::Claude, StartMode::Fresh, &manual(), None, None, &[], None, ID, ctx, true);
         assert!(bare.contains(&"--add-dir".to_string()) && bare.contains(&"--session-id".to_string()));
     }
 
@@ -389,10 +484,11 @@ mod tests {
         assert!(prompt.contains(&ctx.join("briefing.md").display().to_string()));
         assert!(!prompt.contains('"') && !prompt.contains('\n') && !prompt.contains('\r'));
         assert!(prompt.starts_with("Read the file "));
-        for accept_edits in [false, true] {
-            let list = session_args(Engine::Claude, StartMode::Fresh, accept_edits, None, &[], None, ID, ctx, false);
+        for policy in [PolicyMode::Ask, PolicyMode::AcceptEdits] {
+            let access = Access::from_policy(Engine::Claude, policy);
+            let list = session_args(Engine::Claude, StartMode::Fresh, &access, None, None, &[], None, ID, ctx, false);
             assert_eq!(list.last(), Some(&prompt));
-            assert_eq!(list[list.len() - 2], if accept_edits { "acceptEdits" } else { "manual" });
+            assert_eq!(list[list.len() - 2], if policy == PolicyMode::AcceptEdits { "acceptEdits" } else { "manual" });
         }
     }
 

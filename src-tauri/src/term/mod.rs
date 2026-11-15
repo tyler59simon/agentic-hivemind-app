@@ -3,7 +3,8 @@ pub mod pty;
 pub mod scrollback;
 
 use crate::agent::events::Status;
-use crate::agent::scope::{self, PolicyMode};
+use crate::agent::access::Access;
+use crate::agent::scope;
 use crate::agent::{self, Engine, Interface, SessionInfo};
 use crate::settings;
 use crate::worktree;
@@ -197,8 +198,9 @@ impl Manager {
         cli.args.extend(launch::session_args(
             engine,
             mode,
-            info.policy == PolicyMode::AcceptEdits,
+            &info.access.unwrap_or_else(|| Access::from_policy(engine, info.policy)),
             info.model.as_deref(),
+            info.effort.as_deref(),
             &scope::governed_rules(),
             info.name.as_deref(),
             session_id,
@@ -496,7 +498,7 @@ pub fn write_briefing(dir: &Path, session_id: &str, text: &str) -> Result<PathBu
 mod tests {
     use super::*;
     use crate::agent::events::Mode;
-    use crate::agent::scope::AgentTask;
+    use crate::agent::scope::{AgentTask, PolicyMode};
     use crate::agent::{Review, ReviewState, SessionInfo};
     use crate::worktree::{Totals, Worktree};
     use serde_json::json;
@@ -630,6 +632,8 @@ mod tests {
                 cli_title: None,
                 direct: None,
                 no_task: false,
+                access: None,
+                effort: None,
             }
         }
 

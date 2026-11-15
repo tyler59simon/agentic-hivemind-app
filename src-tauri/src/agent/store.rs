@@ -195,6 +195,8 @@ mod tests {
             cli_title: None,
             direct: None,
             no_task: false,
+            access: None,
+            effort: None,
         }
     }
 
@@ -237,7 +239,7 @@ mod tests {
                 "title": "System passport: Billing", "workspace": ["/work/app", "/work/arch"], "status": "succeeded", "startedAt": 1002,
                 "endedAt": 2002, "costUsd": 0.25, "error": null, "structured": {"summary": "Billing takes payments."},
                 "mode": "unattended", "policy": "pre_approved", "project": null, "worktree": null, "turns": 0, "filesChanged": null,
-                "context": [], "model": null, "system": null, "review": null, "sourceSha": null, "interface": "chat", "name": null, "cliTitle": null, "direct": null, "noTask": false})
+                "context": [], "model": null, "system": null, "review": null, "sourceSha": null, "interface": "chat", "name": null, "cliTitle": null, "direct": null, "noTask": false, "access": null, "effort": null})
         );
         // The persisted JSON of a work session, as the Phase 2 document shows it.
         let path = r"C:\Users\me\AppData\Roaming\dev.hivemind.app\worktrees\paystream-5d1c0a3e\0f9e8d7c";
@@ -284,7 +286,7 @@ mod tests {
                     "baseSha": "a053c800edb319fae41bc4873e4412b763b9d93b"},
                 "turns": 2, "filesChanged": {"files": 3, "added": 42, "removed": 8},
                 "context": ["paystream:6f0c1d2e-3b4a-4c5d-8e9f-0a1b2c3d4e5f"], "model": null, "system": "paystream",
-                "review": null, "sourceSha": null, "interface": "chat", "name": null, "cliTitle": null, "direct": null, "noTask": false})
+                "review": null, "sourceSha": null, "interface": "chat", "name": null, "cliTitle": null, "direct": null, "noTask": false, "access": null, "effort": null})
         );
         save_index(&dir, &sessions).unwrap();
         std::fs::write(dir.join("index.json"), "not json").unwrap();
