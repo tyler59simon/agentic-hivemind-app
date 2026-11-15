@@ -5,6 +5,7 @@ mod capture;
 mod drafts;
 mod folders;
 mod git;
+mod notify;
 mod review;
 mod settings;
 mod term;
@@ -49,6 +50,13 @@ struct ConnectInfo {
     script: String,
     /// The signed-in OS user, for the sidebar footer.
     user: Option<String>,
+}
+
+/// The `term-attention` event; `kind` is null when the attention was cleared.
+#[derive(Serialize, Clone)]
+struct TermAttention {
+    id: String,
+    kind: Option<term::signal::Kind>,
 }
 
 #[derive(Serialize, Clone)]
@@ -439,6 +447,19 @@ fn term_list(state: State<'_, AppState>) -> Vec<term::TermInfo> {
     state.terminals.list()
 }
 
+/// The user looked at a terminal: clear its attention.
+#[tauri::command]
+fn term_seen(state: State<'_, AppState>, id: String) {
+    notify::forget(&id);
+    state.terminals.seen(&id);
+}
+
+/// The window was just hidden to the tray: tell the user once (the page keeps the flag).
+#[tauri::command]
+fn notify_tray(app: AppHandle) {
+    notify::tray(&app);
+}
+
 #[tauri::command]
 fn get_settings(state: State<'_, AppState>) -> Settings {
     settings::load(&state.settings_path)
@@ -526,6 +547,11 @@ fn draft_list(state: State<'_, AppState>) -> Vec<Value> {
     drafts::list(&state.drafts_dir)
 }
 
+/// Hook mode (`--hivemind-signal <event>`): Some(exit code) when this run is a hook, which opens no window.
+pub fn hook_main(args: &[String]) -> Option<i32> {
+    term::signal::hook_main(args)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -571,8 +597,17 @@ pub fn run() {
                 agents.clone(),
                 settings_path.clone(),
                 Arc::new(move |emit| {
-                    let term::Emit::Exit(exit) = emit;
-                    let _ = exits.emit("term-exit", exit);
+                    match emit {
+                        term::Emit::Exit(exit) => {
+                            let _ = exits.emit("term-exit", exit);
+                        }
+                        term::Emit::Attention { id, kind, title } => {
+                            let _ = exits.emit("term-attention", TermAttention { id: id.clone(), kind });
+                            if let Some(kind) = kind {
+                                notify::terminal(&exits, &id, &title, kind);
+                            }
+                        }
+                    }
                 }),
             );
             app.manage(AppState {
@@ -594,9 +629,12 @@ pub fn run() {
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
                 window.app_handle().exit(0);
             }
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Focused(true)) {
+                notify::on_focus(window.app_handle());
+            }
         })
         .invoke_handler(tauri::generate_handler![
-            lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, app_quit, quit_ack, draft_put, draft_get, draft_delete, draft_list,
+            lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, repo_branches,
             agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_request_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
             system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget

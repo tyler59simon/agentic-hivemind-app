@@ -3,6 +3,7 @@ pub mod launch;
 pub mod pricing;
 pub mod pty;
 pub mod scrollback;
+pub mod signal;
 pub mod transcript;
 pub mod usage;
 
@@ -15,6 +16,7 @@ use crate::worktree;
 use launch::Cli;
 use pty::{Spawn, TermEvent};
 use scrollback::Scrollback;
+use signal::{Intake, Kind, Scanner};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -33,6 +35,8 @@ const NOT_RUNNING: &str = "This terminal is not running";
 /// How often, and how many times, a running program is checked for its CLI's conversation file and title.
 const WATCH_EVERY: Duration = Duration::from_secs(3);
 const WATCH_TRIES: u32 = 40;
+/// How often a Claude terminal's `signals.jsonl` is looked at for new lines.
+const SIGNAL_EVERY: Duration = Duration::from_millis(500);
 /// How long `stop_all` waits, after the closes, for the exits to be recorded.
 const RECORD_WAIT: Duration = Duration::from_secs(5);
 
@@ -61,6 +65,8 @@ pub struct TermInfo {
     pub label: Option<String>,
     /// The folder a PowerShell tab runs in; None for the others.
     pub cwd: Option<String>,
+    /// What the program wants from the user right now; None when nothing.
+    pub attention: Option<Kind>,
 }
 
 /// Where a PowerShell tab starts. Serde's external tag gives `{ session: id }`, `{ checkout: { project, repo } }` and `{ folder: path }`.
@@ -87,6 +93,8 @@ pub struct TermExit {
 #[derive(Clone, Debug)]
 pub enum Emit {
     Exit(TermExit),
+    /// The terminal's attention changed: `kind` is None when it was cleared. `title` is the tab's name, for a notification.
+    Attention { id: String, kind: Option<Kind>, title: String },
 }
 pub type Sink = Arc<dyn Fn(Emit) + Send + Sync>;
 
@@ -98,6 +106,12 @@ struct Out {
     output: Option<Output>,
     /// None for a sign-in terminal.
     scrollback: Option<Scrollback>,
+}
+
+/// What a terminal wants from the user.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Attention {
+    kind: Kind,
 }
 
 struct Shared {
@@ -112,6 +126,8 @@ struct Shared {
     refreshing: AtomicBool,
     /// When the program was started (ms): a Codex conversation older than this is not its own.
     since: u64,
+    /// Set from a hook line or a bell; a lock of its own, never taken together with `terms`.
+    attention: Mutex<Option<Attention>>,
 }
 
 struct Entry {
@@ -145,6 +161,8 @@ struct Run {
     rows: u16,
     scrollback: Option<Scrollback>,
     output: Output,
+    /// A Claude session's folder for hook signals (`HIVEMIND_SIGNAL_DIR`); None for every other program.
+    signal_dir: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -166,6 +184,7 @@ fn info_of(shared: &Shared) -> TermInfo {
         windows_build: launch::windows_build(),
         label: shared.shell.as_ref().map(|(label, _)| label.clone()),
         cwd: shared.shell.as_ref().map(|(_, cwd)| cwd.clone()),
+        attention: shared.attention.lock().unwrap().map(|a| a.kind),
     }
 }
 
@@ -232,6 +251,7 @@ impl Manager {
             windows_build: build,
             label: None,
             cwd: None,
+            attention: None,
         };
         let Some((mode, found)) = start else {
             drop(terms);
@@ -242,7 +262,15 @@ impl Manager {
         };
         let cwd = session_cwd(&info)?;
         let mut cli = found?;
-        let context = session_dir(&inner.dir, session_id)?.join("context");
+        let own_dir = session_dir(&inner.dir, session_id)?;
+        let context = own_dir.join("context");
+        // Claude reports attention through hooks in a settings file of its own. If it cannot be written the terminal
+        // still starts, only without dots and notifications.
+        let signals = match engine {
+            Engine::Claude => std::env::current_exe().map_err(|e| e.to_string()).and_then(|exe| signal::prepare_claude(&own_dir, &exe)).ok(),
+            Engine::Codex => None,
+        };
+        cli.args.extend(launch::signal_args(engine, signals.as_deref()));
         cli.args.extend(launch::session_args(
             engine,
             mode,
@@ -285,6 +313,7 @@ impl Manager {
             rows,
             scrollback: Scrollback::open(scrollback_path, scrollback::KEEP).ok(),
             output,
+            signal_dir: signals.map(|_| own_dir),
         };
         match self.spawn_in(&mut terms, run) {
             Ok(started) => {
@@ -381,6 +410,7 @@ impl Manager {
             rows,
             scrollback: None,
             output,
+            signal_dir: None,
         };
         self.spawn_in(&mut terms, run)
     }
@@ -408,6 +438,7 @@ impl Manager {
             rows,
             scrollback: None,
             output,
+            signal_dir: None,
         };
         let mut terms = self.inner.terms.lock().unwrap();
         self.spawn_in(&mut terms, run)
@@ -415,7 +446,19 @@ impl Manager {
 
     pub fn write(&self, id: &str, data: &[u8]) -> Result<(), String> {
         let entry = self.inner.terms.lock().unwrap().get(id).cloned().ok_or(NOT_RUNNING)?;
-        entry.pty.write(data).map_err(|_| NOT_RUNNING.to_string())
+        entry.pty.write(data).map_err(|_| NOT_RUNNING.to_string())?;
+        if signal::is_user_input(data) {
+            self.inner.clear_attention(&entry.shared);
+        }
+        Ok(())
+    }
+
+    /// `term_seen`: the user has looked at the terminal, so its attention is cleared.
+    pub fn seen(&self, id: &str) {
+        let entry = self.inner.terms.lock().unwrap().get(id).cloned();
+        if let Some(entry) = entry {
+            self.inner.clear_attention(&entry.shared);
+        }
     }
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
@@ -492,7 +535,12 @@ impl Manager {
             return Err(format!("Close a terminal first: {MAX_TERMINALS} are already running"));
         }
         let own: Vec<String> = std::env::vars_os().map(|(name, _)| name.to_string_lossy().into_owned()).collect();
-        let (env, env_remove) = launch::environment(&own, run.memory_root.as_deref(), &run.id);
+        let (mut env, env_remove) = launch::environment(&own, run.memory_root.as_deref(), &run.id);
+        if let Some(dir) = &run.signal_dir {
+            env.push(("HIVEMIND_SIGNAL_DIR".to_string(), dir.display().to_string()));
+        }
+        // Codex rings the terminal; only its session terminals are scanned (not the sign-in and not PowerShell).
+        let scanner = (run.engine == Engine::Codex && run.session_id.is_some()).then(|| Mutex::new(Scanner::default()));
         let shared = Arc::new(Shared {
             id: run.id,
             session_id: run.session_id,
@@ -502,10 +550,20 @@ impl Manager {
             close_requested: AtomicBool::new(false),
             refreshing: AtomicBool::new(false),
             since: agent::now_ms(),
+            attention: Mutex::new(None),
         });
         let (inner, handler) = (self.inner.clone(), shared.clone());
         let sink: pty::Sink = Arc::new(move |event| match event {
             TermEvent::Data(bytes) => {
+                // One signal per batch at most (a waiting one wins), raised after `out` is released.
+                let mut rung: Option<Kind> = None;
+                if let Some(scanner) = &scanner {
+                    scanner.lock().unwrap().feed(&bytes, |kind| {
+                        if rung != Some(Kind::Waiting) {
+                            rung = Some(kind);
+                        }
+                    });
+                }
                 let mut out = handler.out.lock().unwrap();
                 if let Some(scrollback) = out.scrollback.as_mut() {
                     scrollback.append(&bytes);
@@ -514,6 +572,10 @@ impl Manager {
                     && !output(bytes)
                 {
                     out.output = None;
+                }
+                drop(out);
+                if let Some(kind) = rung {
+                    inner.raise_attention(&handler, kind);
                 }
             }
             TermEvent::Quiet => inner.quiet(&handler),
@@ -525,6 +587,9 @@ impl Manager {
         )
         .map_err(|e| format!("Could not start {}: {e}", run.cli.program))?;
         let started = info_of(&shared);
+        if let Some(dir) = &run.signal_dir {
+            self.inner.watch_signals(shared.clone(), dir.join(signal::SIGNALS));
+        }
         terms.insert(shared.id.clone(), Arc::new(Entry { shared, pty }));
         Ok(started)
     }
@@ -623,6 +688,52 @@ impl Inner {
                 let alive = inner.terms.lock().unwrap().get(&shared.id).is_some_and(|entry| Arc::ptr_eq(&entry.shared, &shared));
                 if !alive || inner.discover(&session_id, shared.since) {
                     return;
+                }
+            }
+        });
+    }
+
+    /// The tab's name for a notification: the session's name, the CLI's title, its task, else the program's name.
+    fn notice_title(&self, shared: &Shared) -> String {
+        let info = shared.session_id.as_deref().and_then(|id| self.agents.info(id).ok());
+        let fallback = if shared.engine == Engine::Codex { "Codex" } else { "Claude Code" };
+        info.and_then(|info| [info.name, info.cli_title, Some(info.title)].into_iter().flatten().map(|t| t.trim().to_string()).find(|t| !t.is_empty()))
+            .unwrap_or_else(|| fallback.to_string())
+    }
+
+    /// The program needs the user or has finished. Nothing happens when that kind is already set, so a repeated
+    /// signal does not notify twice. Takes no lock but the attention's own, and the session lock for the title.
+    fn raise_attention(&self, shared: &Shared, kind: Kind) {
+        {
+            let mut attention = shared.attention.lock().unwrap();
+            if attention.is_some_and(|a| a.kind == kind) {
+                return;
+            }
+            *attention = Some(Attention { kind });
+        }
+        let title = self.notice_title(shared);
+        (self.sink)(Emit::Attention { id: shared.id.clone(), kind: Some(kind), title });
+    }
+
+    fn clear_attention(&self, shared: &Shared) {
+        if shared.attention.lock().unwrap().take().is_some() {
+            (self.sink)(Emit::Attention { id: shared.id.clone(), kind: None, title: String::new() });
+        }
+    }
+
+    /// Follow a Claude terminal's `signals.jsonl` while it runs, on a thread of its own.
+    fn watch_signals(self: &Arc<Self>, shared: Arc<Shared>, path: PathBuf) {
+        let inner = self.clone();
+        std::thread::spawn(move || {
+            let mut intake = Intake::default();
+            loop {
+                std::thread::sleep(SIGNAL_EVERY);
+                let alive = inner.terms.lock().unwrap().get(&shared.id).is_some_and(|entry| Arc::ptr_eq(&entry.shared, &shared));
+                if !alive {
+                    return;
+                }
+                for kind in intake.poll(&path) {
+                    inner.raise_attention(&shared, kind);
                 }
             }
         });
@@ -812,6 +923,7 @@ mod tests {
         terms: Manager,
         exits: Arc<Mutex<Vec<TermExit>>>,
         changed: Arc<Mutex<usize>>,
+        attention: Attentions,
     }
 
     impl Rig {
@@ -835,8 +947,9 @@ mod tests {
                 }),
             );
             let exits: Arc<Mutex<Vec<TermExit>>> = Arc::default();
-            let terms = Manager::new_in(dir.join("terminals"), agents.clone(), settings_path, rig_sink(&exits), dir.join("home"));
-            Rig { dir, agents, terms, exits, changed }
+            let attention: Attentions = Arc::default();
+            let terms = Manager::new_in(dir.join("terminals"), agents.clone(), settings_path, rig_sink(&exits, &attention), dir.join("home"));
+            Rig { dir, agents, terms, exits, changed, attention }
         }
 
         fn info(id: &str, tree: Option<Worktree>) -> SessionInfo {
@@ -925,6 +1038,7 @@ mod tests {
                 rows: 24,
                 scrollback: Scrollback::open(self.terms.inner.scrollback_path(session).unwrap(), scrollback::KEEP).ok(),
                 output,
+                signal_dir: None,
             })
         }
 
@@ -955,11 +1069,16 @@ mod tests {
         }
     }
 
-    fn rig_sink(exits: &Arc<Mutex<Vec<TermExit>>>) -> Sink {
-        let exits = exits.clone();
+    /// The attention changes the sink saw: terminal id, kind, title.
+    type Attentions = Arc<Mutex<Vec<(String, Option<Kind>, String)>>>;
+
+    fn rig_sink(exits: &Arc<Mutex<Vec<TermExit>>>, attention: &Attentions) -> Sink {
+        let (exits, attention) = (exits.clone(), attention.clone());
         Arc::new(move |emit| {
-            let Emit::Exit(exit) = emit;
-            exits.lock().unwrap().push(exit);
+            match emit {
+                Emit::Exit(exit) => exits.lock().unwrap().push(exit),
+                Emit::Attention { id, kind, title } => attention.lock().unwrap().push((id, kind, title)),
+            }
         })
     }
 
@@ -1066,7 +1185,7 @@ mod tests {
         let run = |session: &str, memory_root: Option<PathBuf>, output: Output| {
             let cwd = PathBuf::from(&rig.agents.info(session).unwrap().worktree.unwrap().path);
             rig.terms
-                .spawn(Run { id: session.into(), session_id: Some(session.into()), engine: Engine::Claude, cli: echo.clone(), cwd, label: None, memory_root, cols: 300, rows: 24, scrollback: None, output })
+                .spawn(Run { id: session.into(), session_id: Some(session.into()), engine: Engine::Claude, cli: echo.clone(), cwd, label: None, memory_root, cols: 300, rows: 24, scrollback: None, output, signal_dir: None })
                 .unwrap()
         };
         run(&id, Some(root.clone()), output);
@@ -1364,6 +1483,7 @@ mod tests {
                 rows: 24,
                 scrollback: None,
                 output,
+                signal_dir: None,
             })
         };
         login("login-claude", output.clone()).unwrap();
@@ -1472,6 +1592,119 @@ mod tests {
         assert!(serde_json::from_value::<ShellTarget>(json!({ "other": "x" })).is_err());
     }
 
+    /// The running terminal's shared state, for tests that raise attention by hand.
+    fn shared_of(rig: &Rig, id: &str) -> Arc<Shared> {
+        rig.terms.inner.terms.lock().unwrap().get(id).unwrap().shared.clone()
+    }
+
+    fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
+        let start = Instant::now();
+        while !done() {
+            assert!(start.elapsed() < Duration::from_secs(20), "timed out: {what}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn attention_is_set_once_per_kind_and_cleared_by_seen_or_typing() {
+        let rig = Rig::new("attention");
+        let id = rig.session(Some(rig.plain_tree()));
+        rig.run(&id, lingering());
+        let shared = shared_of(&rig, &id);
+        let seen = |n: usize| {
+            let all = rig.attention.lock().unwrap();
+            assert_eq!(all.len(), n, "{all:?}");
+        };
+        assert_eq!(rig.terms.list()[0].attention, None);
+        rig.terms.inner.raise_attention(&shared, Kind::Done);
+        seen(1);
+        assert_eq!(rig.attention.lock().unwrap()[0], (id.clone(), Some(Kind::Done), "Fix the bug".to_string()));
+        assert_eq!(rig.terms.list()[0].attention, Some(Kind::Done));
+        // The same kind again says nothing; another kind does.
+        rig.terms.inner.raise_attention(&shared, Kind::Done);
+        seen(1);
+        rig.terms.inner.raise_attention(&shared, Kind::Waiting);
+        seen(2);
+        assert_eq!(rig.terms.list()[0].attention, Some(Kind::Waiting));
+        rig.terms.seen(&id);
+        seen(3);
+        assert_eq!(rig.attention.lock().unwrap()[2].1, None);
+        assert_eq!(rig.terms.list()[0].attention, None);
+        // Clearing what is not set is silent; so is a second `seen`.
+        rig.terms.seen(&id);
+        seen(3);
+        // Typing clears it, an automatic reply from the terminal does not.
+        rig.terms.inner.raise_attention(&shared, Kind::Waiting);
+        seen(4);
+        rig.terms.write(&id, b"[I").unwrap();
+        assert_eq!(rig.terms.list()[0].attention, Some(Kind::Waiting));
+        rig.terms.write(&id, b"y").unwrap();
+        seen(5);
+        assert_eq!(rig.terms.list()[0].attention, None);
+        // A named tab uses its name for the notification.
+        rig.agents.amend(&id, |info| info.name = Some("Importer".into())).unwrap();
+        rig.terms.inner.raise_attention(&shared, Kind::Done);
+        assert_eq!(rig.attention.lock().unwrap()[5].2, "Importer");
+        rig.terms.close(&id);
+        rig.wait_exits(1);
+        rig.clean();
+    }
+
+    #[test]
+    fn a_claude_start_writes_its_hooks_and_follows_its_signals() {
+        let rig = Rig::new("hooks");
+        let id = rig.session(Some(rig.plain_tree()));
+        let (output, _) = collector();
+        let folder = rig.dir.join("terminals").join(&id);
+        // Left over from an earlier run: removed at the start.
+        write_file(&folder.join(signal::SIGNALS), "{\"kind\":\"done\"}
+");
+        rig.terms.open(&id, 80, 24, Some(StartMode::Fresh), false, output).unwrap();
+        let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(folder.join(signal::SETTINGS)).unwrap()).unwrap();
+        assert_eq!(settings, signal::claude_settings(&std::env::current_exe().unwrap()));
+        assert!(!folder.join(signal::SIGNALS).exists());
+        assert!(rig.attention.lock().unwrap().is_empty());
+        // A hook line becomes the terminal's attention within a second or so.
+        write_file(&folder.join(signal::SIGNALS), "{\"kind\":\"waiting\",\"type\":\"permission_prompt\",\"at\":1}
+");
+        wait_for("the signal", || rig.terms.list().first().is_some_and(|t| t.attention == Some(Kind::Waiting)));
+        assert_eq!(rig.attention.lock().unwrap().len(), 1);
+        rig.terms.close(&id);
+        rig.wait_exits(1);
+        rig.clean();
+    }
+
+    #[test]
+    fn a_codex_osc_9_sets_attention() {
+        let rig = Rig::new("osc9");
+        let id = rig.session(Some(rig.plain_tree()));
+        let cwd = PathBuf::from(&rig.agents.info(&id).unwrap().worktree.as_ref().unwrap().path);
+        rig.agents.amend(&id, |info| info.status = Status::Running).unwrap();
+        // Windows: an interactive `cmd` whose prompt is the notification. Elsewhere: printf.
+        let cli = if cfg!(windows) {
+            Cli { program: "cmd.exe".into(), args: vec!["/d".into(), "/k".into(), "prompt $E]9;Approval requested$E\\".into()] }
+        } else {
+            Cli { program: "sh".into(), args: vec!["-c".into(), "printf '\\033]9;Approval requested\\007'; sleep 60".into()] }
+        };
+        let run = |engine, output| Run {
+            id: id.clone(), session_id: Some(id.clone()), engine, cli: cli.clone(), cwd: cwd.clone(), label: None, memory_root: None,
+            cols: 200, rows: 24, scrollback: None, output, signal_dir: None,
+        };
+        rig.terms.spawn(run(Engine::Codex, collector().0)).unwrap();
+        wait_for("the notification", || rig.terms.list().first().is_some_and(|t| t.attention == Some(Kind::Waiting)));
+        rig.terms.close(&id);
+        rig.wait_exits(1);
+        // Claude's output is not scanned: the same program raises nothing.
+        rig.attention.lock().unwrap().clear();
+        rig.agents.amend(&id, |info| info.status = Status::Running).unwrap();
+        rig.terms.spawn(run(Engine::Claude, collector().0)).unwrap();
+        std::thread::sleep(Duration::from_millis(1500));
+        assert!(rig.attention.lock().unwrap().is_empty());
+        rig.terms.close(&id);
+        rig.wait_exits(2);
+        rig.clean();
+    }
+
     #[test]
     fn stale_folders_are_removed_at_start() {
         let rig = Rig::new("stale");
@@ -1482,7 +1715,7 @@ mod tests {
             write_briefing(&terminals, id, "Briefing").unwrap();
         }
         std::fs::create_dir_all(terminals.join("login-claude")).unwrap();
-        Manager::new(terminals.clone(), rig.agents.clone(), rig.dir.join("settings.json"), rig_sink(&rig.exits));
+        Manager::new(terminals.clone(), rig.agents.clone(), rig.dir.join("settings.json"), rig_sink(&rig.exits, &rig.attention));
         assert!(terminals.join(&kept).is_dir());
         assert!(!terminals.join(&stale).exists());
         assert!(terminals.join("login-claude").is_dir());

@@ -198,6 +198,22 @@ pub fn session_args(
     }
 }
 
+/// The arguments that make a session terminal report attention (section 5.4), placed before the session's own: Claude
+/// Code reads its hooks from `settings` (written by `signal::prepare_claude`); Codex rings the terminal with OSC 9.
+/// The sign-in terminal gets none of this.
+pub fn signal_args(engine: Engine, settings: Option<&Path>) -> Vec<String> {
+    match engine {
+        Engine::Claude => settings.map(|path| vec!["--settings".to_string(), path.display().to_string()]).unwrap_or_default(),
+        // Each value is a TOML value, quoted as the reasoning-effort override above is.
+        Engine::Codex => vec![
+            "-c".into(),
+            "tui.notifications=[\"approval-requested\",\"agent-turn-complete\"]".into(),
+            "-c".into(),
+            "tui.notification_method=\"osc9\"".into(),
+        ],
+    }
+}
+
 /// The CLI's own arguments for its sign-in command.
 pub fn login_args(engine: Engine) -> Vec<String> {
     match engine {
@@ -296,6 +312,16 @@ mod tests {
 
     fn strings(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn attention_arguments_per_engine() {
+        let settings = Path::new("C:/data/terminals/x/settings.json");
+        assert_eq!(signal_args(Engine::Claude, Some(settings)), strings(&["--settings", &settings.display().to_string()]));
+        assert!(signal_args(Engine::Claude, None).is_empty());
+        let codex = signal_args(Engine::Codex, None);
+        assert_eq!(codex, strings(&["-c", "tui.notifications=[\"approval-requested\",\"agent-turn-complete\"]", "-c", "tui.notification_method=\"osc9\""]));
+        assert_eq!(signal_args(Engine::Codex, Some(settings)), codex);
     }
 
     #[cfg(windows)]

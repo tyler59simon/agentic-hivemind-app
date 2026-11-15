@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, Database, GitBranch, House, LayoutDashboard, Network, ScrollText, SquareCheck, Terminal, type LucideIcon } from "lucide-react";
 import logo from "../assets/logo.png";
 import { ProjectSwitcher } from "../features/projects/ProjectSwitcher";
+import { dotOf, useAttention } from "../features/terminal/attention";
 import { sessionsQuery } from "../lib/agent";
 import { useRecapEnabled, useSystemsEnabled, useViewsEnabled } from "../lib/connection";
 import type { ConnectInfo } from "../lib/lm";
@@ -31,11 +32,12 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
   const viewsOn = useViewsEnabled();
   const recapOn = useRecapEnabled();
   const sessions = useQuery({ ...sessionsQuery(), enabled: systemsOn });
-  const waiting = sessions.data?.some((s) => s.status === "waiting");
+  const attention = useAttention((s) => dotOf(Object.values(s.byId)));
+  const waiting = sessions.data?.some((s) => s.status === "waiting") || attention === "waiting";
   const running = sessions.data?.some((s) => s.status === "running");
   const unsaved = useWorkspace((s) => Object.values(s.dirty).some(Boolean));
   const user = info.user || "You";
-  const mark = (p: Page) => (p === "agents" && waiting ? "An agent session is waiting for you" : p === "agents" && running ? "An agent session is running" : p === "memory" && unsaved ? "A note has unsaved edits" : null);
+  const mark = (p: Page) => (p === "agents" && waiting ? "An agent session is waiting for you" : p === "agents" && attention === "done" ? "A terminal finished" : p === "agents" && running ? "An agent session is running" : p === "memory" && unsaved ? "A note has unsaved edits" : null);
 
   return (
     <aside className="sidebar">
@@ -45,7 +47,7 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
         {SECTIONS.filter((s) => (s.page !== "dashboards" || viewsOn) && (s.page !== "recap" || recapOn)).map(({ page: p, label, icon: Icon }) => (
           <button key={p} className={`nav-item ${page === p ? "on" : ""}`} aria-current={page === p ? "page" : undefined} onClick={() => go({ page: p })}>
             <Icon size="1.35em" aria-hidden /><span className="grow">{label}</span>
-            {mark(p) && <span className={`nav-dot ${p === "agents" && waiting ? "waiting" : ""}`} title={mark(p)!} aria-label={mark(p)!} />}
+            {mark(p) && <span className={`nav-dot ${p === "agents" && waiting ? "waiting" : p === "agents" && attention === "done" ? "done" : ""}`} title={mark(p)!} aria-label={mark(p)!} />}
           </button>
         ))}
       </nav>

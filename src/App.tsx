@@ -10,7 +10,8 @@ import { SettingsForm } from "./features/settings/SettingsForm";
 import { agentSessions } from "./lib/agent";
 import { captureStatus, connect, domains } from "./lib/lm";
 import { prefs } from "./lib/prefs";
-import { appQuit, quitAck, termList } from "./lib/term";
+import { appQuit, notifyTray, quitAck, termList } from "./lib/term";
+import { useAttentionEvents } from "./features/terminal/attention";
 import { QuitDialog } from "./features/terminal/QuitDialog";
 import { runningSummary } from "./features/terminal/running";
 import { useConnection } from "./lib/connection";
@@ -55,8 +56,9 @@ function useCloseGuard() {
     const stop = win.onCloseRequested(async (e) => {
       if ((await running()).length > 0) {
         e.preventDefault();
-        if (!prefs.trayNoticeShown()) { prefs.setTrayNoticeShown(); toast("Hivemind keeps running in the tray"); }
         await win.hide();
+        // A Windows notification from Rust: a toast inside the window would be raised just as the window hides.
+        if (!prefs.trayNoticeShown()) { prefs.setTrayNoticeShown(); notifyTray().catch(() => undefined); }
         return;
       }
       const status = await captureStatus().catch(() => null);
@@ -120,6 +122,7 @@ export default function App() {
   const known = useQuery({ queryKey: ["domains"], queryFn: domains, enabled: link.isSuccess });
   useShortcuts();
   useLiveRefresh(link.isSuccess);
+  useAttentionEvents();
   const closeGuard = useCloseGuard();
   const quitDialog = useQuitRequest();
   useEffect(() => { if (link.data) useConnection.getState().set(link.data.version); }, [link.data]);

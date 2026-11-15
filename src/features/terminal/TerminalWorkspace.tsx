@@ -20,6 +20,7 @@ import { useCurrentProject } from "../projects/useProject";
 import { noteQuery } from "../viewer/NoteView";
 import { termClose, termList, type ShellTarget } from "../../lib/term";
 import { closeTab, focusPane, moveTab, openIn, paneOf, reconcile, toggleSplit, update, useLayout, type Pane } from "./layout";
+import { dotOf, dotTitle, seen, useAttention } from "./attention";
 import * as registry from "./registry";
 import { isShellId, NO_SHELL_PLACE, shellLabel, shellPlaces, shellStatus, shellTitle, type ShellTab } from "./shells";
 import { statusLine, tabLabel, terminalTabs, whereLabel } from "./tabs";
@@ -165,6 +166,7 @@ function PaneView({ index, tabs, activeId, views, onView, focused, split, over, 
   const session = active && !isShell(active) ? active : undefined;
   const shell = active && isShell(active) ? active : undefined;
   const [renaming, setRenaming] = useState<string | null>(null);
+  const attention = useAttention((a) => a.byId);
   const live = registry.useLive(active?.id ?? "");
   const running = registry.useRunning(session ?? (shell ? { id: shell.id, status: shell.running ? "running" : "ended" } : { id: "", status: "idle" }));
   const usage = useQuery({ queryKey: ["agent", "usage", session?.id ?? ""], queryFn: () => agentUsage(session!.id), enabled: !!session, staleTime: 0, refetchInterval: usagePollMs(running) });
@@ -192,11 +194,13 @@ function PaneView({ index, tabs, activeId, views, onView, focused, split, over, 
       <div className={`note-tabs standalone term-tabs ${over ? "drop" : ""}`} role="tablist" aria-label={split ? `Terminals, pane ${index + 1}` : "Terminals"}>
         {tabs.map((s) => {
           const on = s.id === activeId;
+          const dot = dotOf([attention[s.id]]);
           const title = isShell(s) ? shellTitle(s) : `${s.title} · ${whereLabel(s)}`;
           return (
             <div key={s.id} role="tab" aria-selected={on} className={`note-tab-pill ${on ? "on" : ""}`} title={title}
               onPointerDown={(e) => onDragStart(e, s)}
               onClick={() => { if (!clicked()) onTab(s); }} onAuxClick={(e) => { if (e.button === 1) onClose(s); }}>
+              {dot && <span className={`tab-attention ${dot}`} role="img" title={dotTitle(dot)} aria-label={dotTitle(dot)} />}
               {isShell(s) ? <span className="tab-label">{shellLabel(s)}</span>
                 : renaming === s.id
                   ? <RenameInput s={s} onDone={() => setRenaming(null)} />
@@ -292,6 +296,7 @@ export function TerminalWorkspace({ sessions, selected, onEmpty }: { sessions: S
     if (!selectedId) return;
     closed.current.delete(selectedId);
     update((m) => openIn(m, selectedId));
+    seen(selectedId);
   }, [selectedId]);
 
   // The rail shows the focused pane's session; a PowerShell tab has none, so it shows no rail.
@@ -329,11 +334,12 @@ export function TerminalWorkspace({ sessions, selected, onEmpty }: { sessions: S
     if (isShell(s)) registry.dispose(s.id);
     leave(s);
   };
-  const show = (s: Tab) => { update((m) => openIn(m, s.id)); select(s.id); };
+  const show = (s: Tab) => { update((m) => openIn(m, s.id)); select(s.id); seen(s.id); };
   const focusOn = (pane: Pane) => {
     if (view.focus === pane) return;
     update((m) => focusPane(m, pane));
     const a = view.active[pane];
+    if (a) seen(a);
     if (a && a !== selected?.id) select(a);
   };
   const moveOther = (s: Tab) => {
