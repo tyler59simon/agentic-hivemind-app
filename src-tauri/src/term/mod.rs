@@ -365,14 +365,17 @@ impl Manager {
     /// Close a session's program and wait up to `timeout` for it to leave. Returns at once when nothing runs. The close
     /// runs on a thread of its own, so the wait is bounded even when the program ignores the close for a while.
     pub fn stop(&self, id: &str, timeout: Duration) -> Result<(), String> {
-        if !self.inner.terms.lock().unwrap().contains_key(id) {
-            return Ok(());
-        }
-        let (manager, name) = (self.clone(), id.to_string());
-        std::thread::spawn(move || manager.close(&name));
+        // The close and the wait are bound to this run's entry, not to the id: once it exits, a new run may take the id
+        // over (Request changes starts one), and that one must not be closed or waited for.
+        let Some(entry) = self.inner.terms.lock().unwrap().get(id).cloned() else { return Ok(()) };
+        let closing = entry.clone();
+        std::thread::spawn(move || {
+            closing.shared.close_requested.store(true, Ordering::SeqCst);
+            closing.pty.close();
+        });
         let waited = Instant::now();
         // The exit handler removes the entry and stores the status under one lock, so a missing entry means the status is set.
-        while self.inner.terms.lock().unwrap().contains_key(id) {
+        while self.inner.terms.lock().unwrap().get(id).is_some_and(|now| Arc::ptr_eq(now, &entry)) {
             if waited.elapsed() >= timeout {
                 return Err(format!("The program did not stop within {} seconds.", timeout.as_secs()));
             }
@@ -854,7 +857,10 @@ impl Inner {
         };
         let Ok(files) = files else { return };
         let new = worktree::totals(&files);
-        if new == info.files_changed.unwrap_or_default() {
+        // When the program ends after Request changes, the session waits for review again even if the revision kept the
+        // totals (a rename changes no counts).
+        let answered = ended && info.review.as_ref().is_some_and(|review| review.state == agent::ReviewState::ChangesRequested);
+        if new == info.files_changed.unwrap_or_default() && !answered {
             return;
         }
         let _ = self.agents.amend(session_id, |info| {
@@ -1353,6 +1359,19 @@ mod tests {
         assert_eq!(info.status, Status::Failed);
         assert_eq!(info.error.as_deref(), Some("The program exited with code 3."));
         assert!(info.ended_at.is_some());
+        rig.clean();
+    }
+
+    #[test]
+    fn an_answered_request_waits_for_review_again_with_the_same_totals() {
+        let rig = Rig::new("answered");
+        let Some(tree) = rig.git_tree() else { return };
+        let id = rig.session(Some(tree));
+        rig.agents.amend(&id, |info| info.review = Some(Review { state: ReviewState::ChangesRequested, commit: None, at: 1 })).unwrap();
+        // The revision changed no counts (here: nothing at all); the end of the program still reopens the review.
+        rig.run(&id, shell("exit 0", "exit 0"));
+        rig.wait_exits(1);
+        assert_eq!(rig.agents.info(&id).unwrap().review.map(|review| review.state), Some(ReviewState::Pending));
         rig.clean();
     }
 
