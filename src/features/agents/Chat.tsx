@@ -1,11 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, AtSign, ChevronDown, ChevronRight, CircleCheck, CircleSlash, CircleX, File, LoaderCircle, Send, ShieldQuestion, Square } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { agentAnswer, agentFiles, agentInterrupt, agentSend, type ChangedFiles, type FileChange, type SessionInfo } from "../../lib/agent";
+import { agentAnswer, agentInterrupt, agentSend, type FileChange, type SessionInfo } from "../../lib/agent";
 import { useProjectsEnabled } from "../../lib/connection";
 import { domainOf, type NoteRow } from "../../lib/lm";
 import { startSession, useApp } from "../../store";
-import { Confirm, Modal } from "../../ui/Modal";
+import { Confirm } from "../../ui/Modal";
 import { ArrowLink } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { DiffView } from "../plans/PlanDialog";
@@ -84,7 +84,7 @@ export function ApprovalCard({ item, sessionId }: { item: Extract<Item, { kind: 
 }
 
 /** The files the agent changed in a turn. Only the latest card can be reviewed. */
-export function FilesCard({ files, latest, onReview }: { files: FileChange[]; latest: boolean; onReview?: () => void }) {
+export function FilesCard({ files, latest, chip, onReview }: { files: FileChange[]; latest: boolean; chip: { text: string; tone: string } | null; onReview?: () => void }) {
   // Until the user toggles it, only the latest card is open.
   const [toggled, setOpen] = useState<boolean | null>(null);
   const open = toggled ?? latest;
@@ -96,7 +96,7 @@ export function FilesCard({ files, latest, onReview }: { files: FileChange[]; la
         {open ? <ChevronDown size="1.2em" aria-hidden /> : <ChevronRight size="1.2em" aria-hidden />}
         <File size="1.2em" aria-hidden />
         <span>{files.length} file{files.length === 1 ? "" : "s"} proposed · <span className="num-add">+{added}</span> <span className="num-del">−{removed}</span></span>
-        {latest && <span className="status-chip waiting">Waiting for review</span>}
+        {chip && <span className={"status-chip " + chip.tone}>{chip.text}</span>}
       </button>
       {open && (
         <>
@@ -113,41 +113,6 @@ export function FilesCard({ files, latest, onReview }: { files: FileChange[]; la
         </>
       )}
     </div>
-  );
-}
-
-/** The worktree's diff against where its branch started, read from disk each time it opens. */
-export function ChangesModal({ info, onClose }: { info: SessionInfo & { worktree: NonNullable<SessionInfo["worktree"]> }; onClose: () => void }) {
-  const [result, setResult] = useState<ChangedFiles | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let live = true;
-    agentFiles(info.id).then((r) => live && setResult(r)).catch((e) => live && setError(String(e)));
-    return () => { live = false; };
-  }, [info.id]);
-  const { branch, baseBranch, baseSha } = info.worktree;
-  return (
-    <Modal title={"Changes on " + branch} wide onClose={onClose}>
-      {!result && !error && <p className="muted">Reading the worktree…</p>}
-      {error && <p className="error">{error}</p>}
-      {result && (
-        <>
-          <p className="muted">Read-only: the worktree compared with {baseBranch} at {baseSha.slice(0, 7)}.</p>
-          {!result.files.length && <p className="muted">No changes.</p>}
-          <div className="effects">
-            {result.files.map((f) => (
-              <details key={f.path} open={result.files.length === 1}>
-                <summary><span className="badge">{f.status}</span> {f.path} <span className="num-add">+{f.added}</span> <span className="num-del">−{f.removed}</span></summary>
-                {f.binary ? <p className="muted small">Binary or too large to show.</p> : <DiffView text={f.diff} />}
-                {f.truncated && <p className="muted small">The diff is cut off at 16,000 characters.</p>}
-              </details>
-            ))}
-          </div>
-          {result.truncated && <p className="muted small">More than 200 files changed; the rest are not listed.</p>}
-        </>
-      )}
-      <div className="actions"><button onClick={onClose}>Close</button></div>
-    </Modal>
   );
 }
 
