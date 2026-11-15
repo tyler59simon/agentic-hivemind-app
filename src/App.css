@@ -606,6 +606,11 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .term-box.login { flex: none; height: 22rem; }
 .term-host { flex: 1; min-height: 0; padding: .7rem .2rem .3rem .9rem; }
 .term-box-inner, .term-host .xterm { height: 100%; }
+.find-open { position: absolute; top: .4rem; right: 1rem; z-index: 2; opacity: .6; }
+.find-open:hover, .find-open:focus-visible { opacity: 1; }
+.find-bar { position: absolute; top: .4rem; right: 1rem; z-index: 2; display: flex; align-items: center; gap: .3rem; padding: .3rem .4rem; border: 1px solid var(--border-strong); border-radius: .5rem; background: var(--bg-alt); }
+.find-bar input { width: 12rem; }
+.find-count { min-width: 4.5rem; color: var(--muted); font-size: .9rem; text-align: right; }
 /* xterm.css paints the viewport black with a native scrollbar; below the last whole row that shows as a dark strip.
    xterm draws its own scrollbar, so the native one is hidden. */
 .term-host .xterm .xterm-viewport { background-color: var(--bg-code) !important; scrollbar-width: none; }
