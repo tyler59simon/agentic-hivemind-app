@@ -544,8 +544,7 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .tool-call-body code { font-family: var(--font-mono); font-size: .86rem; overflow-wrap: anywhere; white-space: pre-wrap; }
 .agent-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: .8rem; }
 .agent-toolbar select { height: 2.4rem; padding: 0 .8rem; }
-.engine-chip, .branch-label { display: inline-flex; align-items: center; gap: .6rem; height: 2.4rem; padding: 0 1rem; border: 1px solid var(--border-strong); border-radius: .45rem; min-width: 0; }
-.engine-chip { font-weight: 600; }
+.branch-label { display: inline-flex; align-items: center; gap: .6rem; height: 2.4rem; padding: 0 1rem; border: 1px solid var(--border-strong); border-radius: .45rem; min-width: 0; }
 .branch-label { font-family: var(--font-mono); font-size: .9rem; }
 .toolbar-sep { width: 1px; height: 1.6rem; background: var(--border-strong); }
 .nav-dot.waiting { background: var(--warn); }
@@ -590,7 +589,7 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 
 /* ---- Terminal ---- */
 .toolbar-fact { display: inline-flex; align-items: center; gap: .6rem; height: 2.4rem; white-space: nowrap; }
-/* the same box as Phase 2's .engine-chip, which it replaces */
+/* the engine button: the box Phase 2's static engine chip had */
 .engine-menu .menu-button { gap: .6rem; height: 2.4rem; padding: 0 1rem; font-weight: 600; min-width: 11rem; justify-content: flex-start; }
 .engine-menu .menu-button > svg:last-child { margin-left: auto; }
 .segmented.wide button { padding: .55rem 1rem; }

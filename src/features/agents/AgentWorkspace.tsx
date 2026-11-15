@@ -1,15 +1,16 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
-import { ChevronDown, CircleCheck, CircleX, CodeXml, FileText, GitBranch, Layers, Link as LinkIcon, LoaderCircle, MessageSquare, Network, Plus, Shield, ShieldCheck, Sparkle, SquareTerminal } from "lucide-react";
+import { Check, ChevronDown, CircleCheck, CircleX, CodeXml, FileText, GitBranch, Layers, Link as LinkIcon, LoaderCircle, MessageSquare, Network, Plus, Shield, ShieldCheck, Sparkle, SquareTerminal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import logo from "../../assets/logo.png";
-import { agentCancel, agentEnd, agentSession, agentSetPolicy, sessionsQuery, type Policy, type SeqEvent, type SessionInfo } from "../../lib/agent";
+import { agentCancel, agentEnd, agentSession, agentSetPolicy, engineOf, enginesQuery, sessionsQuery, type Engine, type Interface, type Policy, type SeqEvent, type SessionInfo } from "../../lib/agent";
 import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { connect } from "../../lib/lm";
 import { openChange, openProject, openReview, openSession, openSystem, startSession, useApp } from "../../store";
 import { Markdown } from "../../ui/Markdown";
+import { Menu } from "../../ui/Menu";
 import { Confirm } from "../../ui/Modal";
-import { ArrowLink, PageHeader, Row, Section } from "../../ui/Page";
+import { ArrowLink, PageHeader, Row, Section, Tabs } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
 import { displayId, engineName } from "../changes/changes";
@@ -21,8 +22,9 @@ import { ApprovalCard, Composer, FilesCard, RemoveWorktree } from "./Chat";
 import { apply, build, cost, duration, EMPTY, merge, type Finished, type Item, type Transcript as State } from "./events";
 import { filesWord, reviewLabel } from "../review/review";
 import { ALLOWED_NOTE, isEnded, permissionLines, POLICIES, repoName, waitingForReview } from "./session";
+import { useSessionDraft } from "./draft";
 import { StartSession } from "./StartSession";
-import { accessLabel } from "../terminal/tabs";
+import { accessLabel, latestOf } from "../terminal/tabs";
 import { StopSession, TerminalWorkspace } from "../terminal/TerminalWorkspace";
 
 const when = (ms: number) => new Date(ms).toLocaleString();
@@ -131,25 +133,70 @@ const permissionFlags = (s: SessionInfo) => {
     : `Claude Code was started with --permission-mode ${edits ? "acceptEdits" : "manual"}`;
 };
 
-/** Engine, permissions and branch of an interactive session. */
-function Toolbar({ info }: { info: SessionInfo }) {
+/** Engine, interface switch, permissions and branch. Without a session (the terminal empty state) only the engine menu and the switch show. */
+function Toolbar({ info, face, sessions, onAsk }: { info?: SessionInfo; face: Interface; sessions: SessionInfo[]; onAsk: (face: Interface) => void }) {
   const client = useQueryClient();
-  const setPolicy = (policy: Policy) => agentSetPolicy(info.id, policy).then(() => client.invalidateQueries({ queryKey: ["agent", "sessions"] })).catch((e) => toast(String(e), "error"));
+  const project = useApp((s) => s.project) ?? null;
+  const draftEngine = useSessionDraft((s) => s.engine);
+  const engines = useQuery(enginesQuery());
+  const engine: Engine = info ? engineOf(info) : draftEngine;
+  const others: Engine[] = info ? [engine === "codex" ? "claude" : "codex"] : ["claude", "codex"];
+  const adapterOf = (e: Engine) => (e === "codex" ? "codex" : "claude-code");
+  const setPolicy = (policy: Policy) => info && agentSetPolicy(info.id, policy).then(() => client.invalidateQueries({ queryKey: ["agent", "sessions"] })).catch((e) => toast(String(e), "error"));
+  const newWith = (e: Engine) => {
+    const draft = useSessionDraft.getState();
+    draft.setEngine(e);
+    draft.setInterface(face);
+    startSession();
+  };
+  const switchTo = (next: Interface) => {
+    if (next === face && info) return;
+    const s = latestOf(sessions, project, next);
+    if (s) openSession(s.id); else { onAsk(next); useApp.getState().go({ page: "agents" }); }
+  };
   return (
     <div className="agent-toolbar">
-      <span className="engine-chip"><Sparkle size="1.2em" aria-hidden />{engineName(info.adapter)}</span>
-      <span className="toolbar-sep" />
-      {info.interface === "terminal"
-        ? <span className="toolbar-fact" title={permissionFlags(info)}><Shield size="1.2em" aria-hidden />{accessLabel(info)}</span>
-        : (
-          <select aria-label="Permissions" value={info.policy} disabled={isEnded(info)} onChange={(e) => setPolicy(e.target.value as Policy)}>
-            {POLICIES.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
-          </select>
+      <Menu className="engine-menu" label="Engine" button={<><Sparkle size="1.2em" aria-hidden />{engineName(adapterOf(engine))}<ChevronDown size="1.1em" aria-hidden /></>}>
+        {(close) => (
+          <>
+            {info && (
+              <>
+                <li className="menu-label" role="none">This session</li>
+                <li role="none"><button role="menuitem" onClick={close}><span className="grow">{engineName(info.adapter)}</span><Check size="1em" aria-hidden /></button></li>
+                <li className="menu-sep" role="none" />
+              </>
+            )}
+            {others.map((e) => {
+              const error = engines.data?.find((x) => x.engine === e)?.error ?? undefined;
+              return (
+                <li key={e} role="none">
+                  <button role="menuitem" disabled={!!error} title={error} onClick={() => { close(); newWith(e); }}>
+                    <span className="grow">New session with {engineName(adapterOf(e))}</span>
+                  </button>
+                </li>
+              );
+            })}
+            <li className="menu-note" role="none">A session keeps the engine it was started with.</li>
+          </>
         )}
-      <span className="toolbar-sep" />
-      <span className="branch-label" title={info.worktree ? "from " + info.worktree.baseBranch : undefined}>
-        <GitBranch size="1.2em" aria-hidden />{info.worktree?.branch ?? "worktree removed"}
-      </span>
+      </Menu>
+      <Tabs pill label="Interface" items={[{ id: "chat", label: "Chat" }, { id: "terminal", label: "Terminal" }]} value={face} onChange={switchTo} />
+      {info && (
+        <>
+          <span className="toolbar-sep" />
+          {info.interface === "terminal"
+            ? <span className="toolbar-fact" title={permissionFlags(info)}><Shield size="1.2em" aria-hidden />{accessLabel(info)}</span>
+            : (
+              <select aria-label="Permissions" value={info.policy} disabled={isEnded(info)} onChange={(e) => setPolicy(e.target.value as Policy)}>
+                {POLICIES.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+              </select>
+            )}
+          <span className="toolbar-sep" />
+          <span className="branch-label" title={info.worktree ? "from " + info.worktree.baseBranch : undefined}>
+            <GitBranch size="1.2em" aria-hidden />{info.worktree?.branch ?? "worktree removed"}
+          </span>
+        </>
+      )}
     </div>
   );
 }
@@ -300,10 +347,12 @@ export function AgentWorkspace() {
   const sessions = useQuery({ ...sessionsQuery(), enabled });
   const all = sessions.data ?? [];
   // After the last terminal tab is closed, the terminal view stays up with its empty state.
-  const [terminalEmpty, setTerminalEmpty] = useState(false);
-  const emptied = terminalEmpty && !picked;
-  useEffect(() => { if (picked) setTerminalEmpty(false); }, [picked]);
-  const current = emptied ? undefined : all.find((s) => s.id === picked)?.id ?? picked ?? all[0]?.id;
+  // The switch asks for an interface that has no session yet: that interface's empty state shows until a session is picked.
+  const [asked, setAsked] = useState<Interface | null>(null);
+  const emptied = asked === "terminal" && !picked;
+  const chatEmpty = asked === "chat" && !picked;
+  useEffect(() => { if (picked) setAsked(null); }, [picked]);
+  const current = emptied || chatEmpty ? undefined : all.find((s) => s.id === picked)?.id ?? picked ?? all[0]?.id;
   const currentInfo = all.find((s) => s.id === current);
   const terminalView = emptied || currentInfo?.interface === "terminal";
   const days = useMemo(() => {
@@ -321,7 +370,7 @@ export function AgentWorkspace() {
     <div className="page fill-page">
       <PageHeader title="Agent Workspace" actions={<StopSession session={currentInfo} />}
         subtitle={terminalView ? "Run Claude Code or Codex in a local, project-aware harness with memory and context." : undefined} />
-      {currentInfo && (currentInfo.mode === "interactive" || terminalView) && <Toolbar info={currentInfo} />}
+      {(terminalView || chatEmpty || currentInfo?.mode === "interactive") && <Toolbar info={currentInfo} face={terminalView ? "terminal" : "chat"} sessions={all} onAsk={setAsked} />}
       {!enabled ? <p className="muted">Agent sessions need a newer Living Memory (one with the <code>projects</code> command).</p>
         : sessions.isLoading ? <p className="muted">Loading…</p>
         : sessions.error ? <p className="error">{String(sessions.error)}</p>
@@ -331,7 +380,7 @@ export function AgentWorkspace() {
             <button className="primary" onClick={startSession}><Plus size="1.2em" aria-hidden />Start a session</button>
             <ArrowLink onClick={() => go({ page: "architecture" })}>Open Architecture</ArrowLink>
           </div>
-        ) : terminalView ? <TerminalWorkspace sessions={all} selected={currentInfo} onEmpty={() => { setTerminalEmpty(true); go({ page: "agents" }); }} />
+        ) : terminalView ? <TerminalWorkspace sessions={all} selected={currentInfo} onEmpty={() => { setAsked("terminal"); go({ page: "agents" }); }} />
         : (
           <div className="agents">
             <nav className="session-list" aria-label="Sessions">
