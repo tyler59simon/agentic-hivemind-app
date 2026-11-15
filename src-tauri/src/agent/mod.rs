@@ -34,6 +34,9 @@ const LIMIT: &str = "3 agent sessions are already working; wait for one to finis
 const STOPPED: &str = "The agent process has stopped";
 const STDERR_LINES: usize = 5;
 const TITLE: usize = 60;
+const RESERVED: &str = "A review action is running for this session";
+const BUSY: &str = "This session is busy";
+const ALREADY_RESERVED: &str = "A review action is already running for this session";
 
 /// One coding-agent CLI: how to start it and how to read what it prints.
 pub trait Adapter: Send + Sync {
@@ -97,6 +100,48 @@ pub struct SessionInfo {
     /// The system whose architecture line was in the briefing (a slug, for display only).
     #[serde(default)]
     pub system: Option<String>,
+    // Phase 4
+    /// The user's decision about the proposed edits. None reads as "pending".
+    #[serde(default)]
+    pub review: Option<Review>,
+    /// For a passport session: the repository's HEAD when it succeeded.
+    #[serde(default)]
+    pub source_sha: Option<String>,
+}
+
+/// What the user decided about a work session's edits.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewState {
+    Pending,
+    Approved,
+    ChangesRequested,
+    Dismissed,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Review {
+    pub state: ReviewState,
+    /// The commit an approval made (or found); None in every other state.
+    pub commit: Option<String>,
+    /// When the state last changed, in milliseconds since the epoch.
+    pub at: u64,
+}
+
+/// What a finished turn does to the review decision: an answer to "request changes", or a different set of edits, puts
+/// the session back in the queue.
+pub fn review_after_turn(review: Option<Review>, before: Option<&Totals>, after: Option<&Totals>, now: u64) -> Option<Review> {
+    let reopened = Some(Review { state: ReviewState::Pending, commit: None, at: now });
+    match review.as_ref().map(|review| review.state) {
+        Some(ReviewState::ChangesRequested) => reopened,
+        Some(ReviewState::Approved | ReviewState::Dismissed)
+            if after.is_some_and(|after| after.files > 0 && *after != before.copied().unwrap_or_default()) =>
+        {
+            reopened
+        }
+        _ => review,
+    }
 }
 
 /// What `agent_start` may be told besides the task and the prompt.
@@ -146,6 +191,29 @@ pub enum Emit {
     SessionsChanged,
 }
 
+/// Holds one session for a review action. While it lives, nothing else may start a turn in the session, end it or remove
+/// its worktree. Dropping it releases the session.
+pub struct Reservation {
+    inner: Arc<Inner>,
+    id: String,
+}
+
+impl Reservation {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        // A destructor must not panic, so a poisoned mutex is taken as it is.
+        let mut sessions = self.inner.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(session) = sessions.get_mut(&self.id) {
+            session.reserved = false;
+        }
+    }
+}
+
 pub type Sink = Arc<dyn Fn(Emit) + Send + Sync>;
 
 /// Why a session's process was killed.
@@ -190,6 +258,8 @@ impl Tape {
 
 struct Session {
     info: SessionInfo,
+    /// A review action holds this session: no turn may start and it may not be ended or lose its worktree. Memory only.
+    reserved: bool,
     /// The process, while there is one.
     live: Option<Live>,
     /// `None` until first needed for a session loaded from disk; then counted from its log.
@@ -208,7 +278,7 @@ pub struct Manager {
     inner: Arc<Inner>,
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
@@ -336,7 +406,7 @@ impl Manager {
     /// Load the history from `dir`. Sessions left running by a previous run are closed as failed (unattended) or idle.
     pub fn new(dir: PathBuf, adapter: Arc<dyn Adapter>, sink: Sink) -> Manager {
         let sessions =
-            store::recover(&dir, now_ms()).into_iter().map(|info| (info.id.clone(), Session { info, live: None, tape: None })).collect();
+            store::recover(&dir, now_ms()).into_iter().map(|info| (info.id.clone(), Session { info, reserved: false, live: None, tape: None })).collect();
         Manager { inner: Arc::new(Inner { dir, adapter, sink, sessions: Mutex::new(sessions) }) }
     }
 
@@ -370,6 +440,8 @@ impl Manager {
             context: if interactive { options.context.clone() } else { vec![] },
             model: options.model.clone().filter(|_| interactive),
             system: options.system.clone().filter(|_| interactive),
+            review: None,
+            source_sha: None,
         };
 
         // Without its folder a session could not be logged or replayed, so find that out first.
@@ -378,7 +450,7 @@ impl Manager {
         inner.free_slot(&mut sessions)?;
         let (live, stdout, stderr) = inner.spawn(&id, &launch, false, info.model.clone())?;
         let (child, stdin) = (live.child.clone(), live.stdin.clone());
-        sessions.insert(id.clone(), Session { info: info.clone(), live: Some(live), tape: Some(Tape::default()) });
+        sessions.insert(id.clone(), Session { info: info.clone(), reserved: false, live: Some(live), tape: Some(Tape::default()) });
         if interactive {
             let at = now_ms();
             let event = RunEvent::UserMessage { text: prompt.to_string(), context: options.context.clone() };
@@ -407,6 +479,7 @@ impl Manager {
         text: &str,
         options: SendOptions,
         launch: impl FnOnce(&SessionInfo) -> Result<Launch, String>,
+        held: Option<&Reservation>,
     ) -> Result<(), String> {
         let inner = &self.inner;
         store::log_path(&inner.dir, id)?;
@@ -416,6 +489,9 @@ impl Manager {
         let line = inner.adapter.user_line(&message(options.briefing.as_deref(), text));
         let mut sessions = inner.sessions.lock().unwrap();
         let info = Inner::askable(&sessions, id)?;
+        if sessions.get(id).is_some_and(|session| session.reserved) && held.is_none_or(|h| h.id() != id) {
+            return Err(RESERVED.into());
+        }
         let alive = sessions.get(id).and_then(|session| session.live.as_ref()).filter(|live| is_open(&live.stdin)).map(|live| live.stdin.clone());
         let stdin = match alive {
             Some(stdin) => stdin,
@@ -428,6 +504,9 @@ impl Manager {
                 let launch = launch(&info)?;
                 sessions = inner.sessions.lock().unwrap();
                 let info = Inner::askable(&sessions, id)?;
+                if sessions.get(id).is_some_and(|session| session.reserved) && held.is_none_or(|h| h.id() != id) {
+                    return Err(RESERVED.into());
+                }
                 if sessions.get(id).is_some_and(|session| session.live.is_some()) {
                     return Err("The previous agent process is still shutting down; try again in a moment".into());
                 }
@@ -514,6 +593,9 @@ impl Manager {
         let process = {
             let mut sessions = inner.sessions.lock().unwrap();
             let session = sessions.get_mut(id).ok_or("Unknown session")?;
+            if session.reserved {
+                return Err(RESERVED.into());
+            }
             if session.info.mode != Mode::Interactive {
                 return Err("Only an interactive session can be ended; stop a background session instead".into());
             }
@@ -610,7 +692,10 @@ impl Manager {
         let total = (!all.is_empty()).then(|| worktree::totals(&all));
         let changed = inner.sessions.lock().unwrap().get(id).is_some_and(|session| session.info.files_changed != total);
         if changed {
-            inner.update(id, |info| info.files_changed = total);
+            inner.update(id, |info| {
+                info.review = review_after_turn(info.review.take(), info.files_changed.as_ref(), total.as_ref(), now_ms());
+                info.files_changed = total;
+            });
         }
         Ok(files)
     }
@@ -619,6 +704,9 @@ impl Manager {
     pub fn remove_worktree(&self, id: &str) -> Result<(), String> {
         let inner = &self.inner;
         store::log_path(&inner.dir, id)?;
+        if inner.sessions.lock().unwrap().get(id).is_some_and(|session| session.reserved) {
+            return Err(RESERVED.into());
+        }
         let tree = inner.worktree_of(id)?;
         if !inner.sessions.lock().unwrap().get(id).is_some_and(|session| is_over(session.info.status)) {
             return Err("End the session before removing its worktree".into());
@@ -675,6 +763,44 @@ impl Manager {
                 kill(child);
             }
         }
+    }
+
+    /// One session's details, as listed.
+    #[allow(dead_code)] // review.rs calls it from the next commit
+    pub fn info(&self, id: &str) -> Result<SessionInfo, String> {
+        store::log_path(&self.inner.dir, id)?;
+        self.inner.sessions.lock().unwrap().get(id).map(|session| session.info.clone()).ok_or_else(|| "Unknown session".into())
+    }
+
+    /// Change a session's details, save the index and tell the UI.
+    #[allow(dead_code)] // review.rs calls it from the next commit
+    pub fn amend(&self, id: &str, change: impl FnOnce(&mut SessionInfo)) -> Result<SessionInfo, String> {
+        let inner = &self.inner;
+        store::log_path(&inner.dir, id)?;
+        let mut sessions = inner.sessions.lock().unwrap();
+        let session = sessions.get_mut(id).ok_or("Unknown session")?;
+        change(&mut session.info);
+        let info = session.info.clone();
+        let _ = inner.persist(&mut sessions);
+        drop(sessions);
+        (inner.sink)(Emit::SessionsChanged);
+        Ok(info)
+    }
+
+    /// Reserve a session for one review action: it must not be mid-turn or already reserved.
+    #[allow(dead_code)] // review.rs calls it from the next commit
+    pub fn reserve(&self, id: &str) -> Result<Reservation, String> {
+        store::log_path(&self.inner.dir, id)?;
+        let mut sessions = self.inner.sessions.lock().unwrap();
+        let session = sessions.get_mut(id).ok_or("Unknown session")?;
+        if matches!(session.info.status, Status::Running | Status::Waiting) {
+            return Err(BUSY.into());
+        }
+        if session.reserved {
+            return Err(ALREADY_RESERVED.into());
+        }
+        session.reserved = true;
+        Ok(Reservation { inner: self.inner.clone(), id: id.to_string() })
     }
 
     /// Every session, newest first.
@@ -869,12 +995,15 @@ impl Inner {
         // The stored totals can have been changed by `Manager::files` without an event, so they are reconciled on every
         // call and never inferred from the list.
         let recounted = session.info.files_changed != new;
+        let review = review_after_turn(session.info.review.clone(), session.info.files_changed.as_ref(), new.as_ref(), now_ms());
+        let reopened = session.info.review != review;
+        session.info.review = review;
         session.info.files_changed = new;
         if listed {
             let at = now_ms();
             self.record(&mut sessions, id, at, Record::Event { at, event: RunEvent::FilesChanged { files } });
         }
-        if listed || recounted {
+        if listed || recounted || reopened {
             let _ = self.persist(&mut sessions);
         }
     }
@@ -1097,15 +1226,29 @@ pub fn start_task(
 }
 
 /// Send a message to a session, starting a process for it again when it has none.
-pub fn send_task(manager: &Manager, bridge: &Bridge, saved: &Settings, id: &str, text: &str, options: SendOptions) -> Result<(), String> {
-    manager.send(id, text, options, |info| {
-        Ok(Launch {
-            scope: scope::for_session(bridge, info)?,
-            program: claude::available(saved)?,
-            budget_usd: saved.agent_budget_usd(),
-            memory_root: bridge.launch().root,
-        })
-    })
+pub fn send_task(
+    manager: &Manager,
+    bridge: &Bridge,
+    saved: &Settings,
+    id: &str,
+    text: &str,
+    options: SendOptions,
+    held: Option<&Reservation>,
+) -> Result<(), String> {
+    manager.send(
+        id,
+        text,
+        options,
+        |info| {
+            Ok(Launch {
+                scope: scope::for_session(bridge, info)?,
+                program: claude::available(saved)?,
+                budget_usd: saved.agent_budget_usd(),
+                memory_root: bridge.launch().root,
+            })
+        },
+        held,
+    )
 }
 
 #[cfg(test)]
@@ -1467,7 +1610,7 @@ mod tests {
 
     /// `Manager::send` with the rig's launch, for either manager.
     fn send_on(manager: &Manager, rig: &Rig, id: &str, text: &str) -> Result<(), String> {
-        manager.send(id, text, SendOptions::default(), |info| Ok(rig.launch(rig.scope(info.worktree.clone()))))
+        manager.send(id, text, SendOptions::default(), |info| Ok(rig.launch(rig.scope(info.worktree.clone()))), None)
     }
 
     fn last_outcome(lines: &[&str]) -> Option<Outcome> {
@@ -2123,5 +2266,163 @@ mod tests {
         assert_eq!(rig.manager.set_policy(&started.id, PolicyMode::PreApproved).unwrap_err(), "Unknown policy");
         rig.manager.end(&started.id).unwrap();
         assert_eq!(rig.manager.set_policy(&started.id, PolicyMode::Ask).unwrap_err(), "This session has ended");
+    }
+
+    #[test]
+    fn review_json_is_the_contract_shape() {
+        let review = Review { state: ReviewState::ChangesRequested, commit: None, at: 5 };
+        let text = serde_json::to_string(&review).unwrap();
+        assert_eq!(text, r#"{"state":"changes_requested","commit":null,"at":5}"#);
+        assert_eq!(serde_json::from_str::<Review>(&text).unwrap(), review);
+        let states = [ReviewState::Pending, ReviewState::Approved, ReviewState::ChangesRequested, ReviewState::Dismissed];
+        let names: Vec<String> = states.iter().map(|state| serde_json::to_string(state).unwrap()).collect();
+        assert_eq!(names, [r#""pending""#, r#""approved""#, r#""changes_requested""#, r#""dismissed""#]);
+    }
+
+    #[test]
+    fn a_turn_reopens_the_review_when_it_should() {
+        let f = |files: u64| Totals { files, added: files, removed: 0 };
+        let with = |state, commit: Option<&str>| Some(Review { state, commit: commit.map(String::from), at: 1 });
+        assert_eq!(review_after_turn(None, Some(&f(1)), Some(&f(2)), 9), None);
+        let pending = with(ReviewState::Pending, None);
+        for totals in [None, Some(f(0)), Some(f(3))] {
+            let reopened = review_after_turn(with(ReviewState::ChangesRequested, None), totals.as_ref(), totals.as_ref(), 9);
+            assert_eq!(reopened, Some(Review { state: ReviewState::Pending, commit: None, at: 9 }));
+        }
+        let approved = with(ReviewState::Approved, Some("abc"));
+        assert_eq!(
+            review_after_turn(approved.clone(), Some(&f(0)), Some(&f(2)), 9),
+            Some(Review { state: ReviewState::Pending, commit: None, at: 9 })
+        );
+        assert_eq!(review_after_turn(approved.clone(), None, Some(&f(2)), 9), Some(Review { state: ReviewState::Pending, commit: None, at: 9 }));
+        assert_eq!(review_after_turn(approved.clone(), Some(&f(2)), Some(&f(0)), 9), approved);
+        assert_eq!(review_after_turn(approved.clone(), Some(&f(2)), None, 9), approved);
+        let dismissed = with(ReviewState::Dismissed, None);
+        assert_eq!(review_after_turn(dismissed.clone(), Some(&f(3)), Some(&f(3)), 9), dismissed);
+        assert_eq!(
+            review_after_turn(dismissed, Some(&f(3)), Some(&f(4)), 9),
+            Some(Review { state: ReviewState::Pending, commit: None, at: 9 })
+        );
+        assert_eq!(review_after_turn(pending.clone(), Some(&f(0)), Some(&f(4)), 9), pending);
+    }
+
+    #[test]
+    fn amend_changes_saves_and_announces() {
+        let rig = Rig::printing("amend", &WORK);
+        let started = rig.start(None).unwrap();
+        rig.finish(&started.id);
+        let seen_before = rig.seen.lock().unwrap().len();
+        let review = Review { state: ReviewState::Approved, commit: Some("abc".into()), at: 7 };
+        let changed = rig.manager.amend(&started.id, |info| info.review = Some(review.clone())).unwrap();
+        assert_eq!(changed.review, Some(review.clone()));
+        assert_eq!(rig.info(&started.id).review, Some(review.clone()));
+        let (reopened, ..) = rig.reopened("amend", &[]);
+        assert_eq!(reopened.sessions().into_iter().find(|info| info.id == started.id).map(|info| info.review), Some(Some(review)));
+        assert!(rig.seen.lock().unwrap()[seen_before..].iter().any(|emit| matches!(emit, Emit::SessionsChanged)));
+        assert_eq!(rig.manager.amend("../index", |_| {}).unwrap_err(), "Invalid session id");
+        assert_eq!(rig.manager.amend("00000000-0000-4000-8000-000000000009", |_| {}).unwrap_err(), "Unknown session");
+    }
+
+    /// An interactive work session at rest, as an index written by an earlier run holds it.
+    fn resting(id: &str) -> SessionInfo {
+        SessionInfo {
+            id: id.to_string(),
+            adapter: "fake".into(),
+            cli_version: None,
+            task: work_task(),
+            title: "Fix the bug".into(),
+            workspace: vec![],
+            status: Status::Idle,
+            started_at: 1,
+            ended_at: None,
+            cost_usd: None,
+            error: None,
+            structured: None,
+            mode: Mode::Interactive,
+            policy: PolicyMode::Ask,
+            project: Some("paystream".into()),
+            worktree: None,
+            turns: 1,
+            files_changed: None,
+            context: vec![],
+            model: None,
+            system: None,
+            review: None,
+            source_sha: None,
+        }
+    }
+
+    /// A manager on a history that holds `sessions`.
+    fn loaded(name: &str, sessions: &[SessionInfo]) -> (Rig, Manager) {
+        let rig = Rig::new(name, Fake::scripted(name, &[]));
+        store::save_index(&rig.dir.join("sessions"), sessions).unwrap();
+        let (manager, ..) = rig.reopened(name, &[]);
+        (rig, manager)
+    }
+
+    #[test]
+    fn reserve_refuses_a_busy_or_reserved_session() {
+        let id = new_id();
+        let (_rig, manager) = loaded("reserve", &[resting(&id)]);
+        let held = manager.reserve(&id).unwrap();
+        assert_eq!(held.id(), id);
+        assert_eq!(manager.reserve(&id).err(), Some("A review action is already running for this session".to_string()));
+        drop(held);
+        assert!(manager.reserve(&id).is_ok());
+
+        let busy = Rig::lingering("reserve-busy");
+        let running = busy.start(None).unwrap();
+        assert_eq!(busy.manager.reserve(&running.id).err(), Some("This session is busy".to_string()));
+        assert_eq!(manager.reserve("../index").err(), Some("Invalid session id".to_string()));
+        assert_eq!(manager.reserve("00000000-0000-4000-8000-000000000009").err(), Some("Unknown session".to_string()));
+    }
+
+    #[test]
+    fn a_reserved_session_refuses_send_end_and_remove() {
+        let id = new_id();
+        let (_rig, manager) = loaded("reserved-refuses", &[resting(&id)]);
+        let called = Mutex::new(0);
+        let attempt = |held: Option<&Reservation>| {
+            manager.send(
+                &id,
+                "x",
+                SendOptions::default(),
+                |_| {
+                    *called.lock().unwrap() += 1;
+                    Err("no launch".into())
+                },
+                held,
+            )
+        };
+        let held = manager.reserve(&id).unwrap();
+        let running = "A review action is running for this session".to_string();
+        assert_eq!(attempt(None), Err(running.clone()));
+        assert_eq!(*called.lock().unwrap(), 0);
+        assert_eq!(manager.end(&id), Err(running.clone()));
+        assert_eq!(manager.remove_worktree(&id), Err(running));
+        assert_eq!(attempt(Some(&held)), Err("no launch".to_string()));
+        drop(held);
+        assert_eq!(attempt(None), Err("no launch".to_string()));
+        assert_eq!(*called.lock().unwrap(), 2);
+    }
+
+    #[test]
+    fn a_reservation_is_released_when_its_holder_fails() {
+        let id = new_id();
+        let (_rig, manager) = loaded("reserve-release", &[resting(&id)]);
+        fn fails(manager: &Manager, id: &str) -> Result<(), String> {
+            let _held = manager.reserve(id)?;
+            Err("the action failed".to_string())
+        }
+        assert_eq!(fails(&manager, &id), Err("the action failed".to_string()));
+        assert!(manager.reserve(&id).is_ok());
+        let (other, other_id) = (manager.clone(), id.clone());
+        let panicked = std::thread::spawn(move || {
+            let _held = other.reserve(&other_id).unwrap();
+            panic!("the action panicked");
+        })
+        .join();
+        assert!(panicked.is_err());
+        assert!(manager.reserve(&id).is_ok());
     }
 }

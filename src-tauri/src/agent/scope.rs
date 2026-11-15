@@ -426,6 +426,7 @@ mod tests {
             branch: "hivemind/0f9e8d7c".into(),
             base_branch: "main".into(),
             base_sha: "a053c800edb319fae41bc4873e4412b763b9d93b".into(),
+            reviewed_sha: None,
         };
         let scope = work(tree.clone(), PolicyMode::Ask, "\n  Fix the retry\nmore").unwrap();
         assert_eq!(scope.cwd, PathBuf::from("/wt/paystream-5d1c0a3e/0f9e8d7c"));

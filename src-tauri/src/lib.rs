@@ -143,7 +143,7 @@ async fn agent_start(
 #[tauri::command]
 async fn agent_send(state: State<'_, AppState>, session_id: String, text: String, options: Option<agent::SendOptions>) -> Result<(), String> {
     let (agents, bridge, path) = (state.agents.clone(), state.bridge.clone(), state.settings_path.clone());
-    blocking(move || agent::send_task(&agents, &bridge, &settings::load(&path), &session_id, &text, options.unwrap_or_default())).await
+    blocking(move || agent::send_task(&agents, &bridge, &settings::load(&path), &session_id, &text, options.unwrap_or_default(), None)).await
 }
 
 /// Answer a permission request a session is waiting on.

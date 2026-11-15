@@ -38,8 +38,9 @@ export function sessionForNote(sessions: SessionInfo[], project: string, ref: st
     .reduce<SessionInfo | undefined>((newest, s) => (!newest || s.startedAt > newest.startedAt ? s : newest), undefined);
 }
 
-/** Changes to look at, and the agent is not in the middle of something (Phase 4 adds the review state). */
-export const waitingForReview = (s: SessionInfo) => (s.filesChanged?.files ?? 0) > 0 && s.status !== "running" && s.status !== "waiting";
+/** README 7.3: files changed, no turn in progress, and the user has not decided. */
+export const waitingForReview = (s: SessionInfo) =>
+  (s.filesChanged?.files ?? 0) > 0 && s.status !== "running" && s.status !== "waiting" && (!s.review || s.review.state === "pending");
 
 const NOTE_CHARS = 1200;
 

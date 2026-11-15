@@ -7,7 +7,7 @@ let n = 0;
 const session = (o: Partial<SessionInfo>): SessionInfo => ({
   id: `s${++n}`, adapter: "claude-code", cliVersion: null, task: { kind: "work", project: "paystream", repo: "C:/code/ingestion" }, title: "t",
   workspace: [], status: "idle", startedAt: n, endedAt: null, costUsd: null, error: null, structured: null,
-  mode: "interactive", policy: "ask", project: "paystream", worktree: null, turns: 0, filesChanged: null, context: [], model: null, system: null, ...o,
+  mode: "interactive", policy: "ask", project: "paystream", worktree: null, turns: 0, filesChanged: null, context: [], model: null, system: null, review: null, sourceSha: null, ...o,
 });
 const project: Project = {
   slug: "paystream", name: "PayStream", status: "active", repos: ["C:/code/ingestion"], aliases: [], description: "",
@@ -37,6 +37,9 @@ describe("session helpers", () => {
     expect(waitingForReview(session({ status: "idle", filesChanged: totals }))).toBe(true);
     expect(waitingForReview(session({ status: "running", filesChanged: totals }))).toBe(false);
     expect(waitingForReview(session({ status: "idle", filesChanged: null }))).toBe(false);
+    const decided = (state: "approved" | "dismissed" | "changes_requested" | "pending") => session({ status: "idle", filesChanged: totals, review: { state, commit: null, at: 1 } });
+    expect(waitingForReview(decided("pending"))).toBe(true);
+    for (const state of ["approved", "dismissed", "changes_requested"] as const) expect(waitingForReview(decided(state))).toBe(false);
   });
 
   it("permission lines follow the policy", () => {
