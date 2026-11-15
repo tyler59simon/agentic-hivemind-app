@@ -62,11 +62,13 @@
   --chip-next-bg: var(--chip-run-bg);
   --chip-next-border: var(--chip-run-border);
   --chip-next-fg: var(--chip-run-fg);
-  /* --selected marks the current or selected item, --done finished steps, --running a running status;
-     --teal stays for live agent activity. */
+  /* --selected marks the current or selected item, --done finished steps, --progress completion bars,
+     --unsaved the unsaved-edit dot, --running a running status; --teal stays for live agent activity. */
   --selected: var(--teal);
   --selected-node: #01e4a1;
   --done: var(--teal);
+  --progress: var(--teal);
+  --unsaved: var(--teal);
   --running: var(--accent);
   --node-border: #9177a8;
   --node-on-bg: #183834;
@@ -163,6 +165,8 @@
   --selected: #7ecf1c;
   --selected-node: #7ecf1c;
   --done: #62d6a2;
+  --progress: #62d6a2;
+  --unsaved: #7ecf1c;
   --running: #3accdf;
   --node-border: #6f908d;
   --node-on-bg: #1d3f22;
@@ -628,7 +632,7 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .row-line { display: flex; align-items: center; gap: .5rem; min-width: 0; }
 .clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .progress { display: block; flex: 1; min-width: 4rem; height: .4rem; border-radius: 999px; background: var(--bg-hover); overflow: hidden; }
-.progress > span { display: block; height: 100%; background: var(--teal); border-radius: 999px; }
+.progress > span { display: block; height: 100%; background: var(--progress); border-radius: 999px; }
 .progress-line { display: flex; align-items: center; gap: .5rem; }
 .repo-activity { display: flex; flex-direction: column; gap: .25rem; }
 .commit-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -695,6 +699,7 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .branch-label { font-family: var(--font-mono); font-size: .9rem; }
 .toolbar-sep { width: 1px; height: 1.6rem; background: var(--border-strong); }
 .nav-dot.waiting { background: var(--warn); }
+.nav-dot.unsaved { background: var(--unsaved); }
 .chat-user { display: flex; gap: .9rem; align-items: flex-start; }
 .chat-user .avatar { width: 2rem; height: 2rem; font-size: .9rem; }
 .chat-bubble { min-width: 0; display: flex; flex-direction: column; gap: .2rem; padding: .6rem 1rem; border: 1px solid var(--border-strong); border-radius: .6rem; background: var(--bg-hover); white-space: pre-wrap; overflow-wrap: anywhere; }
