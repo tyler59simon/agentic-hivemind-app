@@ -15,6 +15,10 @@ pub const BATCH_BYTES: usize = 64 * 1024;
 pub const CLOSE_GRACE: Duration = Duration::from_secs(3);
 /// Output has stopped for this long: a good moment to look at what changed on disk.
 pub const QUIET: Duration = Duration::from_secs(2);
+/// After the program has exited, how long the reader may take to reach the end of the output before `Exit` is sent anyway.
+const DRAIN: Duration = Duration::from_secs(2);
+/// How often the batcher looks at the clock when no output arrives.
+const TICK: Duration = Duration::from_millis(100);
 
 pub enum TermEvent {
     Data(Vec<u8>),
@@ -72,8 +76,11 @@ impl Session {
 
         // Reader: blocking reads, nothing else. A read cannot time out, so batching is its own thread.
         let (chunks_tx, chunks_rx) = mpsc::channel::<Vec<u8>>();
+        // Dropped when the reader ends, which the waiter waits for (up to DRAIN).
+        let (reader_done, reader_ended) = mpsc::channel::<()>();
         let answer = writer.clone();
         let reader_thread = std::thread::spawn(move || {
+            let _done = reader_done;
             let mut buffer = [0u8; 16 * 1024];
             let mut first = true;
             while let Ok(n) = reader.read(&mut buffer) {
@@ -95,15 +102,27 @@ impl Session {
         });
 
         // Batcher: whole reads joined for up to BATCH, so a flood is tens of messages a second.
+        // It also stops when the waiter sets `stop`, after sending what has arrived.
         let batches = sink.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = stop.clone();
         let batch_thread = std::thread::spawn(move || {
-            let mut dirty = false;
+            // When the last output of the current burst arrived; None once its `Quiet` was sent.
+            let mut last: Option<Instant> = None;
             loop {
-                let mut batch = match chunks_rx.recv_timeout(QUIET) {
+                let mut batch = match chunks_rx.recv_timeout(TICK) {
                     Ok(chunk) => chunk,
                     Err(mpsc::RecvTimeoutError::Timeout) => {
-                        if std::mem::take(&mut dirty) {
+                        if last.is_some_and(|at| at.elapsed() >= QUIET) {
+                            last = None;
                             batches(TermEvent::Quiet);
+                        }
+                        if stopping.load(Ordering::SeqCst) {
+                            let rest: Vec<u8> = chunks_rx.try_iter().flatten().collect();
+                            if !rest.is_empty() {
+                                batches(TermEvent::Data(rest));
+                            }
+                            break;
                         }
                         continue;
                     }
@@ -116,7 +135,7 @@ impl Session {
                         Err(_) => break,
                     }
                 }
-                dirty = true;
+                last = Some(Instant::now());
                 batches(TermEvent::Data(batch));
             }
         });
@@ -128,8 +147,14 @@ impl Session {
             let code = child.wait().ok().map(|status| status.exit_code());
             flag.store(true, Ordering::SeqCst);
             drop(closing.lock().unwrap().take());
-            let _ = reader_thread.join();
+            // Closing the pseudoconsole normally ends the reader. It does not when another process holds the output
+            // pipe: CreatePseudoConsole makes its pipe handles inheritable for a moment, so a process started by any
+            // thread at that moment keeps a copy. Then the reader stays blocked until that process ends; send `Exit`
+            // after DRAIN anyway and leave the reader to finish on its own.
+            let _ = reader_ended.recv_timeout(DRAIN);
+            stop.store(true, Ordering::SeqCst);
             let _ = batch_thread.join();
+            drop(reader_thread);
             sink(TermEvent::Exit(code));
         });
         Ok(Session { pid, master, writer, killer, exited })
