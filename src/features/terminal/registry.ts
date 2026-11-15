@@ -174,9 +174,10 @@ export async function start(id: string, mode: StartMode): Promise<void> {
   await attach(id, mode, false);
 }
 
-/** Focus the terminal unless a dialog or a menu is open. */
+/** Focus the terminal unless a dialog or a menu is open that it is not part of (the sign-in terminal sits in a dialog). */
 function focus(live: Live) {
-  if (document.querySelector('[role="dialog"], [role="menu"]')) return;
+  const open = document.querySelector('[role="dialog"], [role="menu"]');
+  if (open && !open.contains(live.box)) return;
   live.term.focus();
 }
 

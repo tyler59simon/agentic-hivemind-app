@@ -42,6 +42,10 @@ export interface SessionInfo {
 /** The engine of a session, whatever adapter name older code stored. */
 export const engineOf = (s: Pick<SessionInfo, "adapter">): Engine => (s.adapter === "codex" ? "codex" : "claude");
 
+export interface EngineInfo {
+  engine: Engine; label: string; path: string | null; error: string | null; chat: boolean; chatReason: string | null;
+}
+
 export type RunEvent =
   | { type: "started"; model: string | null; cliVersion: string | null; plugins: string[] }
   | { type: "text"; text: string }
@@ -66,6 +70,8 @@ export interface SessionLog { info: SessionInfo; events: SeqEvent[] }
 
 /** The path of the CLI that would be launched; rejects with a reason the user can act on. */
 export const agentAvailable = () => invoke<string>("agent_available");
+/** Which engines can be started, Claude Code first, and with which interface. */
+export const agentEngines = () => invoke<EngineInfo[]>("agent_engines");
 export const agentStart = (task: AgentTask, prompt: string, options?: StartOptions) => invoke<SessionInfo>("agent_start", { task, prompt, options: options ?? null });
 export const agentSend = (sessionId: string, text: string, options?: SendOptions) => invoke<void>("agent_send", { sessionId, text, options: options ?? null });
 export const agentAnswer = (sessionId: string, requestId: string, decision: Exclude<Decision, "withdrawn">) => invoke<void>("agent_answer", { sessionId, requestId, decision });
@@ -93,3 +99,4 @@ export const reviewToolOutput = (sessionId: string, toolUseId: string) => invoke
 export const reviewBase = (w: Worktree) => w.reviewedSha ?? w.baseSha;
 
 export const sessionsQuery = () => ({ queryKey: ["agent", "sessions"], queryFn: agentSessions });
+export const enginesQuery = () => ({ queryKey: ["agent", "engines"], queryFn: agentEngines, staleTime: 60_000 });

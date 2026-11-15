@@ -62,7 +62,6 @@ impl Engine {
         }
     }
 
-    #[allow(dead_code)] // used from commit 8
     pub fn label(self) -> &'static str {
         match self {
             Engine::Claude => "Claude Code",
