@@ -119,6 +119,11 @@ pub fn pointer_prompt(briefing: &Path) -> String {
     format!("Read the file {} first. It holds your task and the project context for this session.", briefing.display())
 }
 
+/// The one-line prompt that points a resumed CLI at the user's review feedback.
+pub fn review_prompt(file: &Path) -> String {
+    format!("Read the file {}. It holds review feedback on your changes.", file.display())
+}
+
 /// The CLI's own arguments for a session terminal (section 5.4), without the launch prefix.
 #[allow(clippy::too_many_arguments)] // each argument is one independent launch setting
 pub fn session_args(

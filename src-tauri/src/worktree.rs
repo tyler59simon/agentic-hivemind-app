@@ -191,11 +191,8 @@ fn line_count(text: &str) -> u64 {
     (text.matches('\n').count() + usize::from(!text.is_empty() && !text.ends_with('\n'))) as u64
 }
 
-pub fn changes(tree: &Worktree) -> Result<Vec<FileChange>, String> {
-    let dir = Path::new(&tree.path);
-    let numstat = run(dir, &["diff", "--numstat", "-z", "--no-renames", tree.review_base()])?;
-    let names = run(dir, &["diff", "--name-status", "-z", "--no-renames", tree.review_base()])?;
-    let others = run(dir, &["ls-files", "--others", "--exclude-standard", "-z"])?;
+/// The files `git diff --numstat -z` and `--name-status -z` list, as the review shows them.
+pub(crate) fn parse_changes(numstat: &str, names: &str) -> Vec<FileChange> {
     let fields: Vec<&str> = names.split('\0').filter(|f| !f.is_empty()).collect();
     let status: HashMap<&str, &str> = fields.iter().step_by(2).zip(fields.iter().skip(1).step_by(2)).map(|(s, p)| (*p, *s)).collect();
     let mut files = Vec::new();
@@ -216,6 +213,15 @@ pub fn changes(tree: &Worktree) -> Result<Vec<FileChange>, String> {
             binary,
         });
     }
+    files
+}
+
+pub fn changes(tree: &Worktree) -> Result<Vec<FileChange>, String> {
+    let dir = Path::new(&tree.path);
+    let numstat = run(dir, &["diff", "--numstat", "-z", "--no-renames", tree.review_base()])?;
+    let names = run(dir, &["diff", "--name-status", "-z", "--no-renames", tree.review_base()])?;
+    let others = run(dir, &["ls-files", "--others", "--exclude-standard", "-z"])?;
+    let mut files = parse_changes(&numstat, &names);
     for path in others.split('\0').filter(|p| !p.is_empty()) {
         let Some(content) = untracked(tree, path) else { continue };
         let (added, binary) = match content {

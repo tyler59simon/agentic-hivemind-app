@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Review, SessionInfo } from "../../lib/agent";
-import { afterDecision, proposedFiles, reviewLabel, reviewSessions, reviewVersion, sessionHeading, step } from "./review";
+import { afterDecision, directBase, proposedFiles, reviewActions, reviewLabel, reviewSessions, reviewVersion, sessionHeading, step } from "./review";
 
 const tree = { repo: "C:/code/ingestion", path: "C:/data/worktrees/x/1", branch: "hivemind/1", baseBranch: "main", baseSha: "a".repeat(40) };
 const base: SessionInfo = {
@@ -57,6 +57,34 @@ describe("review helpers", () => {
 
   it("proposedFiles counts waiting sessions only", () => {
     expect(proposedFiles(reviewSessions(all, "p", undefined))).toBe(3);
+  });
+
+  it("lists a session in the user's own folder, and offers it no commit or discard", () => {
+    const direct = { path: "C:/code/app", repo: "C:/code/app", headSha: "a".repeat(40), startTree: "b".repeat(40) };
+    const own = make("own", { worktree: null, direct, status: "ended" });
+    expect(reviewSessions([own, make("none", { worktree: null })], "p", undefined).map((s) => s.id)).toEqual(["own"]);
+    expect(reviewActions(own)).toEqual({ approve: false, stopAndApprove: false, requestChanges: false, discard: false, dismiss: true });
+    expect(reviewActions(a)).toEqual({ approve: true, stopAndApprove: false, requestChanges: true, discard: true, dismiss: true });
+    expect(proposedFiles([own])).toBe(3);
+  });
+
+  it("a running terminal session in a worktree offers Stop and approve in place of Approve", () => {
+    const running = make("t", { interface: "terminal", status: "running" });
+    expect(reviewActions(running)).toEqual({ approve: false, stopAndApprove: true, requestChanges: true, discard: true, dismiss: true });
+    expect(reviewActions({ ...running, status: "waiting" }).stopAndApprove).toBe(true);
+    // Ended, a terminal session keeps the normal Approve; a running chat session is not a terminal one.
+    expect(reviewActions({ ...running, status: "ended" })).toEqual({ approve: true, stopAndApprove: false, requestChanges: true, discard: true, dismiss: true });
+    expect(reviewActions({ ...running, interface: "chat" }).stopAndApprove).toBe(false);
+    // A terminal session without a worktree has nothing to commit.
+    expect(reviewActions({ ...running, worktree: null }).stopAndApprove).toBe(false);
+  });
+
+  it("directBase tells what a direct session is compared with", () => {
+    const direct = { path: "C:/n", repo: null, headSha: null, startTree: null };
+    expect(directBase(a)).toBeNull();
+    expect(directBase(make("x", { direct: { ...direct, repo: "C:/n", startTree: "b".repeat(40) } }))).toBe("snapshot");
+    expect(directBase(make("x", { direct: { ...direct, repo: "C:/n", headSha: "a".repeat(40) } }))).toBe("head");
+    expect(directBase(make("x", { direct }))).toBe("none");
   });
 
   it("step moves inside the list", () => {

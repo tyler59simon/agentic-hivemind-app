@@ -9,6 +9,10 @@ use std::time::Duration;
 
 /// `git add -A` hashes every changed file of a large repository, so it gets longer than a status call.
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(120);
+/// The session waits for its start snapshot. A folder with many new files that are not ignored can take half a minute
+/// (20,000 small untracked files: 30 s, then 11 s), so the start gives up sooner; Review then diffs against HEAD and
+/// says that edits made before the session are included.
+const START_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 const QUICK: Duration = Duration::from_secs(10);
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -42,7 +46,7 @@ pub fn describe(dir: &Path) -> Direct {
         return Direct { path, repo: None, head_sha: None, start_tree: None };
     }
     let head_sha = crate::git::head_sha(dir).ok();
-    Direct { path, repo, head_sha, start_tree: snapshot(dir).ok() }
+    Direct { path, repo, head_sha, start_tree: snapshot_within(dir, START_SNAPSHOT_TIMEOUT).ok() }
 }
 
 /// Deletes the temporary index when it goes out of scope.
@@ -59,6 +63,11 @@ impl Drop for TempIndex {
 
 /// The tree of everything in `dir`'s work tree now. Works on a copy of the index, so the user's own index is not touched.
 pub fn snapshot(dir: &Path) -> Result<String, String> {
+    snapshot_within(dir, SNAPSHOT_TIMEOUT)
+}
+
+/// `snapshot` with a limit on `git add -A`.
+fn snapshot_within(dir: &Path, limit: Duration) -> Result<String, String> {
     let index = PathBuf::from(git_text(dir, &["rev-parse", "--git-path", "index"], QUICK)?);
     let index = if index.is_absolute() { index } else { dir.join(index) };
     let temp = TempIndex(std::env::temp_dir().join(format!("hivemind-index-{}", uuid::Uuid::new_v4())));
@@ -71,7 +80,7 @@ pub fn snapshot(dir: &Path) -> Result<String, String> {
         command.args(args).env("GIT_INDEX_FILE", &temp.0);
         run_with_timeout(command, timeout).map(|text| text.trim().to_string())
     };
-    run(&["add", "-A"], SNAPSHOT_TIMEOUT)?;
+    run(&["add", "-A"], limit)?;
     let tree = run(&["write-tree"], QUICK)?;
     if crate::git::is_sha(&tree) { Ok(tree) } else { Err("git did not print a tree id".into()) }
 }

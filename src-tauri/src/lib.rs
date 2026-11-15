@@ -282,15 +282,23 @@ async fn agent_remove_worktree(state: State<'_, AppState>, session_id: String) -
 /// The files a work session changed in its worktree since its review base.
 #[tauri::command]
 async fn review_files(state: State<'_, AppState>, session_id: String) -> Result<Vec<worktree::FileChange>, String> {
-    let (agents, root) = (state.agents.clone(), state.worktrees_dir.clone());
-    blocking(move || review::files(&agents, &root, &session_id)).await
+    let (agents, root, bridge, path) = (state.agents.clone(), state.worktrees_dir.clone(), state.bridge.clone(), state.settings_path.clone());
+    blocking(move || {
+        let (saved, registry) = (settings::load(&path), |slug: &str| git::project_entry(&bridge, slug));
+        review::files(&agents, &root, &review::DirectEnv { saved: &saved, registry: &registry }, &session_id)
+    })
+    .await
 }
 
 /// The two versions of one file a work session changed.
 #[tauri::command]
 async fn review_file(state: State<'_, AppState>, session_id: String, path: String) -> Result<review::FileContents, String> {
-    let (agents, root) = (state.agents.clone(), state.worktrees_dir.clone());
-    blocking(move || review::file(&agents, &root, &session_id, &path)).await
+    let (agents, root, bridge, settings_path) = (state.agents.clone(), state.worktrees_dir.clone(), state.bridge.clone(), state.settings_path.clone());
+    blocking(move || {
+        let (saved, registry) = (settings::load(&settings_path), |slug: &str| git::project_entry(&bridge, slug));
+        review::file(&agents, &root, &review::DirectEnv { saved: &saved, registry: &registry }, &session_id, &path)
+    })
+    .await
 }
 
 /// Commit the session's edits on its own branch. Never merges, never pushes.
@@ -298,6 +306,20 @@ async fn review_file(state: State<'_, AppState>, session_id: String, path: Strin
 async fn review_approve(state: State<'_, AppState>, session_id: String, message: String) -> Result<String, String> {
     let (agents, root) = (state.agents.clone(), state.worktrees_dir.clone());
     blocking(move || review::approve(&agents, &root, &session_id, &message)).await
+}
+
+/// Close a terminal session's program, then commit its edits as `review_approve` does.
+#[tauri::command]
+async fn review_stop_and_approve(state: State<'_, AppState>, session_id: String, message: String) -> Result<String, String> {
+    let (agents, terminals, root) = (state.agents.clone(), state.terminals.clone(), state.worktrees_dir.clone());
+    blocking(move || review::stop_and_approve(&agents, &terminals, &root, &session_id, &message)).await
+}
+
+/// Write a terminal session's review comments to a file and resume its program with a pointer to it.
+#[tauri::command]
+async fn review_request_terminal_changes(state: State<'_, AppState>, session_id: String, text: String) -> Result<(), String> {
+    let (agents, terminals) = (state.agents.clone(), state.terminals.clone());
+    blocking(move || review::request_terminal_changes(&agents, &terminals, &session_id, &text).map(|_| ())).await
 }
 
 /// Send the session a message asking for changes.
@@ -690,7 +712,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, repo_branches,
-            agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_request_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
+            agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_stop_and_approve, review_request_changes, review_request_terminal_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
             system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status
         ])
         .build(tauri::generate_context!())
