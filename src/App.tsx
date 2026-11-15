@@ -71,6 +71,7 @@ function useLiveRefresh(enabled: boolean) {
         client.invalidateQueries({ queryKey: ["views"] }); // views.json: dashboards added or removed from the CLI
         client.invalidateQueries({ queryKey: ["learning"] }); // learning.json: the collection switches
         client.invalidateQueries({ queryKey: ["log"] });
+        client.invalidateQueries({ queryKey: ["recap"] });
       }),
       listen("agent-sessions-changed", () => client.invalidateQueries({ queryKey: ["agent", "sessions"] })),
       listen<{ ref: string }>("open-note", (e) => useWorkspace.getState().openNote(e.payload.ref)),

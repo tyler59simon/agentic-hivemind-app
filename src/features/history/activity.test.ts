@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Operation } from "../../lib/lm";
-import { actorOf, dayLabel, domainOfOp, noteIdsOf, verbOf, visible } from "./activity";
+import { actorOf, serverActor, dayLabel, domainOfOp, noteIdsOf, verbOf, visible } from "./activity";
 
 const op = (kind: string, files: string[] = [], id = "op1", state = "committed"): Operation => ({ operation_id: id, kind, state, created: "2026-11-09T02:00:00+00:00", files });
 
@@ -52,5 +52,17 @@ describe("activity", () => {
     expect(verbOf("change_create")).toBe("started change");
     expect(verbOf("change_close")).toBe("closed change");
     expect(actorOf({ operation_id: "x", kind: "change_update" }, new Set()).kind).toBe("plan");
+  });
+});
+
+describe("serverActor", () => {
+  it("maps the actors Living Memory records", () => {
+    expect(serverActor("agent:claude")).toEqual({ kind: "agent", label: "Claude" });
+    expect(serverActor("maintenance").label).toBe("Maintenance");
+    expect(serverActor("obsidian").kind).toBe("obsidian");
+    expect(serverActor("plan").kind).toBe("plan");
+    expect(serverActor("undo").label).toBe("Undo");
+    expect(serverActor("command", true).kind).toBe("you");
+    expect(serverActor("command").label).toBe("Command line");
   });
 });

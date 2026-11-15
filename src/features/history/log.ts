@@ -32,3 +32,6 @@ export function sessionLine(row: Pick<LogRow, "harness" | "notes" | "files">): s
   return [row.harness, plural(row.notes?.length ?? 0, "note saved", "notes saved"), plural(row.files ?? 0, "file changed", "files changed")]
     .filter(Boolean).join(", ");
 }
+
+/** The line under a log row: the server's summary, else the older `detail`. */
+export const rowSummary = (row: Pick<LogRow, "summary" | "detail">): string => row.summary || row.detail || "";

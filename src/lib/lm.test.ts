@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { LmError, addAction, changePlan, changesArgs, list, listArgs, logArgs, openArgs, projectPlan, projects, projectsArgs, read, reviewArgs, run, searchArgs, setDetail, setTransport, systemPlan, systemsArgs, timelineArgs, type Invoke } from "./lm";
+import { LmError, addAction, changePlan, changesArgs, list, listArgs, logArgs, openArgs, projectPlan, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setDetail, setTransport, systemPlan, systemsArgs, timelineArgs, type Invoke } from "./lm";
 
 afterEach(() => setTransport(invoke as Invoke));
 
@@ -97,6 +97,11 @@ describe("run", () => {
     expect(logArgs({})).toEqual(["log", "--actor", "viewer"]);
     expect(logArgs({ domain: "d", project: "hive", since: "2026-11-01", until: "2026-11-09", note: "CHG-014", type: "decision", event: "created", limit: 20 }))
       .toEqual(["log", "--domain", "d", "--project", "hive", "--since", "2026-11-01", "--until", "2026-11-09", "--note", "CHG-014", "--type", "decision", "--event", "created", "--limit", "20", "--actor", "viewer"]);
+  });
+
+  it("recap covers every domain, narrowed by project and days", () => {
+    expect(recapArgs({})).toEqual(["recap", "--all-domains", "--actor", "viewer"]);
+    expect(recapArgs({ days: 30, project: "hive" })).toEqual(["recap", "--all-domains", "--days", "30", "--project", "hive", "--actor", "viewer"]);
   });
 
   it("set-detail puts the revision in argv and sends no stdin", async () => {

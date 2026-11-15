@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LogRow } from "../../lib/lm";
-import { groupByDay, sessionLine, targetOf } from "./log";
+import { groupByDay, rowSummary, sessionLine, targetOf } from "./log";
 
 const row = (over: Partial<LogRow> = {}): LogRow =>
   ({ time: "2026-11-10T10:00:00", event: "created", ref: "demo:abc12345", title: "T", type: "decision", domain: "demo", projects: [], ...over });
@@ -22,5 +22,14 @@ describe("log view", () => {
   it("summarizes a session", () => {
     expect(sessionLine({ harness: "claude", notes: ["a", "b"], files: 1 })).toBe("claude, 2 notes saved, 1 file changed");
     expect(sessionLine({})).toBe("0 notes saved, 0 files changed");
+  });
+});
+
+describe("rowSummary", () => {
+  it("prefers the summary, falls back to detail, else empty", () => {
+    expect(rowSummary({ summary: "New", detail: "Old" })).toBe("New");
+    expect(rowSummary({ detail: "Old" })).toBe("Old");
+    expect(rowSummary({ summary: "", detail: "Old" })).toBe("Old");
+    expect(rowSummary({})).toBe("");
   });
 });

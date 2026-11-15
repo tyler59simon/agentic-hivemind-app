@@ -82,7 +82,7 @@ export function ActivityView() {
         <div className="segmented compact">
           {ACTORS.map((a) => <button key={a.label} className={who === a.kind ? "on" : ""} onClick={() => setWho(a.kind)}>{a.label}</button>)}
         </div>
-        <span className="muted small">Who made a change is inferred: Living Memory's journal does not record it.</span>
+        {!base.some((o) => o.actor) && <span className="muted small">Who made a change is inferred: Living Memory's journal does not record it.</span>}
       </div>
       {source.isLoading && <p className="muted pad">Loading…</p>}
       {source.error && <p className="error pad">{String(source.error)}</p>}
