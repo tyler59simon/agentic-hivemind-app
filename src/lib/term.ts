@@ -13,3 +13,6 @@ export const termWrite = (id: string, data: string) => invoke<void>("term_write"
 export const termResize = (id: string, cols: number, rows: number) => invoke<void>("term_resize", { id, cols, rows });
 export const termClose = (id: string) => invoke<void>("term_close", { id });
 export const termList = () => invoke<TermInfo[]>("term_list");
+/** Exit the app now; `RunEvent::Exit` stops every program. */
+export const appQuit = () => invoke<void>("app_quit");
+export const quitAck = () => invoke<void>("quit_ack");

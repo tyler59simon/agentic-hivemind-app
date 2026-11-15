@@ -7,12 +7,17 @@ import "./App.css";
 import logo from "./assets/logo.png";
 import { Palette } from "./features/palette/Palette";
 import { SettingsForm } from "./features/settings/SettingsForm";
+import { agentSessions } from "./lib/agent";
 import { captureStatus, connect, domains } from "./lib/lm";
+import { prefs } from "./lib/prefs";
+import { appQuit, quitAck, termList } from "./lib/term";
+import { QuitDialog } from "./features/terminal/QuitDialog";
+import { runningSummary } from "./features/terminal/running";
 import { useConnection } from "./lib/connection";
 import { refreshStore } from "./lib/refresh";
 import { Shell } from "./shell/Shell";
 import { useApp } from "./store";
-import { Toasts } from "./ui/toast";
+import { toast, Toasts } from "./ui/toast";
 import { useWorkspace } from "./workspace/store";
 
 /** Shortcuts that work on every page. Ctrl+K and Ctrl+Shift+F belong to the top bar's search; tab ones to the open notes. */
@@ -35,13 +40,25 @@ function useShortcuts() {
   }, []);
 }
 
-/** Closing the window hides it to the tray when that is on (the quick-capture hotkey keeps working);
+/** What runs now: terminals and chat turns, one line each. Empty when nothing does or when the lists cannot be read. */
+async function running(): Promise<string[]> {
+  const lists = await Promise.all([termList(), agentSessions()]).catch(() => null);
+  return lists ? runningSummary(lists[0], lists[1]) : [];
+}
+
+/** Closing the window hides it to the tray while anything runs, or when that is on (the quick-capture hotkey keeps working);
  *  otherwise, with unsaved edits, it asks first (the drafts survive either way). */
 function useCloseGuard() {
   const [asking, setAsking] = useState(false);
   useEffect(() => {
     const win = getCurrentWindow();
     const stop = win.onCloseRequested(async (e) => {
+      if ((await running()).length > 0) {
+        e.preventDefault();
+        if (!prefs.trayNoticeShown()) { prefs.setTrayNoticeShown(); toast("Hivemind keeps running in the tray"); }
+        await win.hide();
+        return;
+      }
       const status = await captureStatus().catch(() => null);
       if (status?.close_to_tray) { e.preventDefault(); await win.hide(); return; }
       if (Object.values(useWorkspace.getState().dirty).some(Boolean)) { e.preventDefault(); setAsking(true); }
@@ -53,6 +70,21 @@ function useCloseGuard() {
       message="Some tabs have edits that are not saved to Living Memory. They are kept as drafts and come back when you reopen those notes."
       onAnswer={(yes) => { setAsking(false); if (yes) getCurrentWindow().destroy(); }} />
   );
+}
+
+/** Tray Quit: the backend shows the window and asks; nothing running quits at once, otherwise the dialog names what stops. */
+function useQuitRequest() {
+  const [lines, setLines] = useState<string[] | null>(null);
+  useEffect(() => {
+    const stop = listen("quit-requested", async () => {
+      quitAck().catch(() => undefined);
+      const now = await running();
+      if (now.length === 0) appQuit().catch((e) => toast(String(e), "error"));
+      else setLines(now);
+    });
+    return () => { stop.then((unlisten) => unlisten()); };
+  }, []);
+  return lines && <QuitDialog lines={lines} onKeep={() => setLines(null)} onQuit={() => appQuit().catch((e) => toast(String(e), "error"))} />;
 }
 
 /** Refresh lists and open notes when the store's note files change (agents write while you read).
@@ -89,6 +121,7 @@ export default function App() {
   useShortcuts();
   useLiveRefresh(link.isSuccess);
   const closeGuard = useCloseGuard();
+  const quitDialog = useQuitRequest();
   useEffect(() => { if (link.data) useConnection.getState().set(link.data.version); }, [link.data]);
 
   // Start on the largest bound domain once domains are known.
@@ -120,6 +153,7 @@ export default function App() {
       <Palette onSettings={() => setSettings(true)} onReconnect={reconnect} />
       <Toasts />
       {closeGuard}
+      {quitDialog}
     </>
   );
 }

@@ -2,10 +2,43 @@
 //! so a note can be saved without bringing up the whole app.
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 pub const WINDOW: &str = "capture";
+
+/// A second tray Quit within this long exits at once when no page answered the first (`quit_ack`), so Quit works
+/// when the page is not loaded. Once the page answers, it asks before quitting however often Quit is clicked.
+const QUIT_AGAIN: Duration = Duration::from_secs(5);
+static LAST_QUIT: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Whether a tray Quit at `now` is the second within `QUIT_AGAIN` of `last`.
+fn quit_again(last: Option<Instant>, now: Instant) -> bool {
+    last.is_some_and(|last| now.duration_since(last) <= QUIT_AGAIN)
+}
+
+/// The page received `quit-requested` and will ask the user itself.
+pub fn quit_ack() {
+    *LAST_QUIT.lock().unwrap() = None;
+}
+
+/// Tray Quit: show the window and ask the page to confirm (it quits at once when nothing runs); a second click within
+/// five seconds exits directly.
+fn request_quit(app: &AppHandle) {
+    let now = Instant::now();
+    let mut last = LAST_QUIT.lock().unwrap();
+    if quit_again(*last, now) {
+        drop(last);
+        app.exit(0);
+        return;
+    }
+    *last = Some(now);
+    drop(last);
+    show_main(app);
+    let _ = app.emit("quit-requested", ());
+}
 
 pub fn show_capture(app: &AppHandle) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window(WINDOW) {
@@ -58,7 +91,7 @@ pub fn tray(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "capture" => { let _ = show_capture(app); }
             "show" => show_main(app),
-            "quit" => app.exit(0),
+            "quit" => request_quit(app),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -71,4 +104,17 @@ pub fn tray(app: &AppHandle) -> tauri::Result<()> {
     }
     builder.build(app)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_second_quit_within_five_seconds_exits() {
+        let start = Instant::now();
+        assert!(!quit_again(None, start));
+        assert!(quit_again(Some(start), start + Duration::from_secs(4)));
+        assert!(!quit_again(Some(start), start + Duration::from_secs(6)));
+    }
 }

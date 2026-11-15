@@ -37,6 +37,10 @@ export interface SessionInfo {
   context: string[]; model: string | null; system: string | null;
   review: Review | null; sourceSha: string | null;
   interface: Interface;
+  /** The name the user gave the session. */
+  name: string | null;
+  /** The title the CLI gave its conversation. */
+  cliTitle: string | null;
 }
 
 /** The engine of a session, whatever adapter name older code stored. */
@@ -79,6 +83,8 @@ export const agentInterrupt = (sessionId: string) => invoke<void>("agent_interru
 export const agentEnd = (sessionId: string) => invoke<void>("agent_end", { sessionId });
 export const agentFiles = (sessionId: string) => invoke<ChangedFiles>("agent_files", { sessionId });
 export const agentSetPolicy = (sessionId: string, policy: Policy) => invoke<void>("agent_set_policy", { sessionId, policy });
+/** Name a session (trimmed, at most 80 characters); an empty name clears it. */
+export const agentRename = (sessionId: string, name: string) => invoke<void>("agent_rename", { sessionId, name });
 export const agentRemoveWorktree = (sessionId: string) => invoke<void>("agent_remove_worktree", { sessionId });
 export const repoBranches = (project: string, repo: string) => invoke<RepoBranches>("repo_branches", { project, repo });
 export const agentCancel = (sessionId: string) => invoke<void>("agent_cancel", { sessionId });

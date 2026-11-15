@@ -391,6 +391,8 @@ mod tests {
             review: None,
             source_sha: None,
             interface: crate::agent::Interface::Chat,
+            name: None,
+            cli_title: None,
         }
     }
 

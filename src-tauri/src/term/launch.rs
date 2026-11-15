@@ -118,12 +118,14 @@ pub fn pointer_prompt(briefing: &Path) -> String {
 }
 
 /// The CLI's own arguments for a session terminal (section 5.4), without the launch prefix.
+#[allow(clippy::too_many_arguments)] // each argument is one independent launch setting
 pub fn session_args(
     engine: Engine,
     mode: StartMode,
     accept_edits: bool,
     model: Option<&str>,
     deny: &[String],
+    name: Option<&str>,
     session_id: &str,
     context_dir: &Path,
 ) -> Vec<String> {
@@ -142,6 +144,9 @@ pub fn session_args(
                 args.extend([text("--model"), text(model)]);
             }
             args.extend([text("--permission-mode"), text(if accept_edits { "acceptEdits" } else { "manual" })]);
+            if let Some(name) = name {
+                args.extend([text("--name"), text(name)]);
+            }
             if mode == StartMode::Fresh {
                 args.push(prompt);
             }
@@ -176,9 +181,13 @@ pub fn login_args(engine: Engine) -> Vec<String> {
     }
 }
 
-/// Variables to set and names to remove, given the app's own variable names.
-pub fn environment(own: &[String], memory_root: Option<&Path>) -> (Vec<(String, String)>, Vec<String>) {
-    let mut set = vec![("TERM".to_string(), "xterm-256color".to_string()), ("COLORTERM".to_string(), "truecolor".to_string())];
+/// Variables to set and names to remove, given the app's own variable names and the terminal's id.
+pub fn environment(own: &[String], memory_root: Option<&Path>, terminal_id: &str) -> (Vec<(String, String)>, Vec<String>) {
+    let mut set = vec![
+        ("TERM".to_string(), "xterm-256color".to_string()),
+        ("COLORTERM".to_string(), "truecolor".to_string()),
+        ("HIVEMIND_SESSION".to_string(), terminal_id.to_string()),
+    ];
     if let Some(root) = memory_root {
         set.push(("LIVING_MEMORY_ROOT".to_string(), root.display().to_string()));
     }
@@ -300,7 +309,7 @@ mod tests {
         let ctx = Path::new("C:/data/terminals/ID/context");
         let c = ctx.display().to_string();
         let prompt = pointer_prompt(&ctx.join("briefing.md"));
-        let args = |engine, mode, edits, model: Option<&str>, deny: &[String]| session_args(engine, mode, edits, model, deny, ID, ctx);
+        let args = |engine, mode, edits, model: Option<&str>, deny: &[String]| session_args(engine, mode, edits, model, deny, None, ID, ctx);
         let (fresh, resume) = (StartMode::Fresh, StartMode::Resume);
         let none: Vec<String> = vec![];
 
@@ -342,6 +351,20 @@ mod tests {
     }
 
     #[test]
+    fn a_session_name_goes_to_claude_only() {
+        let ctx = Path::new("C:/data/terminals/ID/context");
+        let prompt = pointer_prompt(&ctx.join("briefing.md"));
+        let named = |engine, mode| session_args(engine, mode, false, None, &[], Some("Fix login"), ID, ctx);
+        let fresh = named(Engine::Claude, StartMode::Fresh);
+        assert_eq!(fresh[fresh.len() - 3..], strings(&["--name", "Fix login", &prompt])[..]);
+        let resume = named(Engine::Claude, StartMode::Resume);
+        assert_eq!(resume[resume.len() - 2..], strings(&["--name", "Fix login"])[..]);
+        for mode in [StartMode::Fresh, StartMode::Resume] {
+            assert_eq!(named(Engine::Codex, mode), session_args(Engine::Codex, mode, false, None, &[], None, ID, ctx));
+        }
+    }
+
+    #[test]
     fn the_prompt_is_one_line_without_quotes() {
         let ctx = Path::new("C:/data/terminals/ID/context");
         let prompt = pointer_prompt(&ctx.join("briefing.md"));
@@ -349,7 +372,7 @@ mod tests {
         assert!(!prompt.contains('"') && !prompt.contains('\n') && !prompt.contains('\r'));
         assert!(prompt.starts_with("Read the file "));
         for accept_edits in [false, true] {
-            let list = session_args(Engine::Claude, StartMode::Fresh, accept_edits, None, &[], ID, ctx);
+            let list = session_args(Engine::Claude, StartMode::Fresh, accept_edits, None, &[], None, ID, ctx);
             assert_eq!(list.last(), Some(&prompt));
             assert_eq!(list[list.len() - 2], if accept_edits { "acceptEdits" } else { "manual" });
         }
@@ -363,21 +386,26 @@ mod tests {
 
     #[test]
     fn environment_adds_colour_and_strips_a_nested_session() {
-        let colour = vec![("TERM".to_string(), "xterm-256color".to_string()), ("COLORTERM".to_string(), "truecolor".to_string())];
-        assert_eq!(environment(&strings(&["PATH", "CLAUDE_CONFIG_DIR"]), None), (colour.clone(), vec![]));
-        let (set, remove) = environment(&strings(&["PATH", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CONFIG_DIR", "NO_COLOR"]), None);
+        let colour = vec![
+            ("TERM".to_string(), "xterm-256color".to_string()),
+            ("COLORTERM".to_string(), "truecolor".to_string()),
+            ("HIVEMIND_SESSION".to_string(), ID.to_string()),
+        ];
+        assert_eq!(environment(&strings(&["PATH", "CLAUDE_CONFIG_DIR"]), None, ID), (colour.clone(), vec![]));
+        let (set, remove) = environment(&strings(&["PATH", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CONFIG_DIR", "NO_COLOR"]), None, ID);
         assert_eq!(set, colour);
         assert_eq!(remove, strings(&["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CONFIG_DIR", "NO_COLOR"]));
     }
 
     #[test]
     fn environment_names_the_store_the_app_uses() {
-        let (set, remove) = environment(&strings(&["PATH"]), Some(Path::new("C:/demo/store")));
-        assert_eq!(set.len(), 3);
+        let (set, remove) = environment(&strings(&["PATH"]), Some(Path::new("C:/demo/store")), "login-claude");
+        assert_eq!(set.len(), 4);
+        assert!(set.contains(&("HIVEMIND_SESSION".to_string(), "login-claude".to_string())));
         assert!(set.contains(&("LIVING_MEMORY_ROOT".to_string(), "C:/demo/store".to_string())));
         assert!(set.iter().any(|(k, _)| k == "TERM") && set.iter().any(|(k, _)| k == "COLORTERM"));
         assert!(remove.is_empty());
-        let (_, remove) = environment(&strings(&["CLAUDECODE", "LIVING_MEMORY_ROOT"]), None);
+        let (_, remove) = environment(&strings(&["CLAUDECODE", "LIVING_MEMORY_ROOT"]), None, ID);
         assert!(!remove.contains(&"LIVING_MEMORY_ROOT".to_string()));
     }
 

@@ -159,6 +159,13 @@ pub struct SessionInfo {
     /// README 7.1. Default `chat`, so older indexes load.
     #[serde(default)]
     pub interface: Interface,
+    // Phase 6
+    /// The name the user gave the session; shown first on its tab.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The title the CLI gave its conversation (filled from the CLI's own files).
+    #[serde(default)]
+    pub cli_title: Option<String>,
 }
 
 /// What the user decided about a work session's edits.
@@ -498,10 +505,22 @@ fn session_info(id: &str, adapter: &str, task: AgentTask, scope: &Scope, options
         review: None,
         source_sha: None,
         interface: Interface::Chat,
+        name: None,
+        cli_title: None,
     }
 }
 
 /// Refuse the combinations of task, engine and interface that cannot be started.
+/// The most characters a session name keeps.
+pub const NAME_MAX: usize = 80;
+
+/// A session name as stored: trimmed, at most `NAME_MAX` characters; None when empty.
+pub fn clean_name(name: &str) -> Option<String> {
+    let name: String = name.trim().chars().take(NAME_MAX).collect();
+    let name = name.trim_end().to_string();
+    (!name.is_empty()).then_some(name)
+}
+
 fn check_combination(task: &AgentTask, engine: Engine, interface: Interface) -> Result<(), String> {
     let work = matches!(task, AgentTask::Work { .. });
     if interface == Interface::Terminal && !work {
@@ -2586,6 +2605,22 @@ mod tests {
         std::fs::remove_dir_all(&blocker).unwrap();
     }
 
+    #[test]
+    fn rename_trims_caps_and_clears() {
+        let rig = Rig::printing("rename", &WORK);
+        let started = rig.start(None).unwrap();
+        rig.finish(&started.id);
+        let rename = |name: &str| rig.manager.amend(&started.id, |info| info.name = clean_name(name)).unwrap().name;
+        assert_eq!(rename("  Fix login  "), Some("Fix login".to_string()));
+        assert_eq!(rig.info(&started.id).name, Some("Fix login".to_string()));
+        assert_eq!(rename(&"é".repeat(100)), Some("é".repeat(NAME_MAX)));
+        assert_eq!(rename("   "), None);
+        assert_eq!(rename("Again"), Some("Again".to_string()));
+        assert_eq!(rename(""), None);
+        let (reopened, ..) = rig.reopened("rename", &[]);
+        assert_eq!(reopened.sessions().into_iter().find(|info| info.id == started.id).map(|info| info.name), Some(None));
+    }
+
     /// An interactive work session at rest, as an index written by an earlier run holds it.
     fn resting(id: &str) -> SessionInfo {
         SessionInfo {
@@ -2613,6 +2648,8 @@ mod tests {
             review: None,
             source_sha: None,
             interface: Interface::Chat,
+            name: None,
+            cli_title: None,
         }
     }
 

@@ -1,7 +1,7 @@
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRightLeft, CodeXml, Columns2, Database, FileText, GitBranch, Network, Plus, Square, X } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { engineOf, reviewFiles, type SessionInfo } from "../../lib/agent";
+import { agentRename, engineOf, reviewFiles, type SessionInfo } from "../../lib/agent";
 import { openReview, openSession, openSystem, startSession, useApp } from "../../store";
 import { Confirm } from "../../ui/Modal";
 import { ArrowLink, Row, Section } from "../../ui/Page";
@@ -98,6 +98,29 @@ function Rail({ s }: { s: SessionInfo }) {
 
 const DRAG_PX = 6;
 
+/** The tab's label as an input: Enter or blur saves, Escape cancels. It never starts a drag of the pill. */
+function RenameInput({ s, onDone }: { s: SessionInfo; onDone: () => void }) {
+  const client = useQueryClient();
+  const start = s.name ?? tabLabel(s);
+  const [value, setValue] = useState(start);
+  const finished = useRef(false);
+  const finish = (save: boolean) => {
+    if (finished.current) return;
+    finished.current = true;
+    onDone();
+    if (!save || value.trim() === start.trim()) return;
+    agentRename(s.id, value)
+      .then(() => client.invalidateQueries({ queryKey: ["agent", "sessions"] }))
+      .catch((e) => toast(String(e), "error"));
+  };
+  return (
+    <input className="tab-rename" autoFocus value={value} maxLength={80} aria-label="Tab name" onFocus={(e) => e.currentTarget.select()}
+      onChange={(e) => setValue(e.target.value)} onBlur={() => finish(true)}
+      onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => { if (e.key === "Enter") finish(true); else if (e.key === "Escape") finish(false); }} />
+  );
+}
+
 interface Drag { id: string; label: string; x: number; y: number; over: Pane | null }
 
 /** One pane: its tab strip, the active tab's terminal and its status line. */
@@ -108,6 +131,7 @@ function PaneView({ index, tabs, activeId, focused, split, over, onFocus, onTogg
   onDragStart: (e: ReactPointerEvent, s: SessionInfo) => void; clicked: () => boolean;
 }) {
   const active = tabs.find((t) => t.id === activeId);
+  const [renaming, setRenaming] = useState<string | null>(null);
   const live = registry.useLive(active?.id ?? "");
   const running = registry.useRunning(active ?? { id: "", status: "idle" });
   const line = active ? statusLine(active, running) : null;
@@ -123,7 +147,9 @@ function PaneView({ index, tabs, activeId, focused, split, over, onFocus, onTogg
             <div key={s.id} role="tab" aria-selected={on} className={`note-tab-pill ${on ? "on" : ""}`} title={`${s.title} · ${s.worktree?.branch ?? "worktree removed"}`}
               onPointerDown={(e) => onDragStart(e, s)}
               onClick={() => { if (!clicked()) onTab(s); }} onAuxClick={(e) => { if (e.button === 1) onClose(s); }}>
-              <span className="tab-label">{tabLabel(s)}</span>
+              {renaming === s.id
+                ? <RenameInput s={s} onDone={() => setRenaming(null)} />
+                : <span className="tab-label" onDoubleClick={() => setRenaming(s.id)}>{tabLabel(s)}</span>}
               {split && <button className="tab-close tab-move" aria-label="Move to other pane" title="Move to other pane" onClick={(e) => { e.stopPropagation(); onMove(s); }}><ArrowRightLeft size="1em" aria-hidden /></button>}
               <button className="tab-close" aria-label="Close terminal" onClick={(e) => { e.stopPropagation(); onClose(s); }}><X size="1em" aria-hidden /></button>
             </div>

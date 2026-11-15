@@ -9,6 +9,8 @@ export const prefs = {
   setDefaultMode: (mode: Mode) => set("hivemind.defaultMode", mode),
   captureDomain: () => get("hivemind.captureDomain"),
   setCaptureDomain: (domain: string) => set("hivemind.captureDomain", domain),
+  trayNoticeShown: () => get("hivemind.trayNotice") === "1",
+  setTrayNoticeShown: () => set("hivemind.trayNotice", "1"),
   captureProject: () => get("hivemind.captureProject"),
   setCaptureProject: (slug: string) => set("hivemind.captureProject", slug),
 };

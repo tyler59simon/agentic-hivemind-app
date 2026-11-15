@@ -228,6 +228,7 @@ button.arrow-row:hover { background: var(--bg-alt); }
 .note-tab-pill.on { color: var(--fg); border-color: var(--border-strong); }
 .pane.focused .note-tab-pill.on, .note-tabs.standalone .note-tab-pill.on { background: #432953; border-color: #432953; }
 .tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-rename { font: inherit; width: 14em; max-width: 100%; padding: 0 0.3em; }
 .note-tab-pill .dot { color: var(--accent); font-size: .65rem; }
 .tab-close { border: none; padding: .15rem; opacity: .65; border-radius: .3rem; }
 .tab-close:hover { opacity: 1; }
