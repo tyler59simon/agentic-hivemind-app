@@ -114,6 +114,8 @@ export function ArchitectureCanvas({ slug, model, diagrams, version, caption, se
     setView({ scale, x: (el.clientWidth - laid.width * scale) / 2, y: (el.clientHeight - laid.height * scale) / 2 });
   }, [laid]);
   useEffect(() => { fit(); }, [fit, full]);
+  // An older baseline has no pictures of its own, so its Deployment level is gone.
+  useEffect(() => { if (level === "deployment" && !deployment) setLevel("containers"); }, [level, deployment]);
   useEffect(() => {
     if (!full) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setFull(false); };

@@ -20,7 +20,9 @@ import { validation, type Check } from "./validation";
 export function FilePane({ info, file }: { info: SessionInfo; file: FileChange }) {
   const contents = useQuery({
     queryKey: ["agent", "review-file", info.id, file.path, reviewVersion(info)],
-    queryFn: () => reviewFile(info.id, file.path), staleTime: Infinity, retry: false,
+    // Not cached for good: a hand edit that keeps the line counts leaves reviewVersion unchanged, and the pane must show
+    // what approving would commit. Equal contents keep their identity, so the diff is not rebuilt.
+    queryFn: () => reviewFile(info.id, file.path), staleTime: 0, retry: false,
   });
   const tree = info.worktree;
   const c = contents.data;

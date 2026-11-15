@@ -785,7 +785,8 @@ impl Manager {
         self.inner.sessions.lock().unwrap().get(id).map(|session| session.info.clone()).ok_or_else(|| "Unknown session".into())
     }
 
-    /// Change a session's details, save the index and tell the UI.
+    /// Change a session's details, save the index and tell the UI. A failed save is an error: the change then lives only
+    /// in memory and is gone after a restart (for an approval, its review base with it).
     pub fn amend(&self, id: &str, change: impl FnOnce(&mut SessionInfo)) -> Result<SessionInfo, String> {
         let inner = &self.inner;
         store::log_path(&inner.dir, id)?;
@@ -793,9 +794,10 @@ impl Manager {
         let session = sessions.get_mut(id).ok_or("Unknown session")?;
         change(&mut session.info);
         let info = session.info.clone();
-        let _ = inner.persist(&mut sessions);
+        let saved = inner.persist(&mut sessions);
         drop(sessions);
         (inner.sink)(Emit::SessionsChanged);
+        saved.map_err(|e| format!("Could not save the session list: {e}"))?;
         Ok(info)
     }
 
@@ -2431,6 +2433,12 @@ mod tests {
         assert!(rig.seen.lock().unwrap()[seen_before..].iter().any(|emit| matches!(emit, Emit::SessionsChanged)));
         assert_eq!(rig.manager.amend("../index", |_| {}).unwrap_err(), "Invalid session id");
         assert_eq!(rig.manager.amend("00000000-0000-4000-8000-000000000009", |_| {}).unwrap_err(), "Unknown session");
+        // A folder where the index's temporary file goes makes the save fail; amend says so instead of reporting success.
+        let blocker = rig.dir.join("sessions").join("index.json.tmp");
+        std::fs::create_dir_all(&blocker).unwrap();
+        let failed = rig.manager.amend(&started.id, |info| info.review = None).unwrap_err();
+        assert!(failed.starts_with("Could not save the session list:"), "{failed}");
+        std::fs::remove_dir_all(&blocker).unwrap();
     }
 
     /// An interactive work session at rest, as an index written by an earlier run holds it.

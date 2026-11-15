@@ -343,7 +343,7 @@ function SystemView({ system, all }: { system: System; all: System[] }) {
         <AgentActions system={system} all={all} />
         {model?.elements?.length ? (
           <>
-            <ArchitectureCanvas slug={system.slug} model={shownModel ?? model} diagrams={diagrams} version={arch?.generatedAt ?? null} caption={generated}
+            <ArchitectureCanvas slug={system.slug} model={shownModel ?? model} diagrams={shownId ? [] : diagrams} version={arch?.generatedAt ?? null} caption={generated}
               selected={picked?.id ?? null} onSelect={setPicked} top={controls} diff={diff}
               notice={loadingBaseline ? (snapshot.error ? <p className="error pad">{classify(snapshot.error).message}</p> : <p className="muted pad">Loading baseline…</p>) : undefined} />
             {!!diagrams.length && (

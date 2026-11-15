@@ -81,7 +81,12 @@ pub fn file_contents(tree: &Worktree, path: &str) -> Result<FileContents, String
             if has_nul(text.as_bytes()) { binary = true } else { base = Some(text) }
         }
     }
-    if entry.status != "D" {
+    let link = std::fs::symlink_metadata(dir.join(&entry.path)).is_ok_and(|meta| meta.file_type().is_symlink());
+    if entry.status != "D" && link {
+        // Git commits a link as the path it points to, so that is what is shown; the link is never followed.
+        let target = std::fs::read_link(dir.join(&entry.path)).map_err(|e| e.to_string())?;
+        head = Some(target.to_string_lossy().replace('\\', "/"));
+    } else if entry.status != "D" {
         let root = canonical(dir).map_err(|_| format!("The session's worktree folder is missing: {}", tree.path))?;
         let full = canonical(&dir.join(&entry.path)).ok().filter(|full| full.starts_with(&root)).ok_or("That file is outside the worktree")?;
         let meta = std::fs::metadata(&full).map_err(|e| e.to_string())?;
@@ -252,7 +257,8 @@ pub fn approve(agents: &Manager, worktrees_dir: &Path, id: &str, message: &str) 
         }
         info.files_changed = Some(Totals::default());
         info.review = Some(Review { state: ReviewState::Approved, commit: Some(commit.clone()), at: agent::now_ms() });
-    })?;
+    })
+    .map_err(|e| format!("Committed {} on {}, but Hivemind did not record the approval. {e}", &commit[..7], tree.branch))?;
     Ok(commit)
 }
 
