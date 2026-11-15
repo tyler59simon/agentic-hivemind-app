@@ -190,7 +190,7 @@ export function TerminalWorkspace({ sessions, selected, onEmpty }: { sessions: S
   const stored = useLayout();
   // Tabs closed here stay in the session list until it is refetched; they must not come back as new tabs meanwhile.
   const closed = useRef(new Set<string>());
-  const tabs = terminalTabs(sessions, project, selected?.id).filter((s) => s.id === selected?.id || !closed.current.has(s.id));
+  const tabs = terminalTabs(sessions, project, selected?.id, [...stored.panes[0], ...stored.panes[1]]).filter((s) => s.id === selected?.id || !closed.current.has(s.id));
   const view = reconcile(stored, tabs.map((t) => t.id));
   const byId = (id: string | null) => tabs.find((t) => t.id === id);
   const [closing, setClosing] = useState<SessionInfo | null>(null);

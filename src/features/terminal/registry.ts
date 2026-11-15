@@ -270,6 +270,12 @@ export function focusTerm(id: string): void {
   focus(live);
 }
 
+/** Allow or forbid a finished start to take the keyboard focus. Clearing the flag does not blur the terminal. */
+export function setFocusable(id: string, value: boolean): void {
+  const live = lives.get(id);
+  if (live) live.focusable = value;
+}
+
 /** Close the find bar and give the terminal the focus back. */
 export function closeFind(id: string): void {
   const live = lives.get(id);

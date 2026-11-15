@@ -2,7 +2,7 @@ import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Engine } from "../../lib/agent";
 import type { StartMode } from "../../lib/term";
-import { swallow } from "./keys";
+import { reloadKey, swallow } from "./keys";
 import * as registry from "./registry";
 
 /** Find in the terminal's scrollback. Enter finds the next match, Shift+Enter the previous one, Escape closes. */
@@ -28,6 +28,7 @@ function FindBar({ id }: { id: string }) {
         onChange={(e) => change(e.target.value)}
         onKeyDown={(e) => {
           e.stopPropagation();
+          if (reloadKey(e.nativeEvent)) e.preventDefault();
           if (e.key === "Escape") registry.closeFind(id);
           else if (e.key === "Enter") { e.preventDefault(); if (e.shiftKey) prev(); else next(); }
         }}
@@ -75,7 +76,7 @@ export function TerminalView({ id, sessionId, engine, start, label, focused = tr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  useEffect(() => { if (focused) registry.focusTerm(id); }, [focused, id]);
+  useEffect(() => { if (focused) registry.focusTerm(id); else registry.setFocusable(id, false); }, [focused, id]);
 
   return (
     <>

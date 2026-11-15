@@ -31,6 +31,11 @@ describe("terminal tabs", () => {
     expect(terminalTabs(all, "paystream").map((s) => s.id)).toEqual(["running", "idle"]);
     expect(terminalTabs(all, "paystream", "ended").map((s) => s.id)).toEqual(["running", "ended", "idle"]);
     expect(terminalTabs(all, null).map((s) => s.id)).toEqual(["running", "idle", "other"]);
+    // The selected session is listed whatever its project or status.
+    expect(terminalTabs(all, "paystream", "other").map((s) => s.id)).toEqual(["running", "idle", "other"]);
+    // Sessions already in a pane stay when they end, or when they belong to another project.
+    expect(terminalTabs(all, "paystream", undefined, ["ended"]).map((s) => s.id)).toEqual(["running", "ended", "idle"]);
+    expect(terminalTabs(all, "paystream", undefined, ["other", "gone"]).map((s) => s.id)).toEqual(["running", "idle", "other"]);
 
     expect(latestOf(all, "paystream", "terminal")?.id).toBe("idle");
     expect(latestOf(all, "paystream", "chat")?.id).toBe("chat");

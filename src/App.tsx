@@ -133,17 +133,22 @@ export default function App() {
 
   const reconnect = useCallback(() => { setSettings(false); client.resetQueries(); }, [client]);
 
-  if (link.isLoading) return <main className="center muted">Connecting to Living Memory…</main>;
+  // The dialogs belong to every branch: tray Quit must show its dialog while Settings is open or the connection has failed.
+  const dialogs = <>{closeGuard}{quitDialog}</>;
+  if (link.isLoading) return <><main className="center muted">Connecting to Living Memory…</main>{dialogs}</>;
   if (link.error || settings) {
     return (
-      <main className="center">
-        <div className="card">
-          <h1 className="brand"><img src={logo} alt="" />Hivemind</h1>
-          {link.error && <p className="error">{String(link.error)}</p>}
-          <SettingsForm onSaved={reconnect} />
-          {link.isSuccess && <button className="link" onClick={() => setSettings(false)}>Back</button>}
-        </div>
-      </main>
+      <>
+        <main className="center">
+          <div className="card">
+            <h1 className="brand"><img src={logo} alt="" />Hivemind</h1>
+            {link.error && <p className="error">{String(link.error)}</p>}
+            <SettingsForm onSaved={reconnect} />
+            {link.isSuccess && <button className="link" onClick={() => setSettings(false)}>Back</button>}
+          </div>
+        </main>
+        {dialogs}
+      </>
     );
   }
 
@@ -152,8 +157,7 @@ export default function App() {
       <Shell info={link.data!} onSettings={() => setSettings(true)} onReconnect={reconnect} />
       <Palette onSettings={() => setSettings(true)} onReconnect={reconnect} />
       <Toasts />
-      {closeGuard}
-      {quitDialog}
+      {dialogs}
     </>
   );
 }

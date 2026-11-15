@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { keyAction, swallow, type Key } from "./keys";
+import { keyAction, reloadKey, swallow, type Key } from "./keys";
 
 const k = (key: string, o: Partial<Key> = {}): Key => ({ type: "keydown", key, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...o });
 
@@ -35,5 +35,15 @@ describe("terminal keys", () => {
     expect(swallow(k("r", { ctrlKey: true }))).toBe(true);
     expect(swallow(k("R", { ctrlKey: true, shiftKey: true }))).toBe(true);
     expect(swallow(k("ArrowRight", { altKey: true }))).toBe(false);
+  });
+  it("recognises the reload keys only", () => {
+    expect(reloadKey(k("F5"))).toBe(true);
+    expect(reloadKey(k("F5", { ctrlKey: true, shiftKey: true, altKey: true }))).toBe(true);
+    expect(reloadKey(k("r", { ctrlKey: true }))).toBe(true);
+    expect(reloadKey(k("R", { ctrlKey: true, shiftKey: true }))).toBe(true);
+    expect(reloadKey(k("r", { metaKey: true }))).toBe(true);
+    expect(reloadKey(k("r"))).toBe(false);
+    expect(reloadKey(k("r", { ctrlKey: true, altKey: true }))).toBe(false);
+    for (const key of ["a", "c", "v", "z", "x", "ArrowLeft", "F4"]) expect(reloadKey(k(key, { ctrlKey: true }))).toBe(false);
   });
 });
