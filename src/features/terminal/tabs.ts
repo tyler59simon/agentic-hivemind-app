@@ -5,15 +5,21 @@ import { engineName } from "../changes/changes";
 const inProject = (s: SessionInfo, project: string | null) => project === null || s.project === project;
 
 /** "Codex · ingestion-service": the engine and the repository's folder name. The task's repo is used because the worktree can be gone. */
-export function tabLabel(s: SessionInfo): string {
+export function defaultLabel(s: SessionInfo): string {
   const repo = s.task.kind === "work" ? repoName(s.task.repo) : s.title;
   return `${engineName(s.adapter)} · ${repo}`;
 }
 
-/** The tab strip: the project's terminal sessions that are idle or running, oldest first, plus `selected` when it is an ended or failed terminal session of that project. */
-export function terminalTabs(sessions: SessionInfo[], project: string | null, selected?: string): SessionInfo[] {
+/** The tab's text: the name the user gave, else the CLI's own title, else `defaultLabel`. */
+export function tabLabel(s: SessionInfo): string {
+  return s.name?.trim() || s.cliTitle?.trim() || defaultLabel(s);
+}
+
+/** The tab strip, oldest first: the project's terminal sessions that are idle or running, plus `selected` (whatever its project or status)
+ *  and every session in `open` (already in a pane, whatever its status or project: a tab stays until the user closes it). */
+export function terminalTabs(sessions: SessionInfo[], project: string | null, selected?: string, open: readonly string[] = []): SessionInfo[] {
   return sessions
-    .filter((s) => s.interface === "terminal" && inProject(s, project) && (s.status === "idle" || s.status === "running" || s.id === selected))
+    .filter((s) => s.interface === "terminal" && ((inProject(s, project) && (s.status === "idle" || s.status === "running")) || s.id === selected || open.includes(s.id)))
     .sort((a, b) => a.startedAt - b.startedAt);
 }
 

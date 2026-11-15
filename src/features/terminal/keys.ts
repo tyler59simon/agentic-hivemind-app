@@ -1,5 +1,5 @@
 export interface Key { type: string; key: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }
-export type KeyAction = "copy" | "paste" | "leave" | "newline" | "pass";
+export type KeyAction = "copy" | "paste" | "leave" | "search" | "newline" | "pass";
 
 /** What the terminal does with a key before xterm sees it. */
 export function keyAction(e: Key, hasSelection: boolean): KeyAction {
@@ -7,14 +7,22 @@ export function keyAction(e: Key, hasSelection: boolean): KeyAction {
   const mod = (e.ctrlKey || e.metaKey) && !e.altKey;
   const key = e.key.toLowerCase();
   if (mod && e.shiftKey && key === "k") return "leave";
+  if (mod && e.shiftKey && key === "f") return "search";
   if (mod && key === "c" && (hasSelection || e.shiftKey)) return "copy";
   if (mod && key === "v") return "paste";
   if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && e.key === "Enter") return "newline";
   return "pass";
 }
 
-/** Whether the browser's own action for this key must be stopped. Never for AltGr (Ctrl+Alt) or for paste. */
+/** F5 (any modifiers), Ctrl+R and Ctrl+Shift+R (Ctrl or Meta, no Alt): the keys that reload the page. */
+export function reloadKey(e: Key): boolean {
+  if (e.key === "F5") return true;
+  return (e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "r";
+}
+
+/** Whether the browser's own action for this key must be stopped. Never for AltGr (Ctrl+Alt) or for paste. F5 and Ctrl+R reload the page, so they are stopped too. */
 export function swallow(e: Key): boolean {
+  if (reloadKey(e)) return true;
   if (e.altKey && !e.ctrlKey && !e.metaKey) return e.key === "ArrowLeft";
   if (!(e.ctrlKey || e.metaKey) || e.altKey) return false;
   return e.key.length === 1 && e.key.toLowerCase() !== "v";

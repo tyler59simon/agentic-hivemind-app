@@ -249,6 +249,13 @@ async fn agent_set_policy(state: State<'_, AppState>, session_id: String, policy
     blocking(move || agents.set_policy(&session_id, policy)).await
 }
 
+/// Give a session a name (trimmed, at most 80 characters; empty clears it).
+#[tauri::command]
+async fn agent_rename(state: State<'_, AppState>, session_id: String, name: String) -> Result<(), String> {
+    let agents = state.agents.clone();
+    blocking(move || agents.amend(&session_id, |info| info.name = agent::clean_name(&name)).map(|_| ())).await
+}
+
 /// Remove the worktree of a session that has ended.
 #[tauri::command]
 async fn agent_remove_worktree(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
@@ -430,6 +437,18 @@ fn show_main(app: AppHandle) {
     capture::show_main(&app);
 }
 
+/// Exit the app; `RunEvent::Exit` stops the programs it started.
+#[tauri::command]
+fn app_quit(app: AppHandle) {
+    app.exit(0);
+}
+
+/// The page answered a tray Quit and asks the user itself, so a second tray Quit does not exit without asking.
+#[tauri::command]
+fn quit_ack() {
+    capture::quit_ack();
+}
+
 #[tauri::command]
 fn draft_put(state: State<'_, AppState>, key: String, value: Value) -> Result<(), String> {
     drafts::put(&state.drafts_dir, &key, &value)
@@ -519,8 +538,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, draft_put, draft_get, draft_delete, draft_list,
-            agent_available, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_remove_worktree, repo_branches,
+            lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, app_quit, quit_ack, draft_put, draft_get, draft_delete, draft_list,
+            agent_available, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, repo_branches,
             agent_cancel, agent_sessions, agent_session, review_files, review_file, review_approve, review_request_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
             system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_write, term_resize, term_close, term_list, agent_engines
         ])

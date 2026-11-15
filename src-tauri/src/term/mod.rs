@@ -17,8 +17,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// How many terminal programs may run at once.
-pub const MAX_TERMINALS: usize = 4;
+/// How many terminal programs may run at once. The sign-in terminals (ids starting `login-`) are not counted.
+pub const MAX_TERMINALS: usize = 8;
 /// Exit codes that mean the user left, not that something broke: clean exit, SIGHUP, SIGINT, and
 /// Windows' STATUS_CONTROL_C_EXIT (what Codex returns after Ctrl+C and what a closed console gives).
 pub const QUIET_EXITS: [u32; 4] = [0, 129, 130, 0xC000_013A];
@@ -204,6 +204,7 @@ impl Manager {
             info.policy == PolicyMode::AcceptEdits,
             info.model.as_deref(),
             &scope::governed_rules(),
+            info.name.as_deref(),
             session_id,
             &context,
         ));
@@ -352,11 +353,11 @@ impl Manager {
         if terms.contains_key(&run.id) {
             return Err("This terminal is already running".into());
         }
-        if terms.len() >= MAX_TERMINALS {
+        if !run.id.starts_with("login-") && terms.keys().filter(|id| !id.starts_with("login-")).count() >= MAX_TERMINALS {
             return Err(format!("Close a terminal first: {MAX_TERMINALS} are already running"));
         }
         let own: Vec<String> = std::env::vars_os().map(|(name, _)| name.to_string_lossy().into_owned()).collect();
-        let (env, env_remove) = launch::environment(&own, run.memory_root.as_deref());
+        let (env, env_remove) = launch::environment(&own, run.memory_root.as_deref(), &run.id);
         let shared = Arc::new(Shared {
             id: run.id,
             session_id: run.session_id,
@@ -617,6 +618,8 @@ mod tests {
                 review: None,
                 source_sha: None,
                 interface: Interface::Terminal,
+                name: None,
+                cli_title: None,
             }
         }
 
@@ -977,7 +980,7 @@ mod tests {
             rig.run(id, lingering());
         }
         let (output, _) = collector();
-        assert_eq!(rig.run_with(&ids[MAX_TERMINALS], lingering(), output.clone()).unwrap_err(), "Close a terminal first: 4 are already running");
+        assert_eq!(rig.run_with(&ids[MAX_TERMINALS], lingering(), output.clone()).unwrap_err(), "Close a terminal first: 8 are already running");
         rig.terms.close(&ids[0]);
         rig.wait_exits(1);
         assert!(rig.run_with(&ids[MAX_TERMINALS], lingering(), output).is_ok());
@@ -987,6 +990,39 @@ mod tests {
         assert!(stopped.elapsed() < Duration::from_secs(10));
         assert!(rig.terms.list().is_empty());
         assert_eq!(rig.exits.lock().unwrap().len(), MAX_TERMINALS + 1);
+        rig.clean();
+    }
+
+    #[test]
+    fn a_login_terminal_does_not_count() {
+        let rig = Rig::new("login-limit");
+        let ids: Vec<String> = (0..MAX_TERMINALS).map(|_| rig.session(Some(rig.plain_tree()))).collect();
+        let (output, _) = collector();
+        let login = |id: &str, output: Output| {
+            rig.terms.spawn(Run {
+                id: id.into(),
+                session_id: None,
+                engine: Engine::Claude,
+                cli: lingering(),
+                cwd: rig.dir.clone(),
+                memory_root: None,
+                cols: 200,
+                rows: 24,
+                scrollback: None,
+                output,
+            })
+        };
+        login("login-claude", output.clone()).unwrap();
+        for id in &ids {
+            rig.run(id, lingering());
+        }
+        // A full house plus the sign-in terminal; another sign-in still starts, another session does not.
+        assert_eq!(rig.terms.list().len(), MAX_TERMINALS + 1);
+        login("login-codex", output).unwrap();
+        let extra = rig.session(Some(rig.plain_tree()));
+        let (output, _) = collector();
+        assert!(rig.run_with(&extra, lingering(), output).is_err());
+        rig.terms.stop_all();
         rig.clean();
     }
 

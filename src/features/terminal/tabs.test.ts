@@ -8,7 +8,7 @@ const session = (o: Partial<SessionInfo>): SessionInfo => ({
   id: `s${++n}`, adapter: "claude-code", cliVersion: null, task: { kind: "work", project: "paystream", repo: "C:/src/app" }, title: "t",
   workspace: [], status: "idle", startedAt: n, endedAt: null, costUsd: null, error: null, structured: null,
   mode: "interactive", policy: "ask", project: "paystream", worktree: wt, turns: 0, filesChanged: null, context: [], model: null, system: null,
-  review: null, sourceSha: null, interface: "terminal", ...o,
+  review: null, sourceSha: null, interface: "terminal", name: null, cliTitle: null, ...o,
 });
 
 describe("terminal tabs", () => {
@@ -17,6 +17,10 @@ describe("terminal tabs", () => {
     expect(tabLabel(codex)).toBe("Codex · ingestion-service");
     expect(tabLabel(session({ task: { kind: "work", project: "p", repo: "/src/app/" } }))).toBe("Claude Code · app");
     expect(tabLabel({ ...codex, worktree: null })).toBe(tabLabel(codex));
+    // The user's name wins over the CLI's title, which wins over the default.
+    expect(tabLabel({ ...codex, cliTitle: "Fix the importer" })).toBe("Fix the importer");
+    expect(tabLabel({ ...codex, cliTitle: "Fix the importer", name: "Importer" })).toBe("Importer");
+    expect(tabLabel({ ...codex, name: "  ", cliTitle: " " })).toBe("Codex · ingestion-service");
 
     const idle = session({ id: "idle", startedAt: 30 });
     const running = session({ id: "running", status: "running", startedAt: 10 });
@@ -27,6 +31,11 @@ describe("terminal tabs", () => {
     expect(terminalTabs(all, "paystream").map((s) => s.id)).toEqual(["running", "idle"]);
     expect(terminalTabs(all, "paystream", "ended").map((s) => s.id)).toEqual(["running", "ended", "idle"]);
     expect(terminalTabs(all, null).map((s) => s.id)).toEqual(["running", "idle", "other"]);
+    // The selected session is listed whatever its project or status.
+    expect(terminalTabs(all, "paystream", "other").map((s) => s.id)).toEqual(["running", "idle", "other"]);
+    // Sessions already in a pane stay when they end, or when they belong to another project.
+    expect(terminalTabs(all, "paystream", undefined, ["ended"]).map((s) => s.id)).toEqual(["running", "ended", "idle"]);
+    expect(terminalTabs(all, "paystream", undefined, ["other", "gone"]).map((s) => s.id)).toEqual(["running", "idle", "other"]);
 
     expect(latestOf(all, "paystream", "terminal")?.id).toBe("idle");
     expect(latestOf(all, "paystream", "chat")?.id).toBe("chat");

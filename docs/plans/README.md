@@ -8,6 +8,7 @@ Hivemind is being rebuilt to the UX of a set of ten mock screens. Phase 1 (theme
 | 3 | [phase-3-changes.md](phase-3-changes.md) | 05 Changes List, 06 Change Detail | Phases 1 and 2 |
 | 4 | [phase-4-review.md](phase-4-review.md) | 10 Agent Code Review | Phases 1, 2 and 3 |
 | 5 | [phase-5-codex-and-terminal.md](phase-5-codex-and-terminal.md) | 04 Agent Workspace Codex Terminal | Phases 1 and 2 (4 for the "Review diff" link) |
+| 6 | [phase-6-terminal-parity.md](phase-6-terminal-parity.md) | 04 (the terminal behaves like the real CLI) | Phases 4 and 5 |
 
 **How to use these documents.** Read this file first, then your phase's document, then the spike findings it cites under [spikes/](spikes/). This file holds what every phase shares: the decisions already made, the map of the code after Phase 1, the conventions, how to run and verify, and the contracts between phases. Where a phase document and this file disagree about a shared name or shape, this file wins; tell the user about the conflict in your final report.
 
@@ -20,7 +21,7 @@ Hivemind is being rebuilt to the UX of a set of ten mock screens. Phase 1 (theme
 The user made these on 2026-11-10.
 
 1. **Full parity with the mocks, in phases**, including backends that did not exist.
-2. **Sections are pages; only notes are tabs.** The sidebar has six sections (Overview, Agent Workspace, Changes, Architecture, Memory, Review), each one page with a breadcrumb. Notes, and only notes, open as tabs and side by side in up to three panes, inside Memory. Do not add tabs or split panes for sessions, changes, diffs or anything else, with one exception already decided: Phase 5's terminal has its own tab strip.
+2. **Sections are pages; only notes are tabs.** The sidebar has six sections (Overview, Agent Workspace, Changes, Architecture, Memory, Review), each one page with a breadcrumb. Notes, and only notes, open as tabs and side by side in up to three panes, inside Memory. Do not add tabs or split panes for sessions, changes, diffs or anything else, with one exception already decided: Phase 5's terminal has its own tab strip, and since Phase 6 (user decision 2026-11-15) up to two terminal panes side by side.
 3. **Brand:** the hex/wasp symbol and the word "Hivemind". The name or wordmark "Vesparc" appears nowhere in the product, the code or the documents' user-facing copy. The mock images carry that wordmark; ignore it.
 4. **Dark only.** There is no light theme.
 5. **A change (Phase 3)** is a `plan` note (the brief) plus an entry in a new Living Memory `changes` registry. Change numbers (CHG-014) are unique across the whole store.
