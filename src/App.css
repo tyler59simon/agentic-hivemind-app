@@ -701,12 +701,21 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .canvas-node strong { max-width: 100%; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .canvas-node span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: #dccbe8; }
 .canvas-node.outside { border-color: #9177a8; border-style: dashed; }
+.canvas-node.diff-added { border-color: var(--success); border-style: solid; background: var(--diff-add); }
+.canvas-node.diff-changed { border-color: var(--warn); border-style: solid; background: var(--warn-bg); }
+.canvas-edge.diff-added path { stroke: var(--success); stroke-width: 2; }
+.canvas-edge.diff-changed path { stroke: var(--warn); stroke-width: 2; }
 .canvas-node.on { border-color: #01e4a1; border-style: solid; border-width: 2px; background: #183834; }
 .canvas-zoom { display: flex; align-items: center; gap: .3rem; }
 .canvas-zoom span { min-width: 3.2rem; text-align: center; font-variant-numeric: tabular-nums; }
 .canvas-picture { position: absolute; inset: 0; overflow: auto; background: #fff; cursor: default; }
 .canvas-picture img { display: block; max-width: none; }
 .canvas-source { position: absolute; inset: 0; margin: 0; overflow: auto; padding: 1rem; background: var(--bg-code); font-family: var(--font-mono); font-size: .86rem; cursor: text; user-select: text; }
+.canvas-top select { padding: .3rem .5rem; max-width: 17rem; }
+.canvas-legend { display: flex; align-items: center; flex-wrap: wrap; gap: .3rem 1rem; padding: 0 .9rem .5rem; font-size: .86rem; flex: none; }
+.swatch.added { background: var(--success); }
+.swatch.changed { background: var(--warn); }
+.swatch.removed { background: var(--error); }
 .banner.stale { flex-direction: row; align-items: center; gap: .7rem; }
 .banner.stale svg { flex: none; }
 .switch { display: inline-flex; align-items: center; gap: .6rem; cursor: pointer; }

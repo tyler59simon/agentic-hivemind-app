@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { create } from "zustand";
-import { systemArchitecture, systemDiagram, systemSnapshots, systemStaleness } from "../../lib/architecture";
+import { systemArchitecture, systemDiagram, systemSnapshot, systemSnapshots, systemStaleness } from "../../lib/architecture";
 import { useSystemsEnabled } from "../../lib/connection";
 import { sessionsQuery } from "../../lib/agent";
 import { list, systems, type System } from "../../lib/lm";
@@ -66,6 +66,11 @@ export function useOlderSnapshots(slug: string | undefined, generatedAt: number 
     select: (all) => all.filter((s) => s.takenAt < generatedAt!),
     enabled: !!slug && !!generatedAt, staleTime: 60_000, retry: false,
   });
+}
+
+/** One stored baseline's model; kept for good, since a snapshot never changes. */
+export function useSnapshot(slug: string, id: string | null) {
+  return useQuery({ queryKey: ["architecture", slug, "snapshot", id], queryFn: () => systemSnapshot(slug, id!), enabled: !!id, staleTime: Infinity, retry: false });
 }
 
 const DISMISSED = "hivemind.system-proposals-dismissed";
