@@ -667,7 +667,14 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .review-meta { display: flex; align-items: center; gap: .6rem; font-family: var(--font-mono); font-size: .93rem; color: #e9def2; }
 .review-diff { border: 1px solid var(--border-strong); border-radius: .5rem; overflow: hidden; background: var(--bg-code); }
 .review-diff .cm-editor { max-height: 58vh; }
-.review-pane code { font-family: var(--font-mono); font-size: .9em; }
+.validation { border-top: 1px solid var(--border-strong); padding-top: 1rem; display: flex; flex-direction: column; gap: .5rem; }
+.validation-row { display: flex; align-items: center; justify-content: flex-start; gap: .8rem; border: none; padding: .2rem 0; text-align: left; }
+.validation-row svg { flex: none; }
+.validation-row.passed svg { color: var(--success); }
+.validation-row.failed svg { color: var(--error); }
+.validation-row.warn svg { color: var(--warn); }
+.validation-row code, .review-pane code { font-family: var(--font-mono); font-size: .9em; }
+.tool-output { margin: 0; padding: .8rem; background: var(--bg-code); border: 1px solid var(--border); border-radius: .45rem; font-family: var(--font-mono); font-size: .86rem; overflow: auto; max-height: 60vh; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* ---- Architecture canvas ---- */
 .canvas { display: flex; flex-direction: column; height: clamp(20rem, 52vh, 38rem); border: 1px solid #4c3861; border-radius: .6rem; background-color: #1c0a27; background-image: radial-gradient(#3a224c 1px, transparent 1px); background-size: 22px 22px; overflow: hidden; }
