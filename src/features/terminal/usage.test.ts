@@ -15,6 +15,7 @@ describe("usage text", () => {
     expect(usageText(usage({ inputTokens: 500, costUsd: 0.001 }))).toBe("500 tokens · ≈ <$0.01");
     expect(usageText(usage({ inputTokens: 500 }))).toBe("500 tokens");
     expect(usageText(usage())).toBe("");
+    expect(usageText(usage({ inputTokens: 100, cachedTokens: 10_000, outputTokens: 30 }))).toBe("10.1k tokens");
     expect(usageText(undefined)).toBe("");
   });
 

@@ -115,13 +115,33 @@ pub(super) fn first_line(path: &Path) -> Option<Value> {
     serde_json::from_str(&line).ok()
 }
 
-/// The thread a Codex session started: the earliest rollout filed on or after the day before `since_ms` whose first
+/// The thread ids of the rollouts filed on or after the day before `since_ms`, from the file names alone
+/// (`rollout-<time>-<id>.jsonl`), so nothing is read. Taken before a Codex terminal starts, to tell its own thread apart.
+pub fn codex_thread_ids(home: &Path, since_ms: u64) -> Vec<String> {
+    let first_day = (since_ms / 86_400_000) as i64 - 1;
+    date_folders(home)
+        .into_iter()
+        .filter(|(day, _)| *day >= first_day)
+        .flat_map(|(_, dir)| rollouts(&dir).collect::<Vec<_>>())
+        .filter_map(|path| {
+            let name = path.file_name()?.to_str()?;
+            let stem = name.strip_suffix(".jsonl")?;
+            // `rollout-` + `YYYY-MM-DDThh-mm-ss` (19 characters) + `-` + the id.
+            let id = stem.get("rollout-".len() + 19 + 1..)?;
+            valid_id(id).then(|| id.to_string())
+        })
+        .collect()
+}
+
+/// The thread a Codex session started: the rollout filed on or after the day before `since_ms` whose first
 /// `session_meta` names this folder and starts at or after `since_ms` (less a few seconds). Threads in `taken` belong to
-/// other sessions. The date folders are in local time, so a day of slack is read on each side of the UTC date.
-pub fn codex_thread(home: &Path, cwd: &str, since_ms: u64, taken: &[String]) -> Option<String> {
+/// other sessions and threads in `before` existed when the terminal started. When more than one candidate is left the
+/// answer is None (it is looked for again later). The date folders are in local time, so a day of slack is read on each
+/// side of the UTC date.
+pub fn codex_thread(home: &Path, cwd: &str, since_ms: u64, taken: &[String], before: &[String]) -> Option<String> {
     const SLACK_MS: u64 = 5_000;
     let first_day = (since_ms / 86_400_000) as i64 - 1;
-    let mut best: Option<(u64, String)> = None;
+    let mut found: Vec<String> = Vec::new();
     for (day, dir) in date_folders(home) {
         if day < first_day {
             continue;
@@ -139,15 +159,15 @@ pub fn codex_thread(home: &Path, cwd: &str, since_ms: u64, taken: &[String]) -> 
             ) else {
                 continue;
             };
-            if !same_folder(folder, cwd) || at + SLACK_MS < since_ms || taken.iter().any(|t| t == id) {
+            if !same_folder(folder, cwd) || at + SLACK_MS < since_ms || taken.iter().chain(before).any(|t| t == id) {
                 continue;
             }
-            if best.as_ref().is_none_or(|(earliest, _)| at < *earliest) {
-                best = Some((at, id.to_string()));
+            if !found.iter().any(|f| f == id) {
+                found.push(id.to_string());
             }
         }
     }
-    best.map(|(_, id)| id)
+    if found.len() == 1 { found.pop() } else { None }
 }
 
 /// The rollout file of a known thread, from any date folder.
@@ -288,10 +308,12 @@ mod tests {
         // Too early (before the session), and a later one for the same folder.
         rollout(&home, "2026/11/14", "2026-11-14T10-00-00", "019b2222-aaaa-7bbb-8ccc-ddddeeeeffff", cwd, "2026-11-14T17:00:00.000Z");
         rollout(&home, "2026/11/15", "2026-11-15T17-00-00", "019b3333-aaaa-7bbb-8ccc-ddddeeeeffff", cwd, "2026-11-16T00:00:00.000Z");
-        assert_eq!(codex_thread(&home, cwd, start, &[]).as_deref(), Some(THREAD));
-        // Another session already holds that thread: the next one is taken.
-        assert_eq!(codex_thread(&home, cwd, start, &[THREAD.to_string()]).as_deref(), Some("019b3333-aaaa-7bbb-8ccc-ddddeeeeffff"));
-        assert_eq!(codex_thread(&home, "C:\\elsewhere", start, &[]), None);
+        // Two candidates are left (the earlier one and the later one): none is chosen.
+        assert_eq!(codex_thread(&home, cwd, start, &[], &[]), None);
+        // Another session already holds one of them: the other is taken.
+        assert_eq!(codex_thread(&home, cwd, start, &[THREAD.to_string()], &[]).as_deref(), Some("019b3333-aaaa-7bbb-8ccc-ddddeeeeffff"));
+        assert_eq!(codex_thread(&home, cwd, start, &[], &["019b3333-aaaa-7bbb-8ccc-ddddeeeeffff".to_string()]).as_deref(), Some(THREAD));
+        assert_eq!(codex_thread(&home, "C:\\elsewhere", start, &[], &[]), None);
         assert!(codex_rollout(&home, THREAD).is_some());
         assert_eq!(codex_rollout(&home, "019bffff-aaaa-7bbb-8ccc-ddddeeeeffff"), None);
         fs::remove_dir_all(home).ok();
@@ -304,7 +326,24 @@ mod tests {
         // Started 01:00 UTC on the 16th; local time (UTC+10) files it under the 16th, and UTC-8 under the 15th.
         let start = parse_iso_ms("2026-11-16T01:00:00Z").unwrap();
         rollout(&home, "2026/11/15", "2026-11-15T17-00-10", THREAD, cwd, "2026-11-16T01:00:10.000Z");
-        assert_eq!(codex_thread(&home, cwd, start, &[]).as_deref(), Some(THREAD));
+        assert_eq!(codex_thread(&home, cwd, start, &[], &[]).as_deref(), Some(THREAD));
+        fs::remove_dir_all(home).ok();
+    }
+
+    #[test]
+    fn a_conversation_that_existed_before_the_start_is_not_the_terminals() {
+        let home = home("codex-before");
+        let cwd = "/work/one";
+        let start = parse_iso_ms("2026-11-16T10:00:00Z").unwrap();
+        // Another conversation in the same folder began 3 s before the terminal: inside the slack, so it passes the time check.
+        let other = "019b4444-aaaa-7bbb-8ccc-ddddeeeeffff";
+        rollout(&home, "2026/11/16", "2026-11-16T09-59-57", other, cwd, "2026-11-16T09:59:57.000Z");
+        let before = codex_thread_ids(&home, start);
+        assert_eq!(before, vec![other.to_string()]);
+        rollout(&home, "2026/11/16", "2026-11-16T10-00-02", THREAD, cwd, "2026-11-16T10:00:02.000Z");
+        assert_eq!(codex_thread(&home, cwd, start, &[], &before).as_deref(), Some(THREAD));
+        // Without the list, both look like candidates and none is chosen.
+        assert_eq!(codex_thread(&home, cwd, start, &[], &[]), None);
         fs::remove_dir_all(home).ok();
     }
 

@@ -135,13 +135,14 @@ fn codex_first_message(path: &Path) -> Option<String> {
     found
 }
 
-/// The newest Codex conversations whose rollout names `cwd`, found by walking the date folders newest first. The walk
-/// stops after `MAX_LISTED` matches or after `MAX_ROLLOUTS` rollouts have been opened.
+/// The most recently updated Codex conversations whose rollout names `cwd`. The date folders are walked newest first
+/// until `MAX_ROLLOUTS` rollouts have been opened; the matches are then sorted by update time (the index's, else the
+/// file's modified time) and the newest `MAX_LISTED` kept, so an old conversation resumed today is not missed.
 pub fn codex(home: &Path, cwd: &str) -> Vec<Conversation> {
     let index = codex_index(home);
     let mut days = date_folders(home);
     days.sort_by_key(|day| std::cmp::Reverse(day.0));
-    let (mut found, mut opened) = (Vec::new(), 0);
+    let (mut matches, mut opened) = (Vec::new(), 0);
     'days: for (_, dir) in days {
         let mut files: Vec<_> = rollouts(&dir).collect();
         files.sort_by(|a, b| b.cmp(a));
@@ -157,15 +158,19 @@ pub fn codex(home: &Path, cwd: &str) -> Vec<Conversation> {
                 continue;
             }
             let (name, at) = index.get(id).cloned().unwrap_or_default();
-            let title = name.or_else(|| codex_first_message(&path)).unwrap_or_else(|| UNTITLED.to_string());
-            found.push(Conversation { id: id.to_string(), title, updated_at: at.unwrap_or_else(|| modified_ms(&path)), hivemind_session: None });
-            if found.len() >= MAX_LISTED {
-                break 'days;
-            }
+            matches.push((id.to_string(), path.clone(), name, at.unwrap_or_else(|| modified_ms(&path))));
         }
     }
-    found.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| a.id.cmp(&b.id)));
-    found
+    matches.sort_by(|a, b| b.3.cmp(&a.3).then_with(|| a.0.cmp(&b.0)));
+    matches.truncate(MAX_LISTED);
+    // The first message is read only for the conversations that are kept.
+    matches
+        .into_iter()
+        .map(|(id, path, name, updated_at)| {
+            let title = name.or_else(|| codex_first_message(&path)).unwrap_or_else(|| UNTITLED.to_string());
+            Conversation { id, title, updated_at, hivemind_session: None }
+        })
+        .collect()
 }
 
 /// The CLI conversation a session is bound to. Claude: the imported conversation, else the session's own id (Hivemind
@@ -359,6 +364,29 @@ mod tests {
             rollout(&home, "2026/11/15", &format!("2026-11-15T10-{n:02}-00"), &thread, CWD, &[]);
         }
         assert_eq!(codex(&home, CWD).len(), MAX_LISTED);
+        fs::remove_dir_all(home).ok();
+    }
+
+    #[test]
+    fn codex_keeps_the_most_recently_updated_not_the_most_recently_created() {
+        let home = home("codex-updated");
+        let old = "019bffff-aaaa-7bbb-8ccc-ddddeeeeffff";
+        rollout(&home, "2026/10/01", "2026-10-01T10-00-00", old, CWD, &[]);
+        for n in 0..55u32 {
+            let thread = format!("019b{n:04x}-aaaa-7bbb-8ccc-ddddeeeeffff");
+            rollout(&home, "2026/11/15", &format!("2026-11-15T10-{n:02}-00"), &thread, CWD, &[]);
+        }
+        // The October conversation was resumed after all the November ones were last touched.
+        let lines: String = (0..55u32)
+            .map(|n| format!("{{\"id\":\"019b{n:04x}-aaaa-7bbb-8ccc-ddddeeeeffff\",\"thread_name\":\"n{n}\",\"updated_at\":\"2026-11-15T11:00:00Z\"}}
+"))
+            .chain(std::iter::once(format!("{{\"id\":\"{old}\",\"thread_name\":\"Old one\",\"updated_at\":\"2026-11-15T12:00:00Z\"}}
+")))
+            .collect();
+        write(&home.join(".codex/session_index.jsonl"), &lines);
+        let listed = codex(&home, CWD);
+        assert_eq!(listed.len(), MAX_LISTED);
+        assert_eq!((listed[0].id.as_str(), listed[0].title.as_str()), (old, "Old one"));
         fs::remove_dir_all(home).ok();
     }
 

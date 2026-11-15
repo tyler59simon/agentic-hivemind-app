@@ -128,6 +128,8 @@ struct Shared {
     refreshing: AtomicBool,
     /// When the program was started (ms): a Codex conversation older than this is not its own.
     since: u64,
+    /// The Codex thread ids that existed when the program started; none of them is its own.
+    before: Vec<String>,
     /// Set from a hook line or a bell; a lock of its own, never taken together with `terms`.
     attention: Mutex<Option<Attention>>,
 }
@@ -165,6 +167,8 @@ struct Run {
     output: Output,
     /// A Claude session's folder for hook signals (`HIVEMIND_SIGNAL_DIR`); None for every other program.
     signal_dir: Option<PathBuf>,
+    /// The Codex thread ids that existed before the start (read before the map is locked); empty for every other program.
+    before: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -234,6 +238,11 @@ impl Manager {
             // An imported conversation: Claude resumes it by its own id, not by the session's.
             Some((StartMode::Resume, _)) => info.engine_session.clone(),
             _ => None,
+        };
+        // Also before the lock: the threads that exist already, so a new Codex conversation can be told from them.
+        let existing = match &start {
+            Some(_) if engine == Engine::Codex && !inner.home.as_os_str().is_empty() => cli_files::codex_thread_ids(&inner.home, agent::now_ms()),
+            _ => Vec::new(),
         };
         // Held from the limit check until the new entry is inserted, so an exit cannot be handled before its entry exists.
         let mut terms = inner.terms.lock().unwrap();
@@ -318,6 +327,7 @@ impl Manager {
             scrollback: Scrollback::open(scrollback_path, scrollback::KEEP).ok(),
             output,
             signal_dir: signals.map(|_| own_dir),
+            before: existing,
         };
         match self.spawn_in(&mut terms, run) {
             Ok(started) => {
@@ -423,7 +433,7 @@ impl Manager {
             rows,
             scrollback: None,
             output,
-            signal_dir: None,
+            signal_dir: None, before: Vec::new(),
         };
         self.spawn_in(&mut terms, run)
     }
@@ -451,7 +461,7 @@ impl Manager {
             rows,
             scrollback: None,
             output,
-            signal_dir: None,
+            signal_dir: None, before: Vec::new(),
         };
         let mut terms = self.inner.terms.lock().unwrap();
         self.spawn_in(&mut terms, run)
@@ -563,6 +573,7 @@ impl Manager {
             close_requested: AtomicBool::new(false),
             refreshing: AtomicBool::new(false),
             since: agent::now_ms(),
+            before: run.before,
             attention: Mutex::new(None),
         });
         let (inner, handler) = (self.inner.clone(), shared.clone());
@@ -641,7 +652,7 @@ impl Inner {
         let found = match &info.engine_session {
             Some(id) if cli_files::codex_rollout(&self.home, id).is_some() => return Some(id.clone()),
             Some(_) => None,
-            None => self.find_thread(info, info.started_at),
+            None => self.find_thread(info, info.started_at, &[]),
         };
         if found != info.engine_session {
             let _ = self.agents.amend(&info.id, |info| info.engine_session = found.clone());
@@ -649,16 +660,17 @@ impl Inner {
         found
     }
 
-    /// The Codex thread started in the session's folder at or after `since`, leaving out the other sessions' threads.
-    fn find_thread(&self, info: &SessionInfo, since: u64) -> Option<String> {
+    /// The Codex thread started in the session's folder at or after `since`, leaving out the other sessions' threads and
+    /// those in `before`. None when it is not there yet or more than one is left.
+    fn find_thread(&self, info: &SessionInfo, since: u64, before: &[String]) -> Option<String> {
         let cwd = session_cwd(info).ok()?.display().to_string();
         let taken: Vec<String> = self.agents.sessions().into_iter().filter(|s| s.id != info.id).filter_map(|s| s.engine_session).collect();
-        cli_files::codex_thread(&self.home, &cwd, since, &taken)
+        cli_files::codex_thread(&self.home, &cwd, since, &taken, before)
     }
 
     /// Fill `engine_session` (Codex) and `cli_title` from the CLI's files. True when there is nothing more to find.
     /// Reads files and takes the session lock only; call it without the terminal map locked.
-    fn discover(&self, session_id: &str, since: u64) -> bool {
+    fn discover(&self, session_id: &str, since: u64, before: &[String]) -> bool {
         if self.home.as_os_str().is_empty() {
             return true;
         }
@@ -671,7 +683,7 @@ impl Inner {
                 (None, cli_files::claude_transcript(&self.home, &cwd, conversation).and_then(|path| cli_files::claude_title(&path)))
             }
             Engine::Codex => {
-                let thread = info.engine_session.clone().or_else(|| self.find_thread(&info, since));
+                let thread = info.engine_session.clone().or_else(|| self.find_thread(&info, since, before));
                 let title = thread.as_deref().and_then(|id| cli_files::codex_title(&self.home, id));
                 (thread, title)
             }
@@ -700,7 +712,7 @@ impl Inner {
             for _ in 0..WATCH_TRIES {
                 std::thread::sleep(WATCH_EVERY);
                 let alive = inner.terms.lock().unwrap().get(&shared.id).is_some_and(|entry| Arc::ptr_eq(&entry.shared, &shared));
-                if !alive || inner.discover(&session_id, shared.since) {
+                if !alive || inner.discover(&session_id, shared.since, &shared.before) {
                     return;
                 }
             }
@@ -788,7 +800,7 @@ impl Inner {
     fn finish(&self, shared: &Shared, code: Option<u32>) {
         if let Some(session_id) = &shared.session_id {
             self.refresh_files(session_id);
-            self.discover(session_id, shared.since);
+            self.discover(session_id, shared.since, &shared.before);
         }
         let mut terms = self.terms.lock().unwrap();
         terms.remove(&shared.id);
@@ -1052,7 +1064,7 @@ mod tests {
                 rows: 24,
                 scrollback: Scrollback::open(self.terms.inner.scrollback_path(session).unwrap(), scrollback::KEEP).ok(),
                 output,
-                signal_dir: None,
+                signal_dir: None, before: Vec::new(),
             })
         }
 
@@ -1199,7 +1211,7 @@ mod tests {
         let run = |session: &str, memory_root: Option<PathBuf>, output: Output| {
             let cwd = PathBuf::from(&rig.agents.info(session).unwrap().worktree.unwrap().path);
             rig.terms
-                .spawn(Run { id: session.into(), session_id: Some(session.into()), engine: Engine::Claude, cli: echo.clone(), cwd, label: None, memory_root, cols: 300, rows: 24, scrollback: None, output, signal_dir: None })
+                .spawn(Run { id: session.into(), session_id: Some(session.into()), engine: Engine::Claude, cli: echo.clone(), cwd, label: None, memory_root, cols: 300, rows: 24, scrollback: None, output, signal_dir: None, before: Vec::new() })
                 .unwrap()
         };
         run(&id, Some(root.clone()), output);
@@ -1497,7 +1509,7 @@ mod tests {
                 rows: 24,
                 scrollback: None,
                 output,
-                signal_dir: None,
+                signal_dir: None, before: Vec::new(),
             })
         };
         login("login-claude", output.clone()).unwrap();
@@ -1702,7 +1714,7 @@ mod tests {
         };
         let run = |engine, output| Run {
             id: id.clone(), session_id: Some(id.clone()), engine, cli: cli.clone(), cwd: cwd.clone(), label: None, memory_root: None,
-            cols: 200, rows: 24, scrollback: None, output, signal_dir: None,
+            cols: 200, rows: 24, scrollback: None, output, signal_dir: None, before: Vec::new(),
         };
         rig.terms.spawn(run(Engine::Codex, collector().0)).unwrap();
         wait_for("the notification", || rig.terms.list().first().is_some_and(|t| t.attention == Some(Kind::Waiting)));

@@ -20,7 +20,7 @@ import { useCurrentProject } from "../projects/useProject";
 import { noteQuery } from "../viewer/NoteView";
 import { termClose, termList, type ShellTarget } from "../../lib/term";
 import { closeTab, focusPane, moveTab, openIn, paneOf, reconcile, toggleSplit, update, useLayout, type Pane } from "./layout";
-import { dotOf, dotTitle, seen, useAttention } from "./attention";
+import { dotOf, dotTitle, seen, setWorkspaceMounted, useAttention } from "./attention";
 import * as registry from "./registry";
 import { isShellId, NO_SHELL_PLACE, shellLabel, shellPlaces, shellStatus, shellTitle, type ShellTab } from "./shells";
 import { statusLine, tabLabel, terminalTabs, whereLabel } from "./tabs";
@@ -170,6 +170,17 @@ function PaneView({ index, tabs, activeId, views, onView, focused, split, over, 
   const live = registry.useLive(active?.id ?? "");
   const running = registry.useRunning(session ?? (shell ? { id: shell.id, status: shell.running ? "running" : "ended" } : { id: "", status: "idle" }));
   const usage = useQuery({ queryKey: ["agent", "usage", session?.id ?? ""], queryFn: () => agentUsage(session!.id), enabled: !!session, staleTime: 0, refetchInterval: usagePollMs(running) });
+  // The program exited between polls: polling has stopped, so read the final transcript and usage once.
+  const client = useQueryClient();
+  const before = useRef({ id: session?.id ?? "", running });
+  useEffect(() => {
+    const was = before.current;
+    before.current = { id: session?.id ?? "", running };
+    if (session && was.id === session.id && was.running && !running) {
+      void client.invalidateQueries({ queryKey: ["agent", "transcript", session.id] });
+      void client.invalidateQueries({ queryKey: ["agent", "usage", session.id] });
+    }
+  }, [session?.id, running, client]); // eslint-disable-line react-hooks/exhaustive-deps
   const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings, enabled: !!session });
   const budget = settings.data?.agent_budget_usd ?? 5;
   const level = session && usage.data ? budgetLevel(engineOf(session), usage.data, budget) : "none";
@@ -288,6 +299,8 @@ export function TerminalWorkspace({ sessions, selected, onEmpty }: { sessions: S
   const [drag, setDrag] = useState<Drag | null>(null);
   const dragged = useRef(false);
 
+  // The attention store marks a terminal's signal as seen only while this workspace is on screen.
+  useEffect(() => { setWorkspaceMounted(true); return () => setWorkspaceMounted(false); }, []);
   // The view is derived on every render, so nothing flickers; this keeps the store in step with it.
   useEffect(() => { if (view !== stored) update(() => view); });
   // A session opened from elsewhere shows in its pane and takes the focus.

@@ -38,10 +38,10 @@ export function fullestWindow(usage: Pick<Usage, "limits">): { name: string; use
   return { name, usedPercent: top.usedPercent };
 }
 
-/** "12.4k tokens · $0.31", "12.4k tokens · ≈ $0.31" (an estimate), Codex "41.9k tokens · 28% of weekly limit"; "" before any use. */
+/** The tokens are input + cached + output. "12.4k tokens · $0.31", "12.4k tokens · ≈ $0.31" (an estimate), Codex "41.9k tokens · 28% of weekly limit"; "" before any use. */
 export function usageText(usage: Usage | undefined): string {
   if (!usage) return "";
-  const tokens = usage.inputTokens + usage.outputTokens;
+  const tokens = usage.inputTokens + usage.cachedTokens + usage.outputTokens;
   const parts: string[] = [];
   if (tokens > 0) parts.push(`${formatTokens(tokens)} tokens`);
   if (usage.costUsd !== null) parts.push(`${usage.costExact ? "" : "≈ "}${money(usage.costUsd)}`);

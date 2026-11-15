@@ -21,13 +21,17 @@ describe("dotOf", () => {
 });
 
 describe("lookingAt", () => {
-  const here = { windowFocused: true, page: "agents", active: "a" };
-  it("is true only for the active terminal of a focused Agent Workspace", () => {
+  const here = { windowFocused: true, page: "agents", workspace: true, shown: ["a", null] as (string | null)[] };
+  it("is true only for a tab shown in the terminal workspace of a focused Agent Workspace", () => {
     expect(lookingAt("a", here)).toBe(true);
     expect(lookingAt("b", here)).toBe(false);
+    expect(lookingAt("b", { ...here, shown: ["a", "b"] })).toBe(true);
     expect(lookingAt("a", { ...here, windowFocused: false })).toBe(false);
     expect(lookingAt("a", { ...here, page: "memory" })).toBe(false);
-    expect(lookingAt("a", { ...here, active: null })).toBe(false);
+    expect(lookingAt("a", { ...here, shown: [null] })).toBe(false);
+  });
+  it("is false while the Start screen or a chat session replaces the terminal workspace", () => {
+    expect(lookingAt("a", { ...here, workspace: false })).toBe(false);
   });
 });
 
