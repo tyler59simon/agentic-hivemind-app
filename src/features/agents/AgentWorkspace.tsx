@@ -6,7 +6,7 @@ import logo from "../../assets/logo.png";
 import { agentCancel, agentEnd, agentRemoveWorktree, agentSession, agentSetPolicy, sessionsQuery, type Policy, type SeqEvent, type SessionInfo } from "../../lib/agent";
 import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { connect } from "../../lib/lm";
-import { openChange, openProject, openSession, openSystem, startSession, useApp } from "../../store";
+import { openChange, openProject, openReview, openSession, openSystem, startSession, useApp } from "../../store";
 import { Markdown } from "../../ui/Markdown";
 import { Confirm } from "../../ui/Modal";
 import { ArrowLink, PageHeader, Row, Section } from "../../ui/Page";
@@ -17,16 +17,17 @@ import { dayLabel } from "../history/activity";
 import { projectsQuery } from "../projects/useProject";
 import { systemsQuery } from "../systems/useSystem";
 import { noteQuery } from "../viewer/NoteView";
-import { ApprovalCard, ChangesModal, Composer, FilesCard } from "./Chat";
+import { ApprovalCard, Composer, FilesCard } from "./Chat";
 import { apply, build, cost, duration, EMPTY, merge, type Finished, type Item, type Transcript as State } from "./events";
-import { ALLOWED_NOTE, isEnded, permissionLines, POLICIES, repoName } from "./session";
+import { filesWord, reviewLabel } from "../review/review";
+import { ALLOWED_NOTE, isEnded, permissionLines, POLICIES, repoName, waitingForReview } from "./session";
 import { StartSession } from "./StartSession";
 
 const when = (ms: number) => new Date(ms).toLocaleString();
 const elapsed = (s: SessionInfo) => duration((s.endedAt ?? Date.now()) - s.startedAt);
 
 /** What an interactive transcript needs beyond the items: the session, which files card is the latest, and how to review it. */
-interface Chat { sessionId: string; latestFiles: number; onReview?: () => void }
+interface Chat { sessionId: string; latestFiles: number; chip: { text: string; tone: string } | null; onReview?: () => void }
 
 function Entry({ item, index, chat }: { item: Item; index: number; chat?: Chat }) {
   const [open, setOpen] = useState(false);
@@ -64,7 +65,7 @@ function Entry({ item, index, chat }: { item: Item; index: number; chat?: Chat }
     case "approval":
       return <ApprovalCard item={item} sessionId={chat?.sessionId ?? ""} />;
     case "files":
-      return <FilesCard files={item.files} latest={index === chat?.latestFiles} onReview={chat?.onReview} />;
+      return <FilesCard files={item.files} latest={index === chat?.latestFiles} chip={index === chat?.latestFiles ? chat.chip : null} onReview={chat?.onReview} />;
     case "turn":
       if (item.outcome === "stopped") return <p className="turn-line">Stopped</p>;
       if (item.outcome === "error") return <div className="banner warn"><strong>The turn failed</strong><span className="small">{item.reason}</span></div>;
@@ -183,7 +184,7 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
         <p className="muted small">{ALLOWED_NOTE}</p>
       </Section>
       <Section title="Changes">
-        {files ? <Row icon={<FileText size="1.3em" aria-hidden />} onClick={onReview}>{files} file{files === 1 ? "" : "s"} awaiting review</Row>
+        {files ? <Row icon={<FileText size="1.3em" aria-hidden />} onClick={onReview}>{filesWord(files)} {waitingForReview(info) ? "awaiting review" : "changed"}</Row>
           : <p className="muted small">No file changes yet.</p>}
       </Section>
       <div className="rail-actions">
@@ -215,7 +216,6 @@ function Session({ id }: { id: string }) {
   const sessions = useQuery(sessionsQuery());
   const systems = useQuery(systemsQuery());
   const [state, setState] = useState<State>(EMPTY);
-  const [reviewing, setReviewing] = useState(false);
   const info = sessions.data?.find((s) => s.id === id) ?? log.data?.info;
 
   useEffect(() => { if (log.data) setState((live) => merge(live, build(log.data.events))); }, [log.data]);
@@ -236,7 +236,7 @@ function Session({ id }: { id: string }) {
   const work = info.task.kind === "work" ? info.task : null;
   const interactive = info.mode === "interactive";
   const live = { ...info, status };
-  const review = info.worktree ? () => setReviewing(true) : undefined;
+  const review = info.worktree ? () => openReview(info.id) : undefined;
   return (
     <>
       <div className="chat-thread">
@@ -250,7 +250,7 @@ function Session({ id }: { id: string }) {
           )}
         </header>
         <div className="chat-scroll">
-          <Transcript state={state} running={running} chat={interactive ? { sessionId: info.id, onReview: review } : undefined} />
+          <Transcript state={state} running={running} chat={interactive ? { sessionId: info.id, chip: reviewLabel(live), onReview: review } : undefined} />
         </div>
         {interactive && <Composer info={live} transcript={state} />}
       </div>
@@ -276,7 +276,6 @@ function Session({ id }: { id: string }) {
           </div>
         </aside>
       )}
-      {reviewing && info.worktree && <ChangesModal info={{ ...info, worktree: info.worktree }} onClose={() => setReviewing(false)} />}
     </>
   );
 }

@@ -10,7 +10,7 @@ import {
 import { actionItems, addEvidence, evidenceItems, sections, setEvidence, stepParts, wikilinks } from "../../lib/note";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
-import { openSession, openSystem, useApp } from "../../store";
+import { openReview, openSession, openSystem, useApp } from "../../store";
 import { Markdown } from "../../ui/Markdown";
 import { Menu } from "../../ui/Menu";
 import { Modal } from "../../ui/Modal";
@@ -225,7 +225,7 @@ function LinkedSession({ view }: { view: ChangeView }) {
           <span><Sparkle size="1.1em" aria-hidden /> <strong>{engineName(latest.adapter)}</strong></span>
           <span className="session-title">{latest.title}</span>
           <span className="muted">{sessionLine(latest)}</span>
-          <ArrowLink onClick={() => openSession(latest.id)}>{waitingForReview(latest) ? "Review proposed changes" : "Open session"}</ArrowLink>
+          <ArrowLink onClick={() => (waitingForReview(latest) ? openReview(latest.id) : openSession(latest.id))}>{waitingForReview(latest) ? "Review proposed changes" : "Open session"}</ArrowLink>
         </div>
       ) : <p className="muted">No agent session yet.</p>}
     </Section>

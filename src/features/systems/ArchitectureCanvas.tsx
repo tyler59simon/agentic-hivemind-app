@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Bell, Box, Database, Maximize, Minimize, Minus, Plus, User } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { systemDiagramSource, type ArchModel } from "../../lib/architecture";
+import { changeCount, type ModelDiff } from "./compare";
 import { canvasGraph, fitScale, layoutGraph, type CanvasNode, type Level } from "./canvas";
 import type { DiagramEntry } from "./passport";
 import { useDiagram } from "./useSystem";
@@ -21,6 +22,13 @@ function icon(n: CanvasNode): ReactNode {
   if (/queue|topic|bus|stream|notif/i.test(`${n.name} ${n.technology ?? ""}`)) return <Bell size={20} aria-hidden />;
   if (/store|database|\bdb\b|sql|dynamo|bucket|cache|redis/i.test(`${n.name} ${n.technology ?? ""}`)) return <Database size={20} aria-hidden />;
   return <Box size={20} aria-hidden />;
+}
+
+/** `diff-added` or `diff-changed` for a box (`""`) or an arrow (`"Edges"`) a comparison found, else nothing. */
+function tint(diff: { result: ModelDiff } | null | undefined, id: string, edges: "" | "Edges"): string {
+  const r = diff?.result;
+  if (!r) return "";
+  return (edges ? r.addedEdges : r.added).includes(id) ? "diff-added" : (edges ? r.changedEdges : r.changed).includes(id) ? "diff-changed" : "";
 }
 
 /** A smooth line through dagre's points. */
@@ -51,10 +59,39 @@ function Source({ slug, entry, version }: { slug: string; entry: DiagramEntry; v
   return <pre className="canvas-source">{text.data}</pre>;
 }
 
+const MAX_NAMES = 6;
+
+/** What a comparison found. Removed boxes and arrows are not drawn, so they are named here. */
+function Legend({ result, label }: { result: ModelDiff; label: string }) {
+  const counts = [
+    { kind: "added", text: "Added", n: result.added.length + result.addedEdges.length },
+    { kind: "changed", text: "Changed", n: result.changed.length + result.changedEdges.length },
+    { kind: "removed", text: "Removed", n: result.removed.length + result.removedEdges.length },
+  ];
+  const names = [...result.removed.map((e) => e.name), ...result.removedEdges.map((e) => `${e.from} → ${e.to}`)];
+  return (
+    <div className="canvas-legend" role="status">
+      {!changeCount(result) ? <span>No differences from {label}.</span> : (
+        <>
+          <span>Compared with {label}:</span>
+          {counts.filter((c) => c.n > 0).map(({ kind, text, n }) => <span key={kind}><span className={`swatch ${kind}`} />{text} {n}</span>)}
+          {!!names.length && <span className="muted">{names.slice(0, MAX_NAMES).join(", ")}{names.length > MAX_NAMES ? ` and ${names.length - MAX_NAMES} more` : ""}</span>}
+        </>
+      )}
+    </div>
+  );
+}
+
 /** Mock 07: the system drawn from its architecture model. Pick a level, pan and zoom, and select a box to inspect it. */
-export function ArchitectureCanvas({ slug, model, diagrams, version, caption, selected, onSelect }: {
-  slug: string; model: ArchModel; diagrams: DiagramEntry[]; version: number | null; caption?: string;
+export function ArchitectureCanvas({ slug, model, diagrams, version, caption, selected, onSelect, top, diff, notice }: {
+  slug: string; model: ArchModel; diagrams: DiagramEntry[]; version: number | null; caption?: ReactNode;
   selected: string | null; onSelect: (node: CanvasNode | null) => void;
+  /** Extra controls for the top bar, between the caption and the Source switch. */
+  top?: ReactNode;
+  /** What to tint: the result of a comparison, with the date it was compared with. */
+  diff?: { result: ModelDiff; label: string } | null;
+  /** Shown in place of the drawing while the model to draw is not there yet (a baseline loading or failing). */
+  notice?: ReactNode;
 }) {
   const deployment = diagrams.find((d) => /deploy/i.test(d.level));
   const [level, setLevel] = useState<Shown>("containers");
@@ -77,6 +114,8 @@ export function ArchitectureCanvas({ slug, model, diagrams, version, caption, se
     setView({ scale, x: (el.clientWidth - laid.width * scale) / 2, y: (el.clientHeight - laid.height * scale) / 2 });
   }, [laid]);
   useEffect(() => { fit(); }, [fit, full]);
+  // An older baseline has no pictures of its own, so its Deployment level is gone.
+  useEffect(() => { if (level === "deployment" && !deployment) setLevel("containers"); }, [level, deployment]);
   useEffect(() => {
     if (!full) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setFull(false); };
@@ -98,12 +137,14 @@ export function ArchitectureCanvas({ slug, model, diagrams, version, caption, se
       <div className="canvas-top">
         <span className="muted">{caption}</span>
         <span className="fill" />
+        {top}
         {levelEntry && (
           <label className="switch" title="Show the Mermaid source the Architecture Suite wrote for this diagram">
             Source<input type="checkbox" role="switch" checked={source} onChange={(e) => setSource(e.target.checked)} /><span aria-hidden />
           </label>
         )}
       </div>
+      {diff && !notice && <Legend result={diff.result} label={diff.label} />}
       <div className="canvas-view" ref={host}
         onWheel={(e) => { if (!laid || source) return; const r = e.currentTarget.getBoundingClientRect(); zoom(e.deltaY < 0 ? ZOOM.step : 1 / ZOOM.step, { x: e.clientX - r.left, y: e.clientY - r.top }); }}
         onPointerDown={(e) => { if (!laid || source || e.button !== 0) return; drag.current = { x: e.clientX, y: e.clientY, moved: false }; e.currentTarget.setPointerCapture(e.pointerId); }}
@@ -116,7 +157,7 @@ export function ArchitectureCanvas({ slug, model, diagrams, version, caption, se
           setView((v) => ({ ...v, x: v.x + dx, y: v.y + dy }));
         }}
         onPointerUp={() => { const d = drag.current; drag.current = null; if (d && !d.moved) onSelect(null); }}>
-        {source && levelEntry ? <Source slug={slug} entry={levelEntry} version={version} />
+        {notice ? notice : source && levelEntry ? <Source slug={slug} entry={levelEntry} version={version} />
           : picture ? <Picture slug={slug} entry={picture} version={version} />
           : level === "deployment" ? <p className="muted pad">No deployment diagram was generated for this system.</p>
           : !laid ? <p className="muted pad">The model has nothing to draw at this level.</p>
@@ -137,7 +178,7 @@ export function ArchitectureCanvas({ slug, model, diagrams, version, caption, se
                 {laid.edges.map((e) => {
                   const mid = e.points[Math.floor(e.points.length / 2)];
                   return (
-                    <g key={e.id} className={`canvas-edge ${selected && (e.from === selected || e.to === selected) ? "on" : ""}`}>
+                    <g key={e.id} className={`canvas-edge ${selected && (e.from === selected || e.to === selected) ? "on" : ""} ${tint(diff, e.id, "Edges")}`}>
                       <path d={path(e.points)} markerEnd="url(#canvas-arrow)" />
                       {e.label && <text x={mid.x} y={mid.y - 7} textAnchor="middle">{e.label.length > 16 ? `${e.label.slice(0, 15)}…` : e.label}</text>}
                     </g>
@@ -145,7 +186,7 @@ export function ArchitectureCanvas({ slug, model, diagrams, version, caption, se
                 })}
                 {laid.nodes.map((n) => (
                   <foreignObject key={n.id} x={n.x} y={n.y} width={n.width} height={n.height}>
-                    <button className={`canvas-node ${n.id === selected ? "on" : ""} ${n.external || n.kind === "person" ? "outside" : ""}`} aria-pressed={n.id === selected}
+                    <button className={`canvas-node ${n.id === selected ? "on" : ""} ${n.external || n.kind === "person" ? "outside" : ""} ${tint(diff, n.id, "")}`} aria-pressed={n.id === selected}
                       title={n.description || n.name} onPointerDown={(e) => e.stopPropagation()} onClick={() => onSelect(n.id === selected ? null : n)}>
                       {icon(n)}<strong>{n.name}</strong><span>{n.technology || KIND[n.kind]}</span>
                     </button>

@@ -2,7 +2,7 @@
 //! Memory (`systems`), never from the webview, and only diagrams the suite's manifest lists are served.
 use crate::bridge::Bridge;
 use base64::Engine;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -11,6 +11,8 @@ const MANIFEST: &str = ".architecture-suite-manifest.json";
 const MODEL: &str = "architecture-model.json";
 const MAX_JSON: u64 = 16 * 1024 * 1024;
 const MAX_DIAGRAM: u64 = 32 * 1024 * 1024;
+/// Stored baselines kept per system.
+pub const SNAPSHOT_KEEP: usize = 10;
 
 #[derive(Serialize, Debug, PartialEq)]
 pub struct Diagram {
@@ -186,6 +188,119 @@ pub fn source_for_system(bridge: &Bridge, slug: &str, relative: &str) -> Result<
     read_source(&folder, relative)
 }
 
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Staleness {
+    /// The commit the current output was generated from, when a Hivemind session generated it.
+    pub source_sha: Option<String>,
+    /// Commits on the repository's HEAD that the output has not seen; None when it cannot be told.
+    pub behind: Option<u64>,
+    /// False when `behind` was counted from the model file's date because no `source_sha` applies.
+    pub exact: bool,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotInfo {
+    /// The file's stem: "<takenAt>-<sessionId>".
+    pub id: String,
+    pub session_id: String,
+    pub taken_at: u64,
+}
+
+/// One stored copy of architecture-model.json, as written to disk.
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Snapshot {
+    pub session_id: String,
+    pub taken_at: u64,
+    pub source_sha: Option<String>,
+    pub model: Value,
+}
+
+/// Where snapshots are kept: beside the sessions folder, in the app data folder.
+pub fn snapshots_root(sessions_dir: &Path) -> PathBuf {
+    sessions_dir.with_file_name("architecture-snapshots")
+}
+
+fn snapshot_dir(root: &Path, slug: &str) -> Result<PathBuf, String> {
+    let mut chars = slug.chars();
+    let first = chars.next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    if !first || slug.len() > 40 || !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+        return Err("Invalid system slug".into());
+    }
+    Ok(root.join(slug))
+}
+
+/// A system's snapshots, newest first, from the file names alone.
+pub fn list_snapshots(root: &Path, slug: &str) -> Result<Vec<SnapshotInfo>, String> {
+    let dir = snapshot_dir(root, slug)?;
+    let mut found: Vec<SnapshotInfo> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let id = name.strip_suffix(".json")?;
+            let (taken, session) = id.split_once('-')?;
+            if taken.is_empty() || !taken.bytes().all(|b| b.is_ascii_digit()) || uuid::Uuid::try_parse(session).is_err() {
+                return None;
+            }
+            Some(SnapshotInfo { id: id.to_string(), session_id: session.to_string(), taken_at: taken.parse().ok()? })
+        })
+        .collect();
+    found.sort_by(|a, b| b.taken_at.cmp(&a.taken_at).then_with(|| a.id.cmp(&b.id)));
+    Ok(found)
+}
+
+/// Keep a copy of the folder's model for this session; drop all but the newest SNAPSHOT_KEEP of the system.
+pub fn save_snapshot(root: &Path, slug: &str, session_id: &str, taken_at: u64, source_sha: Option<&str>, folder: &Path) -> Result<(), String> {
+    let dir = snapshot_dir(root, slug)?;
+    let Some(model) = read_json(&folder.join(MODEL)) else { return Ok(()) };
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    let snapshot = Snapshot { session_id: session_id.to_string(), taken_at, source_sha: source_sha.map(String::from), model };
+    let text = serde_json::to_string_pretty(&snapshot).map_err(|e| e.to_string())?;
+    let (file, temp) = (dir.join(format!("{taken_at}-{session_id}.json")), dir.join(format!("{taken_at}-{session_id}.tmp")));
+    std::fs::write(&temp, text).map_err(|e| e.to_string())?;
+    std::fs::rename(&temp, &file).map_err(|e| e.to_string())?;
+    for old in list_snapshots(root, slug)?.into_iter().skip(SNAPSHOT_KEEP) {
+        let _ = std::fs::remove_file(dir.join(format!("{}.json", old.id)));
+    }
+    Ok(())
+}
+
+pub fn read_snapshot(root: &Path, slug: &str, id: &str) -> Result<Snapshot, String> {
+    let unknown = || "Unknown snapshot".to_string();
+    if !list_snapshots(root, slug)?.iter().any(|s| s.id == id) {
+        return Err(unknown());
+    }
+    let value = read_json(&snapshot_dir(root, slug)?.join(format!("{id}.json"))).ok_or_else(unknown)?;
+    serde_json::from_value(value).map_err(|_| unknown())
+}
+
+/// How far the repository has moved since the system's architecture output was generated.
+pub fn staleness(bridge: &Bridge, sessions: &[crate::agent::SessionInfo], slug: &str) -> Result<Staleness, String> {
+    use crate::agent::{events::Status, scope::AgentTask};
+    let entry = system_entry(bridge, slug)?;
+    let repo = entry.get("repos").and_then(Value::as_array).and_then(|repos| repos.first()).and_then(Value::as_str);
+    let generated = folder_of(&entry).and_then(|folder| modified_ms(&folder.join(MODEL)));
+    let (Some(repo), Some(generated)) = (repo, generated) else { return Ok(Staleness { source_sha: None, behind: None, exact: false }) };
+    let repo = Path::new(repo);
+    let current = sessions.iter().find(|s| {
+        matches!(&s.task, AgentTask::SystemPassport { slug: of } if of == slug)
+            && s.status == Status::Succeeded
+            && s.source_sha.as_deref().is_some_and(crate::git::is_sha)
+            && s.ended_at.is_some_and(|at| at >= generated)
+    });
+    if let Some(sha) = current.and_then(|s| s.source_sha.as_deref())
+        && let Ok(behind) = crate::git::rev_count(repo, &[&format!("{sha}..HEAD")])
+    {
+        return Ok(Staleness { source_sha: Some(sha.to_string()), behind: Some(behind), exact: true });
+    }
+    let since = format!("--since=@{}", generated / 1000);
+    Ok(Staleness { source_sha: None, behind: crate::git::rev_count(repo, &[&since, "HEAD"]).ok(), exact: false })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,5 +394,49 @@ mod tests {
         assert_eq!(folder_of(&json!({"architecture": "C:/arch/billing"})), Some(PathBuf::from("C:/arch/billing")));
         assert_eq!(folder_of(&json!({"architecture": null})), None);
         assert_eq!(folder_of(&json!({"architecture": " "})), None);
+    }
+
+    fn root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("hivemind-snap-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        root
+    }
+
+    #[test]
+    fn snapshots_are_kept_listed_and_pruned() {
+        let (root, folder) = (root("keep"), fixture("snap-model"));
+        let session = |n: u64| format!("00000000-0000-4000-8000-{n:012}");
+        for n in 1..=12u64 {
+            save_snapshot(&root, "paystream", &session(n), 1000 + n, Some("abc"), &folder).unwrap();
+        }
+        let listed = list_snapshots(&root, "paystream").unwrap();
+        assert_eq!(listed.len(), SNAPSHOT_KEEP);
+        assert_eq!(listed[0], SnapshotInfo { id: format!("1012-{}", session(12)), session_id: session(12), taken_at: 1012 });
+        assert_eq!(listed.last().unwrap().taken_at, 1003);
+        for gone in [1001, 1002] {
+            assert!(!root.join("paystream").join(format!("{gone}-{}.json", session(gone - 1000))).exists());
+        }
+        let read = read_snapshot(&root, "paystream", &listed[0].id).unwrap();
+        assert_eq!((read.session_id, read.source_sha.as_deref(), read.model["schema_version"].as_str()), (session(12), Some("abc"), Some("2.0")));
+        for id in [format!("1001-{}", session(1)), "../x".to_string()] {
+            assert_eq!(read_snapshot(&root, "paystream", &id).unwrap_err(), "Unknown snapshot");
+        }
+        // A folder with no model saves nothing.
+        let empty = root.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert_eq!(save_snapshot(&root, "other", &session(1), 5, None, &empty), Ok(()));
+        assert!(list_snapshots(&root, "other").unwrap().is_empty());
+        std::fs::remove_dir_all(root).ok();
+        std::fs::remove_dir_all(folder).ok();
+    }
+
+    #[test]
+    fn snapshot_folders_take_only_slugs() {
+        let root = Path::new("snaps");
+        assert_eq!(snapshot_dir(root, "paystream"), Ok(root.join("paystream")));
+        assert_eq!(snapshot_dir(root, "a-1"), Ok(root.join("a-1")));
+        for bad in ["", "../x", "A", "a/b", &"a".repeat(41)] {
+            assert_eq!(snapshot_dir(root, bad), Err("Invalid system slug".to_string()), "{bad}");
+        }
     }
 }

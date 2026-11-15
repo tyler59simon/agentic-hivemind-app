@@ -4,6 +4,7 @@ mod bridge;
 mod capture;
 mod drafts;
 mod git;
+mod review;
 mod settings;
 mod watcher;
 mod worktree;
@@ -21,6 +22,7 @@ struct AppState {
     settings_path: PathBuf,
     drafts_dir: PathBuf,
     worktrees_dir: PathBuf,
+    snapshots_dir: PathBuf,
     agents: agent::Manager,
     watcher: Mutex<Option<notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>>,
     /// Why the quick-capture hotkey could not be registered, for the settings screen.
@@ -120,6 +122,27 @@ async fn system_diagram_source(state: State<'_, AppState>, slug: String, path: S
     blocking(move || architecture::source_for_system(&bridge, &slug, &path)).await
 }
 
+/// How many commits a system's repository is ahead of its architecture output.
+#[tauri::command]
+async fn system_staleness(state: State<'_, AppState>, slug: String) -> Result<architecture::Staleness, String> {
+    let (bridge, agents) = (state.bridge.clone(), state.agents.clone());
+    blocking(move || architecture::staleness(&bridge, &agents.sessions(), &slug)).await
+}
+
+/// The stored copies of a system's architecture model, newest first.
+#[tauri::command]
+async fn system_snapshots(state: State<'_, AppState>, slug: String) -> Result<Vec<architecture::SnapshotInfo>, String> {
+    let root = state.snapshots_dir.clone();
+    blocking(move || architecture::list_snapshots(&root, &slug)).await
+}
+
+/// One stored copy of a system's architecture model; the id must be one the listing gave.
+#[tauri::command]
+async fn system_snapshot(state: State<'_, AppState>, slug: String, id: String) -> Result<architecture::Snapshot, String> {
+    let root = state.snapshots_dir.clone();
+    blocking(move || architecture::read_snapshot(&root, &slug, &id)).await
+}
+
 /// The coding-agent CLI a session would launch, or why there is none.
 #[tauri::command]
 async fn agent_available(state: State<'_, AppState>) -> Result<String, String> {
@@ -143,7 +166,7 @@ async fn agent_start(
 #[tauri::command]
 async fn agent_send(state: State<'_, AppState>, session_id: String, text: String, options: Option<agent::SendOptions>) -> Result<(), String> {
     let (agents, bridge, path) = (state.agents.clone(), state.bridge.clone(), state.settings_path.clone());
-    blocking(move || agent::send_task(&agents, &bridge, &settings::load(&path), &session_id, &text, options.unwrap_or_default())).await
+    blocking(move || agent::send_task(&agents, &bridge, &settings::load(&path), &session_id, &text, options.unwrap_or_default(), None)).await
 }
 
 /// Answer a permission request a session is waiting on.
@@ -186,6 +209,62 @@ async fn agent_set_policy(state: State<'_, AppState>, session_id: String, policy
 async fn agent_remove_worktree(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
     let agents = state.agents.clone();
     blocking(move || agents.remove_worktree(&session_id)).await
+}
+
+/// The files a work session changed in its worktree since its review base.
+#[tauri::command]
+async fn review_files(state: State<'_, AppState>, session_id: String) -> Result<Vec<worktree::FileChange>, String> {
+    let (agents, root) = (state.agents.clone(), state.worktrees_dir.clone());
+    blocking(move || review::files(&agents, &root, &session_id)).await
+}
+
+/// The two versions of one file a work session changed.
+#[tauri::command]
+async fn review_file(state: State<'_, AppState>, session_id: String, path: String) -> Result<review::FileContents, String> {
+    let (agents, root) = (state.agents.clone(), state.worktrees_dir.clone());
+    blocking(move || review::file(&agents, &root, &session_id, &path)).await
+}
+
+/// Commit the session's edits on its own branch. Never merges, never pushes.
+#[tauri::command]
+async fn review_approve(state: State<'_, AppState>, session_id: String, message: String) -> Result<String, String> {
+    let (agents, root) = (state.agents.clone(), state.worktrees_dir.clone());
+    blocking(move || review::approve(&agents, &root, &session_id, &message)).await
+}
+
+/// Send the session a message asking for changes.
+#[tauri::command]
+async fn review_request_changes(state: State<'_, AppState>, session_id: String, text: String) -> Result<(), String> {
+    let (agents, bridge, path) = (state.agents.clone(), state.bridge.clone(), state.settings_path.clone());
+    blocking(move || review::request_changes(&agents, &bridge, &settings::load(&path), &session_id, &text)).await
+}
+
+/// Take a session's edits out of the review queue and leave them where they are.
+#[tauri::command]
+async fn review_dismiss(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    let agents = state.agents.clone();
+    blocking(move || review::dismiss(&agents, &session_id)).await
+}
+
+/// Throw the session's edits away: reset its worktree to its review base and remove untracked files.
+#[tauri::command]
+async fn review_discard(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    let (agents, root) = (state.agents.clone(), state.worktrees_dir.clone());
+    blocking(move || review::discard(&agents, &root, &session_id)).await
+}
+
+/// The full text of one tool result of a session, read back from its raw log.
+#[tauri::command]
+async fn review_tool_output(state: State<'_, AppState>, session_id: String, tool_use_id: String) -> Result<agent::ToolOutput, String> {
+    let agents = state.agents.clone();
+    blocking(move || agents.tool_output(&session_id, &tool_use_id)).await
+}
+
+/// Look at every session's worktree again, so edits made outside a turn are noticed.
+#[tauri::command]
+async fn review_refresh(state: State<'_, AppState>) -> Result<usize, String> {
+    let (agents, root) = (state.agents.clone(), state.worktrees_dir.clone());
+    blocking(move || Ok(review::refresh(&agents, &root))).await
 }
 
 /// The local branches of one of a project's repositories (the repository must be registered for the project).
@@ -289,6 +368,7 @@ pub fn run() {
             let drafts_dir = app.path().app_data_dir()?.join("drafts");
             let sessions_dir = app.path().app_data_dir()?.join("agent-sessions");
             let worktrees_dir = app.path().app_data_dir()?.join("worktrees");
+            let snapshots_dir = architecture::snapshots_root(&sessions_dir);
             let saved = settings::load(&settings_path);
             let launch = settings::resolve(&saved, |k| std::env::var(k).ok());
             // A taken or invalid hotkey must not stop the app; the settings screen shows why.
@@ -312,6 +392,7 @@ pub fn run() {
                 settings_path,
                 drafts_dir,
                 worktrees_dir,
+                snapshots_dir,
                 agents,
                 watcher: Mutex::new(None),
                 shortcut_error: Mutex::new(shortcut_error),
@@ -327,7 +408,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_remove_worktree, repo_branches,
-            agent_cancel, agent_sessions, agent_session
+            agent_cancel, agent_sessions, agent_session, review_files, review_file, review_approve, review_request_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
+            system_staleness, system_snapshots, system_snapshot
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

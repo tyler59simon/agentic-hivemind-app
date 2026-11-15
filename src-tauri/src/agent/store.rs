@@ -181,6 +181,8 @@ mod tests {
             context: vec![],
             model: None,
             system: None,
+            review: None,
+            source_sha: None,
         }
     }
 
@@ -191,6 +193,7 @@ mod tests {
             branch: "hivemind/0f9e8d7c".into(),
             base_branch: "main".into(),
             base_sha: "a053c800edb319fae41bc4873e4412b763b9d93b".into(),
+            reviewed_sha: None,
         }
     }
 
@@ -222,7 +225,7 @@ mod tests {
                 "title": "System passport: Billing", "workspace": ["/work/app", "/work/arch"], "status": "succeeded", "startedAt": 1002,
                 "endedAt": 2002, "costUsd": 0.25, "error": null, "structured": {"summary": "Billing takes payments."},
                 "mode": "unattended", "policy": "pre_approved", "project": null, "worktree": null, "turns": 0, "filesChanged": null,
-                "context": [], "model": null, "system": null})
+                "context": [], "model": null, "system": null, "review": null, "sourceSha": null})
         );
         // The persisted JSON of a work session, as the Phase 2 document shows it.
         let path = r"C:\Users\me\AppData\Roaming\dev.hivemind.app\worktrees\paystream-5d1c0a3e\0f9e8d7c";
@@ -246,6 +249,7 @@ mod tests {
                 branch: "hivemind/0f9e8d7c".into(),
                 base_branch: "main".into(),
                 base_sha: "a053c800edb319fae41bc4873e4412b763b9d93b".into(),
+                reviewed_sha: None,
             }),
             turns: 2,
             files_changed: Some(Totals { files: 3, added: 42, removed: 8 }),
@@ -267,7 +271,8 @@ mod tests {
                 "worktree": {"repo": "C:/demo/repos/paystream", "path": path, "branch": "hivemind/0f9e8d7c", "baseBranch": "main",
                     "baseSha": "a053c800edb319fae41bc4873e4412b763b9d93b"},
                 "turns": 2, "filesChanged": {"files": 3, "added": 42, "removed": 8},
-                "context": ["paystream:6f0c1d2e-3b4a-4c5d-8e9f-0a1b2c3d4e5f"], "model": null, "system": "paystream"})
+                "context": ["paystream:6f0c1d2e-3b4a-4c5d-8e9f-0a1b2c3d4e5f"], "model": null, "system": "paystream",
+                "review": null, "sourceSha": null})
         );
         save_index(&dir, &sessions).unwrap();
         std::fs::write(dir.join("index.json"), "not json").unwrap();
@@ -289,6 +294,28 @@ mod tests {
         assert_eq!((info.mode, info.policy, info.turns), (Mode::Unattended, PolicyMode::PreApproved, 0));
         assert_eq!((&info.project, &info.worktree, &info.files_changed, &info.model, &info.system), (&None, &None, &None, &None, &None));
         assert!(info.context.is_empty());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn index_written_before_phase_4_still_loads() {
+        let dir = temp("old-index-4");
+        let path = "C:/wt/paystream-5d1c0a3e/0f9e8d7c";
+        let old = json!([{"id": id(1), "adapter": "claude-code", "cliVersion": "2.1.322",
+            "task": {"kind": "work", "project": "paystream", "repo": "C:/demo/repos/paystream", "branch": "main"},
+            "title": "Fix the bug", "workspace": [path], "status": "idle", "startedAt": 1001, "endedAt": null, "costUsd": 0.04,
+            "error": null, "structured": null, "mode": "interactive", "policy": "ask", "project": "paystream",
+            "worktree": {"repo": "C:/demo/repos/paystream", "path": path, "branch": "hivemind/0f9e8d7c", "baseBranch": "main",
+                "baseSha": "a053c800edb319fae41bc4873e4412b763b9d93b"},
+            "turns": 2, "filesChanged": {"files": 3, "added": 42, "removed": 8},
+            "context": [], "model": null, "system": "paystream"}]);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.json"), old.to_string()).unwrap();
+        let loaded = load_index(&dir);
+        assert_eq!(loaded.len(), 1);
+        let info = &loaded[0];
+        assert_eq!((&info.review, &info.source_sha), (&None, &None));
+        assert_eq!(info.worktree.as_ref().map(|tree| tree.reviewed_sha.clone()), Some(None));
         std::fs::remove_dir_all(dir).ok();
     }
 

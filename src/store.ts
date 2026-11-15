@@ -14,7 +14,7 @@ export type Route =
   | { page: "dashboards"; ref?: string }
   | { page: "memory"; view?: "notes" | "graph" | "activity" | "history" | "tags"; q?: string }
   | { page: "recap" }
-  | { page: "review" };
+  | { page: "review"; session?: string; file?: string };
 export type Page = Route["page"];
 
 export const safeStorage: StateStorage = {
@@ -70,5 +70,7 @@ const app = () => useApp.getState();
 export const openProject = (slug: string | null) => { app().setProject(slug); app().go({ page: "overview" }); };
 export const openSystem = (slug: string) => app().go({ page: "architecture", system: slug });
 export const openSession = (session: string) => app().go({ page: "agents", session });
+/** Show the Review page, on one session's edits (and one file) when given. */
+export const openReview = (session?: string, file?: string) => app().go({ page: "review", session, file });
 export const startSession = () => app().go({ page: "agents", view: "new" });
 export const openChange = (id: number) => app().go({ page: "changes", id, view: "detail" });

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { openProject, openSession, openSystem, startSession, useApp } from "./store";
+import { openProject, openReview, openSession, openSystem, startSession, useApp } from "./store";
 
 const app = () => useApp.getState();
 
@@ -49,6 +49,14 @@ describe("navigation", () => {
     expect(app().route).toEqual({ page: "agents", session: "s1" });
     openProject(null);
     expect(app().project).toBeNull();
+  });
+
+  it("openReview routes to a session and file", () => {
+    openReview("s1", "a/b.ts");
+    expect(app().route).toEqual({ page: "review", session: "s1", file: "a/b.ts" });
+    expect(app().back).toEqual([{ page: "overview" }]);
+    openReview();
+    expect(app().route).toEqual({ page: "review" });
   });
 
   it("opens the New session screen", () => {

@@ -1,8 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Ellipsis, MessageCircle, Plus, X } from "lucide-react";
+import { ArrowRight, Ellipsis, MessageCircle, Plus, TriangleAlert, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { agentAvailable, agentStart } from "../../lib/agent";
-import type { ArchModel } from "../../lib/architecture";
+import type { ArchModel, Staleness } from "../../lib/architecture";
 import { useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { systemPlan, type NoteRow, type System } from "../../lib/lm";
@@ -13,7 +13,7 @@ import { openSession, openSystem, startSession, useApp } from "../../store";
 import { Menu } from "../../ui/Menu";
 import { Modal } from "../../ui/Modal";
 import { Markdown } from "../../ui/Markdown";
-import { ArrowLink, PageHeader, Section, Split } from "../../ui/Page";
+import { ArrowLink, dayMonth, PageHeader, Section, Split } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
 import { useSessionDraft } from "../agents/draft";
@@ -24,9 +24,10 @@ import { useCurrentProject } from "../projects/useProject";
 import { ArchitectureCanvas, kindLine } from "./ArchitectureCanvas";
 import { buildBrief } from "./brief";
 import type { CanvasNode } from "./canvas";
+import { diffModels } from "./compare";
 import { cloudResources, diagramList, externalSystems, interfaces, passportSections, techStack, type DiagramEntry } from "./passport";
 import { SystemWizard } from "./SystemWizard";
-import { systemsQuery, useDiagram, useSystem, useSystemIntent, useSystemProposal } from "./useSystem";
+import { systemsQuery, useDiagram, useOlderSnapshots, useSnapshot, useStaleness, useSystem, useSystemIntent, useSystemProposal } from "./useSystem";
 
 const oneLine = (text?: string) => (text ?? "").replace(/\s+/g, " ").trim();
 const MAX_ROWS = 40;
@@ -176,12 +177,26 @@ function Diagrams({ slug, entries, version }: { slug: string; entries: DiagramEn
   );
 }
 
+/** The repository has commits the architecture output has not seen. Nothing when that is not known or not so. */
+function StaleBanner({ stale }: { stale?: Staleness }) {
+  const behind = stale?.behind ?? 0;
+  if (behind <= 0 || !stale) return null;
+  return (
+    <div className="banner warn stale" title={stale.exact && stale.sourceSha ? `Commits on the repository since ${stale.sourceSha.slice(0, 7)}.` : "Commits made since the output was generated."}>
+      <TriangleAlert size="1.2em" aria-hidden />Snapshot is {behind} commit{behind === 1 ? "" : "s"} behind
+    </div>
+  );
+}
+
 /** What is known about the box selected on the canvas: what it is, what it talks to, and the decisions that mention it. */
-function Inspector({ slug, node, model, decisions, onClose }: { slug: string; node: CanvasNode; model: ArchModel; decisions: NoteRow[]; onClose: () => void }) {
+function Inspector({ slug, node, model, decisions, stale, onClose }: { slug: string; node: CanvasNode; model: ArchModel; decisions: NoteRow[]; stale?: Staleness; onClose: () => void }) {
   const names = useMemo(() => new Map((model.elements ?? []).map((e) => [e.id, e.name])), [model]);
   const flows = (model.relationships ?? []).filter((r) => r.source_id === node.id || r.destination_id === node.id);
   const name = node.name.toLowerCase();
   const mentions = decisions.filter((d) => `${d.title} ${d.summary ?? ""}`.toLowerCase().includes(name));
+  const [evidence, setEvidence] = useState(false);
+  const known = new Map((model.evidence ?? []).map((e) => [e.id, e]));
+  const proof = (model.elements?.find((e) => e.id === node.id)?.evidence_ids ?? []).flatMap((id) => known.get(id) ?? []);
   return (
     <Section title={node.name} actions={<button className="icon-button" aria-label="Close" title="Back to the system" onClick={onClose}><X size="1.1em" aria-hidden /></button>}>
       <p className="muted">{kindLine(node)}</p>
@@ -205,7 +220,25 @@ function Inspector({ slug, node, model, decisions, onClose }: { slug: string; no
           </ul>
         </>
       )}
+      <StaleBanner stale={stale} />
+      {!!proof.length && <ArrowLink onClick={() => setEvidence(true)}>View evidence</ArrowLink>}
       <ArrowLink onClick={() => { useSessionDraft.getState().setSystem(slug, node.name); toast("Attached " + node.name + " to the next session's context"); }}>Attach to agent context</ArrowLink>
+      {evidence && (
+        <Modal title={`Evidence for ${node.name}`} wide onClose={() => setEvidence(false)}>
+          <ul className="card-list">
+            {proof.map((e) => (
+              <li key={e.id}>
+                <div className="row-line">
+                  {e.reference ? <code>{e.reference}{e.line ? `:${e.line}` : ""}</code> : <span className="muted">No reference</span>}
+                  {e.kind && <span className="badge">{e.kind}</span>}
+                  {e.confidence !== undefined && <span className="muted small">{Math.round(e.confidence * 100)}%</span>}
+                </div>
+                {e.excerpt && <pre className="tool-output">{e.excerpt}</pre>}
+              </li>
+            ))}
+          </ul>
+        </Modal>
+      )}
     </Section>
   );
 }
@@ -219,6 +252,22 @@ function SystemView({ system, all }: { system: System; all: System[] }) {
   const parts = useMemo(() => passportSections(members, system.passport), [members, system.passport]);
   const arch = architecture.data;
   const model = arch?.model ?? null;
+  const stale = useStaleness(system.slug, arch?.generatedAt).data;
+  // Which baseline the canvas shows (null is the current output) and whether it is compared with the one before it.
+  const [shown, setShown] = useState<string | null>(null);
+  const [comparing, setComparing] = useState(false);
+  const older = useOlderSnapshots(system.slug, arch?.generatedAt).data;
+  const entries = useMemo(
+    () => (arch?.generatedAt ? [{ id: null as string | null, at: arch.generatedAt }, ...(older ?? []).map((o) => ({ id: o.id as string | null, at: o.takenAt }))] : []),
+    [arch?.generatedAt, older]);
+  const at = Math.max(0, entries.findIndex((e) => e.id === shown));
+  const shownId = entries[at]?.id ?? null;
+  const baseEntry = entries[at + 1];
+  const snapshot = useSnapshot(system.slug, shownId);
+  const baseline = useSnapshot(system.slug, baseEntry?.id ?? null);
+  const shownModel = shownId ? snapshot.data?.model ?? null : model;
+  const diff = comparing && baseEntry && baseline.data?.model && shownModel
+    ? { result: diffModels(baseline.data.model, shownModel), label: dayMonth(new Date(baseEntry.at).toISOString()) } : null;
   const stack = useMemo(() => techStack(model), [model]);
   const outside = useMemo(() => externalSystems(model), [model]);
   const io = useMemo(() => interfaces(model, arch?.inventory ?? null), [model, arch?.inventory]);
@@ -230,13 +279,32 @@ function SystemView({ system, all }: { system: System; all: System[] }) {
   const archEmpty = (has: boolean, none: string) =>
     (has ? undefined : !arch?.error ? none : `${arch.error} ${system.architecture ? "Use “Generate with agent” above." : "Edit the system to choose one."}`);
   const archProps = { loading: architecture.isLoading, error: architecture.error };
-  const generated = arch?.generatedAt ? `Generated ${new Date(arch.generatedAt).toISOString().slice(0, 10)}${arch.toolVersion ? ` · Architecture Suite ${arch.toolVersion}` : ""}` : undefined;
+  const generatedText = arch?.generatedAt ? `Generated ${new Date(arch.generatedAt).toISOString().slice(0, 10)}${arch.toolVersion ? ` · Architecture Suite ${arch.toolVersion}` : ""}` : undefined;
+  const sha = (shownId ? snapshot.data?.sourceSha : stale?.sourceSha)?.slice(0, 7);
+  const generated = shownId
+    ? <>{sha ? <>Baseline from source <code>{sha}</code></> : `Generated ${new Date(entries[at].at).toISOString().slice(0, 10)}`} · not the current output</>
+    : sha ? <>Baseline from source <code>{sha}</code></> : generatedText;
+  const loadingBaseline = !!shownId && !shownModel;
+  const controls = entries.length > 0 && (
+    <>
+      <select aria-label="Baseline" value={shownId ?? ""} onChange={(e) => { setShown(e.target.value || null); setPicked(null); }}>
+        {entries.map((e) => (
+          <option key={e.id ?? ""} value={e.id ?? ""}>
+            {e.id === null ? `Current baseline · ${dayMonth(new Date(e.at).toISOString())}`
+              : `Baseline · ${new Date(e.at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`}
+          </option>
+        ))}
+      </select>
+      <button className={`text ${comparing && baseEntry ? "on" : ""}`} aria-pressed={comparing && !!baseEntry} disabled={!baseEntry}
+        title={baseEntry ? undefined : "No earlier baseline to compare with."} onClick={() => setComparing(!comparing)}>Compare</button>
+    </>
+  );
   const newNote = (type?: "runbook") => useWorkspace.getState().openTab({ kind: "new-note", init: { type, tags: [system.tag] } });
 
   return (
     <>
       <Split rail={<>
-        {picked && model && <Inspector slug={system.slug} node={picked} model={model} decisions={parts.decisions} onClose={() => setPicked(null)} />}
+        {picked && shownModel && <Inspector slug={system.slug} node={picked} model={shownModel} decisions={parts.decisions} stale={shownId ? undefined : stale} onClose={() => setPicked(null)} />}
         <Section title={system.name} actions={
           <Menu label="System actions" align="right" button={<Ellipsis size="1.3em" aria-hidden />} className="icon-menu">
             {(close) => (
@@ -248,6 +316,7 @@ function SystemView({ system, all }: { system: System; all: System[] }) {
               </>
             )}
           </Menu>}>
+          {!picked && !shownId && <StaleBanner stale={stale} />}
           <p className="muted"><span className={`status-chip cap ${system.status}`}>{system.status}</span> {system.repos.length ? "System" : "External system"}</p>
           {system.description ? <p>{system.description}</p> : <p className="muted">No purpose recorded yet.</p>}
           {!!system.capabilities.length && <ul className="capabilities">{system.capabilities.map((c) => <li key={c}>{c}</li>)}</ul>}
@@ -274,8 +343,9 @@ function SystemView({ system, all }: { system: System; all: System[] }) {
         <AgentActions system={system} all={all} />
         {model?.elements?.length ? (
           <>
-            <ArchitectureCanvas slug={system.slug} model={model} diagrams={diagrams} version={arch?.generatedAt ?? null} caption={generated}
-              selected={picked?.id ?? null} onSelect={setPicked} />
+            <ArchitectureCanvas slug={system.slug} model={shownModel ?? model} diagrams={shownId ? [] : diagrams} version={arch?.generatedAt ?? null} caption={generated}
+              selected={picked?.id ?? null} onSelect={setPicked} top={controls} diff={diff}
+              notice={loadingBaseline ? (snapshot.error ? <p className="error pad">{classify(snapshot.error).message}</p> : <p className="muted pad">Loading baseline…</p>) : undefined} />
             {!!diagrams.length && (
               <details className="rail-more">
                 <summary>All generated diagrams ({diagrams.length})</summary>
@@ -285,7 +355,7 @@ function SystemView({ system, all }: { system: System; all: System[] }) {
           </>
         ) : (
           <Section title="Diagrams" count={diagrams.length || undefined} {...archProps}
-            actions={generated && <span className="muted small">{generated}</span>}
+            actions={generatedText && <span className="muted small">{generatedText}</span>}
             empty={archEmpty(!!diagrams.length, "The folder has a model but no SVG or PNG diagrams.")}>
             <Diagrams slug={system.slug} entries={diagrams} version={arch?.generatedAt ?? null} />
           </Section>

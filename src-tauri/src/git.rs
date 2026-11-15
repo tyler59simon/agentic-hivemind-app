@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 const MAX_REPOS: usize = 10;
@@ -64,8 +64,54 @@ pub fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHand
     })
 }
 
-/// Run a command, returning stdout. Kills it after `timeout`; non-zero exit is an error.
-pub fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<String, String> {
+/// What a finished command printed and how it ended.
+pub struct Ran {
+    pub status: std::process::ExitStatus,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+const DRAIN_GRACE: Duration = Duration::from_secs(2); // how long to wait for output once a command is over
+
+/// Kill a child and everything it started. A commit hook that outlives git would otherwise keep the output pipes open.
+fn kill_tree(child: &mut Child) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let _ = Command::new("taskkill")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+    }
+    #[cfg(not(windows))]
+    {
+        // The command was started in its own process group; a minus sign addresses the whole group.
+        let _ = Command::new("kill")
+            .args(["-KILL", &format!("-{}", child.id())])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// The text a reader thread collected, or nothing when something still holds the pipe after `grace`.
+fn collect(reader: std::thread::JoinHandle<String>, grace: Duration) -> String {
+    let start = Instant::now();
+    while !reader.is_finished() && start.elapsed() < grace {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if reader.is_finished() { reader.join().unwrap_or_default() } else { String::new() }
+}
+
+/// Run a command to its end, or kill it after `timeout`. An error means it could not start or it timed out.
+pub fn run_captured(mut command: Command, timeout: Duration) -> Result<Ran, String> {
     command
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null())
@@ -77,6 +123,11 @@ pub fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<Strin
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     let name = command.get_program().to_string_lossy().into_owned();
     let mut child = command.spawn().map_err(|e| format!("Could not run {name}: {e}"))?;
     let out = drain(child.stdout.take());
@@ -86,22 +137,48 @@ pub fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<Strin
         match child.try_wait().map_err(|e| e.to_string())? {
             Some(status) => break Some(status),
             None if start.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_tree(&mut child);
                 break None;
             }
             None => std::thread::sleep(Duration::from_millis(20)),
         }
     };
-    let (stdout, stderr) = (out.join().unwrap_or_default(), err.join().unwrap_or_default());
+    let (stdout, stderr) = (collect(out, DRAIN_GRACE), collect(err, DRAIN_GRACE));
     match status {
         None => Err(format!("{name} timed out after {}s", timeout.as_secs())),
-        Some(s) if s.success() => Ok(stdout),
-        Some(s) => {
-            let line = stderr.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
-            Err(if line.is_empty() { format!("{name} exited with {s}") } else { line.to_string() })
-        }
+        Some(status) => Ok(Ran { status, stdout, stderr }),
     }
+}
+
+/// Run a command, returning stdout. Kills it after `timeout`; non-zero exit is an error.
+pub fn run_with_timeout(command: Command, timeout: Duration) -> Result<String, String> {
+    let name = command.get_program().to_string_lossy().into_owned();
+    let ran = run_captured(command, timeout)?;
+    if ran.status.success() {
+        return Ok(ran.stdout);
+    }
+    let line = ran.stderr.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    Err(if line.is_empty() { format!("{name} exited with {}", ran.status) } else { line.to_string() })
+}
+
+/// True for a full commit id: 40 or 64 hex characters.
+pub fn is_sha(text: &str) -> bool {
+    matches!(text.len(), 40 | 64) && text.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// The commit a repository's HEAD points at.
+pub fn head_sha(repo: &Path) -> Result<String, String> {
+    let mut command = Command::new("git");
+    command.args(["--no-optional-locks", "-C"]).arg(repo).args(["rev-parse", "HEAD"]);
+    let text = run_with_timeout(command, TIMEOUT)?;
+    Some(text.trim()).filter(|sha| is_sha(sha)).map(String::from).ok_or_else(|| "git did not print a commit id".to_string())
+}
+
+/// `git rev-list --count <selector...>` in `repo`, e.g. `["abc..HEAD"]` or `["--since=@1794322874", "HEAD"]`.
+pub fn rev_count(repo: &Path, selector: &[&str]) -> Result<u64, String> {
+    let mut command = Command::new("git");
+    command.args(["--no-optional-locks", "-C"]).arg(repo).args(["rev-list", "--count"]).args(selector);
+    run_with_timeout(command, TIMEOUT)?.trim().parse().map_err(|_| "git did not print a number".to_string())
 }
 
 fn commits_for(repo: &Path) -> Result<Vec<Commit>, String> {
@@ -308,6 +385,68 @@ mod tests {
     }
 
     #[test]
+    fn captured_run_keeps_status_and_both_streams() {
+        if !git_available() {
+            return;
+        }
+        let mut command = Command::new("git");
+        command.arg("--version");
+        let ran = run_captured(command, Duration::from_secs(10)).unwrap();
+        assert!(ran.status.success() && ran.stdout.starts_with("git version"), "{}", ran.stdout);
+        let dir = std::env::temp_dir().join(format!("hivemind-captured-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut command = Command::new("git");
+        command.arg("-C").arg(&dir).args(["rev-parse", "--verify", "nothing-here"]);
+        let ran = run_captured(command, Duration::from_secs(10)).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(!ran.status.success());
+        assert!(!ran.stderr.is_empty());
+    }
+
+    #[test]
+    fn timeout_kills_a_hook_that_outlives_git() {
+        if !git_available() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("hivemind-hook-{}", std::process::id()));
+        let (repo, hooks) = (dir.join("repo"), dir.join("hooks"));
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&hooks).unwrap();
+        git(&repo, &["init", "-q"]);
+        git(&repo, &["config", "user.name", "Tester"]);
+        git(&repo, &["config", "user.email", "t@example.com"]);
+        git(&repo, &["config", "commit.gpgsign", "false"]);
+        git(&repo, &["config", "core.autocrlf", "false"]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        let hook = hooks.join("pre-commit");
+        std::fs::write(&hook, "#!/bin/sh\nsleep 30\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut command = Command::new("git");
+        command.arg("-C").arg(&repo).arg("-c").arg(format!("core.hooksPath={}", hooks.display()));
+        command.args(["commit", "--allow-empty", "-m", "x"]);
+        let start = Instant::now();
+        let result = run_captured(command, Duration::from_secs(2));
+        let took = start.elapsed();
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(result.err().is_some_and(|e| e.contains("timed out")));
+        assert!(took < Duration::from_secs(10), "{took:?}");
+    }
+
+    #[test]
+    fn sha_check() {
+        assert!(is_sha(&"a".repeat(40)));
+        assert!(is_sha(&"0123456789abcdef".repeat(4)));
+        assert!(!is_sha(&"a".repeat(39)));
+        assert!(!is_sha("HEAD"));
+        assert!(!is_sha(&format!("{}g", "a".repeat(39))));
+        assert!(!is_sha("--all"));
+    }
+
+    #[test]
     fn non_repo_reports_error() {
         if !git_available() {
             return;
@@ -318,5 +457,32 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
         assert!(activity[0].error.is_some());
         assert!(activity[0].commits.is_none());
+    }
+
+    #[test]
+    fn counts_commits_since_a_commit_and_since_a_time() {
+        if !git_available() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("hivemind-revcount-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let sh = |args: &[&str]| {
+            let mut command = Command::new("git");
+            command.arg("-C").arg(&dir).args(["-c", "user.name=T", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]).args(args);
+            run_with_timeout(command, TIMEOUT).unwrap()
+        };
+        sh(&["init", "-q"]);
+        for n in 0..3 {
+            sh(&["commit", "-q", "--allow-empty", "-m", &format!("c{n}")]);
+        }
+        let first = sh(&["rev-list", "--max-parents=0", "HEAD"]).trim().to_string();
+        assert_eq!(rev_count(&dir, &[&format!("{first}..HEAD")]), Ok(2));
+        assert!(rev_count(&dir, &[&format!("{}..HEAD", "0".repeat(40))]).is_err());
+        assert_eq!(rev_count(&dir, &["--since=@1000000000", "HEAD"]), Ok(3));
+        let head = head_sha(&dir).unwrap();
+        assert!(is_sha(&head) && head.len() == 40);
+        assert_eq!(head, sh(&["rev-parse", "HEAD"]).trim());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

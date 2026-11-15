@@ -11,12 +11,17 @@ export type Policy = "pre_approved" | "ask" | "accept_edits";
 export type Decision = "allow" | "allow_always" | "deny" | "withdrawn";
 export type TurnOutcome = "completed" | "stopped" | "budget" | "error";
 
-export interface Worktree { repo: string; path: string; branch: string; baseBranch: string; baseSha: string }
+export interface Worktree { repo: string; path: string; branch: string; baseBranch: string; baseSha: string; reviewedSha?: string }
 export interface FileChange { path: string; status: "A" | "M" | "D"; added: number; removed: number; binary?: boolean }
 export interface FileTotals { files: number; added: number; removed: number }
 export interface FileDiff extends FileChange { diff: string; truncated: boolean }
 export interface ChangedFiles { files: FileDiff[]; truncated: boolean }
 export interface RepoBranches { current: string | null; branches: string[] }
+
+export type ReviewState = "pending" | "approved" | "changes_requested" | "dismissed";
+export interface Review { state: ReviewState; commit: string | null; at: number }
+export interface FileContents { base: string | null; head: string | null; binary: boolean; tooLarge: boolean }
+export interface ToolOutput { text: string; ok: boolean; truncated: boolean }
 
 export interface SessionInfo {
   id: string; adapter: string; cliVersion: string | null; task: AgentTask; title: string;
@@ -28,6 +33,7 @@ export interface SessionInfo {
   mode: SessionMode; policy: Policy; project: string | null; worktree: Worktree | null;
   turns: number; filesChanged: FileTotals | null;
   context: string[]; model: string | null; system: string | null;
+  review: Review | null; sourceSha: string | null;
 }
 
 export type RunEvent =
@@ -66,5 +72,18 @@ export const repoBranches = (project: string, repo: string) => invoke<RepoBranch
 export const agentCancel = (sessionId: string) => invoke<void>("agent_cancel", { sessionId });
 export const agentSessions = () => invoke<SessionInfo[]>("agent_sessions");
 export const agentSession = (sessionId: string, fromSeq = 0) => invoke<SessionLog>("agent_session", { sessionId, fromSeq });
+
+export const reviewFiles = (sessionId: string) => invoke<FileChange[]>("review_files", { sessionId });
+export const reviewFile = (sessionId: string, path: string) => invoke<FileContents>("review_file", { sessionId, path });
+export const reviewApprove = (sessionId: string, message: string) => invoke<string>("review_approve", { sessionId, message });
+export const reviewRequestChanges = (sessionId: string, text: string) => invoke<void>("review_request_changes", { sessionId, text });
+export const reviewDismiss = (sessionId: string) => invoke<void>("review_dismiss", { sessionId });
+export const reviewDiscard = (sessionId: string) => invoke<void>("review_discard", { sessionId });
+/** Have Rust look at every session's worktree again; resolves to how many sessions changed. */
+export const reviewRefresh = () => invoke<number>("review_refresh");
+export const reviewToolOutput = (sessionId: string, toolUseId: string) => invoke<ToolOutput>("review_tool_output", { sessionId, toolUseId });
+
+/** The commit a session's proposed edits are compared with. */
+export const reviewBase = (w: Worktree) => w.reviewedSha ?? w.baseSha;
 
 export const sessionsQuery = () => ({ queryKey: ["agent", "sessions"], queryFn: agentSessions });

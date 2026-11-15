@@ -24,6 +24,16 @@ pub struct Worktree {
     /// The branch it was created from; "HEAD" when the repository was on a detached commit.
     pub base_branch: String,
     pub base_sha: String,
+    /// The commit of the last approval. Edits are compared with it from then on; `base_sha` never changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed_sha: Option<String>,
+}
+
+impl Worktree {
+    /// The commit the proposed edits are compared with: the last approved commit, else where the branch started.
+    pub fn review_base(&self) -> &str {
+        self.reviewed_sha.as_deref().unwrap_or(&self.base_sha)
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -64,8 +74,7 @@ pub struct ChangedFiles {
     pub truncated: bool,
 }
 
-/// Phase 4's review is the first caller of `list`; until then only the tests use it and its type.
-#[cfg(test)]
+/// One entry of `git worktree list`.
 #[derive(Debug, PartialEq)]
 pub struct Listed {
     pub path: String,
@@ -80,7 +89,7 @@ enum Untracked {
     Unread,
 }
 
-fn git(dir: &Path) -> Command {
+pub(crate) fn git(dir: &Path) -> Command {
     let mut command = Command::new("git");
     command.args(["--no-optional-locks", "-c", "core.longpaths=true", "-c", "core.quotepath=false", "-C"]).arg(dir);
     command
@@ -141,7 +150,7 @@ pub fn create(worktrees: &Path, repo: &Path, branch: Option<&str>, session_id: &
     let mut command = git(repo);
     command.args(["worktree", "add", "-b", &branch]).arg(&path).arg(&base_sha);
     run_with_timeout(command, CREATE_TIMEOUT).map_err(|e| format!("Could not create the worktree: {e}"))?;
-    Ok(Worktree { repo: repo.display().to_string(), path: path.display().to_string(), branch, base_branch, base_sha })
+    Ok(Worktree { repo: repo.display().to_string(), path: path.display().to_string(), branch, base_branch, base_sha, reviewed_sha: None })
 }
 
 /// The only reader of an untracked path's content. A link is reported by its target text and never opened; a file whose
@@ -184,8 +193,8 @@ fn line_count(text: &str) -> u64 {
 
 pub fn changes(tree: &Worktree) -> Result<Vec<FileChange>, String> {
     let dir = Path::new(&tree.path);
-    let numstat = run(dir, &["diff", "--numstat", "-z", "--no-renames", &tree.base_sha])?;
-    let names = run(dir, &["diff", "--name-status", "-z", "--no-renames", &tree.base_sha])?;
+    let numstat = run(dir, &["diff", "--numstat", "-z", "--no-renames", tree.review_base()])?;
+    let names = run(dir, &["diff", "--name-status", "-z", "--no-renames", tree.review_base()])?;
     let others = run(dir, &["ls-files", "--others", "--exclude-standard", "-z"])?;
     let fields: Vec<&str> = names.split('\0').filter(|f| !f.is_empty()).collect();
     let status: HashMap<&str, &str> = fields.iter().step_by(2).zip(fields.iter().skip(1).step_by(2)).map(|(s, p)| (*p, *s)).collect();
@@ -249,7 +258,7 @@ pub fn patch(tree: &Worktree, file: &FileChange) -> Result<(String, bool), Strin
     }
     // A literal pathspec, so a name like `[a].txt` is not read as a pattern that also matches `a.txt`.
     let pathspec = format!(":(literal){}", file.path);
-    let mut text = run(Path::new(&tree.path), &["diff", "--no-color", "--no-ext-diff", "--no-renames", &tree.base_sha, "--", &pathspec])?;
+    let mut text = run(Path::new(&tree.path), &["diff", "--no-color", "--no-ext-diff", "--no-renames", tree.review_base(), "--", &pathspec])?;
     if text.is_empty() {
         text = untracked(tree, &file.path).map(|content| new_file_patch(&file.path, content)).unwrap_or_default();
     }
@@ -280,7 +289,6 @@ pub fn ahead(tree: &Worktree) -> Result<u64, String> {
     text.trim().parse().map_err(|_| format!("Unreadable git output: {}", text.trim()))
 }
 
-#[cfg(test)]
 pub fn list(repo: &Path) -> Result<Vec<Listed>, String> {
     let text = run(repo, &["worktree", "list", "--porcelain"])?;
     let mut all: Vec<Listed> = Vec::new();
@@ -485,6 +493,34 @@ mod tests {
         let (big, cut) = patch(&tree, find("big.txt")).unwrap();
         assert_eq!(big.chars().count(), PATCH_LIMIT);
         assert!(cut);
+    }
+
+    #[test]
+    fn the_review_base_is_the_last_approved_commit() {
+        let mut tree = Worktree {
+            repo: "r".into(),
+            path: "p".into(),
+            branch: "hivemind/abcdefgh".into(),
+            base_branch: "main".into(),
+            base_sha: "a".repeat(40),
+            reviewed_sha: None,
+        };
+        assert_eq!(tree.review_base(), "a".repeat(40));
+        tree.reviewed_sha = Some("b".repeat(40));
+        assert_eq!(tree.review_base(), "b".repeat(40));
+        assert!(!serde_json::to_string(&Worktree { reviewed_sha: None, ..tree.clone() }).unwrap().contains("reviewedSha"));
+
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let mut tree = dirty(&rig, "abcdefgh");
+        sh(Path::new(&tree.path), &["add", "-A"]);
+        sh(Path::new(&tree.path), &["commit", "-q", "-m", "work"]);
+        assert!(!changes(&tree).unwrap().is_empty());
+        tree.reviewed_sha = Some(sh(Path::new(&tree.path), &["rev-parse", "HEAD"]).trim().to_string());
+        assert_eq!(changes(&tree).unwrap(), vec![]);
+        assert_eq!(ahead(&tree), Ok(1));
     }
 
     #[test]
