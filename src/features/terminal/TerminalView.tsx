@@ -41,8 +41,10 @@ function FindBar({ id }: { id: string }) {
 }
 
 /** One terminal's screen. The xterm instance lives in the registry; this component only gives it a place. */
-export function TerminalView({ id, sessionId, engine, start, label }: {
+export function TerminalView({ id, sessionId, engine, start, label, focused = true }: {
   id: string; sessionId: string | null; engine: Engine; start: StartMode | null; label: string;
+  /** False in a pane that is not the focused one: the terminal is shown without taking the keyboard. */
+  focused?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const live = registry.useLive(id);
@@ -51,7 +53,7 @@ export function TerminalView({ id, sessionId, engine, start, label }: {
     const el = host.current;
     if (!el) return;
     registry.ensure(id, { sessionId, engine, start });
-    registry.mount(id, el);
+    registry.mount(id, el, { focus: focused });
     // xterm listens on its own textarea, inside this element, so this runs after xterm and before the app's window listeners.
     const onKey = (e: KeyboardEvent) => {
       e.stopPropagation();
@@ -72,6 +74,8 @@ export function TerminalView({ id, sessionId, engine, start, label }: {
     // The session, engine and start mode are read once, when the terminal is first created.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  useEffect(() => { if (focused) registry.focusTerm(id); }, [focused, id]);
 
   return (
     <>

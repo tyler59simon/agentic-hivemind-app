@@ -39,6 +39,8 @@ export interface Live {
   starting: boolean;
   /** How many exits this terminal has seen; an exit that arrives before the start reply must not be undone by it. */
   exits: number;
+  /** Whether mounting and a finished start may take the keyboard focus (false in a pane that is not focused). */
+  focusable: boolean;
 }
 
 interface Source { sessionId: string | null; engine: Engine }
@@ -172,7 +174,7 @@ export function ensure(id: string, opts: { sessionId: string | null; engine: Eng
   term.loadAddon(new WebLinksAddon(openLink));
   const search = new SearchAddon();
   term.loadAddon(search);
-  const live: Live = { id, term, box, fit, search, finding: false, matches: { index: -1, count: 0 }, running: false, error: null, touched: false, starting: false, exits: 0 };
+  const live: Live = { id, term, box, fit, search, finding: false, matches: { index: -1, count: 0 }, running: false, error: null, touched: false, starting: false, exits: 0, focusable: true };
   lives.set(id, live);
   search.onDidChangeResults((r) => { live.matches = { index: r.resultIndex, count: r.resultCount }; notify(); });
   term.parser.registerOscHandler(52, (data) => {
@@ -211,7 +213,8 @@ export function ensure(id: string, opts: { sessionId: string | null; engine: Eng
           document.querySelector<HTMLInputElement>(".top-search input")?.focus();
           return false;
         case "search":
-          if (live.finding) document.querySelector<HTMLInputElement>(".find-bar input")?.select();
+          // The find bar sits in this terminal's own box; with two panes each has one.
+          if (live.finding) live.box.closest(".term-box")?.querySelector<HTMLInputElement>(".find-bar input")?.select();
           else { live.finding = true; notify(); }
           return false;
         case "newline":
@@ -231,7 +234,7 @@ export function ensure(id: string, opts: { sessionId: string | null; engine: Eng
     await attach(id, opts.start, true);
     if (lives.get(id) === live && box.isConnected) {
       refit(id);
-      focus(live);
+      if (live.focusable) focus(live);
     }
   })();
   return live;
@@ -249,12 +252,21 @@ function focus(live: Live) {
   live.term.focus();
 }
 
-/** Put the terminal's element into `host`, fit it, focus it. */
-export function mount(id: string, host: HTMLElement): void {
+/** Put the terminal's element into `host`, fit it, and focus it unless `opts.focus` is false (the pane is not the focused one). */
+export function mount(id: string, host: HTMLElement, opts: { focus: boolean } = { focus: true }): void {
   const live = lives.get(id);
   if (!live) return;
+  live.focusable = opts.focus;
   host.replaceChildren(live.box);
   refit(id);
+  if (opts.focus) focus(live);
+}
+
+/** Give a mounted terminal the keyboard focus (its pane became the focused one). */
+export function focusTerm(id: string): void {
+  const live = lives.get(id);
+  if (!live) return;
+  live.focusable = true;
   focus(live);
 }
 
