@@ -22,4 +22,13 @@ describe("session draft", () => {
     draft().reset();
     expect(draft()).toMatchObject({ task: "", context: [], change: null, system: null, element: null });
   });
+
+  it("keeps the engine and the interface", () => {
+    draft().setEngine("codex");
+    draft().setInterface("terminal");
+    draft().setTask("Fix it");
+    expect([draft().engine, draft().interface]).toEqual(["codex", "terminal"]);
+    draft().reset();
+    expect([draft().engine, draft().interface, draft().task]).toEqual(["claude", "chat", ""]);
+  });
 });

@@ -1,6 +1,6 @@
 //! Session history in the app's data folder: `index.json` lists the sessions, and `<id>.jsonl`
 //! keeps each one's raw output so its events can be rebuilt exactly.
-use super::SessionInfo;
+use super::{Interface, SessionInfo};
 use crate::worktree::FileChange;
 use super::events::{Mode, RunEvent, Status, TurnEnd};
 use serde::{Deserialize, Serialize};
@@ -97,6 +97,13 @@ pub fn recover(dir: &Path, now: u64) -> Vec<SessionInfo> {
     let mut sessions = load_index(dir);
     let mut changed = false;
     for session in sessions.iter_mut().filter(|session| matches!(session.status, Status::Running | Status::Waiting)) {
+        // A terminal session writes no events: its program is gone, so it has ended, and it may be started again.
+        if session.interface == Interface::Terminal {
+            session.status = Status::Ended;
+            session.ended_at = Some(now);
+            changed = true;
+            continue;
+        }
         if session.mode == Mode::Interactive {
             // A git failure is ignored: the worktree may be gone, and only the turn is closed then.
             if let Some(files) = session.worktree.as_ref().and_then(|tree| crate::worktree::changes(tree).ok())
@@ -183,6 +190,7 @@ mod tests {
             system: None,
             review: None,
             source_sha: None,
+            interface: Interface::Chat,
         }
     }
 
@@ -225,7 +233,7 @@ mod tests {
                 "title": "System passport: Billing", "workspace": ["/work/app", "/work/arch"], "status": "succeeded", "startedAt": 1002,
                 "endedAt": 2002, "costUsd": 0.25, "error": null, "structured": {"summary": "Billing takes payments."},
                 "mode": "unattended", "policy": "pre_approved", "project": null, "worktree": null, "turns": 0, "filesChanged": null,
-                "context": [], "model": null, "system": null, "review": null, "sourceSha": null})
+                "context": [], "model": null, "system": null, "review": null, "sourceSha": null, "interface": "chat"})
         );
         // The persisted JSON of a work session, as the Phase 2 document shows it.
         let path = r"C:\Users\me\AppData\Roaming\dev.hivemind.app\worktrees\paystream-5d1c0a3e\0f9e8d7c";
@@ -272,7 +280,7 @@ mod tests {
                     "baseSha": "a053c800edb319fae41bc4873e4412b763b9d93b"},
                 "turns": 2, "filesChanged": {"files": 3, "added": 42, "removed": 8},
                 "context": ["paystream:6f0c1d2e-3b4a-4c5d-8e9f-0a1b2c3d4e5f"], "model": null, "system": "paystream",
-                "review": null, "sourceSha": null})
+                "review": null, "sourceSha": null, "interface": "chat"})
         );
         save_index(&dir, &sessions).unwrap();
         std::fs::write(dir.join("index.json"), "not json").unwrap();
@@ -316,6 +324,26 @@ mod tests {
         let info = &loaded[0];
         assert_eq!((&info.review, &info.source_sha), (&None, &None));
         assert_eq!(info.worktree.as_ref().map(|tree| tree.reviewed_sha.clone()), Some(None));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn an_index_from_before_interfaces_still_loads() {
+        let dir = temp("old-index-5");
+        let path = "C:/wt/paystream-5d1c0a3e/0f9e8d7c";
+        let old = json!([{"id": id(1), "adapter": "claude-code", "cliVersion": "2.1.322",
+            "task": {"kind": "work", "project": "paystream", "repo": "C:/demo/repos/paystream", "branch": "main"},
+            "title": "Fix the bug", "workspace": [path], "status": "idle", "startedAt": 1001, "endedAt": null, "costUsd": 0.04,
+            "error": null, "structured": null, "mode": "interactive", "policy": "ask", "project": "paystream",
+            "worktree": {"repo": "C:/demo/repos/paystream", "path": path, "branch": "hivemind/0f9e8d7c", "baseBranch": "main",
+                "baseSha": "a053c800edb319fae41bc4873e4412b763b9d93b"},
+            "turns": 2, "filesChanged": {"files": 3, "added": 42, "removed": 8},
+            "context": [], "model": null, "system": "paystream", "review": null, "sourceSha": null}]);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.json"), old.to_string()).unwrap();
+        let loaded = load_index(&dir);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].interface, Interface::Chat);
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -415,6 +443,22 @@ mod tests {
         assert!(matches!(&read_log(&dir, &id(2)).unwrap()[..], [Record::Event { event: RunEvent::Finished { status: Status::Failed, .. }, .. }]));
         assert_eq!(sessions[2], interactive(1, Status::Idle, None));
         assert!(read_log(&dir, &id(1)).unwrap().is_empty());
+        assert_eq!(load_index(&dir), sessions);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn recovery_ends_a_terminal_session_left_running() {
+        let dir = temp("recover-terminal");
+        let terminal = |n: u64, status: Status| SessionInfo { interface: Interface::Terminal, ..interactive(n, status, None) };
+        save_index(&dir, &[terminal(3, Status::Running), terminal(2, Status::Idle), interactive(1, Status::Running, None)]).unwrap();
+        let sessions = recover(&dir, 9_000);
+        assert_eq!((sessions[0].status, sessions[0].ended_at, &sessions[0].error), (Status::Ended, Some(9_000), &None));
+        assert!(read_log(&dir, &id(3)).unwrap().is_empty());
+        assert_eq!(sessions[1], terminal(2, Status::Idle));
+        assert_eq!((sessions[2].status, sessions[2].ended_at), (Status::Idle, None));
+        let log = read_log(&dir, &id(1)).unwrap();
+        assert!(matches!(log.last(), Some(Record::Event { event: RunEvent::TurnFinished { ok: false, outcome: TurnEnd::Error, .. }, .. })));
         assert_eq!(load_index(&dir), sessions);
         std::fs::remove_dir_all(dir).ok();
     }

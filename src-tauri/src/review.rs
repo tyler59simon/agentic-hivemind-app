@@ -390,6 +390,7 @@ mod tests {
             system: None,
             review: None,
             source_sha: None,
+            interface: crate::agent::Interface::Chat,
         }
     }
 

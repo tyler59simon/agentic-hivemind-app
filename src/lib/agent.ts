@@ -10,6 +10,8 @@ export type SessionMode = "unattended" | "interactive";
 export type Policy = "pre_approved" | "ask" | "accept_edits";
 export type Decision = "allow" | "allow_always" | "deny" | "withdrawn";
 export type TurnOutcome = "completed" | "stopped" | "budget" | "error";
+export type Engine = "claude" | "codex";
+export type Interface = "chat" | "terminal";
 
 export interface Worktree { repo: string; path: string; branch: string; baseBranch: string; baseSha: string; reviewedSha?: string }
 export interface FileChange { path: string; status: "A" | "M" | "D"; added: number; removed: number; binary?: boolean }
@@ -34,7 +36,11 @@ export interface SessionInfo {
   turns: number; filesChanged: FileTotals | null;
   context: string[]; model: string | null; system: string | null;
   review: Review | null; sourceSha: string | null;
+  interface: Interface;
 }
+
+/** The engine of a session, whatever adapter name older code stored. */
+export const engineOf = (s: Pick<SessionInfo, "adapter">): Engine => (s.adapter === "codex" ? "codex" : "claude");
 
 export type RunEvent =
   | { type: "started"; model: string | null; cliVersion: string | null; plugins: string[] }
@@ -52,7 +58,7 @@ export type RunEvent =
     durationMs: number | null; turns: number | null; result: string | null; structured: unknown; denials: number;
   };
 
-export interface StartOptions { policy: Policy; context: string[]; briefing?: string; model?: string; system?: string }
+export interface StartOptions { policy: Policy; context: string[]; briefing?: string; model?: string; system?: string; engine?: Engine; interface?: Interface }
 export interface SendOptions { context: string[]; briefing?: string }
 
 export interface SeqEvent { sessionId: string; seq: number; at: number; event: RunEvent }

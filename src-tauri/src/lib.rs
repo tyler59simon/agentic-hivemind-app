@@ -24,6 +24,7 @@ struct AppState {
     settings_path: PathBuf,
     drafts_dir: PathBuf,
     worktrees_dir: PathBuf,
+    terminals_dir: PathBuf,
     snapshots_dir: PathBuf,
     agents: agent::Manager,
     watcher: Mutex<Option<notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>>,
@@ -160,8 +161,9 @@ async fn agent_start(
     prompt: String,
     options: Option<agent::StartOptions>,
 ) -> Result<agent::SessionInfo, String> {
-    let (agents, bridge, path, worktrees) = (state.agents.clone(), state.bridge.clone(), state.settings_path.clone(), state.worktrees_dir.clone());
-    blocking(move || agent::start_task(&agents, &bridge, &settings::load(&path), &worktrees, task, &prompt, options.unwrap_or_default())).await
+    let (agents, bridge, path) = (state.agents.clone(), state.bridge.clone(), state.settings_path.clone());
+    let (worktrees, terminals) = (state.worktrees_dir.clone(), state.terminals_dir.clone());
+    blocking(move || agent::start_task(&agents, &bridge, &settings::load(&path), &worktrees, &terminals, task, &prompt, options.unwrap_or_default())).await
 }
 
 /// Send a message to an idle interactive session.
@@ -370,6 +372,7 @@ pub fn run() {
             let drafts_dir = app.path().app_data_dir()?.join("drafts");
             let sessions_dir = app.path().app_data_dir()?.join("agent-sessions");
             let worktrees_dir = app.path().app_data_dir()?.join("worktrees");
+            let terminals_dir = app.path().app_data_dir()?.join("terminals");
             let snapshots_dir = architecture::snapshots_root(&sessions_dir);
             let saved = settings::load(&settings_path);
             let launch = settings::resolve(&saved, |k| std::env::var(k).ok());
@@ -394,6 +397,7 @@ pub fn run() {
                 settings_path,
                 drafts_dir,
                 worktrees_dir,
+                terminals_dir,
                 snapshots_dir,
                 agents,
                 watcher: Mutex::new(None),
