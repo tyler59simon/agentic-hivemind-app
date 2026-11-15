@@ -23,8 +23,8 @@ describe("runningSummary", () => {
     expect(lines).toEqual(["Claude Code · paystream (terminal)", "Codex sign-in (terminal)", "Chat turn · Explain billing", "Chat turn · Ask"]);
   });
 
-  it("names a terminal by its engine and folder, not the user's rename", () => {
+  it("names a terminal as its tab does, with the user's rename", () => {
     const named = session({ id: "t", interface: "terminal", name: "Mine" });
-    expect(runningSummary([term({ id: "t", sessionId: "t" })], [named])).toEqual(["Claude Code · paystream (terminal)"]);
+    expect(runningSummary([term({ id: "t", sessionId: "t" })], [named])).toEqual(["Mine (terminal)"]);
   });
 });

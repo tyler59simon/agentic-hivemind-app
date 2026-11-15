@@ -21,7 +21,7 @@ import { TerminalView } from "./TerminalView";
 const baseName = (path: string) => path.split(/[\\/]/).pop() || path;
 
 const HINT = {
-  claude: "Claude Code may ask whether you trust this folder. Every session works in its own new folder, so it can ask each time. Answer in the terminal; Hivemind does not answer for you.",
+  claude: "Claude Code may ask whether you trust this folder, once per repository. Answer in the terminal; Hivemind does not answer for you.",
   codex: "Codex may ask about an update, folder trust or hooks before it starts. Answer in the terminal; Hivemind does not answer for you.",
 };
 

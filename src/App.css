@@ -627,7 +627,8 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .term-pane + .term-pane { margin-left: .8rem; padding-left: .8rem; border-left: 1px solid var(--border); }
 .term-pane.focused .term-box { border-color: var(--accent); }
 .term-tabs.drop { outline: 2px dashed var(--accent); outline-offset: -2px; border-radius: .45rem; }
-.term-tabs .note-tab-pill { user-select: none; touch-action: none; }
+.term-tabs .note-tab-pill { user-select: none; touch-action: none; flex-shrink: 1; min-width: 7rem; }
+.term-tabs .icon-button { flex-shrink: 0; }
 .term-tabs .icon-button.on { color: var(--accent); }
 .tab-move { display: none; }
 .note-tab-pill:hover .tab-move, .note-tab-pill:focus-within .tab-move, .note-tab-pill.on .tab-move { display: inline-flex; }
