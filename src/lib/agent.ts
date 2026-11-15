@@ -10,6 +10,8 @@ export type SessionMode = "unattended" | "interactive";
 export type Policy = "pre_approved" | "ask" | "accept_edits";
 export type Decision = "allow" | "allow_always" | "deny" | "withdrawn";
 export type TurnOutcome = "completed" | "stopped" | "budget" | "error";
+export type Engine = "claude" | "codex";
+export type Interface = "chat" | "terminal";
 
 export interface Worktree { repo: string; path: string; branch: string; baseBranch: string; baseSha: string; reviewedSha?: string }
 export interface FileChange { path: string; status: "A" | "M" | "D"; added: number; removed: number; binary?: boolean }
@@ -34,6 +36,14 @@ export interface SessionInfo {
   turns: number; filesChanged: FileTotals | null;
   context: string[]; model: string | null; system: string | null;
   review: Review | null; sourceSha: string | null;
+  interface: Interface;
+}
+
+/** The engine of a session, whatever adapter name older code stored. */
+export const engineOf = (s: Pick<SessionInfo, "adapter">): Engine => (s.adapter === "codex" ? "codex" : "claude");
+
+export interface EngineInfo {
+  engine: Engine; label: string; path: string | null; error: string | null; chat: boolean; chatReason: string | null;
 }
 
 export type RunEvent =
@@ -52,7 +62,7 @@ export type RunEvent =
     durationMs: number | null; turns: number | null; result: string | null; structured: unknown; denials: number;
   };
 
-export interface StartOptions { policy: Policy; context: string[]; briefing?: string; model?: string; system?: string }
+export interface StartOptions { policy: Policy; context: string[]; briefing?: string; model?: string; system?: string; engine?: Engine; interface?: Interface }
 export interface SendOptions { context: string[]; briefing?: string }
 
 export interface SeqEvent { sessionId: string; seq: number; at: number; event: RunEvent }
@@ -60,6 +70,8 @@ export interface SessionLog { info: SessionInfo; events: SeqEvent[] }
 
 /** The path of the CLI that would be launched; rejects with a reason the user can act on. */
 export const agentAvailable = () => invoke<string>("agent_available");
+/** Which engines can be started, Claude Code first, and with which interface. */
+export const agentEngines = () => invoke<EngineInfo[]>("agent_engines");
 export const agentStart = (task: AgentTask, prompt: string, options?: StartOptions) => invoke<SessionInfo>("agent_start", { task, prompt, options: options ?? null });
 export const agentSend = (sessionId: string, text: string, options?: SendOptions) => invoke<void>("agent_send", { sessionId, text, options: options ?? null });
 export const agentAnswer = (sessionId: string, requestId: string, decision: Exclude<Decision, "withdrawn">) => invoke<void>("agent_answer", { sessionId, requestId, decision });
@@ -87,3 +99,4 @@ export const reviewToolOutput = (sessionId: string, toolUseId: string) => invoke
 export const reviewBase = (w: Worktree) => w.reviewedSha ?? w.baseSha;
 
 export const sessionsQuery = () => ({ queryKey: ["agent", "sessions"], queryFn: agentSessions });
+export const enginesQuery = () => ({ queryKey: ["agent", "engines"], queryFn: agentEngines, staleTime: 60_000 });

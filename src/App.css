@@ -544,8 +544,7 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .tool-call-body code { font-family: var(--font-mono); font-size: .86rem; overflow-wrap: anywhere; white-space: pre-wrap; }
 .agent-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: .8rem; }
 .agent-toolbar select { height: 2.4rem; padding: 0 .8rem; }
-.engine-chip, .branch-label { display: inline-flex; align-items: center; gap: .6rem; height: 2.4rem; padding: 0 1rem; border: 1px solid var(--border-strong); border-radius: .45rem; min-width: 0; }
-.engine-chip { font-weight: 600; }
+.branch-label { display: inline-flex; align-items: center; gap: .6rem; height: 2.4rem; padding: 0 1rem; border: 1px solid var(--border-strong); border-radius: .45rem; min-width: 0; }
 .branch-label { font-family: var(--font-mono); font-size: .9rem; }
 .toolbar-sep { width: 1px; height: 1.6rem; background: var(--border-strong); }
 .nav-dot.waiting { background: var(--warn); }
@@ -587,6 +586,37 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .spin { animation: spin 1.2s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 1100px) { .agents { grid-template-columns: 13rem minmax(0, 1fr); } .agents-rail { display: none; } }
+
+/* ---- Terminal ---- */
+.toolbar-fact { display: inline-flex; align-items: center; gap: .6rem; height: 2.4rem; white-space: nowrap; }
+/* the engine button: the box Phase 2's static engine chip had */
+.engine-menu .menu-button { gap: .6rem; height: 2.4rem; padding: 0 1rem; font-weight: 600; min-width: 11rem; justify-content: flex-start; }
+.engine-menu .menu-button > svg:last-child { margin-left: auto; }
+.segmented.wide button { padding: .55rem 1rem; }
+.control-help { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: .45rem; }
+.control-help .arrow-link { align-self: center; font-size: 1rem; }
+.rail-sub { margin: 0; font-size: 1.15rem; font-weight: 700; }
+
+.term-view { display: grid; grid-template-columns: minmax(0, 1fr) minmax(15rem, 21rem); flex: 1; min-height: 0; border-top: 1px solid var(--border); }
+.term-main { display: flex; flex-direction: column; gap: .5rem; min-width: 0; min-height: 0; padding: .9rem 1.4rem 0 0; }
+.term-tabs { padding: 0; border-bottom: none; }
+.term-hint { margin: 0; padding: .4rem .8rem; border-left: 4px solid var(--warn-fg); background: var(--bg-alt); border-radius: .3rem; font-size: .93rem; }
+.term-box { position: relative; flex: 1; min-height: 12rem; display: flex; flex-direction: column; border: 1px solid var(--border-strong); border-radius: .6rem; background: var(--bg-code); overflow: hidden; }
+.term-box:focus-within { border-color: var(--accent); }
+.term-box.login { flex: none; height: 22rem; }
+.term-host { flex: 1; min-height: 0; padding: .7rem .2rem .3rem .9rem; }
+.term-box-inner, .term-host .xterm { height: 100%; }
+/* xterm.css paints the viewport black with a native scrollbar; below the last whole row that shows as a dark strip.
+   xterm draws its own scrollbar, so the native one is hidden. */
+.term-host .xterm .xterm-viewport { background-color: var(--bg-code) !important; scrollbar-width: none; }
+.term-box > .error { position: absolute; inset: 0; margin: 0; background: var(--bg-code); display: flex; flex-direction: column; align-items: flex-start; gap: .6rem; }
+.term-status { display: flex; align-items: center; gap: .8rem; flex: none; min-height: 2.6rem; padding: .3rem .9rem; border-top: 1px solid var(--border); font-size: .93rem; }
+.term-dot { width: .55rem; height: .55rem; border-radius: 50%; background: var(--muted); flex: none; }
+.term-dot.on { background: var(--teal); }
+.term-dot.failed { background: var(--error); }
+.term-status .failed-text { color: var(--error); }
+.term-rail { padding: .9rem 0 1rem 1.4rem; overflow: auto; }
+@media (max-width: 1100px) { .term-view { grid-template-columns: minmax(0, 1fr); } .term-main { padding-right: 0; } }
 .linked-chip { display: inline-flex; align-items: center; gap: .6rem; border: none; padding: 0; color: var(--accent); align-self: flex-start; }
 .linked-chip:hover { background: none; text-decoration: underline; }
 .start-body { flex: 1; min-height: 0; overflow: auto; }

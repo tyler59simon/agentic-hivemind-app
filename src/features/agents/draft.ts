@@ -1,6 +1,7 @@
 // What the next agent session starts with. Other pages add notes and a system to it; the Start screen reads it.
 // It lives in memory only: the repository, branch, permissions and model are the Start screen's own state.
 import { create } from "zustand";
+import type { Engine, Interface } from "../../lib/agent";
 
 interface SessionDraft {
   task: string;
@@ -12,14 +13,20 @@ interface SessionDraft {
   system: string | null;
   /** A canvas element's name attached with it. */
   element: string | null;
+  engine: Engine;
+  interface: Interface;
   setTask: (task: string) => void;
   addContext: (ref: string) => void;
   removeContext: (ref: string) => void;
   setSystem: (system: string | null, element?: string | null) => void;
+  setEngine: (engine: Engine) => void;
+  setInterface: (face: Interface) => void;
   reset: () => void;
 }
 
-const EMPTY = { task: "", context: [], change: null, system: null, element: null };
+const EMPTY: Pick<SessionDraft, "task" | "context" | "change" | "system" | "element" | "engine" | "interface"> = {
+  task: "", context: [], change: null, system: null, element: null, engine: "claude", interface: "chat",
+};
 
 export const useSessionDraft = create<SessionDraft>()((set) => ({
   ...EMPTY,
@@ -27,5 +34,7 @@ export const useSessionDraft = create<SessionDraft>()((set) => ({
   addContext: (ref) => set((s) => (s.context.includes(ref) ? s : { context: [...s.context, ref] })),
   removeContext: (ref) => set((s) => ({ context: s.context.filter((r) => r !== ref) })),
   setSystem: (system, element = null) => set({ system, element }),
+  setEngine: (engine) => set({ engine }),
+  setInterface: (face) => set({ interface: face }),
   reset: () => set(EMPTY),
 }));

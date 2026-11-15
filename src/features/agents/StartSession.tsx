@@ -1,7 +1,7 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileText, Layers, Link as LinkIcon, Play, Plus } from "lucide-react";
+import { Check, FileText, Layers, Link as LinkIcon, Play, Plus } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { agentAvailable, agentStart, repoBranches, type Policy } from "../../lib/agent";
+import { agentStart, enginesQuery, repoBranches, type Engine, type Interface, type Policy } from "../../lib/agent";
 import { useChangesEnabled, useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { domainOf, getSettings, type Project } from "../../lib/lm";
@@ -18,6 +18,7 @@ import { systemsForProject } from "../projects/scope";
 import { useCurrentProject, useGitActivity, useProject } from "../projects/useProject";
 import { systemsQuery, useSystem } from "../systems/useSystem";
 import { noteQuery } from "../viewer/NoteView";
+import { ConnectionDialog } from "./ConnectionDialog";
 import { useSessionDraft } from "./draft";
 import { ALLOWED_NOTE, draftCounts, permissionLines, POLICIES, repoName, sessionBriefing } from "./session";
 
@@ -28,13 +29,55 @@ const MODELS = [
   { id: "haiku", label: "Haiku" },
 ];
 
+const ENGINES: { id: Engine; label: string }[] = [{ id: "claude", label: "Claude Code" }, { id: "codex", label: "Codex" }];
+const INTERFACES: { id: Interface; label: string }[] = [{ id: "chat", label: "Chat" }, { id: "terminal", label: "Terminal" }];
+
+const TERMINAL_APPROVALS = "The program asks for approvals itself, in the terminal. Hivemind does not see or answer those prompts.";
+
+/** The lines under "Tools, MCP & hooks": what is enforced depends on the engine and the interface. */
+function toolLines(engine: Engine, face: Interface): string[] {
+  if (face === "terminal") {
+    return engine === "claude"
+      ? [TERMINAL_APPROVALS, "Never: Living Memory plan, apply and undo commands. Claude Code is started with rules that deny them.", "Loaded from your own Claude Code setup: settings, hooks, plugins and MCP servers."]
+      : [TERMINAL_APPROVALS, "Hivemind cannot refuse Living Memory plan, apply and undo commands in a Codex terminal. The briefing tells the agent not to run them; do not approve one if Codex asks.", "Loaded from your own Codex setup: its configuration, AGENTS.md, plugins and MCP servers."];
+  }
+  return engine === "claude"
+    ? [
+      "Without asking: reading files in the worktree; Living Memory's search, read and capture commands (allowed by its own hook); and anything your own Claude Code settings already allow.",
+      "With “Accept edits”, also without asking: file edits in the worktree and simple file commands there, such as creating a folder.",
+      "Asks you first: everything else, such as other shell commands, reading or writing outside the worktree, and file edits under “Review edits”.",
+      "Never: Living Memory plan, apply and undo commands, even if a setting allows them.",
+      "Loaded from your Claude Code setup: settings, hooks, plugins and MCP servers. The first line of the session lists the plugins that loaded.",
+    ]
+    : [
+      "Asks you first: shell commands and file edits, by Codex's rules for the chosen permission.",
+      "Never: Living Memory plan, apply and undo commands.",
+      "Loaded from your Codex setup: its configuration, AGENTS.md, plugins and MCP servers.",
+    ];
+}
+
+/** Equal buttons of which one is on. */
+function Choice<T extends string>({ label, value, options, onPick }: {
+  label: string; value: T; options: { id: T; label: string; disabled?: boolean; title?: string }[]; onPick: (id: T) => void;
+}) {
+  return (
+    <div className="segmented wide" role="radiogroup" aria-label={label}>
+      {options.map((o) => (
+        <button key={o.id} type="button" role="radio" aria-checked={value === o.id} className={value === o.id ? "on" : ""} disabled={o.disabled} title={o.title} onClick={() => onPick(o.id)}>
+          {value === o.id && <Check size="1.1em" aria-hidden />}{o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** Mock 02: scope a session (task, repository, start branch, permissions), inspect its briefing, and start it. */
 export function StartSession() {
   const { enabled, registry, project } = useCurrentProject();
   const go = useApp((s) => s.go);
   return (
     <div className="page fill-page">
-      <PageHeader title="Start a session" subtitle="Scope the workspace and inspect the context." />
+      <PageHeader title="Start a session" subtitle="Choose an engine, scope the workspace, and inspect the context." />
       {!enabled ? <p className="muted">Sessions need a newer Living Memory (one with the <code>projects</code> command).</p>
         : !project ? (registry.isLoading ? <p className="muted">Loading…</p>
           : <div className="empty-state"><p className="muted">Pick a project in the sidebar to start a session. A session works in one of the project's repositories.</p></div>)
@@ -60,6 +103,7 @@ function StartForm({ project }: { project: Project }) {
   const [starting, setStarting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [picking, setPicking] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   // Every note that was in the draft when the screen opened or was added since, ticked or not.
   const [listed, setListed] = useState(draft.context);
   const touched = useRef(false);
@@ -93,7 +137,11 @@ function StartForm({ project }: { project: Project }) {
     if (linked.branch && branchList.includes(linked.branch)) setPickedBranch(linked.branch);
     setAppliedFor(linked.id);
   }, [linked, repo, branchList, project.repos]);
-  const available = useQuery({ queryKey: ["agent", "available"], queryFn: agentAvailable, retry: false, staleTime: 60_000 });
+  const engines = useQuery({ ...enginesQuery(), retry: false });
+  const selected = engines.data?.find((e) => e.engine === draft.engine);
+  const terminal = draft.interface === "terminal";
+  // A draft can arrive with Codex and Chat (another page preselected the engine); Chat is then not allowed.
+  useEffect(() => { if (selected && !selected.chat && draft.interface === "chat") draft.setInterface("terminal"); }, [selected, draft]);
   const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
 
   const { rows, open, charter } = useProject(project.slug);
@@ -128,7 +176,7 @@ function StartForm({ project }: { project: Project }) {
       element: draft.element, containers: (archModel?.elements ?? []).filter((e) => e.type === "container").map((e) => e.name),
     },
   });
-  const blocked = !!branches.error || available.isError || link.kind === "loading" || link.kind === "failed";
+  const blocked = !!branches.error || !!selected?.error || link.kind === "loading" || link.kind === "failed";
   const canStart = !!task && !loading && !starting && !branches.isLoading && !blocked && !!branch;
 
   const add = (ref: string) => { draft.addContext(ref); setListed((l) => (l.includes(ref) ? l : [...l, ref])); };
@@ -136,7 +184,7 @@ function StartForm({ project }: { project: Project }) {
     if (blocked) return;
     setStarting(true);
     try {
-      const info = await agentStart({ kind: "work", project: project.slug, repo, branch, ...(draft.change !== null ? { change: draft.change } : {}) }, task, { policy, context: draft.context, briefing, model: model || undefined, system: system?.slug });
+      const info = await agentStart({ kind: "work", project: project.slug, repo, branch, ...(draft.change !== null ? { change: draft.change } : {}) }, task, { policy, context: draft.context, briefing, model: draft.engine === "claude" ? model || undefined : undefined, system: system?.slug, engine: draft.engine, interface: draft.interface });
       useSessionDraft.getState().reset();
       client.invalidateQueries({ queryKey: ["agent", "sessions"] });
       openSession(info.id);
@@ -151,7 +199,7 @@ function StartForm({ project }: { project: Project }) {
   return (
     <>
       <div className="start-body">
-        {available.isError && <div className="banner warn">{String(available.error)}</div>}
+        {selected?.error && <div className="banner warn">{selected.error}</div>}
         {link.kind === "failed" && (
           <div className="banner warn" role="alert">
             <strong>{link.message}</strong>
@@ -216,7 +264,26 @@ function StartForm({ project }: { project: Project }) {
                 </span>
               )}
             </section>
-            {/* Phase 5: Engine and Interface sections go here */}
+            <section className="start-section">
+              <h2>Engine</h2>
+              <Choice label="Engine" value={draft.engine} options={ENGINES.map((o) => ({ ...o, disabled: !!engines.data?.find((e) => e.engine === o.id)?.error, title: engines.data?.find((e) => e.engine === o.id)?.error ?? undefined }))}
+                onPick={(id) => {
+                  draft.setEngine(id);
+                  if (engines.data?.find((e) => e.engine === id)?.chat === false && draft.interface === "chat") draft.setInterface("terminal");
+                }} />
+              <div className="control-help">
+                <span className="muted small">Use existing local sign-in.</span>
+                <ArrowLink onClick={() => setConnecting(true)} title="Sign in to the engine in a terminal">Manage connection</ArrowLink>
+              </div>
+              {engines.isError && <p className="error small">{String(engines.error)}</p>}
+            </section>
+            <section className="start-section">
+              <h2>Interface</h2>
+              <Choice label="Interface" value={draft.interface} options={INTERFACES.map((o) => ({ ...o, disabled: o.id === "chat" && selected?.chat === false, title: o.id === "chat" ? selected?.chatReason ?? undefined : undefined }))}
+                onPick={(id) => draft.setInterface(id)} />
+              {selected?.chat === false && selected.chatReason && <p className="muted small">{selected.chatReason}</p>}
+              {terminal && <p className="muted small">The terminal runs the real command-line program. It asks for approvals itself, inside the terminal.</p>}
+            </section>
             <section className="start-section">
               <h2>Workspace</h2>
               <div className="start-row">
@@ -246,22 +313,22 @@ function StartForm({ project }: { project: Project }) {
             <details className="start-more">
               <summary>Tools, MCP &amp; hooks</summary>
               <ul>
-                <li>Without asking: reading files in the worktree; Living Memory's search, read and capture commands (allowed by its own hook); and anything your own Claude Code settings already allow.</li>
-                <li>With “Accept edits”, also without asking: file edits in the worktree and simple file commands there, such as creating a folder.</li>
-                <li>Asks you first: everything else, such as other shell commands, reading or writing outside the worktree, and file edits under “Review edits”.</li>
-                <li>Never: Living Memory plan, apply and undo commands, even if a setting allows them.</li>
-                <li>Loaded from your Claude Code setup: settings, hooks, plugins and MCP servers. The first line of the session lists the plugins that loaded.</li>
+                {toolLines(draft.engine, draft.interface).map((line) => <li key={line}>{line}</li>)}
               </ul>
             </details>
             <details className="start-more">
               <summary>Environment &amp; session options</summary>
-              <label className="field"><span>Model</span>
-                <select aria-label="Model" value={model} onChange={(e) => setModel(e.target.value)}>
-                  {MODELS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-                </select>
-              </label>
-              <p className="muted small">Spending limit: ${(settings.data?.agent_budget_usd ?? 5).toFixed(2)} per run. Change it in Settings.</p>
-              {available.data && <p className="muted small">Claude Code: <code>{available.data}</code></p>}
+              {draft.engine === "claude" ? (
+                <label className="field"><span>Model</span>
+                  <select aria-label="Model" value={model} onChange={(e) => setModel(e.target.value)}>
+                    {MODELS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                  </select>
+                </label>
+              ) : <p className="muted small">Codex uses the model set in your Codex configuration.</p>}
+              {draft.engine === "claude" && !terminal
+                ? <p className="muted small">Spending limit: ${(settings.data?.agent_budget_usd ?? 5).toFixed(2)} per run. Change it in Settings.</p>
+                : <p className="muted small">No spending limit applies in the terminal or with Codex.</p>}
+              {selected?.path && <p className="muted small">{selected.label}: <code>{selected.path}</code></p>}
             </details>
           </form>
         </Split>
@@ -276,6 +343,7 @@ function StartForm({ project }: { project: Project }) {
           <Play size="1.2em" aria-hidden />{starting ? "Starting…" : "Start session"}
         </button>
       </footer>
+      {connecting && selected && <ConnectionDialog engine={selected} onClose={() => setConnecting(false)} />}
       {picking && <NotePicker title="Add a note to the briefing" domain={domain ?? appDomain ?? ""} exclude="" onPick={(n) => { add(n.ref); setPicking(false); }} onClose={() => setPicking(false)} />}
       {previewing && (
         <Modal title="Briefing" wide onClose={() => setPreviewing(false)}>

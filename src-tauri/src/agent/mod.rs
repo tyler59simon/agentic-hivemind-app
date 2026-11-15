@@ -39,6 +39,49 @@ const RESERVED: &str = "A review action is running for this session";
 const BUSY: &str = "This session is busy";
 const ALREADY_RESERVED: &str = "A review action is already running for this session";
 
+/// Which coding-agent CLI a session uses. `SessionInfo.adapter` stores the adapter's name; this is the same fact as a type.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum Engine {
+    #[default]
+    Claude,
+    Codex,
+}
+
+impl Engine {
+    /// The engine of a stored session. Anything that is not Codex is Claude Code, whatever name Phase 1 or 2 stored.
+    pub fn of(adapter: &str) -> Engine {
+        if adapter == "codex" { Engine::Codex } else { Engine::Claude }
+    }
+
+    /// What `SessionInfo.adapter` holds for a new session.
+    pub fn adapter_name(self) -> &'static str {
+        match self {
+            Engine::Claude => claude::ClaudeCode.name(),
+            Engine::Codex => "codex",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Engine::Claude => "Claude Code",
+            Engine::Codex => "Codex",
+        }
+    }
+}
+
+/// How the user talks to a session.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Interface {
+    #[default]
+    Chat,
+    Terminal,
+}
+
+/// Whether a Codex session may use the Chat interface. Part C turns this on.
+pub const CODEX_CHAT: bool = false;
+
 /// One coding-agent CLI: how to start it and how to read what it prints.
 pub trait Adapter: Send + Sync {
     fn name(&self) -> &'static str;
@@ -112,6 +155,10 @@ pub struct SessionInfo {
     /// For a passport session: the repository's HEAD when it succeeded.
     #[serde(default)]
     pub source_sha: Option<String>,
+    // Phase 5
+    /// README 7.1. Default `chat`, so older indexes load.
+    #[serde(default)]
+    pub interface: Interface,
 }
 
 /// What the user decided about a work session's edits.
@@ -172,6 +219,10 @@ pub struct StartOptions {
     pub model: Option<String>,
     #[serde(default)]
     pub system: Option<String>,
+    #[serde(default)]
+    pub engine: Engine,
+    #[serde(default)]
+    pub interface: Interface,
 }
 
 /// What `agent_send` may be told besides the text.
@@ -408,12 +459,61 @@ fn exit_code(child: &Mutex<Child>) -> Option<i32> {
     }
 }
 
-/// The text of a message: the briefing goes in front when there is one.
-fn message(briefing: Option<&str>, text: &str) -> String {
+/// The text of a session's first message: the briefing, a rule, and what the user typed. A later message has the same shape.
+pub fn first_text(briefing: Option<&str>, prompt: &str) -> String {
     match briefing {
-        Some(briefing) => format!("{briefing}\n\n---\n\n{text}"),
-        None => text.to_string(),
+        Some(briefing) => format!("{briefing}\n\n---\n\n{prompt}"),
+        None => prompt.to_string(),
     }
+}
+
+/// A new session as it is first listed, before it has a process.
+fn session_info(id: &str, adapter: &str, task: AgentTask, scope: &Scope, options: &StartOptions) -> SessionInfo {
+    let interactive = scope.mode == Mode::Interactive;
+    SessionInfo {
+        id: id.to_string(),
+        adapter: adapter.to_string(),
+        cli_version: None,
+        project: match &task {
+            AgentTask::Work { project, .. } => Some(project.clone()),
+            AgentTask::SystemPassport { .. } => None,
+        },
+        task,
+        title: scope.title.clone(),
+        workspace: std::iter::once(&scope.cwd).chain(&scope.add_dirs).map(|dir| dir.display().to_string()).collect(),
+        status: Status::Running,
+        started_at: now_ms(),
+        ended_at: None,
+        cost_usd: None,
+        error: None,
+        structured: None,
+        mode: scope.mode,
+        policy: scope.policy.mode(),
+        worktree: scope.worktree.clone(),
+        turns: 0,
+        files_changed: None,
+        context: if interactive { options.context.clone() } else { vec![] },
+        model: options.model.clone().filter(|_| interactive),
+        system: options.system.clone().filter(|_| interactive),
+        review: None,
+        source_sha: None,
+        interface: Interface::Chat,
+    }
+}
+
+/// Refuse the combinations of task, engine and interface that cannot be started.
+fn check_combination(task: &AgentTask, engine: Engine, interface: Interface) -> Result<(), String> {
+    let work = matches!(task, AgentTask::Work { .. });
+    if interface == Interface::Terminal && !work {
+        return Err("A terminal session needs a project repository.".into());
+    }
+    if engine == Engine::Codex && !work {
+        return Err("System passports run with Claude Code.".into());
+    }
+    if engine == Engine::Codex && interface == Interface::Chat && !CODEX_CHAT {
+        return Err("Chat with Codex is not available yet. Use Terminal.".into());
+    }
+    Ok(())
 }
 
 impl Manager {
@@ -429,34 +529,7 @@ impl Manager {
         let inner = &self.inner;
         let scope = &launch.scope;
         let interactive = scope.mode == Mode::Interactive;
-        let info = SessionInfo {
-            id: id.clone(),
-            adapter: inner.adapter.name().to_string(),
-            cli_version: None,
-            project: match &task {
-                AgentTask::Work { project, .. } => Some(project.clone()),
-                AgentTask::SystemPassport { .. } => None,
-            },
-            task,
-            title: scope.title.clone(),
-            workspace: std::iter::once(&scope.cwd).chain(&scope.add_dirs).map(|dir| dir.display().to_string()).collect(),
-            status: Status::Running,
-            started_at: now_ms(),
-            ended_at: None,
-            cost_usd: None,
-            error: None,
-            structured: None,
-            mode: scope.mode,
-            policy: scope.policy.mode(),
-            worktree: scope.worktree.clone(),
-            turns: 0,
-            files_changed: None,
-            context: if interactive { options.context.clone() } else { vec![] },
-            model: options.model.clone().filter(|_| interactive),
-            system: options.system.clone().filter(|_| interactive),
-            review: None,
-            source_sha: None,
-        };
+        let info = session_info(&id, inner.adapter.name(), task, scope, options);
 
         // Without its folder a session could not be logged or replayed, so find that out first.
         std::fs::create_dir_all(&inner.dir).map_err(|e| format!("Could not create {}: {e}", inner.dir.display()))?;
@@ -477,11 +550,24 @@ impl Manager {
         let (pump, required) = (inner.clone(), launch.scope.required_plugin.clone());
         std::thread::spawn(move || pump.pump(&id, stdout, stderr, &child, required.as_deref()));
         // A CLI that has already died shows up as a failed session, not as an error here.
-        let _ = write(&stdin, &inner.adapter.user_line(&message(options.briefing.as_deref().filter(|_| interactive), prompt)));
+        let _ = write(&stdin, &inner.adapter.user_line(&first_text(options.briefing.as_deref().filter(|_| interactive), prompt)));
         if !interactive {
             // Closing stdin is what makes this a one-prompt session: the CLI exits when the work is done.
             *stdin.lock().unwrap() = None;
         }
+        Ok(info)
+    }
+
+    /// Add a session that has no headless process (a terminal session). Saves the index and tells the UI.
+    pub fn register(&self, info: SessionInfo) -> Result<SessionInfo, String> {
+        let inner = &self.inner;
+        std::fs::create_dir_all(&inner.dir).map_err(|e| format!("Could not create {}: {e}", inner.dir.display()))?;
+        let mut sessions = inner.sessions.lock().unwrap();
+        sessions.insert(info.id.clone(), Session { info: info.clone(), reserved: false, live: None, tape: None });
+        let saved = inner.persist(&mut sessions);
+        drop(sessions);
+        (inner.sink)(Emit::SessionsChanged);
+        saved.map_err(|e| format!("Could not save the session list: {e}"))?;
         Ok(info)
     }
 
@@ -500,8 +586,11 @@ impl Manager {
         if text.trim().is_empty() {
             return Err("Write a message first".into());
         }
-        let line = inner.adapter.user_line(&message(options.briefing.as_deref(), text));
+        let line = inner.adapter.user_line(&first_text(options.briefing.as_deref(), text));
         let mut sessions = inner.sessions.lock().unwrap();
+        if sessions.get(id).is_some_and(|session| session.info.interface == Interface::Terminal) {
+            return Err("This session runs in the terminal. Resume it there and type your request.".into());
+        }
         let info = Inner::askable(&sessions, id)?;
         if sessions.get(id).is_some_and(|session| session.reserved) && held.is_none_or(|h| h.id() != id) {
             return Err(RESERVED.into());
@@ -607,6 +696,9 @@ impl Manager {
         let process = {
             let mut sessions = inner.sessions.lock().unwrap();
             let session = sessions.get_mut(id).ok_or("Unknown session")?;
+            if session.info.interface == Interface::Terminal {
+                return Err("This session runs in the terminal. Stop it there.".into());
+            }
             if session.reserved {
                 return Err(RESERVED.into());
             }
@@ -675,6 +767,9 @@ impl Manager {
         store::log_path(&inner.dir, id)?;
         let mut sessions = inner.sessions.lock().unwrap();
         let session = sessions.get_mut(id).ok_or("Unknown session")?;
+        if session.info.interface == Interface::Terminal {
+            return Err("A terminal session keeps the permission mode it was started with.".into());
+        }
         if session.info.mode != Mode::Interactive {
             return Err("Only an interactive session has a permission mode".into());
         }
@@ -788,10 +883,23 @@ impl Manager {
     /// Change a session's details, save the index and tell the UI. A failed save is an error: the change then lives only
     /// in memory and is gone after a restart (for an approval, its review base with it).
     pub fn amend(&self, id: &str, change: impl FnOnce(&mut SessionInfo)) -> Result<SessionInfo, String> {
+        self.amend_checked(id, None, change)
+    }
+
+    /// `amend`, refused with `refusal` while a review action holds the session. The check and the change happen under one
+    /// lock, so a review action cannot reserve the session between them.
+    pub fn amend_unreserved(&self, id: &str, refusal: &str, change: impl FnOnce(&mut SessionInfo)) -> Result<SessionInfo, String> {
+        self.amend_checked(id, Some(refusal), change)
+    }
+
+    fn amend_checked(&self, id: &str, refusal: Option<&str>, change: impl FnOnce(&mut SessionInfo)) -> Result<SessionInfo, String> {
         let inner = &self.inner;
         store::log_path(&inner.dir, id)?;
         let mut sessions = inner.sessions.lock().unwrap();
         let session = sessions.get_mut(id).ok_or("Unknown session")?;
+        if let Some(refusal) = refusal.filter(|_| session.reserved) {
+            return Err(refusal.to_string());
+        }
         change(&mut session.info);
         let info = session.info.clone();
         let saved = inner.persist(&mut sessions);
@@ -816,6 +924,11 @@ impl Manager {
             return Ok(ToolOutput { text, ok, truncated: false });
         }
         Ok(ToolOutput { text: text.chars().skip(length - MAX_OUTPUT).collect(), ok, truncated: true })
+    }
+
+    /// Whether a review action holds the session.
+    pub fn is_reserved(&self, id: &str) -> bool {
+        self.inner.sessions.lock().unwrap().get(id).is_some_and(|session| session.reserved)
     }
 
     /// Reserve a session for one review action: it must not be mid-turn or already reserved.
@@ -950,8 +1063,10 @@ impl Inner {
     fn free_slot(&self, sessions: &mut HashMap<String, Session>) -> Result<(), String> {
         let mut busy: Vec<String> = vec![];
         loop {
+            // A terminal session has no headless process and its own limit (decision D14).
             let holding = |session: &Session| {
-                session.live.as_ref().is_some_and(|live| match session.info.status {
+                session.info.interface == Interface::Chat
+                    && session.live.as_ref().is_some_and(|live| match session.info.status {
                     Status::Running | Status::Waiting => true,
                     Status::Idle => is_open(&live.stdin),
                     _ => false,
@@ -1237,16 +1352,21 @@ impl Inner {
 
 /// Work out what `task` may touch (from Living Memory and the settings), then start its session. A work session gets a
 /// worktree of its own first, which is removed again when the session cannot start.
+#[allow(clippy::too_many_arguments)] // the signature section 6.6 of the Phase 5 plan fixes
 pub fn start_task(
     manager: &Manager,
     bridge: &Bridge,
     saved: &Settings,
     worktrees: &Path,
+    terminals: &Path,
     task: AgentTask,
     prompt: &str,
     options: StartOptions,
 ) -> Result<SessionInfo, String> {
-    let program = claude::available(saved)?;
+    check_combination(&task, options.engine, options.interface)?;
+    let terminal = options.interface == Interface::Terminal;
+    // A terminal session starts no process here; the lookup only reports a missing CLI on the Start screen.
+    let program = if terminal { crate::term::launch::program(options.engine, saved).map(|_| String::new())? } else { claude::available(saved)? };
     let id = uuid::Uuid::new_v4().to_string();
     let launch = |scope| Launch { scope, program: program.clone(), budget_usd: saved.agent_budget_usd(), memory_root: bridge.launch().root };
     let AgentTask::Work { project, repo, branch, change } = &task else {
@@ -1267,7 +1387,20 @@ pub fn start_task(
         scope::check_change(&scope::change_entry(bridge, *id)?, project, &repo.to_string_lossy())?;
     }
     let tree = worktree::create(worktrees, &repo, branch.as_deref(), &id)?;
-    let started = scope::work(tree.clone(), policy, prompt).and_then(|scope| manager.start(id, task.clone(), launch(scope), prompt, &options));
+    let started = scope::work(tree.clone(), policy, prompt).and_then(|scope| {
+        if !terminal {
+            return manager.start(id, task.clone(), launch(scope), prompt, &options);
+        }
+        let mut info = session_info(&id, options.engine.adapter_name(), task.clone(), &scope, &options);
+        info.status = Status::Idle;
+        info.interface = Interface::Terminal;
+        if options.engine == Engine::Codex {
+            info.model = None;
+        }
+        let context = crate::term::write_briefing(terminals, &id, &first_text(options.briefing.as_deref(), prompt))?;
+        info.workspace.push(context.display().to_string());
+        manager.register(info)
+    });
     if started.is_err() {
         let _ = worktree::remove(&tree);
     }
@@ -1307,6 +1440,18 @@ mod tests {
     use scope::Policy;
     use serde_json::json;
     use std::time::Instant;
+
+    #[test]
+    fn engine_serialises_in_lowercase() {
+        assert_eq!(serde_json::to_value(Engine::Codex).unwrap(), json!("codex"));
+        assert_eq!(serde_json::to_value(Engine::Claude).unwrap(), json!("claude"));
+        assert_eq!(Engine::default(), Engine::Claude);
+        assert_eq!(Engine::of("codex"), Engine::Codex);
+        assert_eq!(Engine::of("claude-code"), Engine::Claude);
+        assert_eq!(Engine::of("claude"), Engine::Claude);
+        assert_eq!(Engine::Claude.adapter_name(), "claude-code");
+        assert_eq!(Engine::Codex.label(), "Codex");
+    }
 
     const INIT: &str = r#"{"type":"system","subtype":"init","session_id":"00000000-0000-4000-8000-000000000001","model":"claude-test-1","claude_code_version":"2.1.321","plugins":[{"name":"architecture-suite","path":"/plugins/architecture-suite","source":"architecture-suite@local"}]}"#;
     const BARE_INIT: &str = r#"{"type":"system","subtype":"init","model":"claude-test-1","claude_code_version":"2.1.321","plugins":[{"name":"something-else","path":"/plugins/else","source":"else@local"}]}"#;
@@ -2467,6 +2612,7 @@ mod tests {
             system: None,
             review: None,
             source_sha: None,
+            interface: Interface::Chat,
         }
     }
 
@@ -2542,5 +2688,85 @@ mod tests {
         .join();
         assert!(panicked.is_err());
         assert!(manager.reserve(&id).is_ok());
+    }
+
+    /// A terminal session at rest, as `start_task` registers it.
+    fn terminal(id: &str) -> SessionInfo {
+        SessionInfo { interface: Interface::Terminal, status: Status::Idle, turns: 0, ..resting(id) }
+    }
+
+    #[test]
+    fn interface_serialises_in_lowercase() {
+        assert_eq!(serde_json::to_value(Interface::Terminal).unwrap(), json!("terminal"));
+        assert_eq!(serde_json::to_value(Interface::Chat).unwrap(), json!("chat"));
+        assert_eq!(Interface::default(), Interface::Chat);
+        let options: StartOptions = serde_json::from_value(json!({})).unwrap();
+        assert_eq!((options.engine, options.interface), (Engine::Claude, Interface::Chat));
+        let options: StartOptions = serde_json::from_value(json!({"engine": "codex", "interface": "terminal"})).unwrap();
+        assert_eq!((options.engine, options.interface), (Engine::Codex, Interface::Terminal));
+    }
+
+    #[test]
+    fn a_terminal_session_is_registered_without_a_process() {
+        let rig = Rig::new("register", Fake::scripted("register", &[]));
+        let id = new_id();
+        let registered = rig.manager.register(terminal(&id)).unwrap();
+        assert_eq!(registered, terminal(&id));
+        let listed = rig.manager.sessions();
+        assert_eq!(listed.len(), 1);
+        assert_eq!((listed[0].id.as_str(), listed[0].status, listed[0].interface), (id.as_str(), Status::Idle, Interface::Terminal));
+        assert!(rig.seen.lock().unwrap().iter().any(|emit| matches!(emit, Emit::SessionsChanged)));
+        assert!(store::read_log(&rig.dir.join("sessions"), &id).unwrap().is_empty());
+        rig.manager.amend(&id, |info| info.status = Status::Running).unwrap();
+        let (again, ..) = rig.reopened("register-again", &[]);
+        let reloaded = again.sessions();
+        assert_eq!(reloaded.len(), 1);
+        assert_eq!(reloaded[0].id, id);
+    }
+
+    #[test]
+    fn terminal_sessions_do_not_hold_a_slot() {
+        let rig = Rig::lingering("terminal-slots");
+        let ids: Vec<String> = (0..MAX_RUNNING).map(|_| new_id()).collect();
+        for id in &ids {
+            rig.manager.register(terminal(id)).unwrap();
+            rig.manager.amend(id, |info| info.status = Status::Running).unwrap();
+        }
+        let started = rig.begin();
+        assert_eq!(started.status, Status::Running);
+        for id in &ids {
+            let info = rig.info(id);
+            assert_eq!((info.status, info.interface), (Status::Running, Interface::Terminal));
+        }
+    }
+
+    #[test]
+    fn the_first_text_is_the_briefing_a_rule_and_the_task() {
+        assert_eq!(first_text(Some("B"), "T"), "B\n\n---\n\nT");
+        assert_eq!(first_text(None, "T"), "T");
+    }
+
+    #[test]
+    fn start_refuses_unsupported_combinations() {
+        let passport = AgentTask::SystemPassport { slug: "billing".into() };
+        assert_eq!(check_combination(&passport, Engine::Claude, Interface::Terminal).unwrap_err(), "A terminal session needs a project repository.");
+        assert_eq!(check_combination(&passport, Engine::Codex, Interface::Chat).unwrap_err(), "System passports run with Claude Code.");
+        assert_eq!(check_combination(&work_task(), Engine::Codex, Interface::Chat).unwrap_err(), "Chat with Codex is not available yet. Use Terminal.");
+        assert!(check_combination(&work_task(), Engine::Codex, Interface::Terminal).is_ok());
+        assert!(check_combination(&passport, Engine::Claude, Interface::Chat).is_ok());
+    }
+
+    #[test]
+    fn chat_only_commands_refuse_a_terminal_session() {
+        let id = new_id();
+        let (rig, manager) = loaded("terminal-refuses", &[terminal(&id)]);
+        let before = manager.info(&id).unwrap();
+        assert_eq!(send_on(&manager, &rig, &id, "hello").unwrap_err(), "This session runs in the terminal. Resume it there and type your request.");
+        assert_eq!(manager.end(&id).unwrap_err(), "This session runs in the terminal. Stop it there.");
+        assert_eq!(manager.set_policy(&id, PolicyMode::AcceptEdits).unwrap_err(), "A terminal session keeps the permission mode it was started with.");
+        assert_eq!(manager.info(&id).unwrap(), before);
+        assert!(store::read_log(&rig.dir.join("sessions"), &id).unwrap().is_empty());
+        assert!(manager.cancel(&id).is_ok());
+        assert!(manager.interrupt(&id).is_ok());
     }
 }
