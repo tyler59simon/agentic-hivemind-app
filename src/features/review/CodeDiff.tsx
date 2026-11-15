@@ -8,11 +8,11 @@ import { loadLanguage } from "./language";
 
 const code = HighlightStyle.define([
   { tag: [t.keyword, t.modifier], color: "var(--accent)", fontWeight: "600" },
-  { tag: [t.string, t.regexp], color: "#f7b267" },
+  { tag: [t.string, t.regexp], color: "var(--syntax-string)" },
   { tag: [t.comment, t.meta], color: "var(--muted)" },
   { tag: [t.number, t.bool, t.null, t.atom], color: "var(--teal)" },
-  { tag: [t.typeName, t.className, t.namespace], color: "#e2bdf7" },
-  { tag: [t.function(t.variableName), t.function(t.propertyName), t.propertyName, t.tagName, t.attributeName], color: "#7fb0ff" },
+  { tag: [t.typeName, t.className, t.namespace], color: "var(--syntax-type)" },
+  { tag: [t.function(t.variableName), t.function(t.propertyName), t.propertyName, t.tagName, t.attributeName], color: "var(--syntax-fn)" },
 ]);
 
 const theme = EditorView.theme({

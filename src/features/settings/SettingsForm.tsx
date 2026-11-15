@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { captureStatus, getSettings, saveSettings, type CaptureStatus, type Settings } from "../../lib/lm";
 import { prefs } from "../../lib/prefs";
+import { applyTheme, THEMES, useTheme, type Theme } from "../../lib/theme";
 import type { Mode } from "../../workspace/store";
 
 const DEFAULT_SHORTCUT = "CommandOrControl+Alt+M";
@@ -12,6 +13,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
   const [status, setStatus] = useState<CaptureStatus | null>(null);
   const [mode, setMode] = useState<Mode>(prefs.defaultMode());
   const [error, setError] = useState<string | null>(null);
+  const theme = useTheme();
   useEffect(() => {
     getSettings().then(setValue).catch((e) => setError(String(e)));
     captureStatus().then(setStatus).catch(() => {});
@@ -70,6 +72,15 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
           <option value="source">Source (plain Markdown)</option>
         </select>
       </label>
+
+      <h3>Appearance</h3>
+      <label className="field">
+        <span>Theme</span>
+        <select value={theme} onChange={(e) => applyTheme(e.target.value as Theme)}>
+          {THEMES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+        </select>
+      </label>
+      <p className="muted small">The theme changes at once and is kept on this computer; it does not need Save.</p>
       {error && <p className="error">{error}</p>}
       <button type="submit" className="primary">Save</button>
     </form>

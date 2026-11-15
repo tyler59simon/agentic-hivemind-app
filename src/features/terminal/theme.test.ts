@@ -8,7 +8,7 @@ describe("terminal theme", () => {
     expect(t.foreground).toBe("<--fg>");
     expect(t.cursor).toBe("<--accent>");
     expect(t.green).toBe("<--success>");
-    expect(t.blue).toBe("#7fb0ff");
+    expect(t.blue).toBe("<--term-blue>");
     expect(fontPx(18)).toBe(15);
     expect(fontPx(14)).toBe(12);
   });
