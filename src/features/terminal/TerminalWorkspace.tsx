@@ -19,7 +19,7 @@ import { termClose, termList, type ShellTarget } from "../../lib/term";
 import { closeTab, focusPane, moveTab, openIn, paneOf, reconcile, toggleSplit, update, useLayout, type Pane } from "./layout";
 import * as registry from "./registry";
 import { isShellId, NO_SHELL_PLACE, shellLabel, shellPlaces, shellStatus, shellTitle, type ShellTab } from "./shells";
-import { statusLine, tabLabel, terminalTabs } from "./tabs";
+import { statusLine, tabLabel, terminalTabs, whereLabel } from "./tabs";
 import { TerminalView } from "./TerminalView";
 
 const baseName = (path: string) => path.split(/[\\/]/).pop() || path;
@@ -82,7 +82,9 @@ function Rail({ s }: { s: SessionInfo }) {
         {task && <Row icon={<Database size="1.3em" aria-hidden />} title={task.repo}>{repoName(task.repo)}</Row>}
         {tree
           ? <Row icon={<GitBranch size="1.3em" aria-hidden />} title={`Working on ${tree.branch}, created from ${tree.baseBranch}. Folder: ${tree.path}`}>{tree.baseBranch}</Row>
-          : <p className="muted small">The worktree was removed.</p>}
+          : s.direct
+            ? <Row icon={<GitBranch size="1.3em" aria-hidden />} title={`Works in your own files, not in a copy. Folder: ${s.direct.path}`}>{whereLabel(s)}</Row>
+            : <p className="muted small">The worktree was removed.</p>}
       </Section>
       <Section title="Attached context" empty={s.context.length || s.system ? undefined : "No notes attached."}>
         {s.context.map((ref, i) => {
@@ -164,7 +166,7 @@ function PaneView({ index, tabs, activeId, focused, split, over, onFocus, onTogg
       <div className={`note-tabs standalone term-tabs ${over ? "drop" : ""}`} role="tablist" aria-label={split ? `Terminals, pane ${index + 1}` : "Terminals"}>
         {tabs.map((s) => {
           const on = s.id === activeId;
-          const title = isShell(s) ? shellTitle(s) : `${s.title} · ${s.worktree?.branch ?? "worktree removed"}`;
+          const title = isShell(s) ? shellTitle(s) : `${s.title} · ${whereLabel(s)}`;
           return (
             <div key={s.id} role="tab" aria-selected={on} className={`note-tab-pill ${on ? "on" : ""}`} title={title}
               onPointerDown={(e) => onDragStart(e, s)}

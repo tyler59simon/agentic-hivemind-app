@@ -1,6 +1,6 @@
 //! Which program to start in a terminal, with which arguments and environment. Pure functions, except the thin
 //! wrappers over the real machine (`codex`, `claude`, `windows_build`).
-use crate::agent::access::{Access, Approval, Sandbox};
+use crate::agent::access::{Access, Approval};
 use crate::agent::scope::PolicyMode;
 use crate::agent::Engine;
 use crate::settings::Settings;
@@ -183,7 +183,8 @@ pub fn session_args(
             if let Access::Codex { sandbox, approval } = access {
                 match approval {
                     // Approvals go to Codex's automatic reviewer, which only exists in the workspace-write sandbox.
-                    Approval::ApproveForMe => args.extend([text("--approve-for-me"), text("-s"), text(Sandbox::WorkspaceWrite.name())]),
+                    // codex-cli 0.169.0 refuses `-s` next to `--approve-for-me`, which picks the workspace-write sandbox itself.
+                    Approval::ApproveForMe => args.push(text("--approve-for-me")),
                     approval => args.extend([text("-s"), text(sandbox.name()), text("-a"), text(approval.name())]),
                 }
             }
@@ -280,7 +281,7 @@ pub fn windows_build() -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::access::ClaudeMode;
+    use crate::agent::access::{ClaudeMode, Sandbox};
 
     const ID: &str = "00000000-0000-4000-8000-000000000001";
 
@@ -470,7 +471,7 @@ mod tests {
         // Approve for me has no `-a`, and always runs in workspace-write.
         for sandbox in [Sandbox::WorkspaceWrite, Sandbox::ReadOnly] {
             let access = codex(sandbox, Approval::ApproveForMe);
-            let want = strings(&["--no-alt-screen", "--no-daemon", "--approve-for-me", "-s", "workspace-write"]);
+            let want = strings(&["--no-alt-screen", "--no-daemon", "--approve-for-me"]);
             assert_eq!(build(Engine::Codex, StartMode::Fresh, &access), [want.clone(), vec![prompt.clone()]].concat());
             assert_eq!(build(Engine::Codex, StartMode::Resume, &access), [strings(&["resume", "--last"]), want].concat());
         }

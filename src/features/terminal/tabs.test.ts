@@ -19,11 +19,14 @@ describe("terminal tabs", () => {
   });
 
   it("labels and lists the terminal tabs", () => {
-    const codex = session({ adapter: "codex", task: { kind: "work", project: "p", repo: "C:\\src\\ingestion-service" } });
+    const codex = session({ adapter: "codex", task: { kind: "work", project: "p", repo: "C:\\src\\ingestion-service" }, noTask: true });
     expect(tabLabel(codex)).toBe("Codex · ingestion-service");
-    expect(tabLabel(session({ task: { kind: "work", project: "p", repo: "/src/app/" } }))).toBe("Claude Code · app");
+    expect(tabLabel(session({ task: { kind: "work", project: "p", repo: "/src/app/" }, noTask: true }))).toBe("Claude Code · app");
     expect(tabLabel({ ...codex, worktree: null })).toBe(tabLabel(codex));
-    // The user's name wins over the CLI's title, which wins over the default.
+    // With a task, the task names the tab until the CLI gives its own title.
+    expect(tabLabel({ ...codex, noTask: false, title: "Fix the login redirect" })).toBe("Fix the login redirect");
+    expect(tabLabel({ ...codex, noTask: false, title: " " })).toBe("Codex · ingestion-service");
+    // The user's name wins over the CLI's title, which wins over the task and the default.
     expect(tabLabel({ ...codex, cliTitle: "Fix the importer" })).toBe("Fix the importer");
     expect(tabLabel({ ...codex, cliTitle: "Fix the importer", name: "Importer" })).toBe("Importer");
     expect(tabLabel({ ...codex, name: "  ", cliTitle: " " })).toBe("Codex · ingestion-service");
@@ -81,5 +84,17 @@ describe("terminal tabs", () => {
       .toEqual({ tone: "failed", text: "Session failed · The program exited with code 1." });
     expect(statusLine(session({ status: "ended", worktree: null }), false).text).toBe("Session ended · worktree removed");
     expect(statusLine(session({ status: "failed", error: "x", worktree: null }), false).text).toBe("Session failed · x · worktree removed");
+  });
+});
+
+describe("whereLabel", () => {
+  it("names the branch, the checkout or the picked folder", async () => {
+    const { whereLabel } = await import("./tabs");
+    const base = session({});
+    expect(whereLabel(base)).toBe("hivemind/x");
+    const direct = { path: "C:/src/app", repo: "C:/src/app", headSha: null, startTree: null };
+    expect(whereLabel({ ...base, worktree: null, direct })).toBe("your checkout");
+    expect(whereLabel({ ...base, worktree: null, direct: { ...direct, path: "C:/Users/me/Notes" }, task: { kind: "folder", path: "C:/Users/me/Notes" } })).toBe("Notes");
+    expect(whereLabel({ ...base, worktree: null })).toBe("worktree removed");
   });
 });

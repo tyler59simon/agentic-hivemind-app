@@ -12,9 +12,16 @@ export function defaultLabel(s: SessionInfo): string {
   return `${engineName(s.adapter)} · ${repo}`;
 }
 
-/** The tab's text: the name the user gave, else the CLI's own title, else `defaultLabel`. */
+/** The tab's text: the name the user gave, else the CLI's own title, else the task, else `defaultLabel`. */
 export function tabLabel(s: SessionInfo): string {
-  return s.name?.trim() || s.cliTitle?.trim() || defaultLabel(s);
+  return s.name?.trim() || s.cliTitle?.trim() || (s.noTask ? "" : s.title.trim()) || defaultLabel(s);
+}
+
+/** Where the session works, in a few words: its branch, "your checkout", the picked folder's name, or a removed worktree. */
+export function whereLabel(s: SessionInfo): string {
+  if (s.worktree) return s.worktree.branch;
+  if (s.direct) return s.task.kind === "work" ? "your checkout" : repoName(s.direct.path);
+  return "worktree removed";
 }
 
 /** The tab strip, oldest first: the project's terminal sessions that are idle or running, plus `selected` (whatever its project or status)

@@ -20,7 +20,7 @@ describe("runningSummary", () => {
   it("lists running terminals and chat turns", () => {
     const sessions = [session({ id: "t", interface: "terminal" }), session({ id: "c", title: "Explain billing" }), session({ id: "w", status: "waiting", title: "Ask" }), session({ id: "d", status: "succeeded" })];
     const lines = runningSummary([term({ id: "t", sessionId: "t" }), term({ id: "login-codex", sessionId: null, engine: "codex" })], sessions);
-    expect(lines).toEqual(["Claude Code · paystream (terminal)", "Codex sign-in (terminal)", "Chat turn · Explain billing", "Chat turn · Ask"]);
+    expect(lines).toEqual(["Fix login (terminal)", "Codex sign-in (terminal)", "Chat turn · Explain billing", "Chat turn · Ask"]);
   });
 
   it("lists a running PowerShell tab by its label and folder", () => {
