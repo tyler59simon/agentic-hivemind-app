@@ -6,6 +6,8 @@ mod drafts;
 mod git;
 mod review;
 mod settings;
+#[allow(dead_code)] // used from commit 5
+mod term;
 mod watcher;
 mod worktree;
 
