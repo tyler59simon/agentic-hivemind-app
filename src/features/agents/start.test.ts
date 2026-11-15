@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentModels, SessionInfo } from "../../lib/agent";
-import { accessLines, buildStart, defaultAccess, effortOptions, terminalsIn, withApproval, type StartForm } from "./start";
+import { accessLines, buildStart, conversationAction, defaultAccess, effortOptions, historyTarget, terminalsIn, withApproval, type StartForm } from "./start";
 
 const form = (o: Partial<StartForm> = {}): StartForm => ({
   engine: "claude", face: "terminal", where: "checkout", project: "paystream", repo: "C:/src/app", branch: "main", change: null, folder: null,
@@ -93,5 +93,28 @@ describe("terminalsIn", () => {
     const all = [hit, s({ id: "running", status: "running" }), s({ id: "ended", status: "ended" }), s({ id: "chat", interface: "chat" }),
       s({ id: "worktree", direct: null }), s({ id: "elsewhere", direct: { path: "C:/other", repo: null, headSha: null, startTree: null } })];
     expect(terminalsIn(all, "c:/src/app/").map((x) => x.id)).toEqual(["hit", "running"]);
+  });
+});
+
+describe("historyTarget", () => {
+  const at = (o: Partial<Parameters<typeof historyTarget>[0]>) => historyTarget({ where: "checkout", project: "paystream", repo: "C:/src/app", folder: null, ...o });
+
+  it("looks in the project checkout or in the picked folder", () => {
+    expect(at({})).toEqual({ checkout: { project: "paystream", repo: "C:/src/app" } });
+    expect(at({ where: "folder", folder: "C:/Notes" })).toEqual({ folder: "C:/Notes" });
+    expect(at({ project: null, where: "folder", folder: "C:/Notes" })).toEqual({ folder: "C:/Notes" });
+  });
+
+  it("has nothing to list for a new worktree, no folder or no repository", () => {
+    expect(at({ where: "worktree" })).toBeNull();
+    expect(at({ where: "folder" })).toBeNull();
+    expect(at({ repo: "" })).toBeNull();
+  });
+});
+
+describe("conversationAction", () => {
+  it("opens a conversation Hivemind already holds and imports the others", () => {
+    expect(conversationAction({ hivemindSession: "abc" })).toBe("open");
+    expect(conversationAction({ hivemindSession: null })).toBe("import");
   });
 });

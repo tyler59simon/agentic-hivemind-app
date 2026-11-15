@@ -379,6 +379,60 @@ async fn agent_usage(state: State<'_, AppState>, session_id: String) -> Result<t
     blocking(move || terminals.usage(&session_id)).await
 }
 
+/// The conversations a CLI saved for a project checkout or a picked folder, newest 50, including ones started outside
+/// Hivemind. The folder comes from the registry or the picker's list, never from a path the webview wrote.
+#[tauri::command]
+async fn cli_history(state: State<'_, AppState>, engine: agent::Engine, target: term::ShellTarget) -> Result<Vec<term::history::Conversation>, String> {
+    let (terminals, agents, bridge, path) = (state.terminals.clone(), state.agents.clone(), state.bridge.clone(), state.settings_path.clone());
+    blocking(move || {
+        let cwd = history_folder(&target, &agents, &bridge, &settings::load(&path))?;
+        Ok(terminals.history(engine, &cwd))
+    })
+    .await
+}
+
+fn history_folder(target: &term::ShellTarget, agents: &agent::Manager, bridge: &bridge::Bridge, saved: &settings::Settings) -> Result<PathBuf, String> {
+    term::shell_cwd(target, agents, saved, |project, repo| agent::scope::project_repo(&git::project_entry(bridge, project)?, repo))
+}
+
+/// Make a Hivemind terminal session of a conversation a CLI saved, in the same folder. It opens in Resume mode.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // one webview argument per setting of the Start screen
+async fn agent_import(
+    state: State<'_, AppState>,
+    engine: agent::Engine,
+    cli_id: String,
+    target: term::ShellTarget,
+    access: Option<agent::access::Access>,
+    model: Option<String>,
+    effort: Option<String>,
+    confirmed_risky: Option<bool>,
+) -> Result<agent::SessionInfo, String> {
+    let (terminals, agents, bridge, path) = (state.terminals.clone(), state.agents.clone(), state.bridge.clone(), state.settings_path.clone());
+    let (worktrees, terminal_dir) = (state.worktrees_dir.clone(), state.terminals_dir.clone());
+    blocking(move || {
+        agent::import_task(&cli_id, &target)?;
+        let saved = settings::load(&path);
+        let cwd = history_folder(&target, &agents, &bridge, &saved)?;
+        let title = terminals
+            .history(engine, &cwd)
+            .into_iter()
+            .find(|conversation| conversation.id == cli_id)
+            .map(|conversation| conversation.title)
+            .ok_or("That conversation is not saved for this folder")?;
+        let options = agent::StartOptions { engine, access, model, effort, confirmed_risky: confirmed_risky.unwrap_or(false), ..Default::default() };
+        agent::import_session(&agents, &bridge, &saved, &worktrees, &terminal_dir, &cli_id, &title, &target, options)
+    })
+    .await
+}
+
+/// Whether a CLI is signed in, from its own status command. Never reads or returns credentials.
+#[tauri::command]
+async fn agent_auth_status(state: State<'_, AppState>, engine: agent::Engine) -> Result<term::auth::AuthStatus, String> {
+    let path = state.settings_path.clone();
+    blocking(move || Ok(term::auth::status(engine, &settings::load(&path)))).await
+}
+
 fn raw(output: Channel<InvokeResponseBody>) -> term::Output {
     Arc::new(move |bytes| output.send(InvokeResponseBody::Raw(bytes)).is_ok())
 }
@@ -637,7 +691,7 @@ pub fn run() {
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, repo_branches,
             agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_request_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
-            system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget
+            system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

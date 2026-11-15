@@ -2,6 +2,7 @@
 // Rust derives the working folders and the allowed actions from the task; the webview passes the task and the prompt.
 import { invoke } from "@tauri-apps/api/core";
 import type { Usage } from "../features/terminal/usage";
+import type { ShellTarget } from "./term";
 
 export type AgentTask =
   | { kind: "system_passport"; slug: string }
@@ -135,6 +136,18 @@ export const agentSessions = () => invoke<SessionInfo[]>("agent_sessions");
 export const agentTranscript = (sessionId: string) => invoke<SeqEvent[]>("agent_transcript", { sessionId });
 /** A terminal session's tokens, cost and plan limits, read from its CLI's own file. */
 export const agentUsage = (sessionId: string) => invoke<Usage>("agent_usage", { sessionId });
+/** A conversation a CLI saved for a folder. `hivemindSession` is a Hivemind session that already holds it. */
+export interface CliConversation { id: string; title: string; updatedAt: number; hivemindSession: string | null }
+/** Where to look for saved conversations, or import them into: a project's checkout or a folder from the picker. */
+export type HistoryTarget = Exclude<ShellTarget, { session: string }>;
+/** The newest 50 conversations the CLI saved for a folder, including ones started outside Hivemind. */
+export const cliHistory = (engine: Engine, target: HistoryTarget) => invoke<CliConversation[]>("cli_history", { engine, target });
+/** Make a terminal session of a saved conversation; it opens in Resume mode. */
+export const agentImport = (a: { engine: Engine; cliId: string; target: HistoryTarget; access?: Access; model?: string; effort?: string; confirmedRisky?: boolean }) =>
+  invoke<SessionInfo>("agent_import", a);
+/** What the CLI's own status command says; `signedIn` is null when it could not be told. `detail` is a plan or method label. */
+export interface AuthStatus { signedIn: boolean | null; detail: string | null }
+export const agentAuthStatus = (engine: Engine) => invoke<AuthStatus>("agent_auth_status", { engine });
 export const agentSession = (sessionId: string, fromSeq = 0) => invoke<SessionLog>("agent_session", { sessionId, fromSeq });
 
 export const reviewFiles = (sessionId: string) => invoke<FileChange[]>("review_files", { sessionId });

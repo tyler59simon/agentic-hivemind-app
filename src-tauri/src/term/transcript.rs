@@ -13,12 +13,12 @@ use std::collections::HashMap;
 const SUMMARY: usize = 300;
 const RESULT: usize = 500;
 
-fn text_of<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+pub(super) fn text_of<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value.get(key).and_then(Value::as_str)
 }
 
 /// A block the CLI injected into a user message: `<tag>` first and `</tag>` last.
-fn injected(text: &str) -> bool {
+pub(super) fn injected(text: &str) -> bool {
     let text = text.trim();
     let Some(rest) = text.strip_prefix('<') else { return false };
     let Some(end) = rest.find('>') else { return false };
@@ -43,7 +43,7 @@ fn stamp(record: &Value) -> u64 {
 }
 
 /// The text of a message's content: a string, or the `text` blocks of a list.
-fn message_text(content: Option<&Value>, kinds: &[&str]) -> String {
+pub(super) fn message_text(content: Option<&Value>, kinds: &[&str]) -> String {
     match content {
         Some(Value::String(text)) => text.clone(),
         Some(Value::Array(blocks)) => blocks

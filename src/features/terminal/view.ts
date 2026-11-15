@@ -15,3 +15,7 @@ export function viewOf(chosen: View | undefined, session: Pick<SessionInfo, "sta
 
 /** The `refetchInterval` of the transcript query. */
 export const pollMs = (view: View, running: boolean): number | false => (view === "transcript" && running ? TRANSCRIPT_POLL_MS : false);
+
+/** How an agent tab starts its program the first time it shows: a resume for an imported conversation, else a fresh start. */
+export const startModeOf = (session: Pick<SessionInfo, "status" | "engineSession">): "fresh" | "resume" | null =>
+  session.status !== "idle" ? null : session.engineSession ? "resume" : "fresh";

@@ -75,12 +75,12 @@ fn plain(path: &str) -> String {
     if cfg!(windows) { text.to_lowercase() } else { text }
 }
 
-fn same_folder(a: &str, b: &str) -> bool {
+pub(super) fn same_folder(a: &str, b: &str) -> bool {
     plain(a) == plain(b)
 }
 
 /// The rollout folders `YYYY/MM/DD` under `~/.codex/sessions`, with their day number (UTC reading of the folder's date).
-fn date_folders(home: &Path) -> Vec<(i64, PathBuf)> {
+pub(super) fn date_folders(home: &Path) -> Vec<(i64, PathBuf)> {
     let number = |path: &Path| path.file_name()?.to_str()?.parse::<i64>().ok();
     let children = |path: &Path| -> Vec<(i64, PathBuf)> {
         std::fs::read_dir(path)
@@ -103,13 +103,13 @@ fn date_folders(home: &Path) -> Vec<(i64, PathBuf)> {
     found
 }
 
-fn rollouts(dir: &Path) -> impl Iterator<Item = PathBuf> {
+pub(super) fn rollouts(dir: &Path) -> impl Iterator<Item = PathBuf> {
     std::fs::read_dir(dir).into_iter().flatten().flatten().map(|entry| entry.path()).filter(|path| {
         path.file_name().and_then(|n| n.to_str()).is_some_and(|name| name.starts_with("rollout-") && name.ends_with(".jsonl"))
     })
 }
 
-fn first_line(path: &Path) -> Option<Value> {
+pub(super) fn first_line(path: &Path) -> Option<Value> {
     let mut line = String::new();
     std::io::BufReader::new(std::fs::File::open(path).ok()?).read_line(&mut line).ok()?;
     serde_json::from_str(&line).ok()
@@ -172,6 +172,20 @@ pub fn codex_title(home: &Path, thread_id: &str) -> Option<String> {
         .filter_map(|value| value.get("thread_name").and_then(Value::as_str).map(|name| name.trim().to_string()))
         .next_back()
         .filter(|name| !name.is_empty())
+}
+
+/// What `~/.codex/session_index.jsonl` says about each thread: its name and when it was last updated (ms). The last
+/// line for an id wins.
+pub fn codex_index(home: &Path) -> std::collections::HashMap<String, (Option<String>, Option<u64>)> {
+    let mut index = std::collections::HashMap::new();
+    let Ok(bytes) = std::fs::read(home.join(".codex").join("session_index.jsonl")) else { return index };
+    for value in String::from_utf8_lossy(&bytes).lines().filter_map(|line| serde_json::from_str::<Value>(line).ok()) {
+        let Some(id) = value.get("id").and_then(Value::as_str) else { continue };
+        let name = value.get("thread_name").and_then(Value::as_str).map(|name| name.trim().to_string()).filter(|name| !name.is_empty());
+        let at = value.get("updated_at").and_then(Value::as_str).and_then(parse_iso_ms);
+        index.insert(id.to_string(), (name, at));
+    }
+    index
 }
 
 #[cfg(test)]

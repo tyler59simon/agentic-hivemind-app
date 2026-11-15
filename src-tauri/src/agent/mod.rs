@@ -1554,6 +1554,44 @@ pub fn start_task(
     started
 }
 
+/// The task an imported CLI conversation runs under: the project checkout or a folder from the picker. A session target
+/// is refused (nothing is imported into a session's own folder), and so is an id that is not a plain conversation id.
+pub fn import_task(cli_id: &str, target: &crate::term::ShellTarget) -> Result<AgentTask, String> {
+    use crate::term::ShellTarget;
+    if !crate::term::cli_files::valid_id(cli_id) {
+        return Err("That is not a conversation id".into());
+    }
+    match target {
+        ShellTarget::Checkout { project, repo } => Ok(AgentTask::Work { project: project.clone(), repo: repo.clone(), branch: None, change: None }),
+        ShellTarget::Folder(path) => Ok(AgentTask::Folder { path: path.clone() }),
+        ShellTarget::Session(_) => Err("Pick a project or a folder".into()),
+    }
+}
+
+/// Make a terminal session of a conversation a CLI saved: a direct session with no task, bound to the conversation and
+/// titled with the CLI's title. The terminal opens it in Resume mode. `options` carries the access, model and effort.
+#[allow(clippy::too_many_arguments)] // the same independent parts as start_task, plus the conversation
+pub fn import_session(
+    manager: &Manager,
+    bridge: &Bridge,
+    saved: &Settings,
+    worktrees: &Path,
+    terminals: &Path,
+    cli_id: &str,
+    title: &str,
+    target: &crate::term::ShellTarget,
+    options: StartOptions,
+) -> Result<SessionInfo, String> {
+    let task = import_task(cli_id, target)?;
+    let options = StartOptions { interface: Interface::Terminal, place: Some(Place::Checkout), ..options };
+    let started = start_task(manager, bridge, saved, worktrees, terminals, task, "", options)?;
+    manager.amend(&started.id, |info| {
+        info.engine_session = Some(cli_id.to_string());
+        info.title = title.to_string();
+        info.cli_title = Some(title.to_string());
+    })
+}
+
 /// Send a message to a session, starting a process for it again when it has none.
 pub fn send_task(
     manager: &Manager,
@@ -2980,6 +3018,44 @@ mod tests {
         assert_eq!(chat.unwrap_err(), "A session in another folder runs in the terminal.");
         let task = start(&spelled, "Do it", terminal_options(Engine::Claude)).unwrap();
         assert_eq!((task.title.as_str(), task.no_task), ("Do it", false));
+    }
+
+    #[test]
+    fn importing_a_cli_conversation_checks_the_id_and_the_target() {
+        use crate::term::ShellTarget;
+        let good = "0ea3c5d4-1111-4222-8333-444455556666";
+        let folder = ShellTarget::Folder("C:/picked".into());
+        for bad in ["", "../x", "a/b", "zz", "ab.jsonl"] {
+            assert_eq!(import_task(bad, &folder).unwrap_err(), "That is not a conversation id", "{bad}");
+        }
+        assert_eq!(import_task(good, &folder).unwrap(), AgentTask::Folder { path: "C:/picked".into() });
+        let checkout = ShellTarget::Checkout { project: "paystream".into(), repo: "C:/repo".into() };
+        assert_eq!(import_task(good, &checkout).unwrap(), AgentTask::Work { project: "paystream".into(), repo: "C:/repo".into(), branch: None, change: None });
+        assert!(import_task(good, &ShellTarget::Session("x".into())).is_err());
+
+        // A folder the picker never gave is refused before anything is made.
+        let rig = Rig::new("import", Fake::scripted("import", &[]));
+        let picked = rig.dir.join("picked");
+        let elsewhere = rig.dir.join("elsewhere");
+        std::fs::create_dir_all(&picked).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let harmless = if cfg!(windows) { std::env::var("ComSpec").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into()) } else { "/bin/sh".into() };
+        let saved = Settings { claude_path: Some(harmless), other_folders: Some(vec![picked.display().to_string()]), ..Default::default() };
+        let bridge = Bridge::new(crate::settings::resolve(&saved, |_| None));
+        let (worktrees, terminals) = (rig.dir.join("worktrees"), rig.dir.join("terminals"));
+        let import = |path: &Path, id: &str| {
+            import_session(&rig.manager, &bridge, &saved, &worktrees, &terminals, id, "Fix the build", &ShellTarget::Folder(path.display().to_string()), terminal_options(Engine::Claude))
+        };
+        assert_eq!(import(&elsewhere, good).unwrap_err(), "That folder was not chosen with the folder picker");
+        assert_eq!(import(&picked, "../x").unwrap_err(), "That is not a conversation id");
+        assert!(rig.manager.sessions().is_empty());
+        if cfg!(windows) {
+            let info = import(&picked, good).unwrap();
+            assert_eq!((info.engine_session.as_deref(), info.title.as_str(), info.cli_title.as_deref()), (Some(good), "Fix the build", Some("Fix the build")));
+            assert!(info.no_task && info.worktree.is_none() && info.interface == Interface::Terminal && info.status == Status::Idle);
+            assert_eq!(info.direct.map(|direct| direct.path), Some(picked.display().to_string()));
+            assert_eq!(rig.manager.info(&info.id).unwrap().engine_session.as_deref(), Some(good));
+        }
     }
 
     #[test]

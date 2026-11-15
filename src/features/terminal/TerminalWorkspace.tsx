@@ -26,7 +26,7 @@ import { isShellId, NO_SHELL_PLACE, shellLabel, shellPlaces, shellStatus, shellT
 import { statusLine, tabLabel, terminalTabs, whereLabel } from "./tabs";
 import { TerminalView } from "./TerminalView";
 import { budgetLevel, budgetMessage, usagePollMs, usageText } from "./usage";
-import { pollMs, viewOf, type View } from "./view";
+import { pollMs, startModeOf, viewOf, type View } from "./view";
 
 const baseName = (path: string) => path.split(/[\\/]/).pop() || path;
 
@@ -241,7 +241,7 @@ function PaneView({ index, tabs, activeId, views, onView, focused, split, over, 
           <>
             {session && view === "transcript" ? <SessionTranscript id={session.id} running={running} /> : shell
               ? <TerminalView key={shell.id} id={shell.id} sessionId={null} engine={null} start={null} shell label={shellLabel(shell)} focused={focused} />
-              : session && <TerminalView key={session.id} id={session.id} sessionId={session.id} engine={engineOf(session)} start={session.status === "idle" ? "fresh" : null} label={tabLabel(session)} focused={focused} />}
+              : session && <TerminalView key={session.id} id={session.id} sessionId={session.id} engine={engineOf(session)} start={startModeOf(session)} label={tabLabel(session)} focused={focused} />}
             <div className="term-status" role="status">
               {ended && session && (
                 <>

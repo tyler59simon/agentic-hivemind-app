@@ -1,4 +1,6 @@
+pub mod auth;
 pub mod cli_files;
+pub mod history;
 pub mod launch;
 pub mod pricing;
 pub mod pty;
@@ -229,6 +231,8 @@ impl Manager {
         // Also before the lock: it reads the CLI's files.
         let thread = match &start {
             Some((StartMode::Resume, _)) if engine == Engine::Codex => inner.known_thread(&info),
+            // An imported conversation: Claude resumes it by its own id, not by the session's.
+            Some((StartMode::Resume, _)) => info.engine_session.clone(),
             _ => None,
         };
         // Held from the limit check until the new entry is inserted, so an exit cannot be handled before its entry exists.
@@ -346,7 +350,7 @@ impl Manager {
         }
         let cwd = session_cwd(&info).map(|path| path.display().to_string()).unwrap_or_default();
         let path = match engine {
-            Engine::Claude => cli_files::claude_transcript(&inner.home, &cwd, session_id),
+            Engine::Claude => cli_files::claude_transcript(&inner.home, &cwd, history::conversation_id(engine, &info).unwrap_or(session_id)),
             Engine::Codex => info.engine_session.as_deref().and_then(|id| cli_files::codex_rollout(&inner.home, id)),
         };
         Ok(path.map(|path| (engine, path)))
@@ -378,6 +382,15 @@ impl Manager {
                 counter.finish()
             }
         })
+    }
+
+    /// The conversations `engine` saved for `cwd`, newest first, with the Hivemind sessions that already hold them.
+    pub fn history(&self, engine: Engine, cwd: &Path) -> Vec<history::Conversation> {
+        let inner = &self.inner;
+        if inner.home.as_os_str().is_empty() {
+            return vec![];
+        }
+        history::list(&inner.home, engine, cwd, &inner.agents.sessions())
     }
 
     /// `term_login`.
@@ -654,7 +667,8 @@ impl Inner {
         let (thread, title) = match engine {
             Engine::Claude => {
                 let cwd = session_cwd(&info).map(|path| path.display().to_string()).unwrap_or_default();
-                (None, cli_files::claude_transcript(&self.home, &cwd, session_id).and_then(|path| cli_files::claude_title(&path)))
+                let conversation = history::conversation_id(engine, &info).unwrap_or(session_id);
+                (None, cli_files::claude_transcript(&self.home, &cwd, conversation).and_then(|path| cli_files::claude_title(&path)))
             }
             Engine::Codex => {
                 let thread = info.engine_session.clone().or_else(|| self.find_thread(&info, since));

@@ -149,7 +149,8 @@ pub fn session_args(
                 args.extend(deny.iter().cloned());
             }
             args.push(text(if mode == StartMode::Fresh { "--session-id" } else { "--resume" }));
-            args.push(text(session_id));
+            // A resume continues the imported conversation when there is one; a new conversation is the session's own id.
+            args.push(text(if mode == StartMode::Resume { thread.unwrap_or(session_id) } else { session_id }));
             if let Some(model) = model {
                 args.extend([text("--model"), text(model)]);
             }
@@ -466,6 +467,20 @@ mod tests {
         }
         assert_eq!(args(Engine::Codex, fresh, &read_only(), None, None, &deny), args(Engine::Codex, fresh, &read_only(), None, None, &none));
         assert_eq!(args(Engine::Codex, resume, &writes, None, None, &deny), args(Engine::Codex, resume, &writes, None, None, &none));
+    }
+
+    #[test]
+    fn claude_resumes_an_imported_conversation_by_its_own_id() {
+        let ctx = Path::new("C:/data/terminals/ID/context");
+        let access = Access::from_policy(Engine::Claude, PolicyMode::Ask);
+        let args = |mode, thread| session_args(Engine::Claude, mode, &access, None, None, &[], None, ID, ctx, true, thread);
+        let imported = "0ea3c5d4-1111-4222-8333-444455556666";
+        let flag = |args: &Vec<String>, name: &str| args.iter().position(|a| a == name).map(|at| args[at + 1].clone());
+        assert_eq!(flag(&args(StartMode::Resume, Some(imported)), "--resume").as_deref(), Some(imported));
+        assert_eq!(flag(&args(StartMode::Resume, None), "--resume").as_deref(), Some(ID));
+        // A new conversation always takes the session's own id.
+        let fresh = args(StartMode::Fresh, Some(imported));
+        assert_eq!((flag(&fresh, "--session-id").as_deref(), flag(&fresh, "--resume")), (Some(ID), None));
     }
 
     #[test]
