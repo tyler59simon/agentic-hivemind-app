@@ -85,3 +85,22 @@ describe("sane", () => {
     expect(sane(null)).toBe(EMPTY);
   });
 });
+
+describe("shell ids", () => {
+  const withShell: Layout = { split: false, panes: [["a", "shell-1"], []], active: ["shell-1", null], focus: 0 };
+  it("keeps a running shell next to sessions when both lists are given", () => {
+    expect(reconcile(withShell, ["a", "shell-1"])).toBe(withShell);
+  });
+  it("drops a shell that is no longer listed and adds a new one to the focused pane", () => {
+    expect(reconcile(withShell, ["a"])).toMatchObject({ panes: [["a"], []], active: ["a", null] });
+    expect(reconcile(withShell, ["a", "shell-1", "shell-2"]).panes[0]).toEqual(["a", "shell-1", "shell-2"]);
+  });
+  it("moves and closes a shell tab like any other", () => {
+    const split: Layout = { ...withShell, split: true };
+    expect(moveTab(split, "shell-1", 1)).toMatchObject({ panes: [["a"], ["shell-1"]], active: ["a", "shell-1"] });
+    expect(closeTab(split, "shell-1")).toMatchObject({ panes: [["a"], []], active: ["a", null] });
+  });
+  it("accepts a stored layout with shell ids", () => {
+    expect(sane(withShell)).toEqual(withShell);
+  });
+});

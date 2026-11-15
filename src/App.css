@@ -601,6 +601,11 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .term-view { display: grid; grid-template-columns: minmax(0, 1fr) minmax(15rem, 21rem); flex: 1; min-height: 0; border-top: 1px solid var(--border); }
 .term-main { display: flex; flex-direction: column; gap: .5rem; min-width: 0; min-height: 0; padding: .9rem 1.4rem 0 0; }
 .term-tabs { padding: 0; border-bottom: none; }
+.term-bar { display: flex; align-items: center; gap: .35rem; min-width: 0; }
+.term-bar .term-tabs { flex: 0 1 auto; min-width: 0; }
+.term-bar .menu-list { min-width: 14rem; }
+.term-bar .menu-list button:disabled { opacity: .55; cursor: default; }
+.term-view.no-rail { grid-template-columns: minmax(0, 1fr); }
 .term-hint { margin: 0; padding: .4rem .8rem; border-left: 4px solid var(--warn-fg); background: var(--bg-alt); border-radius: .3rem; font-size: .93rem; }
 .term-box { position: relative; flex: 1; min-height: 12rem; display: flex; flex-direction: column; border: 1px solid var(--border-strong); border-radius: .6rem; background: var(--bg-code); overflow: hidden; }
 .term-box:focus-within { border-color: var(--accent); }

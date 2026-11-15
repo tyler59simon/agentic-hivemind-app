@@ -4,7 +4,7 @@ import type { Engine } from "../../lib/agent";
  *  image-paste key (the CLI reads the Windows clipboard itself), `null` does nothing. */
 export type PasteAction = "xterm" | { send: string } | null;
 
-export function pasteAction(hasText: boolean, engine: Engine): PasteAction {
+export function pasteAction(hasText: boolean, engine: Engine | null): PasteAction {
   if (hasText) return "xterm";
   if (engine === "claude") return { send: "\x1bv" };
   if (engine === "codex") return { send: "\x16" };
