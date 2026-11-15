@@ -289,7 +289,7 @@ pub fn staleness(bridge: &Bridge, sessions: &[crate::agent::SessionInfo], slug: 
     let current = sessions.iter().find(|s| {
         matches!(&s.task, AgentTask::SystemPassport { slug: of } if of == slug)
             && s.status == Status::Succeeded
-            && s.source_sha.is_some()
+            && s.source_sha.as_deref().is_some_and(crate::git::is_sha)
             && s.ended_at.is_some_and(|at| at >= generated)
     });
     if let Some(sha) = current.and_then(|s| s.source_sha.as_deref())
