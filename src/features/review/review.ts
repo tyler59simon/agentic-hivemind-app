@@ -17,8 +17,26 @@ export function sessionHeading(info: SessionInfo, display?: string): string {
 
 /** The sessions the Code section lists: edits not yet approved or dismissed, plus the one the route names. */
 export function reviewSessions(all: SessionInfo[], project: string | undefined, routed: string | undefined): SessionInfo[] {
-  return all.filter((s) => s.worktree && (s.id === routed
+  return all.filter((s) => (s.worktree || s.direct) && (s.id === routed
     || ((s.filesChanged?.files ?? 0) > 0 && s.review?.state !== "approved" && s.review?.state !== "dismissed" && (!project || s.project === project))));
+}
+
+export const DIRECT_NOTE = "These edits are in your real files. Commit them yourself.";
+export const EARLIER_NOTE = "Includes edits made before this session.";
+export const NOT_GIT_NOTE = "This folder is not a git repository; Hivemind cannot show what changed.";
+
+/** What a session in the user's own folder is compared with: the snapshot taken at its start (exact), `HEAD` when the
+ *  snapshot failed (earlier edits show too), or nothing for a folder git does not know. */
+export function directBase(info: SessionInfo): "snapshot" | "head" | "none" | null {
+  const d = info.direct;
+  return !d ? null : d.startTree ? "snapshot" : d.headSha ? "head" : "none";
+}
+
+/** Which decisions the Review bar offers. A session in the user's own folder has no branch to commit to or remove, and
+ *  no worktree to discard; Dismiss stays. */
+export function reviewActions(info: SessionInfo): { approve: boolean; requestChanges: boolean; discard: boolean; dismiss: boolean } {
+  const direct = !!info.direct;
+  return { approve: !direct, requestChanges: !direct, discard: !direct, dismiss: true };
 }
 
 /** Changes whenever the worktree's listing can have changed. */

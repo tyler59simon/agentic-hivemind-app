@@ -773,16 +773,22 @@ impl Inner {
         }
         let (inner, shared) = (self.clone(), shared.clone());
         std::thread::spawn(move || {
-            inner.refresh_files(&session_id);
+            inner.refresh_files(&session_id, false);
             shared.refreshing.store(false, Ordering::SeqCst);
         });
     }
 
-    /// Store the worktree's current totals when they differ from the stored ones. Errors leave the stored value.
-    fn refresh_files(&self, session_id: &str) {
+    /// Store the current totals when they differ from the stored ones. Errors leave the stored value. A session in the
+    /// user's own folder is looked at only when its program has ended (`ended`): that takes a snapshot of the folder, too
+    /// slow to repeat while the program runs.
+    fn refresh_files(&self, session_id: &str, ended: bool) {
         let Ok(info) = self.agents.info(session_id) else { return };
-        let Some(tree) = info.worktree.as_ref() else { return };
-        let Ok(files) = worktree::changes(tree) else { return };
+        let files = match (&info.worktree, &info.direct) {
+            (Some(tree), _) => worktree::changes(tree),
+            (None, Some(direct)) if ended => crate::review::direct_files_now(direct),
+            _ => return,
+        };
+        let Ok(files) = files else { return };
         let new = worktree::totals(&files);
         if new == info.files_changed.unwrap_or_default() {
             return;
@@ -799,7 +805,7 @@ impl Inner {
     /// follows the removal cannot be overwritten by this status.
     fn finish(&self, shared: &Shared, code: Option<u32>) {
         if let Some(session_id) = &shared.session_id {
-            self.refresh_files(session_id);
+            self.refresh_files(session_id, true);
             self.discover(session_id, shared.since, &shared.before);
         }
         let mut terms = self.terms.lock().unwrap();

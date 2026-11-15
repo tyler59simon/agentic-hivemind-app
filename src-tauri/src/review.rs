@@ -1,15 +1,20 @@
 //! Reviewing a work session's edits: the worktree and its base commits come from the session's stored details, never from
 //! the webview. It lists nothing itself: the listing is `crate::worktree::changes`.
+use crate::agent::direct::{self, Direct};
 use crate::agent::events::Status;
+use crate::agent::scope::{self, AgentTask};
 use crate::agent::{self, Manager, Review, ReviewState, SendOptions, SessionInfo};
 use crate::bridge::Bridge;
 use crate::git::{is_sha, run_captured};
 use crate::settings::Settings;
 use crate::worktree::{self, FileChange, Totals, Worktree};
 use serde::Serialize;
+use serde_json::Value;
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 pub const MAX_FILE: u64 = 2 * 1024 * 1024; // bytes, per side of a diff
 const SNIFF: usize = 8000; // bytes git looks at to call a file binary
@@ -18,6 +23,7 @@ const WRITE: Duration = Duration::from_secs(120);
 const NO_IDENTITY: &str = "Git has no author identity, so it cannot commit. Set one with: git config --global user.name \"Your Name\" and git config --global user.email \"you@example.com\". Then approve again.";
 const OUTPUT_LINES: usize = 20; // lines of a failed commit's output that are shown
 pub const REFRESH_CAP: usize = 20; // worktrees one review_refresh looks at
+const FRESH: Duration = Duration::from_secs(10); // how long a direct session's fresh snapshot is reused
 
 /// The two versions of one changed file.
 #[derive(Serialize, Debug, PartialEq)]
@@ -154,6 +160,118 @@ pub fn reset_to_base(tree: &Worktree) -> Result<(), String> {
     Ok(())
 }
 
+// ---- a session in the user's own folder (no worktree: the start snapshot is the base) ----
+
+const NOT_GIT: &str = "This folder is not a git repository; Hivemind cannot show what changed.";
+
+/// What `checked_direct` needs besides the session: the saved settings (the picked folders) and a lookup of a project's
+/// registry entry by slug.
+pub struct DirectEnv<'a> {
+    pub saved: &'a Settings,
+    pub registry: &'a dyn Fn(&str) -> Result<Value, String>,
+}
+
+/// The tree or commit a direct session's edits are compared with: its start snapshot, else `HEAD` at the start.
+fn direct_base(direct: &Direct) -> Option<&str> {
+    direct.start_tree.as_deref().or(direct.head_sha.as_deref())
+}
+
+/// The session's folder, once it is known to still be one Hivemind may read: the project's registered repository (a
+/// session in the checkout) or one of the picked folders (a folder session), and the same one the session started in.
+fn checked_direct(info: &SessionInfo, env: &DirectEnv) -> Result<(PathBuf, Direct), String> {
+    let direct = info.direct.clone().ok_or("This session does not run in your own folder")?;
+    let allowed = match &info.task {
+        AgentTask::Work { project, repo, .. } => scope::project_repo(&(env.registry)(project)?, repo)
+            .map_err(|_| "This folder is no longer one of the project's repositories, so Hivemind will not read it".to_string())?,
+        AgentTask::Folder { path } => scope::other_folder(env.saved, path)
+            .map_err(|_| "This folder is no longer one of your other folders, so Hivemind will not read it".to_string())?,
+        AgentTask::SystemPassport { .. } => return Err("This session does not run in your own folder".into()),
+    };
+    if !scope::same_path(&allowed.to_string_lossy(), &direct.path) {
+        return Err("The session's folder is not the one its project or folder entry names".into());
+    }
+    if [&direct.start_tree, &direct.head_sha].into_iter().flatten().any(|rev| !is_sha(rev)) {
+        return Err("The session's start point is not a commit or tree id".into());
+    }
+    let dir = PathBuf::from(&direct.path);
+    if !dir.is_dir() {
+        return Err(format!("The session's folder is missing: {}", direct.path));
+    }
+    Ok((dir, direct))
+}
+
+/// What the files of `dir` hold now, as a tree. Reused for `FRESH`, so the file list and each file's diff do not
+/// snapshot again per click. The commands run it off the UI thread.
+fn fresh_tree(id: &str, dir: &Path) -> Result<String, String> {
+    static CACHE: OnceLock<Mutex<HashMap<String, (Instant, String)>>> = OnceLock::new();
+    let mut cache = CACHE.get_or_init(Mutex::default).lock().unwrap_or_else(|e| e.into_inner());
+    let key = format!("{id}|{}", dir.display());
+    if let Some((_, tree)) = cache.get(&key).filter(|(at, _)| at.elapsed() < FRESH) {
+        return Ok(tree.clone());
+    }
+    let tree = direct::snapshot(dir)?;
+    cache.retain(|_, (at, _)| at.elapsed() < FRESH);
+    cache.insert(key, (Instant::now(), tree.clone()));
+    Ok(tree)
+}
+
+/// The files that differ between two trees (or a commit and a tree) of the repository `dir` is in.
+fn direct_changes(dir: &Path, from: &str, now: &str) -> Result<Vec<FileChange>, String> {
+    let numstat = run(dir, &["diff", "--numstat", "-z", "--no-renames", from, now], READ)?;
+    let names = run(dir, &["diff", "--name-status", "-z", "--no-renames", from, now], READ)?;
+    let mut files = worktree::parse_changes(&numstat, &names);
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(files)
+}
+
+/// What a direct session changed, from a snapshot taken now (not cached). No base (a folder git does not know) means no
+/// files. For the terminal, which stores the totals when a program ends.
+pub fn direct_files_now(direct: &Direct) -> Result<Vec<FileChange>, String> {
+    let Some(from) = direct_base(direct) else { return Ok(vec![]) };
+    let dir = Path::new(&direct.path);
+    direct_changes(dir, from, &direct::snapshot(dir)?)
+}
+
+enum Blob {
+    Text(String),
+    Binary,
+    TooLarge,
+}
+
+/// One file of a tree, read through git only (a link is its target text; nothing on disk is opened).
+fn blob(dir: &Path, spec: &str) -> Result<Blob, String> {
+    let size = run(dir, &["cat-file", "-s", spec], READ)?.trim().parse::<u64>().map_err(|_| "git did not print a size".to_string())?;
+    if size > MAX_FILE {
+        return Ok(Blob::TooLarge);
+    }
+    let text = run(dir, &["show", spec], READ)?;
+    Ok(if has_nul(text.as_bytes()) { Blob::Binary } else { Blob::Text(text) })
+}
+
+/// The two versions of one file a direct session changed. `path` must be one of `direct_changes`.
+fn direct_contents(dir: &Path, from: &str, now: &str, path: &str) -> Result<FileContents, String> {
+    let list = direct_changes(dir, from, now)?;
+    let entry = list.iter().find(|entry| entry.path == path).ok_or("That file is not one of this session's changes")?;
+    let (mut base, mut head, mut binary, mut too_large) = (None, None, entry.binary, false);
+    if !binary {
+        // A new file has no base side, a deleted one no head side.
+        for (side, missing, rev) in [(&mut base, "A", from), (&mut head, "D", now)] {
+            if entry.status == missing {
+                continue;
+            }
+            match blob(dir, &format!("{rev}:{}", entry.path))? {
+                Blob::Text(text) => *side = Some(text),
+                Blob::Binary => binary = true,
+                Blob::TooLarge => too_large = true,
+            }
+        }
+    }
+    if binary || too_large {
+        (base, head) = (None, None);
+    }
+    Ok(FileContents { base, head, binary, too_large })
+}
+
 // ---- the same for a session (what the commands call) ----
 
 /// The session's worktree, once it is known to be one of Hivemind's: base commits that are commit ids, and a folder that
@@ -210,8 +328,15 @@ fn reconcile(agents: &Manager, info: &SessionInfo, list: &[FileChange]) -> bool 
 }
 
 /// The files the session changed since its review base.
-pub fn files(agents: &Manager, worktrees_dir: &Path, id: &str) -> Result<Vec<FileChange>, String> {
+pub fn files(agents: &Manager, worktrees_dir: &Path, env: &DirectEnv, id: &str) -> Result<Vec<FileChange>, String> {
     let info = agents.info(id)?;
+    if info.direct.is_some() {
+        let (dir, direct) = checked_direct(&info, env)?;
+        let Some(from) = direct_base(&direct) else { return Ok(vec![]) };
+        let list = direct_changes(&dir, from, &fresh_tree(id, &dir)?)?;
+        reconcile(agents, &info, &list);
+        return Ok(list);
+    }
     let tree = checked_worktree(&info, worktrees_dir)?;
     let list = worktree::changes(&tree)?;
     reconcile(agents, &info, &list);
@@ -239,8 +364,13 @@ pub fn refresh(agents: &Manager, worktrees_dir: &Path) -> usize {
 }
 
 /// The two versions of one file the session changed.
-pub fn file(agents: &Manager, worktrees_dir: &Path, id: &str, path: &str) -> Result<FileContents, String> {
+pub fn file(agents: &Manager, worktrees_dir: &Path, env: &DirectEnv, id: &str, path: &str) -> Result<FileContents, String> {
     let info = agents.info(id)?;
+    if info.direct.is_some() {
+        let (dir, direct) = checked_direct(&info, env)?;
+        let from = direct_base(&direct).ok_or(NOT_GIT)?;
+        return direct_contents(&dir, from, &fresh_tree(id, &dir)?, path);
+    }
     file_contents(&checked_worktree(&info, worktrees_dir)?, path)
 }
 
@@ -495,15 +625,15 @@ mod tests {
             ..session(2, Some(second))
         };
         let (manager, seen) = rig.manager(&[SessionInfo { files_changed: Some(crate::worktree::Totals { files: 1, added: 1, removed: 0 }), ..stale }, approved]);
-        let list = files(&manager, &rig.worktrees, &id(1)).unwrap();
+        let list = files(&manager, &rig.worktrees, &no_direct(), &id(1)).unwrap();
         assert_eq!(paths(&list), ["a.txt", "new.txt"]);
         assert_eq!(manager.info(&id(1)).unwrap().files_changed.map(|totals| totals.files), Some(2));
         assert!(seen.lock().unwrap().iter().any(|emit| matches!(emit, Emit::SessionsChanged)));
-        assert_eq!(files(&manager, &rig.worktrees, &id(2)).unwrap().len(), 2);
+        assert_eq!(files(&manager, &rig.worktrees, &no_direct(), &id(2)).unwrap().len(), 2);
         let reopened = manager.info(&id(2)).unwrap();
         assert_eq!(reopened.review.map(|review| (review.state, review.commit)), Some((ReviewState::Pending, None)));
         assert_eq!(reopened.files_changed.map(|totals| totals.files), Some(2));
-        assert_eq!(files(&manager, &rig.worktrees, "../index").unwrap_err(), "Invalid session id");
+        assert_eq!(files(&manager, &rig.worktrees, &no_direct(), "../index").unwrap_err(), "Invalid session id");
     }
 
     #[test]
@@ -810,5 +940,137 @@ mod tests {
         assert_eq!(request_changes(&manager, &bridge, &saved, &id(1), "add a test"), Err("This session has ended".to_string()));
         assert_eq!(manager.info(&id(1)).unwrap().review, None);
         assert!(manager.reserve(&id(1)).is_ok());
+    }
+
+    // ---- sessions in the user's own folder ----
+
+    /// A direct session's environment with no project registry and no picked folders.
+    fn no_direct() -> DirectEnv<'static> {
+        fn nothing(_: &str) -> Result<Value, String> {
+            Err("no registry".into())
+        }
+        DirectEnv { saved: Box::leak(Box::new(Settings::default())), registry: &nothing }
+    }
+
+    fn registry_of(repo: &Path) -> impl Fn(&str) -> Result<Value, String> {
+        let repos = serde_json::json!({ "repos": [repo.display().to_string()] });
+        move |_| Ok(repos.clone())
+    }
+
+    fn checkout_session(n: u32, repo: &Path, direct: Direct) -> SessionInfo {
+        let task = AgentTask::Work { project: "paystream".into(), repo: repo.display().to_string(), branch: None, change: None };
+        SessionInfo { task, direct: Some(direct), status: Status::Ended, ..session(n, None) }
+    }
+
+    #[test]
+    fn a_direct_review_shows_only_what_changed_after_the_start() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let repo = &rig.repo;
+        std::fs::write(repo.join(".gitignore"), "skip.log\n").unwrap();
+        std::fs::write(repo.join("a.txt"), "before the session\n").unwrap();
+        std::fs::write(repo.join("older.txt"), "also before\n").unwrap();
+        let started = direct::describe(repo);
+        assert!(started.start_tree.is_some());
+        std::fs::write(repo.join("b.txt"), "bee\nafter\n").unwrap();
+        std::fs::write(repo.join("new.txt"), "fresh\n").unwrap();
+        std::fs::write(repo.join("skip.log"), "ignored\n").unwrap();
+        sh(repo, &["status", "--porcelain"]); // lets git refresh its own index before the comparison
+        let index = repo.join(".git").join("index");
+        let (bytes, porcelain) = (std::fs::read(&index).unwrap(), status(repo));
+
+        let (manager, _) = rig.manager(&[checkout_session(1, repo, started)]);
+        let registry = registry_of(repo);
+        let saved = Settings::default();
+        let env = DirectEnv { saved: &saved, registry: &registry };
+        let list = files(&manager, &rig.worktrees, &env, &id(1)).unwrap();
+        assert_eq!(paths(&list), ["b.txt", "new.txt"]);
+        assert_eq!(list.iter().map(|f| f.status.as_str()).collect::<Vec<_>>(), ["M", "A"]);
+        assert_eq!(std::fs::read(&index).unwrap(), bytes, "the real index is byte for byte the same");
+        assert_eq!(status(repo), porcelain);
+        let both = |base: Option<&str>, head: Option<&str>| FileContents { base: base.map(String::from), head: head.map(String::from), binary: false, too_large: false };
+        assert_eq!(file(&manager, &rig.worktrees, &env, &id(1), "b.txt"), Ok(both(Some("bee\n"), Some("bee\nafter\n"))));
+        assert_eq!(file(&manager, &rig.worktrees, &env, &id(1), "new.txt"), Ok(both(None, Some("fresh\n"))));
+        let not_listed = Err("That file is not one of this session's changes".to_string());
+        for path in ["a.txt", "skip.log", "older.txt", "../x"] {
+            assert_eq!(file(&manager, &rig.worktrees, &env, &id(1), path), not_listed, "{path}");
+        }
+        let stored = manager.info(&id(1)).unwrap();
+        assert_eq!(stored.files_changed.map(|totals| totals.files), Some(2));
+        assert_eq!(stored.review, None, "no decision yet");
+        // The same call for the terminal's own bookkeeping sees the same files.
+        let started = stored.direct.unwrap();
+        assert_eq!(paths(&direct_files_now(&started).unwrap()), ["b.txt", "new.txt"]);
+    }
+
+    #[test]
+    fn a_direct_review_without_a_start_tree_compares_with_head() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        std::fs::write(rig.repo.join("a.txt"), "edited before\n").unwrap();
+        let started = Direct { start_tree: None, ..direct::describe(&rig.repo) };
+        assert!(started.head_sha.is_some());
+        let (manager, _) = rig.manager(&[checkout_session(1, &rig.repo, started)]);
+        let registry = registry_of(&rig.repo);
+        let saved = Settings::default();
+        let env = DirectEnv { saved: &saved, registry: &registry };
+        assert_eq!(paths(&files(&manager, &rig.worktrees, &env, &id(1)).unwrap()), ["a.txt"]);
+    }
+
+    #[test]
+    fn a_folder_git_does_not_know_has_nothing_to_show() {
+        let dir = std::env::temp_dir().join(format!("hivemind-review-plain-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let rig = Rig::new();
+        let path = dir.display().to_string();
+        let started = Direct { path: path.clone(), repo: None, head_sha: None, start_tree: None };
+        let info = SessionInfo { task: AgentTask::Folder { path: path.clone() }, direct: Some(started), status: Status::Ended, ..session(1, None) };
+        let (manager, _) = rig.manager(&[info]);
+        let saved = Settings { other_folders: Some(vec![path]), ..Default::default() };
+        let env = DirectEnv { saved: &saved, registry: no_direct().registry };
+        assert_eq!(files(&manager, &rig.worktrees, &env, &id(1)), Ok(vec![]));
+        assert_eq!(file(&manager, &rig.worktrees, &env, &id(1), "a.txt"), Err(NOT_GIT.to_string()));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_direct_folder_must_still_be_registered_or_allowed() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let other = Rig::new();
+        let started = direct::describe(&rig.repo);
+        let checkout = checkout_session(1, &rig.repo, started.clone());
+        let check = |registry: &dyn Fn(&str) -> Result<Value, String>, saved: &Settings, info: &SessionInfo| checked_direct(info, &DirectEnv { saved, registry });
+        let none = Settings::default();
+
+        let registered = registry_of(&rig.repo);
+        assert_eq!(check(&registered, &none, &checkout).unwrap().0, PathBuf::from(&started.path));
+        let elsewhere = registry_of(&other.repo);
+        let gone = "This folder is no longer one of the project's repositories, so Hivemind will not read it".to_string();
+        assert_eq!(check(&elsewhere, &none, &checkout).unwrap_err(), gone);
+        assert_eq!(check(&|_| Err("Unknown project: paystream".into()), &none, &checkout).unwrap_err(), "Unknown project: paystream");
+        // The registry entry is right, but the session ran somewhere else.
+        let moved = checkout_session(1, &rig.repo, Direct { path: other.repo.display().to_string(), ..started.clone() });
+        assert_eq!(check(&registered, &none, &moved).unwrap_err(), "The session's folder is not the one its project or folder entry names");
+        // A start point that is not an id never reaches git.
+        let odd = checkout_session(1, &rig.repo, Direct { start_tree: Some("--all".into()), ..started });
+        assert_eq!(check(&registered, &none, &odd).unwrap_err(), "The session's start point is not a commit or tree id");
+
+        let path = rig.repo.display().to_string();
+        let folder = SessionInfo { task: AgentTask::Folder { path: path.clone() }, ..checkout };
+        let refused = "This folder is no longer one of your other folders, so Hivemind will not read it".to_string();
+        assert_eq!(check(&registered, &none, &folder).unwrap_err(), refused);
+        let wrong = Settings { other_folders: Some(vec![other.repo.display().to_string()]), ..Default::default() };
+        assert_eq!(check(&registered, &wrong, &folder).unwrap_err(), refused);
+        let right = Settings { other_folders: Some(vec![path]), ..Default::default() };
+        assert!(check(&registered, &right, &folder).is_ok());
+        assert_eq!(check(&registered, &none, &session(1, None)).unwrap_err(), "This session does not run in your own folder");
     }
 }

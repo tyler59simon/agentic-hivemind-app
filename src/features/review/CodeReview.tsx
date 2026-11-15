@@ -11,9 +11,9 @@ import { Menu } from "../../ui/Menu";
 import { Confirm, Modal } from "../../ui/Modal";
 import { ArrowLink } from "../../ui/Page";
 import { toast } from "../../ui/toast";
-import { isEnded } from "../agents/session";
+import { isEnded, repoName } from "../agents/session";
 import { CodeDiff } from "./CodeDiff";
-import { baseName, filesWord, reviewVersion, sessionHeading } from "./review";
+import { baseName, directBase, DIRECT_NOTE, EARLIER_NOTE, filesWord, NOT_GIT_NOTE, reviewActions, reviewVersion, sessionHeading } from "./review";
 import { validation, type Check } from "./validation";
 
 /** The selected file of a session: its diff and what the agent ran to check its work. */
@@ -25,6 +25,7 @@ export function FilePane({ info, file }: { info: SessionInfo; file: FileChange }
     queryFn: () => reviewFile(info.id, file.path), staleTime: 0, retry: false,
   });
   const tree = info.worktree;
+  const direct = info.direct;
   const c = contents.data;
   return (
     <div className="review-pane">
@@ -32,13 +33,15 @@ export function FilePane({ info, file }: { info: SessionInfo; file: FileChange }
       <div className="review-meta">
         <GitBranch size="1.1em" aria-hidden />
         {tree && <span>{tree.branch} • Base {reviewBase(tree).slice(0, 7)}</span>}
+        {direct && <span title={direct.path}>{repoName(direct.path)} • Your own files</span>}
         <span className="fill" />
         {file.binary ? <span className="muted">binary</span> : <><span className="num-add">+{file.added}</span><span className="num-del">−{file.removed}</span></>}
       </div>
+      {direct && <p className="muted small">{DIRECT_NOTE}{directBase(info) === "head" && ` ${EARLIER_NOTE}`}</p>}
       {contents.isLoading ? <p className="muted">Loading diff…</p>
         : contents.error ? <p className="error">{classify(contents.error).message}</p>
         : c?.binary ? <p className="muted">This is a binary file. Hivemind does not show binary changes.</p>
-        : c?.tooLarge ? <p className="muted">This file is larger than 2 MB. Open it in your editor to review it: <code>{`${tree?.path ?? ""}/${file.path}`}</code></p>
+        : c?.tooLarge ? <p className="muted">This file is larger than 2 MB. Open it in your editor to review it: <code>{`${tree?.path ?? direct?.path ?? ""}/${file.path}`}</code></p>
         : c && (
           <>
             {c.head === null && <p className="muted small">This file was deleted.</p>}
@@ -116,6 +119,7 @@ export function SessionPane({ info }: { info: SessionInfo }) {
       <p>
         {info.review?.state === "approved"
           ? `Approved. The edits are commit ${(info.review.commit ?? "").slice(0, 7)} on ${info.worktree?.branch ?? "its branch"}.`
+          : directBase(info) === "none" ? NOT_GIT_NOTE
           : "This session has no proposed edits."}
       </p>
       <div><ArrowLink onClick={() => openSession(info.id)}>Open session</ArrowLink></div>
@@ -132,6 +136,7 @@ export function ReviewBar({ info, files, title, onDecided }: { info: SessionInfo
   const [message, setMessage] = useState("");
   const [text, setText] = useState("");
   const branch = info.worktree?.branch ?? "its branch";
+  const actions = reviewActions(info);
   const sessionsChanged = () => client.invalidateQueries({ queryKey: ["agent", "sessions"] });
   const approve = useMutation({
     mutationFn: () => reviewApprove(info.id, message),
@@ -143,7 +148,7 @@ export function ReviewBar({ info, files, title, onDecided }: { info: SessionInfo
   });
   const dismiss = useMutation({
     mutationFn: () => reviewDismiss(info.id),
-    onSuccess: () => { sessionsChanged(); toast("Dismissed. The edits stay in the session's worktree."); onDecided(); },
+    onSuccess: () => { sessionsChanged(); toast(info.direct ? "Dismissed. The edits stay in your files." : "Dismissed. The edits stay in the session's worktree."); onDecided(); },
     onError: (e) => toast(classify(e).message, "error"),
   });
   const discard = useMutation({
@@ -167,17 +172,22 @@ export function ReviewBar({ info, files, title, onDecided }: { info: SessionInfo
     <footer className="review-bar">
       <div className="review-bar-text">
         <span>{first}</span>
-        <span className="review-warning"><TriangleAlert size="1.2em" aria-hidden />Reviewing code does not mark the change complete.</span>
+        <span className="review-warning">
+          <TriangleAlert size="1.2em" aria-hidden />
+          {info.direct ? (directBase(info) === "none" ? NOT_GIT_NOTE : DIRECT_NOTE) : "Reviewing code does not mark the change complete."}
+        </span>
       </div>
       {decide && (
         <>
-          <button className="primary big" disabled={off} title={why} onClick={() => { approve.reset(); setMessage(title); setDialog("approve"); }}>Approve proposed edits</button>
-          <button className="outline" disabled={off || ended} title={why ?? (ended ? "This session has ended. Start a new session to continue." : undefined)}
-            onClick={() => { request.reset(); setDialog("request"); }}>Request changes</button>
-          {state !== "dismissed" && <button className="text" disabled={off} title={why} onClick={() => dismiss.mutate()}>{dismiss.isPending ? "Dismissing…" : "Dismiss"}</button>}
-          <Menu label="More review actions" up align="right" className="icon-menu" button={<Ellipsis size="1.3em" aria-hidden />}>
-            {(close) => <li role="none"><button role="menuitem" className="danger-text" disabled={off} title={why} onClick={() => { close(); setDialog("discard"); }}>Discard edits…</button></li>}
-          </Menu>
+          {actions.approve && <button className="primary big" disabled={off} title={why} onClick={() => { approve.reset(); setMessage(title); setDialog("approve"); }}>Approve proposed edits</button>}
+          {actions.requestChanges && <button className="outline" disabled={off || ended} title={why ?? (ended ? "This session has ended. Start a new session to continue." : undefined)}
+            onClick={() => { request.reset(); setDialog("request"); }}>Request changes</button>}
+          {actions.dismiss && state !== "dismissed" && <button className="text" disabled={off} title={why} onClick={() => dismiss.mutate()}>{dismiss.isPending ? "Dismissing…" : "Dismiss"}</button>}
+          {actions.discard && (
+            <Menu label="More review actions" up align="right" className="icon-menu" button={<Ellipsis size="1.3em" aria-hidden />}>
+              {(close) => <li role="none"><button role="menuitem" className="danger-text" disabled={off} title={why} onClick={() => { close(); setDialog("discard"); }}>Discard edits…</button></li>}
+            </Menu>
+          )}
         </>
       )}
       {dialog === "approve" && (

@@ -282,15 +282,23 @@ async fn agent_remove_worktree(state: State<'_, AppState>, session_id: String) -
 /// The files a work session changed in its worktree since its review base.
 #[tauri::command]
 async fn review_files(state: State<'_, AppState>, session_id: String) -> Result<Vec<worktree::FileChange>, String> {
-    let (agents, root) = (state.agents.clone(), state.worktrees_dir.clone());
-    blocking(move || review::files(&agents, &root, &session_id)).await
+    let (agents, root, bridge, path) = (state.agents.clone(), state.worktrees_dir.clone(), state.bridge.clone(), state.settings_path.clone());
+    blocking(move || {
+        let (saved, registry) = (settings::load(&path), |slug: &str| git::project_entry(&bridge, slug));
+        review::files(&agents, &root, &review::DirectEnv { saved: &saved, registry: &registry }, &session_id)
+    })
+    .await
 }
 
 /// The two versions of one file a work session changed.
 #[tauri::command]
 async fn review_file(state: State<'_, AppState>, session_id: String, path: String) -> Result<review::FileContents, String> {
-    let (agents, root) = (state.agents.clone(), state.worktrees_dir.clone());
-    blocking(move || review::file(&agents, &root, &session_id, &path)).await
+    let (agents, root, bridge, settings_path) = (state.agents.clone(), state.worktrees_dir.clone(), state.bridge.clone(), state.settings_path.clone());
+    blocking(move || {
+        let (saved, registry) = (settings::load(&settings_path), |slug: &str| git::project_entry(&bridge, slug));
+        review::file(&agents, &root, &review::DirectEnv { saved: &saved, registry: &registry }, &session_id, &path)
+    })
+    .await
 }
 
 /// Commit the session's edits on its own branch. Never merges, never pushes.
