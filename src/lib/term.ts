@@ -3,7 +3,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type { Engine } from "./agent";
 
 export type StartMode = "fresh" | "resume";
-export interface TermInfo { id: string; sessionId: string | null; engine: Engine; running: boolean; exitCode: number | null; windowsBuild: number | null; label: string | null; cwd: string | null }
+export interface TermInfo { id: string; sessionId: string | null; engine: Engine; running: boolean; exitCode: number | null; windowsBuild: number | null; label: string | null; cwd: string | null; attention: "waiting" | "done" | null }
 export interface TermExit { id: string; sessionId: string | null; code: number | null }
 
 export const termOpen = (a: { sessionId: string; cols: number; rows: number; start: StartMode | null; replay: boolean; output: Channel<ArrayBuffer> }) =>
@@ -20,3 +20,7 @@ export const termList = () => invoke<TermInfo[]>("term_list");
 /** Exit the app now; `RunEvent::Exit` stops every program. */
 export const appQuit = () => invoke<void>("app_quit");
 export const quitAck = () => invoke<void>("quit_ack");
+/** The user looked at a terminal: clear its attention. */
+export const termSeen = (id: string) => invoke<void>("term_seen", { id });
+/** Ask Rust for the one-time "keeps running in the tray" Windows notification. */
+export const notifyTray = () => invoke<void>("notify_tray");

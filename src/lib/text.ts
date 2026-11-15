@@ -33,3 +33,13 @@ export function highlight(text: string, words: string[]): { text: string; hit: b
 }
 
 export const shortDate = (value?: string) => (value ?? "").slice(0, 10);
+
+/** "today", "yesterday", "N days ago", then the date; for an ISO date or a time in milliseconds. */
+export function ago(when: string | number, now = Date.now()): string {
+  const at = typeof when === "number" ? when : new Date(when).getTime();
+  const days = Math.floor((now - at) / 86_400_000);
+  if (Number.isNaN(days)) return typeof when === "string" ? shortDate(when) : "";
+  if (days < 1) return "today";
+  if (days === 1) return "yesterday";
+  return days < 60 ? `${days} days ago` : typeof when === "string" ? shortDate(when) : new Date(at).toISOString().slice(0, 10);
+}

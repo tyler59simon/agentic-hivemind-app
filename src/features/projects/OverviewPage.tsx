@@ -8,7 +8,7 @@ import { classify } from "../../lib/errors";
 import type { RepoActivity } from "../../lib/git";
 import { list, openWork, projectPlan, review, type NoteRow, type Project } from "../../lib/lm";
 import { sections } from "../../lib/note";
-import { shortDate } from "../../lib/text";
+import { ago } from "../../lib/text";
 import { openChange, openSession, openSystem, startSession, useApp } from "../../store";
 import { Menu } from "../../ui/Menu";
 import { Modal } from "../../ui/Modal";
@@ -36,14 +36,6 @@ import { useCurrentProject, useGitActivity, useProject } from "./useProject";
 
 const oneLine = (text?: string) => (text ?? "").replace(/\s+/g, " ").trim();
 const openNote = (row: Pick<NoteRow, "ref" | "title">, split = false) => useWorkspace.getState().openNote(row.ref, { title: row.title, split });
-
-function ago(iso: string): string {
-  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
-  if (Number.isNaN(days)) return shortDate(iso);
-  if (days < 1) return "today";
-  if (days === 1) return "yesterday";
-  return days < 60 ? `${days} days ago` : shortDate(iso);
-}
 
 /** Recent commits and pull requests of the project's repositories. */
 function Commits({ repos }: { repos: RepoActivity[] }) {

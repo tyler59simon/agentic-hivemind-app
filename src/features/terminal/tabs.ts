@@ -46,11 +46,13 @@ export function accessLabel(s: SessionInfo): string {
   return POLICIES.find((p) => p.id === s.policy)?.label ?? "Review edits";
 }
 
-/** "● Session active" and its siblings. */
-export function statusLine(s: SessionInfo, running: boolean): { tone: "on" | "off" | "failed"; text: string } {
-  if (running) return { tone: "on", text: "Session active" };
-  const removed = s.worktree === null ? " · worktree removed" : "";
-  if (s.status === "failed") return { tone: "failed", text: `Session failed${s.error ? ` · ${s.error}` : ""}${removed}` };
+/** "● Session active" and its siblings; `usage` (see `usageText`) follows the running text. */
+export function statusLine(s: SessionInfo, running: boolean, usage = ""): { tone: "on" | "off" | "failed"; text: string } {
+  if (running) return { tone: "on", text: usage ? `Session active · ${usage}` : "Session active" };
+  // A checkout or folder session never had a worktree.
+  const removed = s.worktree === null && !s.direct ? " · worktree removed" : "";
+  const used = usage ? ` · ${usage}` : "";
+  if (s.status === "failed") return { tone: "failed", text: `Session failed${s.error ? ` · ${s.error}` : ""}${removed}${used}` };
   if (s.status === "idle" || s.status === "running") return { tone: "off", text: "Starting…" };
-  return { tone: "off", text: `Session ended${removed}` };
+  return { tone: "off", text: `Session ended${removed}${used}` };
 }

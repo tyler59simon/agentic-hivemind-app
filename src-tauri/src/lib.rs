@@ -5,6 +5,7 @@ mod capture;
 mod drafts;
 mod folders;
 mod git;
+mod notify;
 mod review;
 mod settings;
 mod term;
@@ -49,6 +50,13 @@ struct ConnectInfo {
     script: String,
     /// The signed-in OS user, for the sidebar footer.
     user: Option<String>,
+}
+
+/// The `term-attention` event; `kind` is null when the attention was cleared.
+#[derive(Serialize, Clone)]
+struct TermAttention {
+    id: String,
+    kind: Option<term::signal::Kind>,
 }
 
 #[derive(Serialize, Clone)]
@@ -357,6 +365,74 @@ async fn agent_session(state: State<'_, AppState>, session_id: String, from_seq:
     blocking(move || agents.session(&session_id, from_seq)).await
 }
 
+/// A terminal session's conversation from its CLI's own file; empty until the file exists.
+#[tauri::command]
+async fn agent_transcript(state: State<'_, AppState>, session_id: String) -> Result<Vec<agent::events::SeqEvent>, String> {
+    let terminals = state.terminals.clone();
+    blocking(move || terminals.transcript(&session_id)).await
+}
+
+/// A terminal session's tokens, cost and plan limits from its CLI's own file.
+#[tauri::command]
+async fn agent_usage(state: State<'_, AppState>, session_id: String) -> Result<term::usage::Usage, String> {
+    let terminals = state.terminals.clone();
+    blocking(move || terminals.usage(&session_id)).await
+}
+
+/// The conversations a CLI saved for a project checkout or a picked folder, newest 50, including ones started outside
+/// Hivemind. The folder comes from the registry or the picker's list, never from a path the webview wrote.
+#[tauri::command]
+async fn cli_history(state: State<'_, AppState>, engine: agent::Engine, target: term::ShellTarget) -> Result<Vec<term::history::Conversation>, String> {
+    let (terminals, agents, bridge, path) = (state.terminals.clone(), state.agents.clone(), state.bridge.clone(), state.settings_path.clone());
+    blocking(move || {
+        let cwd = history_folder(&target, &agents, &bridge, &settings::load(&path))?;
+        Ok(terminals.history(engine, &cwd))
+    })
+    .await
+}
+
+fn history_folder(target: &term::ShellTarget, agents: &agent::Manager, bridge: &bridge::Bridge, saved: &settings::Settings) -> Result<PathBuf, String> {
+    term::shell_cwd(target, agents, saved, |project, repo| agent::scope::project_repo(&git::project_entry(bridge, project)?, repo))
+}
+
+/// Make a Hivemind terminal session of a conversation a CLI saved, in the same folder. It opens in Resume mode.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // one webview argument per setting of the Start screen
+async fn agent_import(
+    state: State<'_, AppState>,
+    engine: agent::Engine,
+    cli_id: String,
+    target: term::ShellTarget,
+    access: Option<agent::access::Access>,
+    model: Option<String>,
+    effort: Option<String>,
+    confirmed_risky: Option<bool>,
+) -> Result<agent::SessionInfo, String> {
+    let (terminals, agents, bridge, path) = (state.terminals.clone(), state.agents.clone(), state.bridge.clone(), state.settings_path.clone());
+    let (worktrees, terminal_dir) = (state.worktrees_dir.clone(), state.terminals_dir.clone());
+    blocking(move || {
+        agent::import_task(&cli_id, &target)?;
+        let saved = settings::load(&path);
+        let cwd = history_folder(&target, &agents, &bridge, &saved)?;
+        let title = terminals
+            .history(engine, &cwd)
+            .into_iter()
+            .find(|conversation| conversation.id == cli_id)
+            .map(|conversation| conversation.title)
+            .ok_or("That conversation is not saved for this folder")?;
+        let options = agent::StartOptions { engine, access, model, effort, confirmed_risky: confirmed_risky.unwrap_or(false), ..Default::default() };
+        agent::import_session(&agents, &bridge, &saved, &worktrees, &terminal_dir, &cli_id, &title, &target, options)
+    })
+    .await
+}
+
+/// Whether a CLI is signed in, from its own status command. Never reads or returns credentials.
+#[tauri::command]
+async fn agent_auth_status(state: State<'_, AppState>, engine: agent::Engine) -> Result<term::auth::AuthStatus, String> {
+    let path = state.settings_path.clone();
+    blocking(move || Ok(term::auth::status(engine, &settings::load(&path)))).await
+}
+
 fn raw(output: Channel<InvokeResponseBody>) -> term::Output {
     Arc::new(move |bytes| output.send(InvokeResponseBody::Raw(bytes)).is_ok())
 }
@@ -423,6 +499,19 @@ async fn term_close(state: State<'_, AppState>, id: String) -> Result<(), String
 #[tauri::command]
 fn term_list(state: State<'_, AppState>) -> Vec<term::TermInfo> {
     state.terminals.list()
+}
+
+/// The user looked at a terminal: clear its attention.
+#[tauri::command]
+fn term_seen(state: State<'_, AppState>, id: String) {
+    notify::forget(&id);
+    state.terminals.seen(&id);
+}
+
+/// The window was just hidden to the tray: tell the user once (the page keeps the flag).
+#[tauri::command]
+fn notify_tray(app: AppHandle) {
+    notify::tray(&app);
 }
 
 #[tauri::command]
@@ -512,6 +601,11 @@ fn draft_list(state: State<'_, AppState>) -> Vec<Value> {
     drafts::list(&state.drafts_dir)
 }
 
+/// Hook mode (`--hivemind-signal <event>`): Some(exit code) when this run is a hook, which opens no window.
+pub fn hook_main(args: &[String]) -> Option<i32> {
+    term::signal::hook_main(args)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -557,8 +651,17 @@ pub fn run() {
                 agents.clone(),
                 settings_path.clone(),
                 Arc::new(move |emit| {
-                    let term::Emit::Exit(exit) = emit;
-                    let _ = exits.emit("term-exit", exit);
+                    match emit {
+                        term::Emit::Exit(exit) => {
+                            let _ = exits.emit("term-exit", exit);
+                        }
+                        term::Emit::Attention { id, kind, title } => {
+                            let _ = exits.emit("term-attention", TermAttention { id: id.clone(), kind });
+                            if let Some(kind) = kind {
+                                notify::terminal(&exits, &id, &title, kind);
+                            }
+                        }
+                    }
                 }),
             );
             app.manage(AppState {
@@ -580,12 +683,15 @@ pub fn run() {
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
                 window.app_handle().exit(0);
             }
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Focused(true)) {
+                notify::on_focus(window.app_handle());
+            }
         })
         .invoke_handler(tauri::generate_handler![
-            lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, app_quit, quit_ack, draft_put, draft_get, draft_delete, draft_list,
+            lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, repo_branches,
-            agent_cancel, agent_sessions, agent_session, review_files, review_file, review_approve, review_request_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
-            system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget
+            agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_request_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
+            system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
