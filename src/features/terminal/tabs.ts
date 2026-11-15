@@ -46,9 +46,9 @@ export function accessLabel(s: SessionInfo): string {
   return POLICIES.find((p) => p.id === s.policy)?.label ?? "Review edits";
 }
 
-/** "● Session active" and its siblings. */
-export function statusLine(s: SessionInfo, running: boolean): { tone: "on" | "off" | "failed"; text: string } {
-  if (running) return { tone: "on", text: "Session active" };
+/** "● Session active" and its siblings; `usage` (see `usageText`) follows the running text. */
+export function statusLine(s: SessionInfo, running: boolean, usage = ""): { tone: "on" | "off" | "failed"; text: string } {
+  if (running) return { tone: "on", text: usage ? `Session active · ${usage}` : "Session active" };
   const removed = s.worktree === null ? " · worktree removed" : "";
   if (s.status === "failed") return { tone: "failed", text: `Session failed${s.error ? ` · ${s.error}` : ""}${removed}` };
   if (s.status === "idle" || s.status === "running") return { tone: "off", text: "Starting…" };

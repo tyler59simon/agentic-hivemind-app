@@ -364,6 +364,13 @@ async fn agent_transcript(state: State<'_, AppState>, session_id: String) -> Res
     blocking(move || terminals.transcript(&session_id)).await
 }
 
+/// A terminal session's tokens, cost and plan limits from its CLI's own file.
+#[tauri::command]
+async fn agent_usage(state: State<'_, AppState>, session_id: String) -> Result<term::usage::Usage, String> {
+    let terminals = state.terminals.clone();
+    blocking(move || terminals.usage(&session_id)).await
+}
+
 fn raw(output: Channel<InvokeResponseBody>) -> term::Output {
     Arc::new(move |bytes| output.send(InvokeResponseBody::Raw(bytes)).is_ok())
 }
@@ -591,7 +598,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, app_quit, quit_ack, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, repo_branches,
-            agent_cancel, agent_sessions, agent_session, agent_transcript, review_files, review_file, review_approve, review_request_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
+            agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_request_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
             system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget
         ])
         .build(tauri::generate_context!())

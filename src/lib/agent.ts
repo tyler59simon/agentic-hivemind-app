@@ -1,6 +1,7 @@
 // Agent sessions: Hivemind launches a coding-agent CLI (Claude Code) in the background for one task.
 // Rust derives the working folders and the allowed actions from the task; the webview passes the task and the prompt.
 import { invoke } from "@tauri-apps/api/core";
+import type { Usage } from "../features/terminal/usage";
 
 export type AgentTask =
   | { kind: "system_passport"; slug: string }
@@ -132,6 +133,8 @@ export const agentCancel = (sessionId: string) => invoke<void>("agent_cancel", {
 export const agentSessions = () => invoke<SessionInfo[]>("agent_sessions");
 /** A terminal session's conversation, read from its CLI's own file; empty until the file exists. */
 export const agentTranscript = (sessionId: string) => invoke<SeqEvent[]>("agent_transcript", { sessionId });
+/** A terminal session's tokens, cost and plan limits, read from its CLI's own file. */
+export const agentUsage = (sessionId: string) => invoke<Usage>("agent_usage", { sessionId });
 export const agentSession = (sessionId: string, fromSeq = 0) => invoke<SessionLog>("agent_session", { sessionId, fromSeq });
 
 export const reviewFiles = (sessionId: string) => invoke<FileChange[]>("review_files", { sessionId });

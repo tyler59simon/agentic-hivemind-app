@@ -284,6 +284,7 @@ input[type="checkbox"] { accent-color: var(--success); }
 .banner { border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: .45rem; padding: .55rem .85rem; background: var(--bg-alt); display: flex; flex-direction: column; gap: .4rem; }
 .banner.warn { border-color: #6b5320; border-left-color: var(--warn-fg); background: #3d2424; color: var(--warn-fg); }
 .banner.warn button { color: var(--fg); }
+.banner.over { border-color: var(--warn-border); border-left-color: var(--warn); background: var(--warn-bg); color: var(--warn); }
 .banner.error { border-left-color: var(--error); }
 .banner ul { margin: 0; padding-left: 1.2rem; }
 .banner .actions { justify-content: flex-start; }

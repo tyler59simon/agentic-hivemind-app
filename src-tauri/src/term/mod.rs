@@ -1,8 +1,10 @@
 pub mod cli_files;
 pub mod launch;
+pub mod pricing;
 pub mod pty;
 pub mod scrollback;
 pub mod transcript;
+pub mod usage;
 
 use crate::agent::events::{SeqEvent, Status};
 use crate::agent::access::Access;
@@ -302,8 +304,8 @@ impl Manager {
         }
     }
 
-    /// The conversation of a terminal session as chat events, read from the CLI's own file. Empty while there is no file.
-    pub fn transcript(&self, session_id: &str) -> Result<Vec<SeqEvent>, String> {
+    /// The CLI's own conversation file for a terminal session: its engine and path, None while there is no file yet.
+    fn conversation_file(&self, session_id: &str) -> Result<Option<(Engine, PathBuf)>, String> {
         let inner = &self.inner;
         let info = inner.agents.info(session_id)?;
         if info.interface != Interface::Terminal {
@@ -311,19 +313,41 @@ impl Manager {
         }
         let engine = Engine::of(&info.adapter);
         if inner.home.as_os_str().is_empty() {
-            return Ok(vec![]);
+            return Ok(None);
         }
         let cwd = session_cwd(&info).map(|path| path.display().to_string()).unwrap_or_default();
         let path = match engine {
             Engine::Claude => cli_files::claude_transcript(&inner.home, &cwd, session_id),
             Engine::Codex => info.engine_session.as_deref().and_then(|id| cli_files::codex_rollout(&inner.home, id)),
         };
-        let Some(path) = path else { return Ok(vec![]) };
+        Ok(path.map(|path| (engine, path)))
+    }
+
+    /// The conversation of a terminal session as chat events, read from the CLI's own file. Empty while there is no file.
+    pub fn transcript(&self, session_id: &str) -> Result<Vec<SeqEvent>, String> {
+        let Some((engine, path)) = self.conversation_file(session_id)? else { return Ok(vec![]) };
         let bytes = std::fs::read(&path).map_err(|e| format!("Could not read the conversation file: {e}"))?;
         let text = String::from_utf8_lossy(&bytes);
         Ok(match engine {
             Engine::Claude => transcript::claude(session_id, &text),
             Engine::Codex => transcript::codex(session_id, &text),
+        })
+    }
+
+    /// Tokens, cost and plan limits of a terminal session, read from the CLI's own file. Zeros while there is no file.
+    pub fn usage(&self, session_id: &str) -> Result<usage::Usage, String> {
+        let Some((engine, path)) = self.conversation_file(session_id)? else { return Ok(usage::Usage::default()) };
+        Ok(match engine {
+            Engine::Claude => {
+                let mut counter = usage::ClaudeUsage::default();
+                usage::read_lines(&path, |line| counter.feed(line))?;
+                counter.finish()
+            }
+            Engine::Codex => {
+                let mut counter = usage::CodexUsage::default();
+                usage::read_lines(&path, |line| counter.feed(line))?;
+                counter.finish()
+            }
         })
     }
 

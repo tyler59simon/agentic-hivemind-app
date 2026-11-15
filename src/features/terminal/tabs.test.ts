@@ -77,6 +77,7 @@ describe("terminal tabs", () => {
     for (const status of ["idle", "running", "ended", "failed"] as const) {
       expect(statusLine(session({ status }), true)).toEqual({ tone: "on", text: "Session active" });
     }
+    expect(statusLine(session({ status: "running" }), true, "12.4k tokens · $0.31").text).toBe("Session active · 12.4k tokens · $0.31");
     expect(statusLine(session({ status: "idle" }), false)).toEqual({ tone: "off", text: "Starting…" });
     expect(statusLine(session({ status: "running" }), false)).toEqual({ tone: "off", text: "Starting…" });
     expect(statusLine(session({ status: "ended" }), false)).toEqual({ tone: "off", text: "Session ended" });

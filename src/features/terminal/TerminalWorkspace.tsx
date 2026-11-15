@@ -1,7 +1,8 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRightLeft, CodeXml, Columns2, Database, FileText, GitBranch, Network, Plus, Square, SquareTerminal, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { agentRename, agentTranscript, engineOf, reviewFiles, type SessionInfo } from "../../lib/agent";
+import { agentRename, agentTranscript, agentUsage, engineOf, reviewFiles, type SessionInfo } from "../../lib/agent";
+import { getSettings } from "../../lib/lm";
 import { OTHER_FOLDERS, otherFolders, realProject } from "../../lib/folders";
 import { openReview, openSession, openSystem, startSession, useApp } from "../../store";
 import { Menu } from "../../ui/Menu";
@@ -23,6 +24,7 @@ import * as registry from "./registry";
 import { isShellId, NO_SHELL_PLACE, shellLabel, shellPlaces, shellStatus, shellTitle, type ShellTab } from "./shells";
 import { statusLine, tabLabel, terminalTabs, whereLabel } from "./tabs";
 import { TerminalView } from "./TerminalView";
+import { budgetLevel, budgetMessage, usagePollMs, usageText } from "./usage";
 import { pollMs, viewOf, type View } from "./view";
 
 const baseName = (path: string) => path.split(/[\\/]/).pop() || path;
@@ -165,7 +167,11 @@ function PaneView({ index, tabs, activeId, views, onView, focused, split, over, 
   const [renaming, setRenaming] = useState<string | null>(null);
   const live = registry.useLive(active?.id ?? "");
   const running = registry.useRunning(session ?? (shell ? { id: shell.id, status: shell.running ? "running" : "ended" } : { id: "", status: "idle" }));
-  const line = session ? statusLine(session, running) : shell ? shellStatus({ running, exitCode: shell.exitCode }) : null;
+  const usage = useQuery({ queryKey: ["agent", "usage", session?.id ?? ""], queryFn: () => agentUsage(session!.id), enabled: !!session, staleTime: 0, refetchInterval: usagePollMs(running) });
+  const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings, enabled: !!session });
+  const budget = settings.data?.agent_budget_usd ?? 5;
+  const level = session && usage.data ? budgetLevel(engineOf(session), usage.data, budget) : "none";
+  const line = session ? statusLine(session, running, usageText(usage.data)) : shell ? shellStatus({ running, exitCode: shell.exitCode }) : null;
   const ended = !!session && (session.status === "ended" || session.status === "failed") && !running && (!!session.worktree || !!session.direct);
   const view = session ? viewOf(views[session.id], session, running) : "terminal";
   const hint = !!session && view === "terminal" && running && !session.endedAt && !live?.touched;
@@ -220,6 +226,9 @@ function PaneView({ index, tabs, activeId, views, onView, focused, split, over, 
         <button className={`icon-button ${split ? "on" : ""}`} title={splitWord} aria-label={splitWord} aria-pressed={split} onClick={onToggleSplit}><Columns2 size="1.2em" aria-hidden /></button>
       </div>
       {hint && <p className="term-hint" role="note">{HINT[engineOf(session)]}</p>}
+      {session && usage.data && level !== "none" && (
+        <div className={`banner ${level === "over" ? "over" : "warn"}`} role="status">{budgetMessage(engineOf(session), usage.data, budget, level)}</div>
+      )}
       {session && (
         <Tabs pill label="View" items={[{ id: "terminal", label: "Terminal" }, { id: "transcript", label: "Transcript" }]} value={view} onChange={(v) => onView(session.id, v)} />
       )}
