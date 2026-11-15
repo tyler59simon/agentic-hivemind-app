@@ -76,6 +76,8 @@ export interface SessionInfo {
   access: Access | null;
   /** The reasoning effort a terminal session was started with. */
   effort: string | null;
+  /** The CLI's own id for the conversation (Codex's thread id), once Hivemind has found it. */
+  engineSession: string | null;
 }
 
 /** The engine of a session, whatever adapter name older code stored. */
@@ -128,6 +130,8 @@ export const agentRemoveWorktree = (sessionId: string) => invoke<void>("agent_re
 export const repoBranches = (project: string, repo: string) => invoke<RepoBranches>("repo_branches", { project, repo });
 export const agentCancel = (sessionId: string) => invoke<void>("agent_cancel", { sessionId });
 export const agentSessions = () => invoke<SessionInfo[]>("agent_sessions");
+/** A terminal session's conversation, read from its CLI's own file; empty until the file exists. */
+export const agentTranscript = (sessionId: string) => invoke<SeqEvent[]>("agent_transcript", { sessionId });
 export const agentSession = (sessionId: string, fromSeq = 0) => invoke<SessionLog>("agent_session", { sessionId, fromSeq });
 
 export const reviewFiles = (sessionId: string) => invoke<FileChange[]>("review_files", { sessionId });

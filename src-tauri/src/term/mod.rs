@@ -1,8 +1,10 @@
+pub mod cli_files;
 pub mod launch;
 pub mod pty;
 pub mod scrollback;
+pub mod transcript;
 
-use crate::agent::events::Status;
+use crate::agent::events::{SeqEvent, Status};
 use crate::agent::access::Access;
 use crate::agent::scope;
 use crate::agent::{self, Engine, Interface, SessionInfo};
@@ -26,6 +28,9 @@ pub const QUIET_EXITS: [u32; 4] = [0, 129, 130, 0xC000_013A];
 
 const RESERVED: &str = "A review action is running for this session";
 const NOT_RUNNING: &str = "This terminal is not running";
+/// How often, and how many times, a running program is checked for its CLI's conversation file and title.
+const WATCH_EVERY: Duration = Duration::from_secs(3);
+const WATCH_TRIES: u32 = 40;
 /// How long `stop_all` waits, after the closes, for the exits to be recorded.
 const RECORD_WAIT: Duration = Duration::from_secs(5);
 
@@ -103,6 +108,8 @@ struct Shared {
     close_requested: AtomicBool,
     /// A files-changed refresh is already under way.
     refreshing: AtomicBool,
+    /// When the program was started (ms): a Codex conversation older than this is not its own.
+    since: u64,
 }
 
 struct Entry {
@@ -118,6 +125,8 @@ struct Inner {
     settings_path: PathBuf,
     sink: Sink,
     terms: Mutex<Terms>,
+    /// The user's home folder, where the CLIs keep their conversation files; empty when it is unknown.
+    home: PathBuf,
 }
 
 /// Everything `spawn` needs to start one program.
@@ -161,6 +170,11 @@ fn info_of(shared: &Shared) -> TermInfo {
 impl Manager {
     /// `dir` is `<app data>/terminals`. Removes the folders of sessions that are no longer in the history.
     pub fn new(dir: PathBuf, agents: agent::Manager, settings_path: PathBuf, sink: Sink) -> Manager {
+        Manager::new_in(dir, agents, settings_path, sink, dirs::home_dir().unwrap_or_default())
+    }
+
+    /// `new` with the home folder given (tests use a temp folder).
+    pub fn new_in(dir: PathBuf, agents: agent::Manager, settings_path: PathBuf, sink: Sink, home: PathBuf) -> Manager {
         let known: HashSet<String> = agents.sessions().into_iter().map(|info| info.id).collect();
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.flatten() {
@@ -170,7 +184,7 @@ impl Manager {
                 }
             }
         }
-        Manager { inner: Arc::new(Inner { dir, agents, settings_path, sink, terms: Mutex::new(HashMap::new()) }) }
+        Manager { inner: Arc::new(Inner { dir, agents, settings_path, sink, terms: Mutex::new(HashMap::new()), home }) }
     }
 
     /// `term_open` (section 4.3 of the Phase 5 plan).
@@ -191,6 +205,11 @@ impl Manager {
         let build = launch::windows_build();
         let saved = settings::load(&inner.settings_path);
         let start = start.map(|mode| (mode, launch::program(engine, &saved)));
+        // Also before the lock: it reads the CLI's files.
+        let thread = match &start {
+            Some((StartMode::Resume, _)) if engine == Engine::Codex => inner.known_thread(&info),
+            _ => None,
+        };
         // Held from the limit check until the new entry is inserted, so an exit cannot be handled before its entry exists.
         let mut terms = inner.terms.lock().unwrap();
         let running = terms.get(session_id).cloned();
@@ -233,6 +252,7 @@ impl Manager {
             session_id,
             &context,
             info.no_task,
+            thread.as_deref(),
         ));
         if replay {
             send_saved(&scrollback_path, &output);
@@ -245,6 +265,11 @@ impl Manager {
             info.status = Status::Running;
             info.ended_at = None;
             info.error = None;
+            if mode == StartMode::Fresh {
+                // A new conversation: the old one's thread and title are not its own.
+                info.engine_session = None;
+                info.cli_title = None;
+            }
         })?;
         let run = Run {
             id: session_id.to_string(),
@@ -260,7 +285,12 @@ impl Manager {
             output,
         };
         match self.spawn_in(&mut terms, run) {
-            Ok(started) => Ok(started),
+            Ok(started) => {
+                if let Some(entry) = terms.get(session_id) {
+                    inner.watch(entry.shared.clone());
+                }
+                Ok(started)
+            }
             Err(error) => {
                 let _ = inner.agents.amend(session_id, |info| {
                     info.status = before.0;
@@ -270,6 +300,31 @@ impl Manager {
                 Err(error)
             }
         }
+    }
+
+    /// The conversation of a terminal session as chat events, read from the CLI's own file. Empty while there is no file.
+    pub fn transcript(&self, session_id: &str) -> Result<Vec<SeqEvent>, String> {
+        let inner = &self.inner;
+        let info = inner.agents.info(session_id)?;
+        if info.interface != Interface::Terminal {
+            return Err("This session is not a terminal session".into());
+        }
+        let engine = Engine::of(&info.adapter);
+        if inner.home.as_os_str().is_empty() {
+            return Ok(vec![]);
+        }
+        let cwd = session_cwd(&info).map(|path| path.display().to_string()).unwrap_or_default();
+        let path = match engine {
+            Engine::Claude => cli_files::claude_transcript(&inner.home, &cwd, session_id),
+            Engine::Codex => info.engine_session.as_deref().and_then(|id| cli_files::codex_rollout(&inner.home, id)),
+        };
+        let Some(path) = path else { return Ok(vec![]) };
+        let bytes = std::fs::read(&path).map_err(|e| format!("Could not read the conversation file: {e}"))?;
+        let text = String::from_utf8_lossy(&bytes);
+        Ok(match engine {
+            Engine::Claude => transcript::claude(session_id, &text),
+            Engine::Codex => transcript::codex(session_id, &text),
+        })
     }
 
     /// `term_login`.
@@ -422,6 +477,7 @@ impl Manager {
             out: Mutex::new(Out { output: Some(run.output), scrollback: run.scrollback }),
             close_requested: AtomicBool::new(false),
             refreshing: AtomicBool::new(false),
+            since: agent::now_ms(),
         });
         let (inner, handler) = (self.inner.clone(), shared.clone());
         let sink: pty::Sink = Arc::new(move |event| match event {
@@ -474,6 +530,80 @@ impl Inner {
         let _ = entry.pty.resize(cols, rows);
     }
 
+    /// The thread a Codex resume continues: the stored one when its rollout still exists (else it is cleared), or, for a
+    /// session from before threads were stored, the one found by folder and start time (and stored).
+    fn known_thread(&self, info: &SessionInfo) -> Option<String> {
+        if self.home.as_os_str().is_empty() {
+            return None;
+        }
+        let found = match &info.engine_session {
+            Some(id) if cli_files::codex_rollout(&self.home, id).is_some() => return Some(id.clone()),
+            Some(_) => None,
+            None => self.find_thread(info, info.started_at),
+        };
+        if found != info.engine_session {
+            let _ = self.agents.amend(&info.id, |info| info.engine_session = found.clone());
+        }
+        found
+    }
+
+    /// The Codex thread started in the session's folder at or after `since`, leaving out the other sessions' threads.
+    fn find_thread(&self, info: &SessionInfo, since: u64) -> Option<String> {
+        let cwd = session_cwd(info).ok()?.display().to_string();
+        let taken: Vec<String> = self.agents.sessions().into_iter().filter(|s| s.id != info.id).filter_map(|s| s.engine_session).collect();
+        cli_files::codex_thread(&self.home, &cwd, since, &taken)
+    }
+
+    /// Fill `engine_session` (Codex) and `cli_title` from the CLI's files. True when there is nothing more to find.
+    /// Reads files and takes the session lock only; call it without the terminal map locked.
+    fn discover(&self, session_id: &str, since: u64) -> bool {
+        if self.home.as_os_str().is_empty() {
+            return true;
+        }
+        let Ok(info) = self.agents.info(session_id) else { return true };
+        let engine = Engine::of(&info.adapter);
+        let (thread, title) = match engine {
+            Engine::Claude => {
+                let cwd = session_cwd(&info).map(|path| path.display().to_string()).unwrap_or_default();
+                (None, cli_files::claude_transcript(&self.home, &cwd, session_id).and_then(|path| cli_files::claude_title(&path)))
+            }
+            Engine::Codex => {
+                let thread = info.engine_session.clone().or_else(|| self.find_thread(&info, since));
+                let title = thread.as_deref().and_then(|id| cli_files::codex_title(&self.home, id));
+                (thread, title)
+            }
+        };
+        let new_thread = thread.clone().filter(|_| info.engine_session.is_none());
+        let new_title = title.clone().filter(|title| info.cli_title.as_ref() != Some(title));
+        if new_thread.is_some() || new_title.is_some() {
+            let _ = self.agents.amend(session_id, |info| {
+                if let Some(thread) = new_thread {
+                    info.engine_session = Some(thread);
+                }
+                if let Some(title) = new_title {
+                    info.cli_title = Some(title);
+                }
+            });
+        }
+        title.is_some() && (engine == Engine::Claude || thread.is_some())
+    }
+
+    /// Look for the CLI's conversation file and title every few seconds while the program runs, on a thread of its own.
+    /// The exit handler looks once more.
+    fn watch(self: &Arc<Self>, shared: Arc<Shared>) {
+        let Some(session_id) = shared.session_id.clone() else { return };
+        let inner = self.clone();
+        std::thread::spawn(move || {
+            for _ in 0..WATCH_TRIES {
+                std::thread::sleep(WATCH_EVERY);
+                let alive = inner.terms.lock().unwrap().get(&shared.id).is_some_and(|entry| Arc::ptr_eq(&entry.shared, &shared));
+                if !alive || inner.discover(&session_id, shared.since) {
+                    return;
+                }
+            }
+        });
+    }
+
     /// No output for a while: look at what the program changed, on a thread of its own because it runs git.
     fn quiet(self: &Arc<Self>, shared: &Arc<Shared>) {
         let Some(session_id) = shared.session_id.clone() else { return };
@@ -509,6 +639,7 @@ impl Inner {
     fn finish(&self, shared: &Shared, code: Option<u32>) {
         if let Some(session_id) = &shared.session_id {
             self.refresh_files(session_id);
+            self.discover(session_id, shared.since);
         }
         let mut terms = self.terms.lock().unwrap();
         terms.remove(&shared.id);
@@ -680,7 +811,7 @@ mod tests {
                 }),
             );
             let exits: Arc<Mutex<Vec<TermExit>>> = Arc::default();
-            let terms = Manager::new(dir.join("terminals"), agents.clone(), settings_path, rig_sink(&exits));
+            let terms = Manager::new_in(dir.join("terminals"), agents.clone(), settings_path, rig_sink(&exits), dir.join("home"));
             Rig { dir, agents, terms, exits, changed }
         }
 
@@ -716,6 +847,7 @@ mod tests {
                 no_task: false,
                 access: None,
                 effort: None,
+                engine_session: None,
             }
         }
 
@@ -823,6 +955,79 @@ mod tests {
         assert!(rig.terms.list().is_empty());
         assert!(text(&bytes).contains("hello"));
         assert!(String::from_utf8_lossy(&rig.saved(&id)).contains("hello"));
+        rig.clean();
+    }
+
+    fn write_file(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    const THREAD: &str = "019b0000-aaaa-7bbb-8ccc-ddddeeeeffff";
+
+    /// A Codex rollout and index entry for `cwd`, filed far in the future so it is after any session's start.
+    fn codex_files(rig: &Rig, cwd: &str, thread: &str, name: &str) {
+        let meta = json!({"type": "session_meta", "payload": {"id": thread, "cwd": cwd, "timestamp": "2099-01-01T00:00:00.000Z"}});
+        write_file(&rig.dir.join("home/.codex/sessions/2099/01/01").join(format!("rollout-2099-01-01T00-00-00-{thread}.jsonl")), &format!("{meta}\n"));
+        write_file(&rig.dir.join("home/.codex/session_index.jsonl"), &format!("{}\n", json!({"id": thread, "thread_name": name})));
+    }
+
+    #[test]
+    fn the_exit_fills_a_claude_session_title_from_its_transcript() {
+        let rig = Rig::new("title-claude");
+        let tree = rig.plain_tree();
+        let id = rig.session(Some(tree.clone()));
+        let file = cli_files::claude_folder(&tree.path);
+        write_file(
+            &rig.dir.join("home/.claude/projects").join(file).join(format!("{id}.jsonl")),
+            "{\"type\":\"ai-title\",\"aiTitle\":\"Old\"}\n{\"type\":\"ai-title\",\"aiTitle\":\"Fix the importer\"}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n",
+        );
+        rig.run(&id, shell("echo hi", "echo hi"));
+        rig.wait_exits(1);
+        assert_eq!(rig.agents.info(&id).unwrap().cli_title.as_deref(), Some("Fix the importer"));
+        let events = rig.terms.transcript(&id).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0].event, crate::agent::events::RunEvent::UserMessage { text, .. } if text == "hi"));
+        rig.clean();
+    }
+
+    #[test]
+    fn the_exit_stores_a_codex_thread_and_its_name_and_the_transcript_follows_it() {
+        let rig = Rig::new("title-codex");
+        let tree = rig.plain_tree();
+        let id = rig.session(Some(tree.clone()));
+        rig.agents.amend(&id, |info| info.adapter = "codex".into()).unwrap();
+        assert!(rig.terms.transcript(&id).unwrap().is_empty());
+        codex_files(&rig, &tree.path, THREAD, "Add a retry");
+        rig.run(&id, shell("echo hi", "echo hi"));
+        rig.wait_exits(1);
+        let info = rig.agents.info(&id).unwrap();
+        assert_eq!(info.engine_session.as_deref(), Some(THREAD));
+        assert_eq!(info.cli_title.as_deref(), Some("Add a retry"));
+        assert!(rig.terms.transcript(&id).unwrap().is_empty());
+        rig.clean();
+    }
+
+    #[test]
+    fn a_stale_thread_is_cleared_and_a_missing_one_is_looked_up() {
+        let rig = Rig::new("stale-thread");
+        let tree = rig.plain_tree();
+        let id = rig.session(Some(tree.clone()));
+        rig.agents.amend(&id, |info| {
+            info.adapter = "codex".into();
+            info.engine_session = Some(THREAD.into());
+            info.started_at = 1;
+        })
+        .unwrap();
+        // No rollout under the home folder has that id: the id is cleared, so the resume uses --last.
+        assert_eq!(rig.terms.inner.known_thread(&rig.agents.info(&id).unwrap()), None);
+        assert_eq!(rig.agents.info(&id).unwrap().engine_session, None);
+        // A session without a stored thread finds its rollout by folder and time, and stores it.
+        codex_files(&rig, &tree.path, THREAD, "Name");
+        assert_eq!(rig.terms.inner.known_thread(&rig.agents.info(&id).unwrap()).as_deref(), Some(THREAD));
+        assert_eq!(rig.agents.info(&id).unwrap().engine_session.as_deref(), Some(THREAD));
+        // A stored thread whose rollout exists is kept.
+        assert_eq!(rig.terms.inner.known_thread(&rig.agents.info(&id).unwrap()).as_deref(), Some(THREAD));
         rig.clean();
     }
 

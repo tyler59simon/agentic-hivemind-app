@@ -132,6 +132,7 @@ pub fn session_args(
     session_id: &str,
     context_dir: &Path,
     no_task: bool,
+    thread: Option<&str>,
 ) -> Vec<String> {
     let text = |s: &str| s.to_string();
     let prompt = pointer_prompt(&context_dir.join("briefing.md"));
@@ -169,7 +170,8 @@ pub fn session_args(
         Engine::Codex => {
             let mut args = Vec::new();
             if mode == StartMode::Resume {
-                args.extend([text("resume"), text("--last")]);
+                // The thread this session started, when it is known; otherwise the folder's newest conversation.
+                args.extend([text("resume"), thread.map_or_else(|| text("--last"), text)]);
             }
             args.extend([text("--no-alt-screen"), text("--no-daemon")]);
             if let Some(model) = model {
@@ -382,7 +384,7 @@ mod tests {
         let c = ctx.display().to_string();
         let prompt = pointer_prompt(&ctx.join("briefing.md"));
         let args = |engine, mode, access: &Access, model: Option<&str>, effort: Option<&str>, deny: &[String]| {
-            session_args(engine, mode, access, model, effort, deny, None, ID, ctx, false)
+            session_args(engine, mode, access, model, effort, deny, None, ID, ctx, false, None)
         };
         let (fresh, resume) = (StartMode::Fresh, StartMode::Resume);
         let none: Vec<String> = vec![];
@@ -441,10 +443,22 @@ mod tests {
     }
 
     #[test]
+    fn codex_resumes_a_known_thread_by_id_and_else_the_newest() {
+        let ctx = Path::new("C:/data/terminals/ID/context");
+        let access = Access::from_policy(Engine::Codex, PolicyMode::Ask);
+        let args = |mode, thread| session_args(Engine::Codex, mode, &access, None, None, &[], None, ID, ctx, false, thread);
+        let by_id = args(StartMode::Resume, Some("019b0000-aaaa-7bbb-8ccc-ddddeeeeffff"));
+        assert_eq!(by_id[..2], strings(&["resume", "019b0000-aaaa-7bbb-8ccc-ddddeeeeffff"])[..]);
+        assert_eq!(args(StartMode::Resume, None)[..2], strings(&["resume", "--last"])[..]);
+        // A fresh start never resumes, whatever thread is stored.
+        assert_eq!(args(StartMode::Fresh, Some("x")), args(StartMode::Fresh, None));
+    }
+
+    #[test]
     fn every_permission_setting_has_its_flags() {
         let ctx = Path::new("C:/data/terminals/ID/context");
         let prompt = pointer_prompt(&ctx.join("briefing.md"));
-        let build = |engine, mode, access: &Access| session_args(engine, mode, access, None, None, &[], None, ID, ctx, false);
+        let build = |engine, mode, access: &Access| session_args(engine, mode, access, None, None, &[], None, ID, ctx, false, None);
         for (mode, name) in [
             (ClaudeMode::Manual, "manual"),
             (ClaudeMode::AcceptEdits, "acceptEdits"),
@@ -484,13 +498,13 @@ mod tests {
     fn a_session_name_goes_to_claude_only() {
         let ctx = Path::new("C:/data/terminals/ID/context");
         let prompt = pointer_prompt(&ctx.join("briefing.md"));
-        let named = |engine, mode| session_args(engine, mode, &Access::from_policy(engine, PolicyMode::Ask), None, None, &[], Some("Fix login"), ID, ctx, false);
+        let named = |engine, mode| session_args(engine, mode, &Access::from_policy(engine, PolicyMode::Ask), None, None, &[], Some("Fix login"), ID, ctx, false, None);
         let fresh = named(Engine::Claude, StartMode::Fresh);
         assert_eq!(fresh[fresh.len() - 3..], strings(&["--name", "Fix login", &prompt])[..]);
         let resume = named(Engine::Claude, StartMode::Resume);
         assert_eq!(resume[resume.len() - 2..], strings(&["--name", "Fix login"])[..]);
         for mode in [StartMode::Fresh, StartMode::Resume] {
-            assert_eq!(named(Engine::Codex, mode), session_args(Engine::Codex, mode, &read_only(), None, None, &[], None, ID, ctx, false));
+            assert_eq!(named(Engine::Codex, mode), session_args(Engine::Codex, mode, &read_only(), None, None, &[], None, ID, ctx, false, None));
         }
     }
 
@@ -500,13 +514,13 @@ mod tests {
         let prompt = pointer_prompt(&ctx.join("briefing.md"));
         for engine in [Engine::Claude, Engine::Codex] {
             let access = Access::from_policy(engine, PolicyMode::Ask);
-            let with = session_args(engine, StartMode::Fresh, &access, None, None, &[], None, ID, ctx, false);
-            let bare = session_args(engine, StartMode::Fresh, &access, None, None, &[], None, ID, ctx, true);
+            let with = session_args(engine, StartMode::Fresh, &access, None, None, &[], None, ID, ctx, false, None);
+            let bare = session_args(engine, StartMode::Fresh, &access, None, None, &[], None, ID, ctx, true, None);
             assert_eq!(with.last(), Some(&prompt));
             assert_eq!(bare, with[..with.len() - 1], "only the prompt is left out");
         }
         // The briefing folder stays readable to Claude, and a fresh Claude session still gets its id.
-        let bare = session_args(Engine::Claude, StartMode::Fresh, &manual(), None, None, &[], None, ID, ctx, true);
+        let bare = session_args(Engine::Claude, StartMode::Fresh, &manual(), None, None, &[], None, ID, ctx, true, None);
         assert!(bare.contains(&"--add-dir".to_string()) && bare.contains(&"--session-id".to_string()));
     }
 
@@ -519,7 +533,7 @@ mod tests {
         assert!(prompt.starts_with("Read the file "));
         for policy in [PolicyMode::Ask, PolicyMode::AcceptEdits] {
             let access = Access::from_policy(Engine::Claude, policy);
-            let list = session_args(Engine::Claude, StartMode::Fresh, &access, None, None, &[], None, ID, ctx, false);
+            let list = session_args(Engine::Claude, StartMode::Fresh, &access, None, None, &[], None, ID, ctx, false, None);
             assert_eq!(list.last(), Some(&prompt));
             assert_eq!(list[list.len() - 2], if policy == PolicyMode::AcceptEdits { "acceptEdits" } else { "manual" });
         }

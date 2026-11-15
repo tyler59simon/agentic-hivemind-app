@@ -184,6 +184,9 @@ pub struct SessionInfo {
     /// The reasoning effort a terminal session was started with; None leaves it to the CLI.
     #[serde(default)]
     pub effort: Option<String>,
+    /// The CLI's own id for the conversation, when Hivemind cannot choose it (Codex's thread id).
+    #[serde(default)]
+    pub engine_session: Option<String>,
 }
 
 /// What the user decided about a work session's edits.
@@ -552,6 +555,7 @@ fn session_info(id: &str, adapter: &str, task: AgentTask, scope: &Scope, options
         no_task: false,
         access: None,
         effort: None,
+        engine_session: None,
     }
 }
 
@@ -2778,6 +2782,7 @@ mod tests {
             no_task: false,
             access: None,
             effort: None,
+            engine_session: None,
         }
     }
 

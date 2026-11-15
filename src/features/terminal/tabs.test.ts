@@ -8,7 +8,7 @@ const session = (o: Partial<SessionInfo>): SessionInfo => ({
   id: `s${++n}`, adapter: "claude-code", cliVersion: null, task: { kind: "work", project: "paystream", repo: "C:/src/app" }, title: "t",
   workspace: [], status: "idle", startedAt: n, endedAt: null, costUsd: null, error: null, structured: null,
   mode: "interactive", policy: "ask", project: "paystream", worktree: wt, turns: 0, filesChanged: null, context: [], model: null, system: null,
-  review: null, sourceSha: null, interface: "terminal", name: null, cliTitle: null, direct: null, noTask: false, access: null, effort: null, ...o,
+  review: null, sourceSha: null, interface: "terminal", name: null, cliTitle: null, direct: null, noTask: false, access: null, effort: null, engineSession: null, ...o,
 });
 
 describe("terminal tabs", () => {

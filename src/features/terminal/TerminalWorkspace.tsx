@@ -1,15 +1,17 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRightLeft, CodeXml, Columns2, Database, FileText, GitBranch, Network, Plus, Square, SquareTerminal, X } from "lucide-react";
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { agentRename, engineOf, reviewFiles, type SessionInfo } from "../../lib/agent";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { agentRename, agentTranscript, engineOf, reviewFiles, type SessionInfo } from "../../lib/agent";
 import { OTHER_FOLDERS, otherFolders, realProject } from "../../lib/folders";
 import { openReview, openSession, openSystem, startSession, useApp } from "../../store";
 import { Menu } from "../../ui/Menu";
 import { Confirm } from "../../ui/Modal";
-import { ArrowLink, Row, Section } from "../../ui/Page";
+import { ArrowLink, Row, Section, Tabs } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
+import { Transcript } from "../agents/AgentWorkspace";
 import { RemoveWorktree } from "../agents/Chat";
+import { build } from "../agents/events";
 import { useSessionDraft } from "../agents/draft";
 import { isEnded, repoName, waitingForReview } from "../agents/session";
 import { reviewVersion } from "../review/review";
@@ -21,6 +23,7 @@ import * as registry from "./registry";
 import { isShellId, NO_SHELL_PLACE, shellLabel, shellPlaces, shellStatus, shellTitle, type ShellTab } from "./shells";
 import { statusLine, tabLabel, terminalTabs, whereLabel } from "./tabs";
 import { TerminalView } from "./TerminalView";
+import { pollMs, viewOf, type View } from "./view";
 
 const baseName = (path: string) => path.split(/[\\/]/).pop() || path;
 
@@ -112,6 +115,16 @@ function Rail({ s }: { s: SessionInfo }) {
   );
 }
 
+/** The session's conversation as the CLI saved it, in the chat view's own transcript; no input and no controls. */
+function SessionTranscript({ id, running }: { id: string; running: boolean }) {
+  const events = useQuery({ queryKey: ["agent", "transcript", id], queryFn: () => agentTranscript(id), staleTime: 0, refetchInterval: pollMs("transcript", running) });
+  const state = useMemo(() => build(events.data ?? []), [events.data]);
+  if (events.isLoading) return <p className="muted pad">Loading…</p>;
+  if (events.error) return <p className="error pad">{String(events.error)}</p>;
+  if (!state.items.length) return <p className="muted pad">Nothing to show yet. The conversation appears here once the CLI has saved it.</p>;
+  return <div className="chat-scroll term-transcript"><Transcript state={state} running={running} /></div>;
+}
+
 const DRAG_PX = 6;
 
 /** The tab's label as an input: Enter or blur saves, Escape cancels. It never starts a drag of the pill. */
@@ -140,8 +153,8 @@ function RenameInput({ s, onDone }: { s: SessionInfo; onDone: () => void }) {
 interface Drag { id: string; label: string; x: number; y: number; over: Pane | null }
 
 /** One pane: its tab strip, the active tab's terminal and its status line. */
-function PaneView({ index, tabs, activeId, focused, split, over, onFocus, onToggleSplit, onNew, onShell, onTab, onClose, onMove, onDragStart, clicked }: {
-  index: Pane; tabs: Tab[]; activeId: string | null; focused: boolean; split: boolean; over: boolean;
+function PaneView({ index, tabs, activeId, views, onView, focused, split, over, onFocus, onToggleSplit, onNew, onShell, onTab, onClose, onMove, onDragStart, clicked }: {
+  index: Pane; tabs: Tab[]; activeId: string | null; views: Record<string, View>; onView: (id: string, view: View) => void; focused: boolean; split: boolean; over: boolean;
   onFocus: () => void; onToggleSplit: () => void; onNew: (active?: SessionInfo) => void; onShell: (target: ShellTarget) => void;
   onTab: (t: Tab) => void; onClose: (t: Tab) => void; onMove: (t: Tab) => void;
   onDragStart: (e: ReactPointerEvent, t: Tab) => void; clicked: () => boolean;
@@ -154,7 +167,14 @@ function PaneView({ index, tabs, activeId, focused, split, over, onFocus, onTogg
   const running = registry.useRunning(session ?? (shell ? { id: shell.id, status: shell.running ? "running" : "ended" } : { id: "", status: "idle" }));
   const line = session ? statusLine(session, running) : shell ? shellStatus({ running, exitCode: shell.exitCode }) : null;
   const ended = !!session && (session.status === "ended" || session.status === "failed") && !running && (!!session.worktree || !!session.direct);
-  const hint = !!session && running && !session.endedAt && !live?.touched;
+  const view = session ? viewOf(views[session.id], session, running) : "terminal";
+  const hint = !!session && view === "terminal" && running && !session.endedAt && !live?.touched;
+  /** The terminal is created when its view first shows; a session opened on Transcript has none yet, so it is made before the start. */
+  const restart = (s: SessionInfo, mode: "resume" | "fresh") => {
+    registry.ensure(s.id, { sessionId: s.id, engine: engineOf(s), start: null });
+    onView(s.id, "terminal");
+    registry.start(s.id, mode);
+  };
   const splitWord = split ? "Close the second pane" : "Split into two panes";
   const project = useApp((s) => s.project) ?? null;
   const { project: current } = useCurrentProject();
@@ -200,17 +220,20 @@ function PaneView({ index, tabs, activeId, focused, split, over, onFocus, onTogg
         <button className={`icon-button ${split ? "on" : ""}`} title={splitWord} aria-label={splitWord} aria-pressed={split} onClick={onToggleSplit}><Columns2 size="1.2em" aria-hidden /></button>
       </div>
       {hint && <p className="term-hint" role="note">{HINT[engineOf(session)]}</p>}
+      {session && (
+        <Tabs pill label="View" items={[{ id: "terminal", label: "Terminal" }, { id: "transcript", label: "Transcript" }]} value={view} onChange={(v) => onView(session.id, v)} />
+      )}
       <div className="term-box">
         {active && line ? (
           <>
-            {shell
+            {session && view === "transcript" ? <SessionTranscript id={session.id} running={running} /> : shell
               ? <TerminalView key={shell.id} id={shell.id} sessionId={null} engine={null} start={null} shell label={shellLabel(shell)} focused={focused} />
               : session && <TerminalView key={session.id} id={session.id} sessionId={session.id} engine={engineOf(session)} start={session.status === "idle" ? "fresh" : null} label={tabLabel(session)} focused={focused} />}
             <div className="term-status" role="status">
               {ended && session && (
                 <>
-                  <button className="primary" disabled={live?.starting} onClick={() => { registry.start(session.id, "resume"); }}>Resume in terminal</button>
-                  <button className="text underline" disabled={live?.starting} title="Start the program again with the briefing, as a new conversation" onClick={() => { registry.start(session.id, "fresh"); }}>Start over</button>
+                  <button className="primary" disabled={live?.starting} onClick={() => restart(session, "resume")}>Resume in terminal</button>
+                  <button className="text underline" disabled={live?.starting} title="Start the program again with the briefing, as a new conversation" onClick={() => restart(session, "fresh")}>Start over</button>
                 </>
               )}
               {session && waitingForReview(session) && <span className="status-chip waiting">Waiting for review</span>}
@@ -246,6 +269,9 @@ export function TerminalWorkspace({ sessions, selected, onEmpty }: { sessions: S
   const byId = (id: string | null) => tabs.find((t) => t.id === id);
   const sessionById = (id: string | null) => sessionTabs.find((t) => t.id === id);
   const [closing, setClosing] = useState<Tab | null>(null);
+  // The user's Terminal / Transcript choice per tab; it lasts while the page is open.
+  const [views, setViews] = useState<Record<string, View>>({});
+  const setView = (id: string, view: View) => setViews((all) => ({ ...all, [id]: view }));
   const [drag, setDrag] = useState<Drag | null>(null);
   const dragged = useRef(false);
 
@@ -367,7 +393,7 @@ export function TerminalWorkspace({ sessions, selected, onEmpty }: { sessions: S
       <div className="term-main">
         <div className="term-panes">
           {panes.map((i) => (
-            <PaneView key={i} index={i} tabs={view.panes[i].map(byId).filter((t): t is Tab => !!t)} activeId={view.active[i]}
+            <PaneView key={i} index={i} tabs={view.panes[i].map(byId).filter((t): t is Tab => !!t)} activeId={view.active[i]} views={views} onView={setView}
               focused={view.focus === i} split={view.split} over={drag?.over === i && paneOf(view, drag.id) !== i}
               onFocus={() => focusOn(i)} onToggleSplit={() => update(toggleSplit)} onNew={(a) => { focusOn(i); newTerminal(a ?? railSession); }} onShell={(t) => { void shellIn(i, t); }}
               onTab={show} onClose={close} onMove={moveOther} onDragStart={startDrag} clicked={() => dragged.current} />

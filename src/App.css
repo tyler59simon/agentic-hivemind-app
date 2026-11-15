@@ -610,6 +610,7 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .term-box { position: relative; flex: 1; min-height: 12rem; display: flex; flex-direction: column; border: 1px solid var(--border-strong); border-radius: .6rem; background: var(--bg-code); overflow: hidden; }
 .term-box:focus-within { border-color: var(--accent); }
 .term-box.login { flex: none; height: 22rem; }
+.term-transcript { padding: 0 1rem 1rem; }
 .term-host { flex: 1; min-height: 0; padding: .7rem .2rem .3rem .9rem; }
 .term-box-inner, .term-host .xterm { height: 100%; }
 .find-open { position: absolute; top: .4rem; right: 1rem; z-index: 2; opacity: .6; }
