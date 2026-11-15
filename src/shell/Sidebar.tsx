@@ -47,7 +47,7 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
         {SECTIONS.filter((s) => (s.page !== "dashboards" || viewsOn) && (s.page !== "recap" || recapOn)).map(({ page: p, label, icon: Icon }) => (
           <button key={p} className={`nav-item ${page === p ? "on" : ""}`} aria-current={page === p ? "page" : undefined} onClick={() => go({ page: p })}>
             <Icon size="1.35em" aria-hidden /><span className="grow">{label}</span>
-            {mark(p) && <span className={`nav-dot ${p === "agents" && waiting ? "waiting" : p === "agents" && attention === "done" ? "done" : ""}`} title={mark(p)!} aria-label={mark(p)!} />}
+            {mark(p) && <span className={`nav-dot ${p === "agents" && waiting ? "waiting" : p === "agents" && attention === "done" ? "done" : p === "memory" ? "unsaved" : ""}`} title={mark(p)!} aria-label={mark(p)!} />}
           </button>
         ))}
       </nav>

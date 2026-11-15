@@ -1,8 +1,5 @@
 import type { ITheme } from "@xterm/xterm";
 
-/** The blue `App.css` uses for `.type-decision`; there is no blue token. */
-const BLUE = "#7fb0ff";
-
 /** The terminal's colours, from the app's CSS tokens. `read` returns a token's value, e.g. read("--bg-code"). */
 export function xtermTheme(read: (token: string) => string): ITheme {
   return {
@@ -18,8 +15,8 @@ export function xtermTheme(read: (token: string) => string): ITheme {
     brightGreen: read("--success"),
     yellow: read("--warn"),
     brightYellow: read("--warn-fg"),
-    blue: BLUE,
-    brightBlue: BLUE,
+    blue: read("--term-blue"),
+    brightBlue: read("--term-blue"),
     magenta: read("--accent"),
     brightMagenta: read("--accent"),
     cyan: read("--teal"),

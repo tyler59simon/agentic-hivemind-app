@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import Sigma from "sigma";
 import type { LinkGraph } from "../../lib/lm";
+import { useTheme } from "../../lib/theme";
 import { PreviewCard } from "../preview/HoverPreview";
 import { toGraphology } from "./graphData";
 
@@ -17,6 +18,7 @@ export function GraphCanvas({ data, focus, onOpen, compact, dim }: {
   const [preview, setPreview] = useState<{ ref: string; x: number; y: number } | null>(null);
   const open = useRef(onOpen);
   open.current = onOpen;
+  const theme = useTheme();   // the colours below are read from the theme's tokens
 
   useEffect(() => {
     if (!host.current) return;
@@ -64,7 +66,7 @@ export function GraphCanvas({ data, focus, onOpen, compact, dim }: {
     const resize = new ResizeObserver(() => { sigma.resize(); sigma.refresh(); });
     resize.observe(host.current);
     return () => { resize.disconnect(); if (timer) clearTimeout(timer); sigma.kill(); };
-  }, [data, focus, compact, dim]);
+  }, [data, focus, compact, dim, theme]);
 
   return (
     <div className={`graph-canvas ${compact ? "compact" : ""}`}>

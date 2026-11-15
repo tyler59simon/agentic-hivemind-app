@@ -1,5 +1,6 @@
 // Per-device conveniences kept in localStorage (shared by the main and capture windows).
 import type { Mode } from "../workspace/store";
+import type { Theme } from "./theme";
 
 const get = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };
 const set = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* not kept */ } };
@@ -13,4 +14,7 @@ export const prefs = {
   setTrayNoticeShown: () => set("hivemind.trayNotice", "1"),
   captureProject: () => get("hivemind.captureProject"),
   setCaptureProject: (slug: string) => set("hivemind.captureProject", slug),
+  themeKey: "hivemind.theme",
+  theme: (): Theme => (get("hivemind.theme") === "emerald" ? "emerald" : "purple"),
+  setTheme: (theme: Theme) => set("hivemind.theme", theme),
 };

@@ -11,6 +11,7 @@ import "@xterm/xterm/css/xterm.css";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useSyncExternalStore } from "react";
 import type { Engine, SessionInfo } from "../../lib/agent";
+import { onThemeChange } from "../../lib/theme";
 import { termClose, termLogin, termOpen, termResize, termShell, termWrite, type ShellTarget, type StartMode, type TermExit, type TermInfo } from "../../lib/term";
 import { keyAction } from "./keys";
 import { decodeOsc52 } from "./osc52";
@@ -70,6 +71,11 @@ export const FIND_DECORATIONS = {
 
 const notify = () => { version++; listeners.forEach((l) => l()); };
 const read = (token: string) => getComputedStyle(document.documentElement).getPropertyValue(token).trim();
+// A theme change recolours every open terminal, shown or not.
+onThemeChange(() => {
+  const theme = xtermTheme(read);
+  lives.forEach((live) => { live.term.options.theme = theme; });
+});
 const rootPx = () => parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
 const openLink = (_e: MouseEvent, uri: string) => { if (/^https?:/i.test(uri)) openUrl(uri).catch(() => undefined); };
 
