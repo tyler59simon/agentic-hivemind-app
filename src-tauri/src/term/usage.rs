@@ -48,11 +48,14 @@ struct Counts {
 /// Feed the lines of a Claude Code transcript, then `finish`.
 #[derive(Default)]
 pub struct ClaudeUsage {
-    /// By message id; a streamed message is written several times and the last record wins.
-    messages: HashMap<String, (Counts, String)>,
+    /// By message id; a streamed message is written several times and the last record wins. The `usize` is how many
+    /// `cost-state` records came before the message's first record.
+    messages: HashMap<String, (Counts, String, usize)>,
     unnamed: u64,
-    /// The last `cost-state`: total cost and, when it lists models, their summed tokens.
+    /// The last `cost-state`: total cost and, when it lists models, their summed tokens. Claude Code writes it as a running
+    /// total (also across resumes) when a run ends and sometimes after a turn, so messages after it are not in it yet.
     state: Option<(f64, Option<Counts>)>,
+    states: usize,
 }
 
 impl ClaudeUsage {
@@ -74,6 +77,7 @@ impl ClaudeUsage {
                     })
                 });
                 self.state = Some((total, counts));
+                self.states += 1;
             }
             Some("assistant") => {
                 let message = &record["message"];
@@ -92,33 +96,48 @@ impl ClaudeUsage {
                     cache_write: num(usage, "cache_creation_input_tokens"),
                 };
                 let model = message.get("model").and_then(Value::as_str).unwrap_or("").to_string();
-                self.messages.insert(id, (counts, model));
+                let first = self.messages.get(&id).map_or(self.states, |m| m.2);
+                self.messages.insert(id, (counts, model, first));
             }
             _ => {}
         }
     }
 
     pub fn finish(self) -> Usage {
-        let mut counted = Counts::default();
-        let mut cost = Some(0.0);
-        for (counts, model) in self.messages.values() {
-            counted.input += counts.input;
-            counted.output += counts.output;
-            counted.cache_read += counts.cache_read;
-            counted.cache_write += counts.cache_write;
-            cost = match (cost, pricing::rates(model)) {
-                (Some(sum), Some(r)) => Some(
-                    sum + (counts.input as f64 * r.input
-                        + counts.output as f64 * r.output
-                        + counts.cache_read as f64 * r.cache_read
-                        + counts.cache_write as f64 * r.cache_write())
-                        / 1e6,
-                ),
-                _ => None,
-            };
-        }
+        // Counted tokens and the estimated cost of all messages, and of those after the last `cost-state`.
+        let sum = |after: usize| {
+            let mut counted = Counts::default();
+            let mut cost = Some(0.0);
+            for (counts, model, _) in self.messages.values().filter(|m| m.2 >= after) {
+                counted.input += counts.input;
+                counted.output += counts.output;
+                counted.cache_read += counts.cache_read;
+                counted.cache_write += counts.cache_write;
+                cost = match (cost, pricing::rates(model)) {
+                    (Some(sum), Some(r)) => Some(
+                        sum + (counts.input as f64 * r.input
+                            + counts.output as f64 * r.output
+                            + counts.cache_read as f64 * r.cache_read
+                            + counts.cache_write as f64 * r.cache_write())
+                            / 1e6,
+                    ),
+                    _ => None,
+                };
+            }
+            (counted, cost)
+        };
+        let (counted, cost) = sum(0);
         let (counts, cost_usd, cost_exact) = match self.state {
-            Some((total, counts)) => (counts.unwrap_or(counted), Some(total), true),
+            Some((total, state_counts)) => {
+                let (later, later_cost) = sum(self.states);
+                let counts = match state_counts {
+                    Some(c) => Counts { input: c.input + later.input, output: c.output + later.output, cache_read: c.cache_read + later.cache_read, cache_write: c.cache_write + later.cache_write },
+                    None => counted,
+                };
+                // Exact only when nothing came after it; otherwise the later messages are estimated on top ("≈").
+                let exact = !self.messages.values().any(|m| m.2 >= self.states);
+                (counts, Some(total + later_cost.unwrap_or(0.0)), exact)
+            }
             None => (counted, if self.messages.is_empty() { None } else { cost }, false),
         };
         Usage {
@@ -235,6 +254,19 @@ mod tests {
         // Without a model list the counted tokens stay.
         let bare = claude(&[A1, r#"{"type":"cost-state","totalCostUSD":0.5}"#]);
         assert_eq!((bare.input_tokens, bare.cost_usd, bare.cost_exact), (10, Some(0.5), true));
+    }
+
+    #[test]
+    fn messages_after_the_last_cost_state_are_estimated_on_top() {
+        // A resumed or running session: the cost-state was written when an earlier run ended.
+        let state = r#"{"type":"cost-state","totalCostUSD":0.5,"modelUsage":{"claude-haiku-5-5":{"inputTokens":100,"outputTokens":50}}}"#;
+        let later = r#"{"type":"assistant","message":{"id":"m2","model":"claude-haiku-5-5","usage":{"input_tokens":1000000,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}"#;
+        let usage = claude(&[A1, state, later]);
+        assert_eq!((usage.input_tokens, usage.output_tokens, usage.cost_exact), (1_000_100, 50, false));
+        assert!((usage.cost_usd.unwrap() - 0.6).abs() < 1e-9);
+        // A message streamed across the cost-state counts as covered by it.
+        let usage = claude(&[A1, state, A1_FINAL]);
+        assert_eq!((usage.cost_usd, usage.cost_exact), (Some(0.5), true));
     }
 
     #[test]

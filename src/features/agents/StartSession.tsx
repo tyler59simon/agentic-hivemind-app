@@ -47,7 +47,7 @@ function toolLines(engine: Engine, face: Interface): string[] {
   if (face === "terminal") {
     return engine === "claude"
       ? [TERMINAL_APPROVALS, "Never: Living Memory plan, apply and undo commands. Claude Code is started with rules that deny them.", "Loaded from your own Claude Code setup: settings, hooks, plugins and MCP servers."]
-      : [TERMINAL_APPROVALS, "Hivemind cannot refuse Living Memory plan, apply and undo commands in a Codex terminal. The briefing tells the agent not to run them; do not approve one if Codex asks.", "Loaded from your own Codex setup: its configuration, AGENTS.md, plugins and MCP servers."];
+      : [TERMINAL_APPROVALS, "Never: applying or undoing Living Memory plans. Living Memory's own hook in your Codex setup refuses them in Hivemind terminals.", "Loaded from your own Codex setup: its configuration, AGENTS.md, plugins and MCP servers."];
   }
   return engine === "claude"
     ? [

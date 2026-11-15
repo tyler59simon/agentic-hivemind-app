@@ -22,7 +22,8 @@ pub(super) fn injected(text: &str) -> bool {
     let text = text.trim();
     let Some(rest) = text.strip_prefix('<') else { return false };
     let Some(end) = rest.find('>') else { return false };
-    let tag = &rest[..end];
+    // The tag name ends at the first space: `<hook_prompt hook_run_id="...">` is Codex's hook text.
+    let tag = rest[..end].split(' ').next().unwrap_or("");
     !tag.is_empty() && tag.chars().all(|c| c.is_ascii_lowercase() || c == '_' || c == '-') && text.ends_with(&format!("</{tag}>"))
 }
 
@@ -310,6 +311,7 @@ mod tests {
     fn only_a_whole_tagged_block_counts_as_injected() {
         assert!(injected("<system-reminder>x</system-reminder>"));
         assert!(injected("<environment_context>\n<cwd>a</cwd>\n</environment_context>\n"));
+        assert!(injected("<hook_prompt hook_run_id=\"stop:5:C:\\x\\hooks.json\">Living Memory: ...</hook_prompt>"));
         assert!(!injected("<div> fix this"));
         assert!(!injected("Use <b>bold</b>"));
         assert!(!injected("plain"));

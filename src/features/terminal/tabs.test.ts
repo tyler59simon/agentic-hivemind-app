@@ -85,6 +85,9 @@ describe("terminal tabs", () => {
       .toEqual({ tone: "failed", text: "Session failed · The program exited with code 1." });
     expect(statusLine(session({ status: "ended", worktree: null }), false).text).toBe("Session ended · worktree removed");
     expect(statusLine(session({ status: "failed", error: "x", worktree: null }), false).text).toBe("Session failed · x · worktree removed");
+    // A checkout session never had a worktree; an ended session still shows what it used.
+    const direct = { path: "C:/src/app", repo: "C:/src/app", headSha: null, startTree: null };
+    expect(statusLine(session({ status: "ended", worktree: null, direct }), false, "12.4k tokens · ≈ $0.31").text).toBe("Session ended · 12.4k tokens · ≈ $0.31");
   });
 });
 
