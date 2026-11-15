@@ -1,9 +1,9 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
-import { ChevronDown, CircleCheck, CircleX, CodeXml, FileText, GitBranch, Layers, Link as LinkIcon, LoaderCircle, MessageSquare, Network, Plus, ShieldCheck, Sparkle } from "lucide-react";
+import { ChevronDown, CircleCheck, CircleX, CodeXml, FileText, GitBranch, Layers, Link as LinkIcon, LoaderCircle, MessageSquare, Network, Plus, Shield, ShieldCheck, Sparkle, SquareTerminal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import logo from "../../assets/logo.png";
-import { agentCancel, agentEnd, agentRemoveWorktree, agentSession, agentSetPolicy, sessionsQuery, type Policy, type SeqEvent, type SessionInfo } from "../../lib/agent";
+import { agentCancel, agentEnd, agentSession, agentSetPolicy, sessionsQuery, type Policy, type SeqEvent, type SessionInfo } from "../../lib/agent";
 import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { connect } from "../../lib/lm";
 import { openChange, openProject, openReview, openSession, openSystem, startSession, useApp } from "../../store";
@@ -12,16 +12,18 @@ import { Confirm } from "../../ui/Modal";
 import { ArrowLink, PageHeader, Row, Section } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
-import { displayId } from "../changes/changes";
+import { displayId, engineName } from "../changes/changes";
 import { dayLabel } from "../history/activity";
 import { projectsQuery } from "../projects/useProject";
 import { systemsQuery } from "../systems/useSystem";
 import { noteQuery } from "../viewer/NoteView";
-import { ApprovalCard, Composer, FilesCard } from "./Chat";
+import { ApprovalCard, Composer, FilesCard, RemoveWorktree } from "./Chat";
 import { apply, build, cost, duration, EMPTY, merge, type Finished, type Item, type Transcript as State } from "./events";
 import { filesWord, reviewLabel } from "../review/review";
 import { ALLOWED_NOTE, isEnded, permissionLines, POLICIES, repoName, waitingForReview } from "./session";
 import { StartSession } from "./StartSession";
+import { accessLabel } from "../terminal/tabs";
+import { StopSession, TerminalWorkspace } from "../terminal/TerminalWorkspace";
 
 const when = (ms: number) => new Date(ms).toLocaleString();
 const elapsed = (s: SessionInfo) => duration((s.endedAt ?? Date.now()) - s.startedAt);
@@ -121,17 +123,29 @@ export function Transcript({ state, running, chat }: { state: State; running: bo
   );
 }
 
+/** The exact permission flags a terminal session was started with (see `term/launch.rs`). */
+const permissionFlags = (s: SessionInfo) => {
+  const edits = s.policy === "accept_edits";
+  return s.adapter === "codex"
+    ? `Codex was started with -s ${edits ? "workspace-write" : "read-only"} -a on-request`
+    : `Claude Code was started with --permission-mode ${edits ? "acceptEdits" : "manual"}`;
+};
+
 /** Engine, permissions and branch of an interactive session. */
 function Toolbar({ info }: { info: SessionInfo }) {
   const client = useQueryClient();
   const setPolicy = (policy: Policy) => agentSetPolicy(info.id, policy).then(() => client.invalidateQueries({ queryKey: ["agent", "sessions"] })).catch((e) => toast(String(e), "error"));
   return (
     <div className="agent-toolbar">
-      <span className="engine-chip"><Sparkle size="1.2em" aria-hidden />Claude Code</span>
+      <span className="engine-chip"><Sparkle size="1.2em" aria-hidden />{engineName(info.adapter)}</span>
       <span className="toolbar-sep" />
-      <select aria-label="Permissions" value={info.policy} disabled={isEnded(info)} onChange={(e) => setPolicy(e.target.value as Policy)}>
-        {POLICIES.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
-      </select>
+      {info.interface === "terminal"
+        ? <span className="toolbar-fact" title={permissionFlags(info)}><Shield size="1.2em" aria-hidden />{accessLabel(info)}</span>
+        : (
+          <select aria-label="Permissions" value={info.policy} disabled={isEnded(info)} onChange={(e) => setPolicy(e.target.value as Policy)}>
+            {POLICIES.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+          </select>
+        )}
       <span className="toolbar-sep" />
       <span className="branch-label" title={info.worktree ? "from " + info.worktree.baseBranch : undefined}>
         <GitBranch size="1.2em" aria-hidden />{info.worktree?.branch ?? "worktree removed"}
@@ -147,7 +161,7 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
   const registry = useQuery({ ...projectsQuery(), enabled: projectsOn });
   const notes = useQueries({ queries: info.context.map((ref) => noteQuery(ref)) });
   const [linked, setLinked] = useState(false);
-  const [asking, setAsking] = useState<"end" | "remove" | null>(null);
+  const [asking, setAsking] = useState<"end" | null>(null);
   const task = info.task.kind === "work" ? info.task : null;
   const project = registry.data?.projects.find((p) => p.slug === info.project);
   const ended = isEnded(info);
@@ -155,7 +169,6 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
   const resume = `claude --resume ${info.id}`;
   const refresh = () => client.invalidateQueries({ queryKey: ["agent", "sessions"] });
   const end = () => agentEnd(info.id).then(refresh).catch((e) => toast(String(e), "error"));
-  const remove = () => agentRemoveWorktree(info.id).then(refresh).catch((e) => toast(String(e), "error"));
   return (
     <aside className="split-rail agents-rail">
       <Section title="Session context">
@@ -189,7 +202,7 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
       </Section>
       <div className="rail-actions">
         {!ended && <button className="danger-text" onClick={() => (info.status === "idle" ? end() : setAsking("end"))}>End session</button>}
-        {ended && info.worktree && <button className="outline" onClick={() => setAsking("remove")}>Remove worktree</button>}
+        <RemoveWorktree info={info} />
         {ended && (
           <button className="outline" title={`Continue this conversation in a terminal: ${resume}`}
             onClick={() => navigator.clipboard.writeText(resume).then(() => toast("Resume command copied"), () => toast(resume))}>Copy resume command</button>
@@ -198,10 +211,6 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
       {asking === "end" && (
         <Confirm title="End this session?" danger action="End session" message="The agent is still working. Ending stops it; the files it has changed stay in the worktree."
           onAnswer={(yes) => { setAsking(null); if (yes) end(); }} />
-      )}
-      {asking === "remove" && info.worktree && (
-        <Confirm title="Remove the worktree?" danger action="Remove" onAnswer={(yes) => { setAsking(null); if (yes) remove(); }}
-          message={`The folder is deleted${files ? `, with ${files} uncommitted file change${files === 1 ? "" : "s"}` : ""}. Commits on ${info.worktree.branch} are kept.`} />
       )}
     </aside>
   );
@@ -290,8 +299,13 @@ export function AgentWorkspace() {
   const enabled = systemsOn || projectsOn;
   const sessions = useQuery({ ...sessionsQuery(), enabled });
   const all = sessions.data ?? [];
-  const current = all.find((s) => s.id === picked)?.id ?? picked ?? all[0]?.id;
+  // After the last terminal tab is closed, the terminal view stays up with its empty state.
+  const [terminalEmpty, setTerminalEmpty] = useState(false);
+  const emptied = terminalEmpty && !picked;
+  useEffect(() => { if (picked) setTerminalEmpty(false); }, [picked]);
+  const current = emptied ? undefined : all.find((s) => s.id === picked)?.id ?? picked ?? all[0]?.id;
   const currentInfo = all.find((s) => s.id === current);
+  const terminalView = emptied || currentInfo?.interface === "terminal";
   const days = useMemo(() => {
     const groups: { day: string; items: SessionInfo[] }[] = [];
     for (const s of all) {
@@ -305,8 +319,9 @@ export function AgentWorkspace() {
   if (view === "new") return <StartSession />;
   return (
     <div className="page fill-page">
-      <PageHeader title="Agent Workspace" />
-      {currentInfo?.mode === "interactive" && <Toolbar info={currentInfo} />}
+      <PageHeader title="Agent Workspace" actions={<StopSession session={currentInfo} />}
+        subtitle={terminalView ? "Run Claude Code or Codex in a local, project-aware harness with memory and context." : undefined} />
+      {currentInfo && (currentInfo.mode === "interactive" || terminalView) && <Toolbar info={currentInfo} />}
       {!enabled ? <p className="muted">Agent sessions need a newer Living Memory (one with the <code>projects</code> command).</p>
         : sessions.isLoading ? <p className="muted">Loading…</p>
         : sessions.error ? <p className="error">{String(sessions.error)}</p>
@@ -316,7 +331,8 @@ export function AgentWorkspace() {
             <button className="primary" onClick={startSession}><Plus size="1.2em" aria-hidden />Start a session</button>
             <ArrowLink onClick={() => go({ page: "architecture" })}>Open Architecture</ArrowLink>
           </div>
-        ) : (
+        ) : terminalView ? <TerminalWorkspace sessions={all} selected={currentInfo} onEmpty={() => { setTerminalEmpty(true); go({ page: "agents" }); }} />
+        : (
           <div className="agents">
             <nav className="session-list" aria-label="Sessions">
               <div className="session-list-head">
@@ -328,7 +344,8 @@ export function AgentWorkspace() {
                   <div className="session-day">{g.day}</div>
                   {g.items.map((s) => (
                     <button key={s.id} className={`session-item ${s.id === current ? "on" : ""}`} aria-current={s.id === current} onClick={() => openSession(s.id)} title={s.error ?? s.title}>
-                      <MessageSquare size="1.3em" aria-hidden /><span className="grow">{s.title}</span>
+                      {s.interface === "terminal" ? <SquareTerminal size="1.3em" aria-hidden /> : <MessageSquare size="1.3em" aria-hidden />}
+                      <span className="grow">{s.title}{s.interface === "terminal" && waitingForReview(s) && <><br /><span className="status-chip waiting">Waiting for review</span></>}</span>
                       {s.status === "running" && <span className="nav-dot" aria-label="Running" />}
                       {s.status === "waiting" && <span className="nav-dot waiting" aria-label="Waiting for you" />}
                     </button>

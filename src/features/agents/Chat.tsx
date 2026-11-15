@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, AtSign, ChevronDown, ChevronRight, CircleCheck, CircleSlash, CircleX, File, LoaderCircle, Send, ShieldQuestion, Square } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { agentAnswer, agentInterrupt, agentSend, type FileChange, type SessionInfo } from "../../lib/agent";
+import { agentAnswer, agentInterrupt, agentRemoveWorktree, agentSend, type FileChange, type SessionInfo } from "../../lib/agent";
 import { useProjectsEnabled } from "../../lib/connection";
 import { domainOf, type NoteRow } from "../../lib/lm";
 import { startSession, useApp } from "../../store";
@@ -217,6 +217,24 @@ export function Composer({ info, transcript }: { info: SessionInfo; transcript: 
       {asking && (
         <Confirm title="Continue past the spending limit?" action="Continue" onAnswer={(yes) => { setAsking(false); if (yes) send(); }}
           message={"This session has spent " + cost(turn?.costUsd ?? info.costUsd) + ". Continuing starts a new run that can spend up to the limit in Settings again."} />
+      )}
+    </>
+  );
+}
+
+/** "Remove worktree" for a session that is over and still has one. Asks first. */
+export function RemoveWorktree({ info }: { info: SessionInfo }) {
+  const client = useQueryClient();
+  const [asking, setAsking] = useState(false);
+  if (!isEnded(info) || !info.worktree) return null;
+  const files = info.filesChanged?.files ?? 0;
+  const remove = () => agentRemoveWorktree(info.id).then(() => client.invalidateQueries({ queryKey: ["agent", "sessions"] })).catch((e) => toast(String(e), "error"));
+  return (
+    <>
+      <button className="outline" onClick={() => setAsking(true)}>Remove worktree</button>
+      {asking && (
+        <Confirm title="Remove the worktree?" danger action="Remove" onAnswer={(yes) => { setAsking(false); if (yes) remove(); }}
+          message={`The folder is deleted${files ? `, with ${files} uncommitted file change${files === 1 ? "" : "s"}` : ""}. Commits on ${info.worktree.branch} are kept.`} />
       )}
     </>
   );
