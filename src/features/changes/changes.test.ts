@@ -16,7 +16,7 @@ let n = 0;
 const session = (o: Partial<SessionInfo> = {}): SessionInfo => ({
   id: "s" + ++n, adapter: "claude-code", cliVersion: null, task: { kind: "work", project: "paystream", repo: "C:/r", change: 14 }, title: "Work",
   workspace: ["C:/r"], status: "idle", startedAt: 100, endedAt: null, costUsd: null, error: null, structured: null,
-  mode: "interactive", policy: "ask", project: "paystream", worktree: null, turns: 0, filesChanged: null, context: [], model: null, system: null, review: null, sourceSha: null, interface: "chat", name: null, cliTitle: null, ...o,
+  mode: "interactive", policy: "ask", project: "paystream", worktree: null, turns: 0, filesChanged: null, context: [], model: null, system: null, review: null, sourceSha: null, interface: "chat", name: null, cliTitle: null, direct: null, noTask: false, access: null, effort: null, ...o,
 });
 const node = (ref: string, type: NoteType = "decision", status: Status = "active", title = ref): LinkNode => ({ ref, id: ref, domain: "demo", title, type, status, tags: [] });
 const graph = (nodes: LinkNode[], edges: LinkGraph["edges"]): LinkGraph => ({ domains: ["demo"], nodes, edges, unresolved: [] });

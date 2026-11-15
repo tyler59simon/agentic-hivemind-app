@@ -7,7 +7,7 @@ let n = 0;
 const session = (o: Partial<SessionInfo>): SessionInfo => ({
   id: `s${++n}`, adapter: "claude-code", cliVersion: null, task: { kind: "work", project: "paystream", repo: "C:/code/ingestion" }, title: "t",
   workspace: [], status: "idle", startedAt: n, endedAt: null, costUsd: null, error: null, structured: null,
-  mode: "interactive", policy: "ask", project: "paystream", worktree: null, turns: 0, filesChanged: null, context: [], model: null, system: null, review: null, sourceSha: null, interface: "chat", name: null, cliTitle: null, ...o,
+  mode: "interactive", policy: "ask", project: "paystream", worktree: null, turns: 0, filesChanged: null, context: [], model: null, system: null, review: null, sourceSha: null, interface: "chat", name: null, cliTitle: null, direct: null, noTask: false, access: null, effort: null, ...o,
 });
 const project: Project = {
   slug: "paystream", name: "PayStream", status: "active", repos: ["C:/code/ingestion"], aliases: [], description: "",
@@ -66,6 +66,16 @@ describe("sessionBriefing", () => {
     architecture: { system: "Ingestion", generated: "2026-11-06", behind: 2, element: null, containers: ["API", "Worker"] },
     now: new Date("2026-11-09T12:00:00Z"),
   };
+
+  it("a terminal in the checkout does not claim a worktree or a permission rule", () => {
+    const text = sessionBriefing({ ...input, place: "checkout" });
+    expect(text).toContain("own checkout");
+    expect(text).not.toContain("worktree");
+    expect(text).not.toContain("created from");
+    expect(text).not.toContain("File edits");
+    expect(sessionBriefing({ ...input, place: "worktree" })).toContain("created from `main`");
+    expect(sessionBriefing({ ...input, place: "worktree" })).not.toContain("File edits");
+  });
 
   it("the briefing names the workspace, the notes and the memory rules", () => {
     const text = sessionBriefing(input);

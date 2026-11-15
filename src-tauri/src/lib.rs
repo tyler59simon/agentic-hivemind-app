@@ -3,6 +3,7 @@ mod architecture;
 mod bridge;
 mod capture;
 mod drafts;
+mod folders;
 mod git;
 mod review;
 mod settings;
@@ -194,6 +195,13 @@ async fn agent_engines(state: State<'_, AppState>) -> Result<Vec<EngineInfo>, St
     .await
 }
 
+/// The models and reasoning efforts an engine offers, and the defaults its own configuration names.
+#[tauri::command]
+async fn agent_models(state: State<'_, AppState>, engine: agent::Engine) -> Result<agent::models::AgentModels, String> {
+    let path = state.settings_path.clone();
+    blocking(move || Ok(agent::models::list(engine, &settings::load(&path)))).await
+}
+
 /// Start an agent session for a task; what it may touch is worked out here, not by the webview.
 #[tauri::command]
 async fn agent_start(
@@ -375,6 +383,19 @@ async fn term_login(state: State<'_, AppState>, engine: agent::Engine, cols: u16
     blocking(move || terminals.login(engine, cols, rows, raw(output))).await
 }
 
+/// Open a PowerShell tab in a session's folder, a project's checkout or a picked folder.
+#[tauri::command]
+async fn term_shell(state: State<'_, AppState>, target: term::ShellTarget, cols: u16, rows: u16, output: Channel<InvokeResponseBody>) -> Result<term::TermInfo, String> {
+    let (terminals, agents, bridge, path) = (state.terminals.clone(), state.agents.clone(), state.bridge.clone(), state.settings_path.clone());
+    blocking(move || {
+        let cwd = term::shell_cwd(&target, &agents, &settings::load(&path), |project, repo| {
+            agent::scope::project_repo(&git::project_entry(&bridge, project)?, repo)
+        })?;
+        terminals.shell(cwd, cols, rows, raw(output))
+    })
+    .await
+}
+
 #[tauri::command]
 async fn term_write(state: State<'_, AppState>, id: String, data: String) -> Result<(), String> {
     let terminals = state.terminals.clone();
@@ -412,6 +433,8 @@ fn get_settings(state: State<'_, AppState>) -> Settings {
 #[tauri::command]
 fn save_settings(app: AppHandle, state: State<'_, AppState>, value: Settings) -> Result<(), String> {
     let previous = settings::load(&state.settings_path);
+    // The folder list changes only through the native picker.
+    let value = folders::keep(&previous, value);
     settings::save(&state.settings_path, &value)?;
     *state.shortcut_error.lock().unwrap() = capture::apply_shortcut(&app, value.capture_shortcut().as_deref()).err();
     // Only a change of interpreter, script or store needs a new Living Memory process.
@@ -420,6 +443,26 @@ fn save_settings(app: AppHandle, state: State<'_, AppState>, value: Settings) ->
         state.bridge.reconfigure(settings::resolve(&value, |k| std::env::var(k).ok()));
     }
     Ok(())
+}
+
+/// Ask the user for a folder with the native dialog and remember it. None when the dialog was cancelled.
+#[tauri::command]
+async fn folder_pick(app: AppHandle, state: State<'_, AppState>) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let path = state.settings_path.clone();
+    // A blocking dialog must not run on the main thread.
+    blocking(move || match app.dialog().file().blocking_pick_folder() {
+        None => Ok(None),
+        Some(picked) => folders::add(&path, &picked.into_path().map_err(|e| e.to_string())?).map(Some),
+    })
+    .await
+}
+
+/// Take a folder out of the remembered list.
+#[tauri::command]
+async fn folder_forget(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    let settings_path = state.settings_path.clone();
+    blocking(move || folders::forget(&settings_path, &path)).await
 }
 
 #[tauri::command]
@@ -473,6 +516,7 @@ fn draft_list(state: State<'_, AppState>) -> Vec<Value> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -541,7 +585,7 @@ pub fn run() {
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, app_quit, quit_ack, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, repo_branches,
             agent_cancel, agent_sessions, agent_session, review_files, review_file, review_approve, review_request_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
-            system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_write, term_resize, term_close, term_list, agent_engines
+            system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

@@ -46,6 +46,8 @@ pub enum AgentTask {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         change: Option<u64>,
     },
+    /// Work in a folder the user picked with the native dialog, in place. Terminal only.
+    Folder { path: String },
 }
 
 /// How gated actions are decided, as stored on a session.
@@ -192,7 +194,7 @@ fn system_passport(entry: &Value, saved: &Settings, home: &Path) -> Result<Scope
 pub fn for_task(bridge: &Bridge, task: &AgentTask, saved: &Settings, home: &Path) -> Result<Scope, String> {
     match task {
         AgentTask::SystemPassport { slug } => system_passport(&crate::architecture::system_entry(bridge, slug)?, saved, home),
-        AgentTask::Work { .. } => Err("A work session is started with start_task".into()),
+        AgentTask::Work { .. } | AgentTask::Folder { .. } => Err("A work session is started with start_task".into()),
     }
 }
 
@@ -242,29 +244,54 @@ pub fn check_change(entry: &Value, project: &str, repo: &str) -> Result<(), Stri
 
 /// What a work session may touch: its worktree, and nothing without asking beyond reading it.
 pub fn work(tree: Worktree, policy: PolicyMode, prompt: &str) -> Result<Scope, String> {
+    let (cwd, title) = (PathBuf::from(&tree.path), task_title(prompt));
+    place(cwd, Some(tree), policy, title)
+}
+
+/// What a session in a folder of the user's own may touch: that folder, with the same rules as a worktree session and no
+/// worktree. `title` is what the tab shows.
+pub fn direct(folder: &Path, policy: PolicyMode, title: String) -> Result<Scope, String> {
+    place(folder.to_path_buf(), None, policy, title)
+}
+
+/// The first line of the task, as a session title.
+pub fn task_title(prompt: &str) -> String {
+    clip(prompt.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or_default(), TITLE)
+}
+
+fn place(cwd: PathBuf, worktree: Option<Worktree>, policy: PolicyMode, title: String) -> Result<Scope, String> {
     let policy = match policy {
         PolicyMode::Ask => Policy::Ask { allow: vec![] },
         PolicyMode::AcceptEdits => Policy::AcceptEdits { allow: vec![] },
         PolicyMode::PreApproved => return Err("A work session needs the ask or accept_edits policy".into()),
     };
-    let first = prompt.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or_default();
     Ok(Scope {
-        title: clip(first, TITLE),
-        cwd: PathBuf::from(&tree.path),
+        title,
+        cwd,
         add_dirs: vec![],
         policy,
         schema: None,
         plugin_dirs: vec![],
         required_plugin: None,
         mode: Mode::Interactive,
-        worktree: Some(tree),
+        worktree,
         deny: governed_rules(),
     })
+}
+
+/// The picked folder `path` names, in its saved spelling. Anything not picked with the native dialog is refused.
+pub fn other_folder(saved: &Settings, path: &str) -> Result<PathBuf, String> {
+    let folder = crate::folders::find(saved, path).ok_or("That folder was not chosen with the folder picker")?;
+    let folder = PathBuf::from(folder);
+    if folder.is_dir() { Ok(folder) } else { Err(format!("The folder no longer exists: {}", folder.display())) }
 }
 
 /// The scope of a stored work session, checked against the registry again before a process is started for it.
 pub fn for_session(bridge: &Bridge, info: &SessionInfo) -> Result<Scope, String> {
     let AgentTask::Work { project, repo, .. } = &info.task else { return Err("This session does not take messages".into()) };
+    if info.direct.is_some() {
+        return Err("A session in your own folder runs in the terminal and does not take messages".into());
+    }
     project_repo(&crate::git::project_entry(bridge, project)?, repo)?;
     let tree = info.worktree.clone().filter(|tree| Path::new(&tree.path).is_dir());
     work(tree.ok_or("This session's worktree no longer exists; end the session")?, info.policy, &info.title)
@@ -328,6 +355,36 @@ mod tests {
         std::fs::create_dir_all(&repo).unwrap();
         std::fs::write(runtime.join(if cfg!(windows) { "python.exe" } else { "python" }), "").unwrap();
         (base, home)
+    }
+
+    #[test]
+    fn only_picked_folders_are_accepted() {
+        let (base, _) = fixture("other-folder");
+        let folder = base.join("app");
+        let saved = Settings { other_folders: Some(vec![folder.display().to_string()]), ..Default::default() };
+        assert_eq!(other_folder(&saved, &format!("{}/", folder.display().to_string().replace('\\', "/"))).unwrap(), folder);
+        let message = "That folder was not chosen with the folder picker";
+        assert_eq!(other_folder(&saved, &base.display().to_string()).unwrap_err(), message);
+        assert_eq!(other_folder(&saved, &folder.join("sub").display().to_string()).unwrap_err(), message);
+        assert_eq!(other_folder(&Settings::default(), &folder.display().to_string()).unwrap_err(), message);
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert!(other_folder(&saved, &folder.display().to_string()).unwrap_err().starts_with("The folder no longer exists"));
+        std::fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn a_direct_scope_has_the_rules_of_a_work_scope_and_no_worktree() {
+        let folder = Path::new("C:/notes");
+        let direct = direct(folder, PolicyMode::AcceptEdits, "Codex".into()).unwrap();
+        assert_eq!((direct.cwd.as_path(), direct.worktree.as_ref(), direct.mode), (folder, None, Mode::Interactive));
+        assert_eq!(direct.policy.mode(), PolicyMode::AcceptEdits);
+        assert_eq!(direct.deny, governed_rules());
+        assert!(direct.add_dirs.is_empty());
+        assert_eq!(super::direct(folder, PolicyMode::PreApproved, String::new()).unwrap_err(), "A work session needs the ask or accept_edits policy");
+        assert_eq!(task_title("\n  Fix the bug  \nmore"), "Fix the bug");
+        assert_eq!(task_title("  "), "");
+        let folder_task: AgentTask = serde_json::from_value(json!({"kind": "folder", "path": "C:/notes"})).unwrap();
+        assert_eq!(folder_task, AgentTask::Folder { path: "C:/notes".into() });
     }
 
     #[test]

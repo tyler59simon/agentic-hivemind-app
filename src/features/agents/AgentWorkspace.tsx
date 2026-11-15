@@ -24,7 +24,7 @@ import { filesWord, reviewLabel } from "../review/review";
 import { ALLOWED_NOTE, isEnded, permissionLines, POLICIES, repoName, waitingForReview } from "./session";
 import { useSessionDraft } from "./draft";
 import { StartSession } from "./StartSession";
-import { accessLabel, latestOf } from "../terminal/tabs";
+import { accessLabel, latestOf, whereLabel } from "../terminal/tabs";
 import { StopSession, TerminalWorkspace } from "../terminal/TerminalWorkspace";
 
 const when = (ms: number) => new Date(ms).toLocaleString();
@@ -127,6 +127,9 @@ export function Transcript({ state, running, chat }: { state: State; running: bo
 
 /** The exact permission flags a terminal session was started with (see `term/launch.rs`). */
 const permissionFlags = (s: SessionInfo) => {
+  const a = s.access;
+  if (a?.engine === "claude") return `Claude Code was started with --permission-mode ${a.mode}`;
+  if (a?.engine === "codex") return a.approval === "approve-for-me" ? "Codex was started with --approve-for-me -s workspace-write" : `Codex was started with -s ${a.sandbox} -a ${a.approval}`;
   const edits = s.policy === "accept_edits";
   return s.adapter === "codex"
     ? `Codex was started with -s ${edits ? "workspace-write" : "read-only"} -a on-request`
@@ -193,7 +196,7 @@ function Toolbar({ info, face, sessions, onAsk }: { info?: SessionInfo; face: In
             )}
           <span className="toolbar-sep" />
           <span className="branch-label" title={info.worktree ? "from " + info.worktree.baseBranch : undefined}>
-            <GitBranch size="1.2em" aria-hidden />{info.worktree?.branch ?? "worktree removed"}
+            <GitBranch size="1.2em" aria-hidden />{whereLabel(info)}
           </span>
         </>
       )}

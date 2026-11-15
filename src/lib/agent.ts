@@ -4,7 +4,9 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type AgentTask =
   | { kind: "system_passport"; slug: string }
-  | { kind: "work"; project: string; repo: string; branch?: string; change?: number };
+  | { kind: "work"; project: string; repo: string; branch?: string; change?: number }
+  /** A folder chosen with `folderPick`; terminal only. It always runs in place. */
+  | { kind: "folder"; path: string };
 export type SessionStatus = "running" | "waiting" | "idle" | "succeeded" | "failed" | "cancelled" | "ended";
 export type SessionMode = "unattended" | "interactive";
 export type Policy = "pre_approved" | "ask" | "accept_edits";
@@ -12,8 +14,33 @@ export type Decision = "allow" | "allow_always" | "deny" | "withdrawn";
 export type TurnOutcome = "completed" | "stopped" | "budget" | "error";
 export type Engine = "claude" | "codex";
 export type Interface = "chat" | "terminal";
+/** Where a work session runs: a new worktree, or the project's own checkout. Chat sessions are worktree only. */
+export type Place = "worktree" | "checkout";
+
+/** The CLI's own permission settings, by the CLI's own names. Rust's serde is the allow-list. */
+export const CLAUDE_MODES = ["manual", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"] as const;
+export const SANDBOXES = ["read-only", "workspace-write", "danger-full-access"] as const;
+export const APPROVALS = ["on-request", "never", "approve-for-me"] as const;
+export type ClaudeMode = (typeof CLAUDE_MODES)[number];
+export type Sandbox = (typeof SANDBOXES)[number];
+export type Approval = (typeof APPROVALS)[number];
+export type Access =
+  | { engine: "claude"; mode: ClaudeMode }
+  | { engine: "codex"; sandbox: Sandbox; approval: Approval };
+
+/** True when the program would act without asking the user; starting such a session needs the confirm tick. Mirrors Rust's `Access::asks_nobody`. */
+export const asksNobody = (access: Access): boolean =>
+  access.engine === "claude"
+    ? access.mode === "bypassPermissions" || access.mode === "dontAsk"
+    : access.sandbox === "danger-full-access" || access.approval !== "on-request";
+
+/** The CLI's own words for an access, for a label. */
+export const accessLabel = (access: Access): string =>
+  access.engine === "claude" ? access.mode : `${access.sandbox} · ${access.approval}`;
 
 export interface Worktree { repo: string; path: string; branch: string; baseBranch: string; baseSha: string; reviewedSha?: string }
+/** A session that runs in a folder of the user's own. `startTree` is a git tree of the folder's files at the start. */
+export interface Direct { path: string; repo: string | null; headSha: string | null; startTree: string | null }
 export interface FileChange { path: string; status: "A" | "M" | "D"; added: number; removed: number; binary?: boolean }
 export interface FileTotals { files: number; added: number; removed: number }
 export interface FileDiff extends FileChange { diff: string; truncated: boolean }
@@ -41,6 +68,14 @@ export interface SessionInfo {
   name: string | null;
   /** The title the CLI gave its conversation. */
   cliTitle: string | null;
+  /** Set when the session runs in the project checkout or another folder, so it has no worktree. */
+  direct: Direct | null;
+  /** A terminal session started with an empty task. */
+  noTask: boolean;
+  /** What a terminal session may do without asking; null for a session from before the modes (its `policy` applies). */
+  access: Access | null;
+  /** The reasoning effort a terminal session was started with. */
+  effort: string | null;
 }
 
 /** The engine of a session, whatever adapter name older code stored. */
@@ -66,7 +101,10 @@ export type RunEvent =
     durationMs: number | null; turns: number | null; result: string | null; structured: unknown; denials: number;
   };
 
-export interface StartOptions { policy: Policy; context: string[]; briefing?: string; model?: string; system?: string; engine?: Engine; interface?: Interface }
+export interface StartOptions { policy: Policy; context: string[]; briefing?: string; model?: string; system?: string; engine?: Engine; interface?: Interface; place?: Place; access?: Access; effort?: string; confirmedRisky?: boolean }
+export interface ModelInfo { id: string; label: string; efforts: string[]; defaultEffort: string | null }
+/** The models an engine offers; the defaults are what its own configuration names. `note` says why the list is empty. */
+export interface AgentModels { models: ModelInfo[]; defaultModel: string | null; defaultEffort: string | null; note: string | null }
 export interface SendOptions { context: string[]; briefing?: string }
 
 export interface SeqEvent { sessionId: string; seq: number; at: number; event: RunEvent }
@@ -76,6 +114,7 @@ export interface SessionLog { info: SessionInfo; events: SeqEvent[] }
 export const agentAvailable = () => invoke<string>("agent_available");
 /** Which engines can be started, Claude Code first, and with which interface. */
 export const agentEngines = () => invoke<EngineInfo[]>("agent_engines");
+export const agentModels = (engine: Engine) => invoke<AgentModels>("agent_models", { engine });
 export const agentStart = (task: AgentTask, prompt: string, options?: StartOptions) => invoke<SessionInfo>("agent_start", { task, prompt, options: options ?? null });
 export const agentSend = (sessionId: string, text: string, options?: SendOptions) => invoke<void>("agent_send", { sessionId, text, options: options ?? null });
 export const agentAnswer = (sessionId: string, requestId: string, decision: Exclude<Decision, "withdrawn">) => invoke<void>("agent_answer", { sessionId, requestId, decision });
@@ -106,3 +145,4 @@ export const reviewBase = (w: Worktree) => w.reviewedSha ?? w.baseSha;
 
 export const sessionsQuery = () => ({ queryKey: ["agent", "sessions"], queryFn: agentSessions });
 export const enginesQuery = () => ({ queryKey: ["agent", "engines"], queryFn: agentEngines, staleTime: 60_000 });
+export const modelsQuery = (engine: Engine) => ({ queryKey: ["agent", "models", engine], queryFn: () => agentModels(engine), staleTime: 600_000 });

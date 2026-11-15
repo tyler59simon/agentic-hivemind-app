@@ -11,11 +11,12 @@ import "@xterm/xterm/css/xterm.css";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useSyncExternalStore } from "react";
 import type { Engine, SessionInfo } from "../../lib/agent";
-import { termClose, termLogin, termOpen, termResize, termWrite, type StartMode, type TermExit, type TermInfo } from "../../lib/term";
+import { termClose, termLogin, termOpen, termResize, termShell, termWrite, type ShellTarget, type StartMode, type TermExit, type TermInfo } from "../../lib/term";
 import { keyAction } from "./keys";
 import { decodeOsc52 } from "./osc52";
 import { quotePaths } from "./paths";
 import { pasteAction } from "./paste";
+import { isShellId, type ShellTab } from "./shells";
 import { fontPx, xtermTheme } from "./theme";
 import { makeWriter } from "./writer";
 
@@ -43,13 +44,22 @@ export interface Live {
   focusable: boolean;
 }
 
-interface Source { sessionId: string | null; engine: Engine }
+/** `engine` is null for a PowerShell terminal: it has no CLI, so no image-paste key. */
+interface Source { sessionId: string | null; engine: Engine | null; shell: boolean }
 
 const lives = new Map<string, Live>();
 const sources = new Map<string, Source>();
+/** The PowerShell tabs, in the order they were opened. They live here so a tab outlasts its page. */
+const shells = new Map<string, ShellTab>();
+/** Shells the user closed: a later `term_list` must not bring their tabs back. */
+const gone = new Set<string>();
+let shellsLoaded = false;
+let shellSnapshot: { version: number; tabs: ShellTab[] } = { version: -1, tabs: [] };
 const listeners = new Set<() => void>();
 let version = 0;
 let exitListener = false;
+/** Exit codes of shells that ended before their tab existed, by terminal id. */
+const earlyExits = new Map<string, number | null>();
 let dropListener = false;
 
 /** Colours for find matches; the addon only takes #RRGGBB. */
@@ -93,6 +103,14 @@ function watchExits() {
   if (exitListener) return;
   exitListener = true;
   listen<TermExit>("term-exit", (e) => {
+    // A shell can exit before `termShell` returns its id; `openShell` applies the exit when it adopts the shell.
+    if (e.payload.id.startsWith("shell-") && !shells.has(e.payload.id) && !lives.has(e.payload.id)) {
+      if (earlyExits.size > 50) earlyExits.clear();
+      earlyExits.set(e.payload.id, e.payload.code);
+      return;
+    }
+    const tab = shells.get(e.payload.id);
+    if (tab) { shells.set(tab.id, { ...tab, running: false, exitCode: e.payload.code }); notify(); }
     const live = lives.get(e.payload.id);
     if (!live) return;
     live.exits++;
@@ -134,9 +152,12 @@ async function attach(id: string, start: StartMode | null, replay: boolean): Pro
   output.onmessage = (bytes) => { live.term.write(new Uint8Array(bytes)); };
   const exits = live.exits;
   try {
-    const info: TermInfo = source.sessionId
-      ? await termOpen({ sessionId: source.sessionId, cols: live.term.cols, rows: live.term.rows, start, replay, output })
-      : await termLogin({ engine: source.engine, cols: live.term.cols, rows: live.term.rows, output });
+    // A shell is re-attached by its own id; it has no scrollback file, so there is nothing to replay.
+    const info: TermInfo = source.shell
+      ? await termOpen({ sessionId: id, cols: live.term.cols, rows: live.term.rows, start: null, replay: false, output })
+      : source.sessionId
+        ? await termOpen({ sessionId: source.sessionId, cols: live.term.cols, rows: live.term.rows, start, replay, output })
+        : await termLogin({ engine: source.engine ?? "claude", cols: live.term.cols, rows: live.term.rows, output });
     if (lives.get(id) !== live) {
       // Disposed while starting (the sign-in dialog was closed before its program was found): stop what was started,
       // unless a new terminal has taken the id over and attached to it.
@@ -155,8 +176,12 @@ async function attach(id: string, start: StartMode | null, replay: boolean): Pro
   notify();
 }
 
-/** Create the terminal for `id` if there is none, then attach to the Rust side. Safe to call twice. */
-export function ensure(id: string, opts: { sessionId: string | null; engine: Engine; start: StartMode | null }): Live {
+/** A shell that `openShell` already started: its reply, its output channel and the bytes that arrived before the terminal existed. */
+interface Adopt { info: TermInfo; output: Channel<ArrayBuffer>; early: ArrayBuffer[] }
+
+/** Create the terminal for `id` if there is none, then attach to the Rust side. Safe to call twice.
+ *  `shell` marks a PowerShell terminal (`id` is its `shell-<uuid>`); with `adopt` it is already attached. */
+export function ensure(id: string, opts: { sessionId: string | null; engine: Engine | null; start: StartMode | null; shell?: boolean; adopt?: Adopt }): Live {
   const existing = lives.get(id);
   if (existing) return existing;
   watchExits();
@@ -185,14 +210,24 @@ export function ensure(id: string, opts: { sessionId: string | null; engine: Eng
   // Capture phase, so this runs before xterm's own paste handler. Text is left to xterm; an image-only clipboard
   // sends the CLI's own image-paste key and the CLI reads the clipboard itself.
   box.addEventListener("paste", (e) => {
-    const action = pasteAction((e.clipboardData?.getData("text/plain") ?? "") !== "", opts.engine);
+    const action = pasteAction((e.clipboardData?.getData("text/plain") ?? "") !== "", opts.shell ? null : opts.engine);
     if (action === "xterm") return;
     e.preventDefault();
     e.stopPropagation();
     if (action && live.running) termWrite(id, action.send).catch(() => undefined);
   }, true);
   watchDrops();
-  sources.set(id, { sessionId: opts.sessionId, engine: opts.engine });
+  sources.set(id, { sessionId: opts.sessionId, engine: opts.engine, shell: !!opts.shell });
+  if (opts.adopt) {
+    // xterm takes writes before `open`, so what the shell printed on the way here is not lost.
+    const { info, output, early } = opts.adopt;
+    const put = (bytes: ArrayBuffer) => { term.write(new Uint8Array(bytes)); };
+    early.forEach(put);
+    output.onmessage = put;
+    live.running = info.running;
+    term.options.disableStdin = !live.running;
+    if (info.windowsBuild != null) term.options.windowsPty = { backend: "conpty", buildNumber: info.windowsBuild };
+  }
 
   void (async () => {
     // xterm measures the cell when it opens, so the font has to be loaded first (gotcha 18).
@@ -231,7 +266,7 @@ export function ensure(id: string, opts: { sessionId: string | null; engine: Eng
     // where 25 fit). Fit again on the next frame; the host's size does not change, so nothing else would.
     if (box.isConnected) refit(id);
     requestAnimationFrame(() => refit(id));
-    await attach(id, opts.start, true);
+    if (!opts.adopt) await attach(id, opts.start, true);
     if (lives.get(id) === live && box.isConnected) {
       refit(id);
       if (live.focusable) focus(live);
@@ -304,8 +339,53 @@ export function refit(id: string): void {
   try { live.fit.fit(); } catch { /* the host has no size yet */ }
 }
 
+const tabOf = (t: TermInfo): ShellTab => ({ shell: true, id: t.id, label: t.label, cwd: t.cwd, running: t.running, exitCode: t.exitCode });
+
+/** Open a PowerShell tab: start the shell, then give its terminal the id the backend chose (`shell-<uuid>`).
+ *  The output channel is made first and buffers what arrives before the terminal exists. Rejects with the backend's error
+ *  (for example the tab limit). The terminal starts at 80 by 24 and is fitted when its pane shows it. */
+export async function openShell(target: ShellTarget): Promise<string> {
+  watchExits();
+  const output = new Channel<ArrayBuffer>();
+  const early: ArrayBuffer[] = [];
+  output.onmessage = (bytes) => { early.push(bytes); };
+  const info = await termShell(target, 80, 24, output);
+  gone.delete(info.id);
+  shells.set(info.id, tabOf(info));
+  const live = ensure(info.id, { sessionId: null, engine: null, start: null, shell: true, adopt: { info, output, early } });
+  if (earlyExits.has(info.id)) {
+    const code = earlyExits.get(info.id) ?? null;
+    earlyExits.delete(info.id);
+    shells.set(info.id, { ...tabOf(info), running: false, exitCode: code });
+    live.exits++;
+    live.running = false;
+    live.term.options.disableStdin = true;
+  }
+  notify();
+  return info.id;
+}
+
+/** Learn the running shells from `term_list` (after a page reload they still run in Rust). Shells already known and shells the
+ *  user closed are left alone. Marks the list as loaded: until then the layout keeps shell ids it cannot match yet. */
+export function loadShells(list: TermInfo[]): void {
+  watchExits();
+  for (const t of list) {
+    if (t.sessionId === null && isShellId(t.id) && t.running && !shells.has(t.id) && !gone.has(t.id)) shells.set(t.id, tabOf(t));
+  }
+  shellsLoaded = true;
+  notify();
+}
+
+/** The shell tabs and whether `loadShells` has run (the tab list is stable until something changes). */
+export function useShells(): { tabs: ShellTab[]; loaded: boolean } {
+  useSyncExternalStore(subscribe, () => version);
+  if (shellSnapshot.version !== version) shellSnapshot = { version, tabs: [...shells.values()] };
+  return { tabs: shellSnapshot.tabs, loaded: shellsLoaded };
+}
+
 /** Forget a terminal and free it. Does not stop its program. */
 export function dispose(id: string): void {
+  if (shells.delete(id)) { gone.add(id); notify(); }
   const live = lives.get(id);
   if (!live) return;
   lives.delete(id);

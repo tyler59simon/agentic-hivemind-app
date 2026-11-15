@@ -1,6 +1,7 @@
 import { engineName } from "../changes/changes";
 import type { SessionInfo } from "../../lib/agent";
 import type { TermInfo } from "../../lib/term";
+import { isShellId, shellLabel } from "./shells";
 import { tabLabel } from "./tabs";
 
 /** One line for each running program and each running chat turn, for the quit dialog. */
@@ -8,6 +9,7 @@ export function runningSummary(terms: TermInfo[], sessions: SessionInfo[]): stri
   const lines: string[] = [];
   for (const t of terms) {
     if (!t.running) continue;
+    if (t.sessionId === null && isShellId(t.id)) { lines.push(`${shellLabel(t)} (terminal)`); continue; }
     const s = sessions.find((x) => x.id === t.sessionId);
     lines.push(s ? `${tabLabel(s)} (terminal)` : `${engineName(t.engine === "codex" ? "codex" : "claude-code")} sign-in (terminal)`);
   }

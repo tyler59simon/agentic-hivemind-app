@@ -1,18 +1,27 @@
-import { engineOf, type SessionInfo } from "../../lib/agent";
+import { accessLabel as cliAccessLabel, engineOf, type SessionInfo } from "../../lib/agent";
+import { OTHER_FOLDERS } from "../../lib/folders";
 import { POLICIES, repoName } from "../agents/session";
 import { engineName } from "../changes/changes";
 
-const inProject = (s: SessionInfo, project: string | null) => project === null || s.project === project;
+/** "Other folders" lists the sessions that belong to no project (the ones in a picked folder). */
+const inProject = (s: SessionInfo, project: string | null) => project === null || (project === OTHER_FOLDERS ? s.project === null : s.project === project);
 
-/** "Codex · ingestion-service": the engine and the repository's folder name. The task's repo is used because the worktree can be gone. */
+/** "Codex · ingestion-service": the engine and the repository's (or picked folder's) name. The task is used because the worktree can be gone. */
 export function defaultLabel(s: SessionInfo): string {
-  const repo = s.task.kind === "work" ? repoName(s.task.repo) : s.title;
+  const repo = s.task.kind === "work" ? repoName(s.task.repo) : s.task.kind === "folder" ? repoName(s.task.path) : s.title;
   return `${engineName(s.adapter)} · ${repo}`;
 }
 
-/** The tab's text: the name the user gave, else the CLI's own title, else `defaultLabel`. */
+/** The tab's text: the name the user gave, else the CLI's own title, else the task, else `defaultLabel`. */
 export function tabLabel(s: SessionInfo): string {
-  return s.name?.trim() || s.cliTitle?.trim() || defaultLabel(s);
+  return s.name?.trim() || s.cliTitle?.trim() || (s.noTask ? "" : s.title.trim()) || defaultLabel(s);
+}
+
+/** Where the session works, in a few words: its branch, "your checkout", the picked folder's name, or a removed worktree. */
+export function whereLabel(s: SessionInfo): string {
+  if (s.worktree) return s.worktree.branch;
+  if (s.direct) return s.task.kind === "work" ? "your checkout" : repoName(s.direct.path);
+  return "worktree removed";
 }
 
 /** The tab strip, oldest first: the project's terminal sessions that are idle or running, plus `selected` (whatever its project or status)
@@ -30,8 +39,9 @@ export function latestOf(sessions: SessionInfo[], project: string | null, face: 
     .reduce<SessionInfo | undefined>((best, s) => (best === undefined || s.startedAt > best.startedAt ? s : best), undefined);
 }
 
-/** The shield label in the toolbar for a terminal session. */
+/** The shield label in the toolbar for a terminal session: the CLI's own words when it was started with them. */
 export function accessLabel(s: SessionInfo): string {
+  if (s.access) return cliAccessLabel(s.access);
   if (engineOf(s) === "codex") return s.policy === "accept_edits" ? "Workspace access" : "Read only, asks first";
   return POLICIES.find((p) => p.id === s.policy)?.label ?? "Review edits";
 }

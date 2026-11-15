@@ -42,8 +42,10 @@ function FindBar({ id }: { id: string }) {
 }
 
 /** One terminal's screen. The xterm instance lives in the registry; this component only gives it a place. */
-export function TerminalView({ id, sessionId, engine, start, label, focused = true }: {
-  id: string; sessionId: string | null; engine: Engine; start: StartMode | null; label: string;
+export function TerminalView({ id, sessionId, engine, start, label, shell = false, focused = true }: {
+  id: string; sessionId: string | null; engine: Engine | null; start: StartMode | null; label: string;
+  /** A PowerShell tab: the id is the backend's `shell-<uuid>`, and the terminal attaches to the running shell. */
+  shell?: boolean;
   /** False in a pane that is not the focused one: the terminal is shown without taking the keyboard. */
   focused?: boolean;
 }) {
@@ -53,7 +55,7 @@ export function TerminalView({ id, sessionId, engine, start, label, focused = tr
   useEffect(() => {
     const el = host.current;
     if (!el) return;
-    registry.ensure(id, { sessionId, engine, start });
+    registry.ensure(id, { sessionId, engine, start, shell });
     registry.mount(id, el, { focus: focused });
     // xterm listens on its own textarea, inside this element, so this runs after xterm and before the app's window listeners.
     const onKey = (e: KeyboardEvent) => {

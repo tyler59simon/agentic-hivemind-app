@@ -3,6 +3,7 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useProjectsEnabled } from "../../lib/connection";
+import { realProject } from "../../lib/folders";
 import { gitActivity } from "../../lib/git";
 import { diff, history, links, list, openWork, projects, review } from "../../lib/lm";
 import { visible } from "../history/activity";
@@ -12,9 +13,9 @@ import { changedSlugs, projectOps, touchesRegistry } from "./projects";
 
 export const projectsQuery = () => ({ queryKey: ["projects"], queryFn: () => projects() });
 
-/** The project picked in the sidebar: undefined for "All memory", and while the registry loads. */
+/** The project picked in the sidebar: undefined for "All memory" and "Other folders", and while the registry loads. */
 export function useCurrentProject() {
-  const slug = useApp((s) => s.project);
+  const slug = useApp((s) => realProject(s.project));
   const enabled = useProjectsEnabled();
   const registry = useQuery({ ...projectsQuery(), enabled });
   const project = slug ? registry.data?.projects.find((p) => p.slug === slug) : undefined;
