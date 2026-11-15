@@ -25,6 +25,7 @@ export function ConnectionDialog({ engine, onClose }: { engine: EngineInfo; onCl
       <p>Hivemind does not store or handle your sign-in. It starts {engine.label} on this computer, and {engine.label} uses the sign-in it has saved itself.</p>
       {engine.path ? <p className="muted small">Program: {engine.path}</p> : <p className="error small">{engine.error}</p>}
       {engine.engine === "codex" && <p className="muted small">Codex keeps its own list of trusted folders and its own session history. Sessions started here appear there too.</p>}
+      {engine.engine === "codex" && <p className="warn-text small">Codex starts a new sign-in even when you are already signed in. If you close this before finishing it, Codex is left signed out.</p>}
       <p className="muted small">In a terminal: Ctrl+Shift+K leaves the terminal. In Claude Code, hold Shift to select text with the mouse.</p>
       {opened ? (
         <>

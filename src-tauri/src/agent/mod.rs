@@ -883,10 +883,23 @@ impl Manager {
     /// Change a session's details, save the index and tell the UI. A failed save is an error: the change then lives only
     /// in memory and is gone after a restart (for an approval, its review base with it).
     pub fn amend(&self, id: &str, change: impl FnOnce(&mut SessionInfo)) -> Result<SessionInfo, String> {
+        self.amend_checked(id, None, change)
+    }
+
+    /// `amend`, refused with `refusal` while a review action holds the session. The check and the change happen under one
+    /// lock, so a review action cannot reserve the session between them.
+    pub fn amend_unreserved(&self, id: &str, refusal: &str, change: impl FnOnce(&mut SessionInfo)) -> Result<SessionInfo, String> {
+        self.amend_checked(id, Some(refusal), change)
+    }
+
+    fn amend_checked(&self, id: &str, refusal: Option<&str>, change: impl FnOnce(&mut SessionInfo)) -> Result<SessionInfo, String> {
         let inner = &self.inner;
         store::log_path(&inner.dir, id)?;
         let mut sessions = inner.sessions.lock().unwrap();
         let session = sessions.get_mut(id).ok_or("Unknown session")?;
+        if let Some(refusal) = refusal.filter(|_| session.reserved) {
+            return Err(refusal.to_string());
+        }
         change(&mut session.info);
         let info = session.info.clone();
         let saved = inner.persist(&mut sessions);

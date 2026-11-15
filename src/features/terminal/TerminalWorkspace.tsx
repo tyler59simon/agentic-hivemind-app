@@ -110,6 +110,8 @@ export function TerminalWorkspace({ sessions, selected, onEmpty }: { sessions: S
   };
   const close = (s: SessionInfo) => {
     if (registry.isRunning(s)) { setClosing(s); return; }
+    // With nothing running, term_close ends a session that never started, so its tab goes and its worktree can be removed.
+    if (s.status === "idle") termClose(s.id).catch((e) => toast(String(e), "error"));
     registry.dispose(s.id);
     leave(s);
   };

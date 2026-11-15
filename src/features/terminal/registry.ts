@@ -9,7 +9,7 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useSyncExternalStore } from "react";
 import type { Engine, SessionInfo } from "../../lib/agent";
-import { termLogin, termOpen, termResize, termWrite, type StartMode, type TermExit, type TermInfo } from "../../lib/term";
+import { termClose, termLogin, termOpen, termResize, termWrite, type StartMode, type TermExit, type TermInfo } from "../../lib/term";
 import { keyAction } from "./keys";
 import { fontPx, xtermTheme } from "./theme";
 import { makeWriter } from "./writer";
@@ -28,6 +28,8 @@ export interface Live {
   touched: boolean;
   /** Whether a `term_open` is in flight (disables the resume buttons). */
   starting: boolean;
+  /** How many exits this terminal has seen; an exit that arrives before the start reply must not be undone by it. */
+  exits: number;
 }
 
 interface Source { sessionId: string | null; engine: Engine }
@@ -75,6 +77,7 @@ function watchExits() {
   listen<TermExit>("term-exit", (e) => {
     const live = lives.get(e.payload.id);
     if (!live) return;
+    live.exits++;
     live.running = false;
     live.term.options.disableStdin = true;
     notify();
@@ -91,15 +94,22 @@ async function attach(id: string, start: StartMode | null, replay: boolean): Pro
   notify();
   const output = new Channel<ArrayBuffer>();
   output.onmessage = (bytes) => { live.term.write(new Uint8Array(bytes)); };
+  const exits = live.exits;
   try {
     const info: TermInfo = source.sessionId
       ? await termOpen({ sessionId: source.sessionId, cols: live.term.cols, rows: live.term.rows, start, replay, output })
       : await termLogin({ engine: source.engine, cols: live.term.cols, rows: live.term.rows, output });
-    if (!lives.has(id)) return;
-    live.running = info.running;
+    if (lives.get(id) !== live) {
+      // Disposed while starting (the sign-in dialog was closed before its program was found): stop what was started,
+      // unless a new terminal has taken the id over and attached to it.
+      if (info.running && !lives.has(id)) termClose(id).catch(() => undefined);
+      return;
+    }
+    // The program may already have exited and its exit been handled while this reply was on its way.
+    live.running = info.running && live.exits === exits;
     if (info.windowsBuild != null) live.term.options.windowsPty = { backend: "conpty", buildNumber: info.windowsBuild };
   } catch (e) {
-    if (!lives.has(id)) return;
+    if (lives.get(id) !== live) return;
     live.error = String(e);
   }
   live.starting = false;
@@ -124,7 +134,7 @@ export function ensure(id: string, opts: { sessionId: string | null; engine: Eng
   term.loadAddon(new Unicode11Addon());
   term.unicode.activeVersion = "11";
   term.loadAddon(new WebLinksAddon(openLink));
-  const live: Live = { id, term, box, fit, running: false, error: null, touched: false, starting: false };
+  const live: Live = { id, term, box, fit, running: false, error: null, touched: false, starting: false, exits: 0 };
   lives.set(id, live);
   sources.set(id, { sessionId: opts.sessionId, engine: opts.engine });
 

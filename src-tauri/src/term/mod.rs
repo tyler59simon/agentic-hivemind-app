@@ -210,9 +210,11 @@ impl Manager {
         if replay {
             send_saved(&scrollback_path, &output);
         }
-        // Running is set before the spawn, and put back if the spawn fails, so an early exit is never overwritten.
+        // Running is set before the spawn, and put back if the spawn fails, so an early exit is never overwritten. The
+        // reservation is checked again in the same step: the check above and this change take the session lock separately,
+        // and once the session is running Phase 4 cannot reserve it.
         let before = (info.status, info.ended_at, info.error.clone());
-        inner.agents.amend(session_id, |info| {
+        inner.agents.amend_unreserved(session_id, RESERVED, |info| {
             info.status = Status::Running;
             info.ended_at = None;
             info.error = None;
@@ -292,11 +294,22 @@ impl Manager {
     /// Ask the program to leave; the exit handler records the rest. The entry is cloned out of the map first because
     /// `close` can wait for seconds.
     pub fn close(&self, id: &str) {
-        let entry = self.inner.terms.lock().unwrap().get(id).cloned();
-        if let Some(entry) = entry {
-            entry.shared.close_requested.store(true, Ordering::SeqCst);
-            entry.pty.close();
-        }
+        let terms = self.inner.terms.lock().unwrap();
+        let Some(entry) = terms.get(id).cloned() else {
+            // Nothing runs: a terminal session that never started (its first start failed) is ended, so its tab goes away
+            // and its worktree can be removed. Done under `terms`, so a start cannot begin in between.
+            let agents = &self.inner.agents;
+            if agents.info(id).is_ok_and(|info| info.interface == Interface::Terminal && info.status == Status::Idle) {
+                let _ = agents.amend(id, |info| {
+                    info.status = Status::Ended;
+                    info.ended_at = Some(agent::now_ms());
+                });
+            }
+            return;
+        };
+        drop(terms);
+        entry.shared.close_requested.store(true, Ordering::SeqCst);
+        entry.pty.close();
     }
 
     pub fn list(&self) -> Vec<TermInfo> {
@@ -853,6 +866,39 @@ mod tests {
         rig.terms.close(&id);
         rig.wait_exits(1);
         assert!(rig.terms.list().is_empty());
+        rig.clean();
+    }
+
+    #[test]
+    fn the_running_change_is_refused_under_a_reservation() {
+        let rig = Rig::new("claim");
+        let id = rig.session(Some(rig.plain_tree()));
+        let reservation = rig.agents.reserve(&id).unwrap();
+        let refused = rig.agents.amend_unreserved(&id, RESERVED, |info| info.status = Status::Running);
+        assert_eq!(refused.unwrap_err(), RESERVED);
+        assert_eq!(rig.agents.info(&id).unwrap().status, Status::Idle);
+        drop(reservation);
+        rig.agents.amend_unreserved(&id, RESERVED, |info| info.status = Status::Running).unwrap();
+        assert_eq!(rig.agents.info(&id).unwrap().status, Status::Running);
+        rig.clean();
+    }
+
+    #[test]
+    fn closing_a_session_that_never_started_ends_it() {
+        let rig = Rig::new("close-idle");
+        let id = rig.session(Some(rig.plain_tree()));
+        assert_eq!(rig.agents.info(&id).unwrap().status, Status::Idle);
+        rig.terms.close(&id);
+        let info = rig.agents.info(&id).unwrap();
+        assert_eq!(info.status, Status::Ended);
+        assert!(info.ended_at.is_some());
+        // A failed session stays failed.
+        let failed = rig.session(Some(rig.plain_tree()));
+        rig.agents.amend(&failed, |info| info.status = Status::Failed).unwrap();
+        rig.terms.close(&failed);
+        assert_eq!(rig.agents.info(&failed).unwrap().status, Status::Failed);
+        // A sign-in terminal id is not a session; closing it with nothing running does nothing.
+        rig.terms.close("login-claude");
         rig.clean();
     }
 
