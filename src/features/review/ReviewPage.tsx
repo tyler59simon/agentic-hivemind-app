@@ -1,97 +1,233 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
-import { useProjectsEnabled, useSystemsEnabled, useConnection } from "../../lib/connection";
-import { learningList, scopeLearning } from '../../lib/learning';
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { CircleCheck, FileText, GraduationCap, Layers, Network } from "lucide-react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { reviewFiles, reviewRefresh, sessionsQuery, type FileChange, type SessionInfo } from "../../lib/agent";
+import { useChangesEnabled, useConnection, useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
-import { review, systemPlan, type ReviewKind, type System, type SystemUpdate } from "../../lib/lm";
-import { openSession, openSystem } from "../../store";
-import { ArrowLink, PageHeader, Section, Tabs } from "../../ui/Page";
+import { learningList, scopeLearning } from "../../lib/learning";
+import { review, systemPlan, type ReviewKind, type ReviewRow, type System, type SystemUpdate } from "../../lib/lm";
+import { openSession, openSystem, useApp } from "../../store";
+import { ArrowLink, PageHeader, Tabs } from "../../ui/Page";
 import { toast } from "../../ui/toast";
+import { changesQuery } from "../changes/useChanges";
 import { PlanDialog } from "../plans/PlanDialog";
 import { systemsForProject } from "../projects/scope";
 import { useCurrentProject, useProject } from "../projects/useProject";
 import { systemsQuery, useSystemProposals } from "../systems/useSystem";
 import { ReviewQueue } from "../work/ReviewQueue";
-import { LearningReview } from './LearningReview';
-import { countLine, kindCounts, worklistRows } from './worklist';
+import { FilePane, SessionPane } from "./CodeReview";
+import { LearningReview } from "./LearningReview";
+import { baseName, changeOf, fileKey, reviewLabel, reviewSessions, reviewVersion, sessionHeading, step } from "./review";
+import { countLine, kindCounts } from "./worklist";
 
-type Kind = "all" | "memory" | "architecture" | "learning";
+type Kind = "all" | "code" | "memory" | "architecture" | "learning";
 
-/** Review: what waits for you before it counts as accepted. Today that is notes due for confirmation and
- *  registry changes an agent proposed; agent code edits join them with the diff review. */
+/** The most file rows one session lists; the rest are counted. */
+const MAX_ROWS = 300;
+const EMPTY: Record<Exclude<Kind, "all" | "learning">, string> = {
+  code: "No code changes are waiting.", memory: "No notes are waiting.", architecture: "No architecture updates are waiting.",
+};
+
+type Item =
+  | { key: string; type: "file"; info: SessionInfo; file: FileChange }
+  | { key: string; type: "session"; info: SessionInfo }
+  | { key: string; type: "memory"; row: ReviewRow }
+  | { key: string; type: "proposal"; system: System; update: SystemUpdate; fields: string; proposer: SessionInfo }
+  | { key: string; type: "learning" };
+
+/** Review: what waits for you before it counts as accepted. Agent code edits, notes due for confirmation, registry changes an agent
+ *  proposed and learned procedures each have their rows in the left list; the right pane shows the selected one. */
 export function ReviewPage() {
   const client = useQueryClient();
+  const route = useApp((s) => s.route);
+  const go = useApp((s) => s.go);
+  const routed = route.page === "review" ? route : { page: "review" as const };
   const projectsOn = useProjectsEnabled();
   const systemsOn = useSystemsEnabled();
+  const changesOn = useChangesEnabled();
   const { project } = useCurrentProject();
-  const learningOn = useConnection(s => (s.capabilities?.learning ?? 0) >= 1);
-  const learning = useQuery({ queryKey: ['learning', 'candidates'], queryFn: () => learningList('candidate'), enabled: learningOn });
-  const learningCount = scopeLearning(learning.data?.records ?? [], project?.slug).filter(r => r.state === 'draft' || r.state === 'deferred').length;
+  const learningSupported = useConnection((s) => s.commands.includes("learn"));
+  const learningOn = useConnection((s) => (s.capabilities?.learning ?? 0) >= 1);
+  const learning = useQuery({ queryKey: ["learning", "candidates"], queryFn: () => learningList("candidate"), enabled: learningOn });
+  const learningCount = scopeLearning(learning.data?.records ?? [], project?.slug).filter((r) => r.state === "draft" || r.state === "deferred").length;
+
+  // Code: the sessions with edits to review, and each one's files.
+  const sessions = useQuery(sessionsQuery());
+  const groups = useMemo(() => reviewSessions(sessions.data ?? [], project?.slug, routed.session), [sessions.data, project?.slug, routed.session]);
+  useEffect(() => { reviewRefresh().catch(() => undefined); }, []);
+  const lists = useQueries({
+    queries: groups.map((g) => ({
+      queryKey: ["agent", "review-files", g.id, reviewVersion(g)], queryFn: () => reviewFiles(g.id), staleTime: 0, retry: false,
+    })),
+  });
+  const changes = useQuery({ ...changesQuery(), enabled: changesOn && groups.some((g) => changeOf(g) !== undefined) });
+  const displayOf = (info: SessionInfo) => changes.data?.changes.find((c) => c.id === changeOf(info))?.display;
+
+  // Memory and Architecture.
   const mine = useProject(project?.slug).due;
   const everything = useQuery({ queryKey: ["review", "*"], queryFn: () => review({ allDomains: true, limit: 100 }), enabled: projectsOn && !project });
   const due = project ? mine : everything;
   const registry = useQuery({ ...systemsQuery(), enabled: systemsOn });
   const all = useMemo(() => registry.data?.systems ?? [], [registry.data]);
   const scoped = useMemo(() => (project ? systemsForProject(project, all) : all).filter((s) => s.status !== "retired"), [project, all]);
-  const { items, dismiss } = useSystemProposals(scoped, all);
-  const proposals = items.filter((i) => i.update && i.proposer);
+  const { items: proposed, dismiss } = useSystemProposals(scoped, all);
+  const proposals = proposed.filter((i) => i.update && i.proposer);
   const [kind, setKind] = useState<Kind>("all");
+  const [picked, setPicked] = useState<string | null>(null);
+  const [kinds, setKinds] = useState<ReviewKind[]>([]);
   const [reviewing, setReviewing] = useState<{ system: System; update: SystemUpdate } | null>(null);
-  const [picked, setPicked] = useState<ReviewKind[]>([]);
   // The unfiltered result gives the counts and the chips; picked kinds are asked of the store so its 100-row limit applies to them.
   const filtered = useQuery({
-    queryKey: ["review", "kinds", project?.slug ?? "*", picked],
-    queryFn: () => review({ allDomains: true, ...(project ? { tags: [project.tag] } : {}), kind: picked, limit: 100 }),
-    enabled: projectsOn && !!picked.length,
+    queryKey: ["review", "kinds", project?.slug ?? "*", kinds],
+    queryFn: () => review({ allDomains: true, ...(project ? { tags: [project.tag] } : {}), kind: kinds, limit: 100 }),
+    enabled: projectsOn && !!kinds.length,
   });
-  const rows = worklistRows(due.data);
-  const active = picked.length ? filtered : due;
-  const notes = worklistRows(active.data);
+  const active = kinds.length ? filtered : due;
+  const notes = active.data?.notes ?? [];
   const counts = due.data?.counts;
-  const total = rows.length + proposals.length + learningCount;
+
+  const codeCount = groups.reduce((sum, g) => sum + (g.filesChanged?.files ?? 0), 0);
+  const memoryCount = due.data?.notes.length ?? 0;
+  const total = codeCount + memoryCount + proposals.length + learningCount;
+  const showCode = kind === "all" || kind === "code";
+  const showMemory = kind === "all" || kind === "memory";
+  const showArchitecture = kind === "all" || kind === "architecture";
+  const showLearning = (kind === "all" && learningCount > 0) || (kind === "learning" && learningSupported);
+
+  // Everything the left list can hold, in order, and which of it is selected.
+  const visible = useMemo(() => {
+    const out: Item[] = [];
+    if (showCode) {
+      groups.forEach((info, i) => {
+        const files = lists[i]?.data ?? [];
+        if (lists[i]?.data && !files.length) out.push({ key: `session:${info.id}`, type: "session", info });
+        for (const file of files.slice(0, MAX_ROWS)) out.push({ key: fileKey(info.id, file.path), type: "file", info, file });
+      });
+    }
+    if (showMemory) for (const row of notes) out.push({ key: `memory:${row.ref}`, type: "memory", row });
+    if (showArchitecture) for (const p of proposals) out.push({ key: `proposal:${p.system.slug}`, type: "proposal", system: p.system, update: p.update!, fields: p.fields, proposer: p.proposer! });
+    if (showLearning) out.push({ key: "learning", type: "learning" });
+    return out;
+  }, [showCode, showMemory, showArchitecture, showLearning, groups, lists, notes, proposals]);
+  const routedKey = routed.session && routed.file ? fileKey(routed.session, routed.file) : null;
+  const firstOfRouted = visible.find((i) => (i.type === "file" || i.type === "session") && i.info.id === routed.session);
+  const selected = (picked && visible.find((i) => i.key === picked))
+    || (routedKey && visible.find((i) => i.key === routedKey)) || firstOfRouted || visible[0] || null;
+
+  const select = (item: Item) => {
+    if (item.type === "file") go({ page: "review", session: item.info.id, file: item.file.path }, { replace: true });
+    else if (item.type === "session") go({ page: "review", session: item.info.id }, { replace: true });
+    setPicked(item.type === "file" || item.type === "session" ? null : item.key);
+  };
+  const list = useRef<HTMLElement>(null);
+  const focusKey = (key: string) => [...(list.current?.querySelectorAll<HTMLButtonElement>("button.review-item") ?? [])].find((b) => b.dataset.key === key)?.focus();
+  const focused = useRef(false);
+  useEffect(() => {
+    if (focused.current || !selected) return;
+    focused.current = true;
+    focusKey(selected.key);
+  }, [selected]);
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const key = step(visible.map((i) => i.key), selected?.key ?? null, e.key === "ArrowDown" ? 1 : -1);
+    const item = visible.find((i) => i.key === key);
+    if (!item) return;
+    e.preventDefault();
+    select(item);
+    focusKey(item.key);
+  };
+
+  const row = (item: Item, icon: React.ReactNode, label: React.ReactNode, extra?: React.ReactNode) => {
+    const on = selected?.key === item.key;
+    return (
+      <button key={item.key} data-key={item.key} className={`review-item ${on ? "on" : ""}`} aria-current={on} title={item.type === "file" ? item.file.path : undefined}
+        onClick={() => select(item)}>
+        {icon}<span className="grow">{label}</span>{extra}
+      </button>
+    );
+  };
+
+  const loading = !visible.length && !groups.length && (sessions.isLoading || (projectsOn && due.isLoading) || (systemsOn && registry.isLoading));
+  const nothing = !loading && !total && !groups.length && !(kind === "learning" && showLearning);
+  const memoryRows = showMemory && projectsOn;
 
   return (
-    <div className="page">
-      <PageHeader title="Review" subtitle={project ? "What waits for you in this project before it counts as accepted." : "What waits for you before it counts as accepted."} />
+    <div className="page fill-page">
+      <PageHeader title="Review" subtitle="Inspect agent changes before they become accepted work." />
       <Tabs pill label="Kind" value={kind} onChange={setKind}
-        items={[{ id: "all", label: "All", count: total }, { id: "memory", label: "Memory", count: rows.length }, { id: "architecture", label: "Architecture", count: proposals.length }, { id: 'learning', label: 'Learning', count: learningCount }]} />
-      {!projectsOn && <p className="muted">Review needs a newer Living Memory (API 2 with the <code>review</code> command).</p>}
-      {due.data && registry.data && (!learningOn || learning.data) && !total && <p className="muted">Nothing is waiting for you.</p>}
-      {(kind === 'all' || kind === 'architecture') && !!proposals.length && (
-        <Section title="Architecture" count={proposals.length}>
-          {proposals.map(({ system, update, fields, proposer }) => (
-            <div key={system.slug} className="work-group">
-              <div className="work-head"><span className="badge">system</span><button className="link-row" onClick={() => openSystem(system.slug)}>{system.name}</button></div>
-              <div>An agent session proposed changes to {fields}.</div>
-              <div className="work-actions">
-                <button className="primary" onClick={() => setReviewing({ system, update: update! })}>Review…</button>
-                <button onClick={() => dismiss(proposer!.id)}>Dismiss</button>
-                <ArrowLink onClick={() => openSession(proposer!.id)}>Open session</ArrowLink>
-              </div>
-            </div>
-          ))}
-        </Section>
-      )}
-      {(kind === 'all' || kind === 'memory') && projectsOn && (
-        <>
-        {counts && (
-          <div>
-            <p className="muted small">{countLine(counts)}</p>
-            <div className="chips">
-              {kindCounts(counts, picked).map(({ kind, count }) => (
-                <button key={kind} className={`chip ${picked.includes(kind) ? "on" : ""}`} aria-pressed={picked.includes(kind)}
-                  onClick={() => setPicked(picked.includes(kind) ? picked.filter((k) => k !== kind) : [...picked, kind])}>{kind} {count}</button>
-              ))}
-            </div>
+        items={[{ id: "all", label: "All", count: total }, { id: "code", label: "Code", count: codeCount }, { id: "memory", label: "Memory", count: memoryCount },
+          { id: "architecture", label: "Architecture", count: proposals.length }, { id: "learning", label: "Learning", count: learningCount }]} />
+      {!projectsOn && <p className="muted">Memory review needs a newer Living Memory (API 2 with the <code>review</code> command).</p>}
+      {sessions.error && <p className="error">{classify(sessions.error).message}</p>}
+      {loading ? <p className="muted">Loading…</p>
+        : nothing ? <p className="muted">Nothing is waiting for you.</p>
+        : (
+          <div className="review">
+            <nav className="review-list" aria-label="Items to review" ref={list} onKeyDown={onKeyDown}>
+              {showCode && groups.map((g, i) => {
+                const files = lists[i];
+                const label = reviewLabel(g);
+                const mineItems = visible.filter((v) => (v.type === "file" || v.type === "session") && v.info.id === g.id);
+                const hidden = (files?.data?.length ?? 0) - MAX_ROWS;
+                return (
+                  <Fragment key={g.id}>
+                    <h2 className="review-group">
+                      {sessionHeading(g, displayOf(g))}
+                      {g.status === "running" || g.status === "waiting" ? <span className="status-chip running">Working…</span>
+                        : label?.tone === "busy" ? <span className="status-chip busy">{label.text}</span> : null}
+                    </h2>
+                    {files?.isLoading ? <p className="muted small pad">Loading files…</p>
+                      : files?.error ? <p className="error small pad">{classify(files.error).message}</p>
+                      : mineItems.map((item) => item.type === "file"
+                        ? row(item, <FileText size="1.3em" aria-hidden />, baseName(item.file.path),
+                          item.file.status === "A" ? <span className="muted small">new</span> : item.file.status === "D" ? <span className="muted small">deleted</span> : null)
+                        : row(item, <CircleCheck size="1.3em" aria-hidden />, "No proposed edits"))}
+                    {hidden > 0 && <p className="muted small pad">and {hidden} more files</p>}
+                  </Fragment>
+                );
+              })}
+              {showCode && !!groups.length && visible.some((v) => v.type !== "file" && v.type !== "session") && <div className="review-divider" role="separator" />}
+              {memoryRows && !!counts && (
+                <div className="pad">
+                  <p className="muted small">{countLine(counts)}</p>
+                  <div className="chips">
+                    {kindCounts(counts, kinds).map(({ kind: k, count }) => (
+                      <button key={k} className={`chip ${kinds.includes(k) ? "on" : ""}`} aria-pressed={kinds.includes(k)}
+                        onClick={() => setKinds(kinds.includes(k) ? kinds.filter((x) => x !== k) : [...kinds, k])}>{k} {count}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {memoryRows && active.isLoading && <p className="muted small pad">Loading…</p>}
+              {memoryRows && !!active.error && <p className="error small pad">{classify(active.error).message}</p>}
+              {visible.map((item) => item.type === "memory" ? row(item, <Layers size="1.3em" aria-hidden />, `Memory: ${item.row.title}`)
+                : item.type === "proposal" ? row(item, <Network size="1.3em" aria-hidden />, `Architecture: ${item.system.name} update`)
+                : item.type === "learning" ? row(item, <GraduationCap size="1.3em" aria-hidden />, `Learning: ${learningCount} to review`)
+                : null)}
+              {!visible.length && kind in EMPTY && <p className="muted pad">{EMPTY[kind as keyof typeof EMPTY]}</p>}
+              {kind === "learning" && !showLearning && <p className="muted pad">Learning review needs a Living Memory installation with the learn command.</p>}
+            </nav>
+            {selected?.type === "file" ? <FilePane info={selected.info} file={selected.file} />
+              : selected?.type === "session" ? <SessionPane info={selected.info} />
+              : selected ? (
+                <div className="review-pane">
+                  {selected.type === "memory" && <ReviewQueue rows={[selected.row]} />}
+                  {selected.type === "proposal" && (
+                    <div className="work-group">
+                      <div className="work-head"><span className="badge">system</span><button className="link-row" onClick={() => openSystem(selected.system.slug)}>{selected.system.name}</button></div>
+                      <div>An agent session proposed changes to {selected.fields}.</div>
+                      <div className="work-actions">
+                        <button className="primary" onClick={() => setReviewing({ system: selected.system, update: selected.update })}>Review…</button>
+                        <button onClick={() => dismiss(selected.proposer.id)}>Dismiss</button>
+                        <ArrowLink onClick={() => openSession(selected.proposer.id)}>Open session</ArrowLink>
+                      </div>
+                    </div>
+                  )}
+                  {selected.type === "learning" && <LearningReview />}
+                </div>
+              ) : <div className="review-pane" />}
           </div>
         )}
-        <Section title="Memory" count={due.data?.due} loading={active.isLoading} error={active.error && classify(active.error).message}
-          empty={active.data && !notes.length ? (counts ? "Nothing needs review." : "No notes are due for review.") : undefined}>
-          <ReviewQueue rows={notes} />
-        </Section>
-        </>
-      )}
-      {(kind === 'all' || kind === 'learning') && <LearningReview />}
       {reviewing && (
         <PlanDialog title={`Update system ${reviewing.system.name}`} applyLabel="Update system"
           intro={<p>These are the registry fields the agent proposed. Nothing changes until you apply the plan.</p>}

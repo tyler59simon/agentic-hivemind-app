@@ -34,12 +34,18 @@ describe("session helpers", () => {
 
   it("waiting for review needs changes and a quiet session", () => {
     const totals = { files: 2, added: 3, removed: 1 };
-    expect(waitingForReview(session({ status: "idle", filesChanged: totals }))).toBe(true);
-    expect(waitingForReview(session({ status: "running", filesChanged: totals }))).toBe(false);
+    const state = (s: NonNullable<SessionInfo["review"]>["state"]) => ({ state: s, commit: null, at: 1 });
+    const a = session({ status: "idle", filesChanged: totals });
+    const b = session({ status: "idle", filesChanged: totals, review: state("approved") });
+    const c = session({ status: "idle", filesChanged: totals, review: state("dismissed") });
+    const d = session({ status: "idle", filesChanged: { files: 0, added: 0, removed: 0 } });
+    const e = session({ status: "idle", filesChanged: totals, review: state("changes_requested") });
+    expect(waitingForReview(a)).toBe(true);
+    expect(waitingForReview({ ...a, review: state("pending") })).toBe(true);
+    for (const x of [b, c, d, e]) expect(waitingForReview(x)).toBe(false);
+    expect(waitingForReview({ ...a, status: "waiting" })).toBe(false);
+    expect(waitingForReview({ ...a, status: "running" })).toBe(false);
     expect(waitingForReview(session({ status: "idle", filesChanged: null }))).toBe(false);
-    const decided = (state: "approved" | "dismissed" | "changes_requested" | "pending") => session({ status: "idle", filesChanged: totals, review: { state, commit: null, at: 1 } });
-    expect(waitingForReview(decided("pending"))).toBe(true);
-    for (const state of ["approved", "dismissed", "changes_requested"] as const) expect(waitingForReview(decided(state))).toBe(false);
   });
 
   it("permission lines follow the policy", () => {

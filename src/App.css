@@ -652,6 +652,23 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .question-row { border: none; padding: .5rem 0; gap: .8rem; justify-content: flex-start; text-align: left; color: var(--warn-fg); }
 .question-row:hover { background: none; text-decoration: underline; }
 
+/* ---- Review ---- */
+.review { display: grid; grid-template-columns: 19rem minmax(0, 1fr); flex: 1; min-height: 0; border-top: 1px solid var(--border); }
+.review-list { border-right: 1px solid var(--border-strong); padding: 1.1rem .9rem 1rem 0; overflow: auto; display: flex; flex-direction: column; gap: .15rem; }
+.review-group { display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .6rem; margin: 1rem 0 .4rem .6rem; font-size: 1.15rem; font-weight: 700; }
+.review-list > .review-group:first-child { margin-top: 0; }
+.review-item { width: 100%; justify-content: flex-start; gap: .8rem; text-align: left; border: none; border-radius: .5rem; padding: .6rem .7rem; flex: none; }
+.review-item svg { flex: none; }
+.review-item.on { background: #432658; }
+.review-divider { border-top: 1px solid var(--border-strong); margin: .8rem 0 .5rem .6rem; }
+.review-pane { padding: 1.1rem 0 1.2rem 1.4rem; overflow: auto; min-width: 0; display: flex; flex-direction: column; gap: 1rem; }
+.review-pane h2 { margin: 0; font-size: 1.55rem; }
+@media (max-width: 1100px) { .review { grid-template-columns: 14rem minmax(0, 1fr); } }
+.review-meta { display: flex; align-items: center; gap: .6rem; font-family: var(--font-mono); font-size: .93rem; color: #e9def2; }
+.review-diff { border: 1px solid var(--border-strong); border-radius: .5rem; overflow: hidden; background: var(--bg-code); }
+.review-diff .cm-editor { max-height: 58vh; }
+.review-pane code { font-family: var(--font-mono); font-size: .9em; }
+
 /* ---- Architecture canvas ---- */
 .canvas { display: flex; flex-direction: column; height: clamp(20rem, 52vh, 38rem); border: 1px solid #4c3861; border-radius: .6rem; background-color: #1c0a27; background-image: radial-gradient(#3a224c 1px, transparent 1px); background-size: 22px 22px; overflow: hidden; }
 .canvas.full { position: fixed; inset: 0; z-index: 35; height: auto; border-radius: 0; }
