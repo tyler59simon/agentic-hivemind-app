@@ -766,14 +766,12 @@ impl Manager {
     }
 
     /// One session's details, as listed.
-    #[allow(dead_code)] // review.rs calls it from the next commit
     pub fn info(&self, id: &str) -> Result<SessionInfo, String> {
         store::log_path(&self.inner.dir, id)?;
         self.inner.sessions.lock().unwrap().get(id).map(|session| session.info.clone()).ok_or_else(|| "Unknown session".into())
     }
 
     /// Change a session's details, save the index and tell the UI.
-    #[allow(dead_code)] // review.rs calls it from the next commit
     pub fn amend(&self, id: &str, change: impl FnOnce(&mut SessionInfo)) -> Result<SessionInfo, String> {
         let inner = &self.inner;
         store::log_path(&inner.dir, id)?;

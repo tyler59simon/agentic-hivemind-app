@@ -73,4 +73,12 @@ export const agentCancel = (sessionId: string) => invoke<void>("agent_cancel", {
 export const agentSessions = () => invoke<SessionInfo[]>("agent_sessions");
 export const agentSession = (sessionId: string, fromSeq = 0) => invoke<SessionLog>("agent_session", { sessionId, fromSeq });
 
+export const reviewFiles = (sessionId: string) => invoke<FileChange[]>("review_files", { sessionId });
+export const reviewFile = (sessionId: string, path: string) => invoke<FileContents>("review_file", { sessionId, path });
+/** Have Rust look at every session's worktree again; resolves to how many sessions changed. */
+export const reviewRefresh = () => invoke<number>("review_refresh");
+
+/** The commit a session's proposed edits are compared with. */
+export const reviewBase = (w: Worktree) => w.reviewedSha ?? w.baseSha;
+
 export const sessionsQuery = () => ({ queryKey: ["agent", "sessions"], queryFn: agentSessions });

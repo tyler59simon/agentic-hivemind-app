@@ -4,6 +4,7 @@ mod bridge;
 mod capture;
 mod drafts;
 mod git;
+mod review;
 mod settings;
 mod watcher;
 mod worktree;
@@ -188,6 +189,27 @@ async fn agent_remove_worktree(state: State<'_, AppState>, session_id: String) -
     blocking(move || agents.remove_worktree(&session_id)).await
 }
 
+/// The files a work session changed in its worktree since its review base.
+#[tauri::command]
+async fn review_files(state: State<'_, AppState>, session_id: String) -> Result<Vec<worktree::FileChange>, String> {
+    let (agents, root) = (state.agents.clone(), state.worktrees_dir.clone());
+    blocking(move || review::files(&agents, &root, &session_id)).await
+}
+
+/// The two versions of one file a work session changed.
+#[tauri::command]
+async fn review_file(state: State<'_, AppState>, session_id: String, path: String) -> Result<review::FileContents, String> {
+    let (agents, root) = (state.agents.clone(), state.worktrees_dir.clone());
+    blocking(move || review::file(&agents, &root, &session_id, &path)).await
+}
+
+/// Look at every session's worktree again, so edits made outside a turn are noticed.
+#[tauri::command]
+async fn review_refresh(state: State<'_, AppState>) -> Result<usize, String> {
+    let (agents, root) = (state.agents.clone(), state.worktrees_dir.clone());
+    blocking(move || Ok(review::refresh(&agents, &root))).await
+}
+
 /// The local branches of one of a project's repositories (the repository must be registered for the project).
 #[tauri::command]
 async fn repo_branches(state: State<'_, AppState>, project: String, repo: String) -> Result<git::Branches, String> {
@@ -327,7 +349,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_remove_worktree, repo_branches,
-            agent_cancel, agent_sessions, agent_session
+            agent_cancel, agent_sessions, agent_session, review_files, review_file, review_refresh
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
