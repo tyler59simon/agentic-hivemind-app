@@ -58,6 +58,8 @@ let shellSnapshot: { version: number; tabs: ShellTab[] } = { version: -1, tabs: 
 const listeners = new Set<() => void>();
 let version = 0;
 let exitListener = false;
+/** Exit codes of shells that ended before their tab existed, by terminal id. */
+const earlyExits = new Map<string, number | null>();
 let dropListener = false;
 
 /** Colours for find matches; the addon only takes #RRGGBB. */
@@ -101,6 +103,12 @@ function watchExits() {
   if (exitListener) return;
   exitListener = true;
   listen<TermExit>("term-exit", (e) => {
+    // A shell can exit before `termShell` returns its id; `openShell` applies the exit when it adopts the shell.
+    if (e.payload.id.startsWith("shell-") && !shells.has(e.payload.id) && !lives.has(e.payload.id)) {
+      if (earlyExits.size > 50) earlyExits.clear();
+      earlyExits.set(e.payload.id, e.payload.code);
+      return;
+    }
     const tab = shells.get(e.payload.id);
     if (tab) { shells.set(tab.id, { ...tab, running: false, exitCode: e.payload.code }); notify(); }
     const live = lives.get(e.payload.id);
@@ -344,7 +352,15 @@ export async function openShell(target: ShellTarget): Promise<string> {
   const info = await termShell(target, 80, 24, output);
   gone.delete(info.id);
   shells.set(info.id, tabOf(info));
-  ensure(info.id, { sessionId: null, engine: null, start: null, shell: true, adopt: { info, output, early } });
+  const live = ensure(info.id, { sessionId: null, engine: null, start: null, shell: true, adopt: { info, output, early } });
+  if (earlyExits.has(info.id)) {
+    const code = earlyExits.get(info.id) ?? null;
+    earlyExits.delete(info.id);
+    shells.set(info.id, { ...tabOf(info), running: false, exitCode: code });
+    live.exits++;
+    live.running = false;
+    live.term.options.disableStdin = true;
+  }
   notify();
   return info.id;
 }

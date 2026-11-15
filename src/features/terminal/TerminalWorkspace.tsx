@@ -153,7 +153,7 @@ function PaneView({ index, tabs, activeId, focused, split, over, onFocus, onTogg
   const live = registry.useLive(active?.id ?? "");
   const running = registry.useRunning(session ?? (shell ? { id: shell.id, status: shell.running ? "running" : "ended" } : { id: "", status: "idle" }));
   const line = session ? statusLine(session, running) : shell ? shellStatus({ running, exitCode: shell.exitCode }) : null;
-  const ended = !!session && (session.status === "ended" || session.status === "failed") && !running && !!session.worktree;
+  const ended = !!session && (session.status === "ended" || session.status === "failed") && !running && (!!session.worktree || !!session.direct);
   const hint = !!session && running && !session.endedAt && !live?.touched;
   const splitWord = split ? "Close the second pane" : "Split into two panes";
   const project = useApp((s) => s.project) ?? null;
@@ -348,7 +348,7 @@ export function TerminalWorkspace({ sessions, selected, onEmpty }: { sessions: S
     window.addEventListener("pointercancel", cancel);
   };
 
-  if (!focusedTab && !selected) {
+  if (!view.panes.some((pane) => pane.some((id) => byId(id))) && !selected) {
     return (
       <div className="term-view">
         <div className="term-main">
