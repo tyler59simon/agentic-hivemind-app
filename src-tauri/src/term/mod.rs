@@ -1,8 +1,15 @@
+pub mod auth;
+pub mod cli_files;
+pub mod history;
 pub mod launch;
+pub mod pricing;
 pub mod pty;
 pub mod scrollback;
+pub mod signal;
+pub mod transcript;
+pub mod usage;
 
-use crate::agent::events::Status;
+use crate::agent::events::{SeqEvent, Status};
 use crate::agent::access::Access;
 use crate::agent::scope;
 use crate::agent::{self, Engine, Interface, SessionInfo};
@@ -11,6 +18,7 @@ use crate::worktree;
 use launch::Cli;
 use pty::{Spawn, TermEvent};
 use scrollback::Scrollback;
+use signal::{Intake, Kind, Scanner};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -26,6 +34,11 @@ pub const QUIET_EXITS: [u32; 4] = [0, 129, 130, 0xC000_013A];
 
 const RESERVED: &str = "A review action is running for this session";
 const NOT_RUNNING: &str = "This terminal is not running";
+/// How often, and how many times, a running program is checked for its CLI's conversation file and title.
+const WATCH_EVERY: Duration = Duration::from_secs(3);
+const WATCH_TRIES: u32 = 40;
+/// How often a Claude terminal's `signals.jsonl` is looked at for new lines.
+const SIGNAL_EVERY: Duration = Duration::from_millis(500);
 /// How long `stop_all` waits, after the closes, for the exits to be recorded.
 const RECORD_WAIT: Duration = Duration::from_secs(5);
 
@@ -54,6 +67,8 @@ pub struct TermInfo {
     pub label: Option<String>,
     /// The folder a PowerShell tab runs in; None for the others.
     pub cwd: Option<String>,
+    /// What the program wants from the user right now; None when nothing.
+    pub attention: Option<Kind>,
 }
 
 /// Where a PowerShell tab starts. Serde's external tag gives `{ session: id }`, `{ checkout: { project, repo } }` and `{ folder: path }`.
@@ -80,6 +95,8 @@ pub struct TermExit {
 #[derive(Clone, Debug)]
 pub enum Emit {
     Exit(TermExit),
+    /// The terminal's attention changed: `kind` is None when it was cleared. `title` is the tab's name, for a notification.
+    Attention { id: String, kind: Option<Kind>, title: String },
 }
 pub type Sink = Arc<dyn Fn(Emit) + Send + Sync>;
 
@@ -93,6 +110,12 @@ struct Out {
     scrollback: Option<Scrollback>,
 }
 
+/// What a terminal wants from the user.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Attention {
+    kind: Kind,
+}
+
 struct Shared {
     id: String,
     session_id: Option<String>,
@@ -103,6 +126,12 @@ struct Shared {
     close_requested: AtomicBool,
     /// A files-changed refresh is already under way.
     refreshing: AtomicBool,
+    /// When the program was started (ms): a Codex conversation older than this is not its own.
+    since: u64,
+    /// The Codex thread ids that existed when the program started; none of them is its own.
+    before: Vec<String>,
+    /// Set from a hook line or a bell; a lock of its own, never taken together with `terms`.
+    attention: Mutex<Option<Attention>>,
 }
 
 struct Entry {
@@ -118,6 +147,8 @@ struct Inner {
     settings_path: PathBuf,
     sink: Sink,
     terms: Mutex<Terms>,
+    /// The user's home folder, where the CLIs keep their conversation files; empty when it is unknown.
+    home: PathBuf,
 }
 
 /// Everything `spawn` needs to start one program.
@@ -134,6 +165,10 @@ struct Run {
     rows: u16,
     scrollback: Option<Scrollback>,
     output: Output,
+    /// A Claude session's folder for hook signals (`HIVEMIND_SIGNAL_DIR`); None for every other program.
+    signal_dir: Option<PathBuf>,
+    /// The Codex thread ids that existed before the start (read before the map is locked); empty for every other program.
+    before: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -155,12 +190,18 @@ fn info_of(shared: &Shared) -> TermInfo {
         windows_build: launch::windows_build(),
         label: shared.shell.as_ref().map(|(label, _)| label.clone()),
         cwd: shared.shell.as_ref().map(|(_, cwd)| cwd.clone()),
+        attention: shared.attention.lock().unwrap().map(|a| a.kind),
     }
 }
 
 impl Manager {
     /// `dir` is `<app data>/terminals`. Removes the folders of sessions that are no longer in the history.
     pub fn new(dir: PathBuf, agents: agent::Manager, settings_path: PathBuf, sink: Sink) -> Manager {
+        Manager::new_in(dir, agents, settings_path, sink, dirs::home_dir().unwrap_or_default())
+    }
+
+    /// `new` with the home folder given (tests use a temp folder).
+    pub fn new_in(dir: PathBuf, agents: agent::Manager, settings_path: PathBuf, sink: Sink, home: PathBuf) -> Manager {
         let known: HashSet<String> = agents.sessions().into_iter().map(|info| info.id).collect();
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.flatten() {
@@ -170,7 +211,7 @@ impl Manager {
                 }
             }
         }
-        Manager { inner: Arc::new(Inner { dir, agents, settings_path, sink, terms: Mutex::new(HashMap::new()) }) }
+        Manager { inner: Arc::new(Inner { dir, agents, settings_path, sink, terms: Mutex::new(HashMap::new()), home }) }
     }
 
     /// `term_open` (section 4.3 of the Phase 5 plan).
@@ -191,6 +232,18 @@ impl Manager {
         let build = launch::windows_build();
         let saved = settings::load(&inner.settings_path);
         let start = start.map(|mode| (mode, launch::program(engine, &saved)));
+        // Also before the lock: it reads the CLI's files.
+        let thread = match &start {
+            Some((StartMode::Resume, _)) if engine == Engine::Codex => inner.known_thread(&info),
+            // An imported conversation: Claude resumes it by its own id, not by the session's.
+            Some((StartMode::Resume, _)) => info.engine_session.clone(),
+            _ => None,
+        };
+        // Also before the lock: the threads that exist already, so a new Codex conversation can be told from them.
+        let existing = match &start {
+            Some(_) if engine == Engine::Codex && !inner.home.as_os_str().is_empty() => cli_files::codex_thread_ids(&inner.home, agent::now_ms()),
+            _ => Vec::new(),
+        };
         // Held from the limit check until the new entry is inserted, so an exit cannot be handled before its entry exists.
         let mut terms = inner.terms.lock().unwrap();
         let running = terms.get(session_id).cloned();
@@ -211,6 +264,7 @@ impl Manager {
             windows_build: build,
             label: None,
             cwd: None,
+            attention: None,
         };
         let Some((mode, found)) = start else {
             drop(terms);
@@ -221,7 +275,15 @@ impl Manager {
         };
         let cwd = session_cwd(&info)?;
         let mut cli = found?;
-        let context = session_dir(&inner.dir, session_id)?.join("context");
+        let own_dir = session_dir(&inner.dir, session_id)?;
+        let context = own_dir.join("context");
+        // Claude reports attention through hooks in a settings file of its own. If it cannot be written the terminal
+        // still starts, only without dots and notifications.
+        let signals = match engine {
+            Engine::Claude => std::env::current_exe().map_err(|e| e.to_string()).and_then(|exe| signal::prepare_claude(&own_dir, &exe)).ok(),
+            Engine::Codex => None,
+        };
+        cli.args.extend(launch::signal_args(engine, signals.as_deref()));
         cli.args.extend(launch::session_args(
             engine,
             mode,
@@ -233,6 +295,7 @@ impl Manager {
             session_id,
             &context,
             info.no_task,
+            thread.as_deref(),
         ));
         if replay {
             send_saved(&scrollback_path, &output);
@@ -245,6 +308,11 @@ impl Manager {
             info.status = Status::Running;
             info.ended_at = None;
             info.error = None;
+            if mode == StartMode::Fresh {
+                // A new conversation: the old one's thread and title are not its own.
+                info.engine_session = None;
+                info.cli_title = None;
+            }
         })?;
         let run = Run {
             id: session_id.to_string(),
@@ -258,9 +326,16 @@ impl Manager {
             rows,
             scrollback: Scrollback::open(scrollback_path, scrollback::KEEP).ok(),
             output,
+            signal_dir: signals.map(|_| own_dir),
+            before: existing,
         };
         match self.spawn_in(&mut terms, run) {
-            Ok(started) => Ok(started),
+            Ok(started) => {
+                if let Some(entry) = terms.get(session_id) {
+                    inner.watch(entry.shared.clone());
+                }
+                Ok(started)
+            }
             Err(error) => {
                 let _ = inner.agents.amend(session_id, |info| {
                     info.status = before.0;
@@ -270,6 +345,62 @@ impl Manager {
                 Err(error)
             }
         }
+    }
+
+    /// The CLI's own conversation file for a terminal session: its engine and path, None while there is no file yet.
+    fn conversation_file(&self, session_id: &str) -> Result<Option<(Engine, PathBuf)>, String> {
+        let inner = &self.inner;
+        let info = inner.agents.info(session_id)?;
+        if info.interface != Interface::Terminal {
+            return Err("This session is not a terminal session".into());
+        }
+        let engine = Engine::of(&info.adapter);
+        if inner.home.as_os_str().is_empty() {
+            return Ok(None);
+        }
+        let cwd = session_cwd(&info).map(|path| path.display().to_string()).unwrap_or_default();
+        let path = match engine {
+            Engine::Claude => cli_files::claude_transcript(&inner.home, &cwd, history::conversation_id(engine, &info).unwrap_or(session_id)),
+            Engine::Codex => info.engine_session.as_deref().and_then(|id| cli_files::codex_rollout(&inner.home, id)),
+        };
+        Ok(path.map(|path| (engine, path)))
+    }
+
+    /// The conversation of a terminal session as chat events, read from the CLI's own file. Empty while there is no file.
+    pub fn transcript(&self, session_id: &str) -> Result<Vec<SeqEvent>, String> {
+        let Some((engine, path)) = self.conversation_file(session_id)? else { return Ok(vec![]) };
+        let bytes = std::fs::read(&path).map_err(|e| format!("Could not read the conversation file: {e}"))?;
+        let text = String::from_utf8_lossy(&bytes);
+        Ok(match engine {
+            Engine::Claude => transcript::claude(session_id, &text),
+            Engine::Codex => transcript::codex(session_id, &text),
+        })
+    }
+
+    /// Tokens, cost and plan limits of a terminal session, read from the CLI's own file. Zeros while there is no file.
+    pub fn usage(&self, session_id: &str) -> Result<usage::Usage, String> {
+        let Some((engine, path)) = self.conversation_file(session_id)? else { return Ok(usage::Usage::default()) };
+        Ok(match engine {
+            Engine::Claude => {
+                let mut counter = usage::ClaudeUsage::default();
+                usage::read_lines(&path, |line| counter.feed(line))?;
+                counter.finish()
+            }
+            Engine::Codex => {
+                let mut counter = usage::CodexUsage::default();
+                usage::read_lines(&path, |line| counter.feed(line))?;
+                counter.finish()
+            }
+        })
+    }
+
+    /// The conversations `engine` saved for `cwd`, newest first, with the Hivemind sessions that already hold them.
+    pub fn history(&self, engine: Engine, cwd: &Path) -> Vec<history::Conversation> {
+        let inner = &self.inner;
+        if inner.home.as_os_str().is_empty() {
+            return vec![];
+        }
+        history::list(&inner.home, engine, cwd, &inner.agents.sessions())
     }
 
     /// `term_login`.
@@ -302,6 +433,7 @@ impl Manager {
             rows,
             scrollback: None,
             output,
+            signal_dir: None, before: Vec::new(),
         };
         self.spawn_in(&mut terms, run)
     }
@@ -329,6 +461,7 @@ impl Manager {
             rows,
             scrollback: None,
             output,
+            signal_dir: None, before: Vec::new(),
         };
         let mut terms = self.inner.terms.lock().unwrap();
         self.spawn_in(&mut terms, run)
@@ -336,7 +469,19 @@ impl Manager {
 
     pub fn write(&self, id: &str, data: &[u8]) -> Result<(), String> {
         let entry = self.inner.terms.lock().unwrap().get(id).cloned().ok_or(NOT_RUNNING)?;
-        entry.pty.write(data).map_err(|_| NOT_RUNNING.to_string())
+        entry.pty.write(data).map_err(|_| NOT_RUNNING.to_string())?;
+        if signal::is_user_input(data) {
+            self.inner.clear_attention(&entry.shared);
+        }
+        Ok(())
+    }
+
+    /// `term_seen`: the user has looked at the terminal, so its attention is cleared.
+    pub fn seen(&self, id: &str) {
+        let entry = self.inner.terms.lock().unwrap().get(id).cloned();
+        if let Some(entry) = entry {
+            self.inner.clear_attention(&entry.shared);
+        }
     }
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
@@ -413,7 +558,12 @@ impl Manager {
             return Err(format!("Close a terminal first: {MAX_TERMINALS} are already running"));
         }
         let own: Vec<String> = std::env::vars_os().map(|(name, _)| name.to_string_lossy().into_owned()).collect();
-        let (env, env_remove) = launch::environment(&own, run.memory_root.as_deref(), &run.id);
+        let (mut env, env_remove) = launch::environment(&own, run.memory_root.as_deref(), &run.id);
+        if let Some(dir) = &run.signal_dir {
+            env.push(("HIVEMIND_SIGNAL_DIR".to_string(), dir.display().to_string()));
+        }
+        // Codex rings the terminal; only its session terminals are scanned (not the sign-in and not PowerShell).
+        let scanner = (run.engine == Engine::Codex && run.session_id.is_some()).then(|| Mutex::new(Scanner::default()));
         let shared = Arc::new(Shared {
             id: run.id,
             session_id: run.session_id,
@@ -422,10 +572,22 @@ impl Manager {
             out: Mutex::new(Out { output: Some(run.output), scrollback: run.scrollback }),
             close_requested: AtomicBool::new(false),
             refreshing: AtomicBool::new(false),
+            since: agent::now_ms(),
+            before: run.before,
+            attention: Mutex::new(None),
         });
         let (inner, handler) = (self.inner.clone(), shared.clone());
         let sink: pty::Sink = Arc::new(move |event| match event {
             TermEvent::Data(bytes) => {
+                // One signal per batch at most (a waiting one wins), raised after `out` is released.
+                let mut rung: Option<Kind> = None;
+                if let Some(scanner) = &scanner {
+                    scanner.lock().unwrap().feed(&bytes, |kind| {
+                        if rung != Some(Kind::Waiting) {
+                            rung = Some(kind);
+                        }
+                    });
+                }
                 let mut out = handler.out.lock().unwrap();
                 if let Some(scrollback) = out.scrollback.as_mut() {
                     scrollback.append(&bytes);
@@ -434,6 +596,10 @@ impl Manager {
                     && !output(bytes)
                 {
                     out.output = None;
+                }
+                drop(out);
+                if let Some(kind) = rung {
+                    inner.raise_attention(&handler, kind);
                 }
             }
             TermEvent::Quiet => inner.quiet(&handler),
@@ -445,6 +611,9 @@ impl Manager {
         )
         .map_err(|e| format!("Could not start {}: {e}", run.cli.program))?;
         let started = info_of(&shared);
+        if let Some(dir) = &run.signal_dir {
+            self.inner.watch_signals(shared.clone(), dir.join(signal::SIGNALS));
+        }
         terms.insert(shared.id.clone(), Arc::new(Entry { shared, pty }));
         Ok(started)
     }
@@ -472,6 +641,128 @@ impl Inner {
             out.output = delivered.then_some(output);
         }
         let _ = entry.pty.resize(cols, rows);
+    }
+
+    /// The thread a Codex resume continues: the stored one when its rollout still exists (else it is cleared), or, for a
+    /// session from before threads were stored, the one found by folder and start time (and stored).
+    fn known_thread(&self, info: &SessionInfo) -> Option<String> {
+        if self.home.as_os_str().is_empty() {
+            return None;
+        }
+        let found = match &info.engine_session {
+            Some(id) if cli_files::codex_rollout(&self.home, id).is_some() => return Some(id.clone()),
+            Some(_) => None,
+            None => self.find_thread(info, info.started_at, &[]),
+        };
+        if found != info.engine_session {
+            let _ = self.agents.amend(&info.id, |info| info.engine_session = found.clone());
+        }
+        found
+    }
+
+    /// The Codex thread started in the session's folder at or after `since`, leaving out the other sessions' threads and
+    /// those in `before`. None when it is not there yet or more than one is left.
+    fn find_thread(&self, info: &SessionInfo, since: u64, before: &[String]) -> Option<String> {
+        let cwd = session_cwd(info).ok()?.display().to_string();
+        let taken: Vec<String> = self.agents.sessions().into_iter().filter(|s| s.id != info.id).filter_map(|s| s.engine_session).collect();
+        cli_files::codex_thread(&self.home, &cwd, since, &taken, before)
+    }
+
+    /// Fill `engine_session` (Codex) and `cli_title` from the CLI's files. True when there is nothing more to find.
+    /// Reads files and takes the session lock only; call it without the terminal map locked.
+    fn discover(&self, session_id: &str, since: u64, before: &[String]) -> bool {
+        if self.home.as_os_str().is_empty() {
+            return true;
+        }
+        let Ok(info) = self.agents.info(session_id) else { return true };
+        let engine = Engine::of(&info.adapter);
+        let (thread, title) = match engine {
+            Engine::Claude => {
+                let cwd = session_cwd(&info).map(|path| path.display().to_string()).unwrap_or_default();
+                let conversation = history::conversation_id(engine, &info).unwrap_or(session_id);
+                (None, cli_files::claude_transcript(&self.home, &cwd, conversation).and_then(|path| cli_files::claude_title(&path)))
+            }
+            Engine::Codex => {
+                let thread = info.engine_session.clone().or_else(|| self.find_thread(&info, since, before));
+                let title = thread.as_deref().and_then(|id| cli_files::codex_title(&self.home, id));
+                (thread, title)
+            }
+        };
+        let new_thread = thread.clone().filter(|_| info.engine_session.is_none());
+        let new_title = title.clone().filter(|title| info.cli_title.as_ref() != Some(title));
+        if new_thread.is_some() || new_title.is_some() {
+            let _ = self.agents.amend(session_id, |info| {
+                if let Some(thread) = new_thread {
+                    info.engine_session = Some(thread);
+                }
+                if let Some(title) = new_title {
+                    info.cli_title = Some(title);
+                }
+            });
+        }
+        title.is_some() && (engine == Engine::Claude || thread.is_some())
+    }
+
+    /// Look for the CLI's conversation file and title every few seconds while the program runs, on a thread of its own.
+    /// The exit handler looks once more.
+    fn watch(self: &Arc<Self>, shared: Arc<Shared>) {
+        let Some(session_id) = shared.session_id.clone() else { return };
+        let inner = self.clone();
+        std::thread::spawn(move || {
+            for _ in 0..WATCH_TRIES {
+                std::thread::sleep(WATCH_EVERY);
+                let alive = inner.terms.lock().unwrap().get(&shared.id).is_some_and(|entry| Arc::ptr_eq(&entry.shared, &shared));
+                if !alive || inner.discover(&session_id, shared.since, &shared.before) {
+                    return;
+                }
+            }
+        });
+    }
+
+    /// The tab's name for a notification: the session's name, the CLI's title, its task, else the program's name.
+    fn notice_title(&self, shared: &Shared) -> String {
+        let info = shared.session_id.as_deref().and_then(|id| self.agents.info(id).ok());
+        let fallback = if shared.engine == Engine::Codex { "Codex" } else { "Claude Code" };
+        info.and_then(|info| [info.name, info.cli_title, Some(info.title)].into_iter().flatten().map(|t| t.trim().to_string()).find(|t| !t.is_empty()))
+            .unwrap_or_else(|| fallback.to_string())
+    }
+
+    /// The program needs the user or has finished. Nothing happens when that kind is already set, so a repeated
+    /// signal does not notify twice. Takes no lock but the attention's own, and the session lock for the title.
+    fn raise_attention(&self, shared: &Shared, kind: Kind) {
+        {
+            let mut attention = shared.attention.lock().unwrap();
+            if attention.is_some_and(|a| a.kind == kind) {
+                return;
+            }
+            *attention = Some(Attention { kind });
+        }
+        let title = self.notice_title(shared);
+        (self.sink)(Emit::Attention { id: shared.id.clone(), kind: Some(kind), title });
+    }
+
+    fn clear_attention(&self, shared: &Shared) {
+        if shared.attention.lock().unwrap().take().is_some() {
+            (self.sink)(Emit::Attention { id: shared.id.clone(), kind: None, title: String::new() });
+        }
+    }
+
+    /// Follow a Claude terminal's `signals.jsonl` while it runs, on a thread of its own.
+    fn watch_signals(self: &Arc<Self>, shared: Arc<Shared>, path: PathBuf) {
+        let inner = self.clone();
+        std::thread::spawn(move || {
+            let mut intake = Intake::default();
+            loop {
+                std::thread::sleep(SIGNAL_EVERY);
+                let alive = inner.terms.lock().unwrap().get(&shared.id).is_some_and(|entry| Arc::ptr_eq(&entry.shared, &shared));
+                if !alive {
+                    return;
+                }
+                for kind in intake.poll(&path) {
+                    inner.raise_attention(&shared, kind);
+                }
+            }
+        });
     }
 
     /// No output for a while: look at what the program changed, on a thread of its own because it runs git.
@@ -509,6 +800,7 @@ impl Inner {
     fn finish(&self, shared: &Shared, code: Option<u32>) {
         if let Some(session_id) = &shared.session_id {
             self.refresh_files(session_id);
+            self.discover(session_id, shared.since, &shared.before);
         }
         let mut terms = self.terms.lock().unwrap();
         terms.remove(&shared.id);
@@ -657,6 +949,7 @@ mod tests {
         terms: Manager,
         exits: Arc<Mutex<Vec<TermExit>>>,
         changed: Arc<Mutex<usize>>,
+        attention: Attentions,
     }
 
     impl Rig {
@@ -680,8 +973,9 @@ mod tests {
                 }),
             );
             let exits: Arc<Mutex<Vec<TermExit>>> = Arc::default();
-            let terms = Manager::new(dir.join("terminals"), agents.clone(), settings_path, rig_sink(&exits));
-            Rig { dir, agents, terms, exits, changed }
+            let attention: Attentions = Arc::default();
+            let terms = Manager::new_in(dir.join("terminals"), agents.clone(), settings_path, rig_sink(&exits, &attention), dir.join("home"));
+            Rig { dir, agents, terms, exits, changed, attention }
         }
 
         fn info(id: &str, tree: Option<Worktree>) -> SessionInfo {
@@ -716,6 +1010,7 @@ mod tests {
                 no_task: false,
                 access: None,
                 effort: None,
+                engine_session: None,
             }
         }
 
@@ -769,6 +1064,7 @@ mod tests {
                 rows: 24,
                 scrollback: Scrollback::open(self.terms.inner.scrollback_path(session).unwrap(), scrollback::KEEP).ok(),
                 output,
+                signal_dir: None, before: Vec::new(),
             })
         }
 
@@ -799,11 +1095,16 @@ mod tests {
         }
     }
 
-    fn rig_sink(exits: &Arc<Mutex<Vec<TermExit>>>) -> Sink {
-        let exits = exits.clone();
+    /// The attention changes the sink saw: terminal id, kind, title.
+    type Attentions = Arc<Mutex<Vec<(String, Option<Kind>, String)>>>;
+
+    fn rig_sink(exits: &Arc<Mutex<Vec<TermExit>>>, attention: &Attentions) -> Sink {
+        let (exits, attention) = (exits.clone(), attention.clone());
         Arc::new(move |emit| {
-            let Emit::Exit(exit) = emit;
-            exits.lock().unwrap().push(exit);
+            match emit {
+                Emit::Exit(exit) => exits.lock().unwrap().push(exit),
+                Emit::Attention { id, kind, title } => attention.lock().unwrap().push((id, kind, title)),
+            }
         })
     }
 
@@ -826,6 +1127,79 @@ mod tests {
         rig.clean();
     }
 
+    fn write_file(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    const THREAD: &str = "019b0000-aaaa-7bbb-8ccc-ddddeeeeffff";
+
+    /// A Codex rollout and index entry for `cwd`, filed far in the future so it is after any session's start.
+    fn codex_files(rig: &Rig, cwd: &str, thread: &str, name: &str) {
+        let meta = json!({"type": "session_meta", "payload": {"id": thread, "cwd": cwd, "timestamp": "2099-01-01T00:00:00.000Z"}});
+        write_file(&rig.dir.join("home/.codex/sessions/2099/01/01").join(format!("rollout-2099-01-01T00-00-00-{thread}.jsonl")), &format!("{meta}\n"));
+        write_file(&rig.dir.join("home/.codex/session_index.jsonl"), &format!("{}\n", json!({"id": thread, "thread_name": name})));
+    }
+
+    #[test]
+    fn the_exit_fills_a_claude_session_title_from_its_transcript() {
+        let rig = Rig::new("title-claude");
+        let tree = rig.plain_tree();
+        let id = rig.session(Some(tree.clone()));
+        let file = cli_files::claude_folder(&tree.path);
+        write_file(
+            &rig.dir.join("home/.claude/projects").join(file).join(format!("{id}.jsonl")),
+            "{\"type\":\"ai-title\",\"aiTitle\":\"Old\"}\n{\"type\":\"ai-title\",\"aiTitle\":\"Fix the importer\"}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n",
+        );
+        rig.run(&id, shell("echo hi", "echo hi"));
+        rig.wait_exits(1);
+        assert_eq!(rig.agents.info(&id).unwrap().cli_title.as_deref(), Some("Fix the importer"));
+        let events = rig.terms.transcript(&id).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0].event, crate::agent::events::RunEvent::UserMessage { text, .. } if text == "hi"));
+        rig.clean();
+    }
+
+    #[test]
+    fn the_exit_stores_a_codex_thread_and_its_name_and_the_transcript_follows_it() {
+        let rig = Rig::new("title-codex");
+        let tree = rig.plain_tree();
+        let id = rig.session(Some(tree.clone()));
+        rig.agents.amend(&id, |info| info.adapter = "codex".into()).unwrap();
+        assert!(rig.terms.transcript(&id).unwrap().is_empty());
+        codex_files(&rig, &tree.path, THREAD, "Add a retry");
+        rig.run(&id, shell("echo hi", "echo hi"));
+        rig.wait_exits(1);
+        let info = rig.agents.info(&id).unwrap();
+        assert_eq!(info.engine_session.as_deref(), Some(THREAD));
+        assert_eq!(info.cli_title.as_deref(), Some("Add a retry"));
+        assert!(rig.terms.transcript(&id).unwrap().is_empty());
+        rig.clean();
+    }
+
+    #[test]
+    fn a_stale_thread_is_cleared_and_a_missing_one_is_looked_up() {
+        let rig = Rig::new("stale-thread");
+        let tree = rig.plain_tree();
+        let id = rig.session(Some(tree.clone()));
+        rig.agents.amend(&id, |info| {
+            info.adapter = "codex".into();
+            info.engine_session = Some(THREAD.into());
+            info.started_at = 1;
+        })
+        .unwrap();
+        // No rollout under the home folder has that id: the id is cleared, so the resume uses --last.
+        assert_eq!(rig.terms.inner.known_thread(&rig.agents.info(&id).unwrap()), None);
+        assert_eq!(rig.agents.info(&id).unwrap().engine_session, None);
+        // A session without a stored thread finds its rollout by folder and time, and stores it.
+        codex_files(&rig, &tree.path, THREAD, "Name");
+        assert_eq!(rig.terms.inner.known_thread(&rig.agents.info(&id).unwrap()).as_deref(), Some(THREAD));
+        assert_eq!(rig.agents.info(&id).unwrap().engine_session.as_deref(), Some(THREAD));
+        // A stored thread whose rollout exists is kept.
+        assert_eq!(rig.terms.inner.known_thread(&rig.agents.info(&id).unwrap()).as_deref(), Some(THREAD));
+        rig.clean();
+    }
+
     #[test]
     fn a_terminal_program_gets_the_store_root() {
         let rig = Rig::new("root");
@@ -837,7 +1211,7 @@ mod tests {
         let run = |session: &str, memory_root: Option<PathBuf>, output: Output| {
             let cwd = PathBuf::from(&rig.agents.info(session).unwrap().worktree.unwrap().path);
             rig.terms
-                .spawn(Run { id: session.into(), session_id: Some(session.into()), engine: Engine::Claude, cli: echo.clone(), cwd, label: None, memory_root, cols: 300, rows: 24, scrollback: None, output })
+                .spawn(Run { id: session.into(), session_id: Some(session.into()), engine: Engine::Claude, cli: echo.clone(), cwd, label: None, memory_root, cols: 300, rows: 24, scrollback: None, output, signal_dir: None, before: Vec::new() })
                 .unwrap()
         };
         run(&id, Some(root.clone()), output);
@@ -1135,6 +1509,7 @@ mod tests {
                 rows: 24,
                 scrollback: None,
                 output,
+                signal_dir: None, before: Vec::new(),
             })
         };
         login("login-claude", output.clone()).unwrap();
@@ -1243,6 +1618,119 @@ mod tests {
         assert!(serde_json::from_value::<ShellTarget>(json!({ "other": "x" })).is_err());
     }
 
+    /// The running terminal's shared state, for tests that raise attention by hand.
+    fn shared_of(rig: &Rig, id: &str) -> Arc<Shared> {
+        rig.terms.inner.terms.lock().unwrap().get(id).unwrap().shared.clone()
+    }
+
+    fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
+        let start = Instant::now();
+        while !done() {
+            assert!(start.elapsed() < Duration::from_secs(20), "timed out: {what}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn attention_is_set_once_per_kind_and_cleared_by_seen_or_typing() {
+        let rig = Rig::new("attention");
+        let id = rig.session(Some(rig.plain_tree()));
+        rig.run(&id, lingering());
+        let shared = shared_of(&rig, &id);
+        let seen = |n: usize| {
+            let all = rig.attention.lock().unwrap();
+            assert_eq!(all.len(), n, "{all:?}");
+        };
+        assert_eq!(rig.terms.list()[0].attention, None);
+        rig.terms.inner.raise_attention(&shared, Kind::Done);
+        seen(1);
+        assert_eq!(rig.attention.lock().unwrap()[0], (id.clone(), Some(Kind::Done), "Fix the bug".to_string()));
+        assert_eq!(rig.terms.list()[0].attention, Some(Kind::Done));
+        // The same kind again says nothing; another kind does.
+        rig.terms.inner.raise_attention(&shared, Kind::Done);
+        seen(1);
+        rig.terms.inner.raise_attention(&shared, Kind::Waiting);
+        seen(2);
+        assert_eq!(rig.terms.list()[0].attention, Some(Kind::Waiting));
+        rig.terms.seen(&id);
+        seen(3);
+        assert_eq!(rig.attention.lock().unwrap()[2].1, None);
+        assert_eq!(rig.terms.list()[0].attention, None);
+        // Clearing what is not set is silent; so is a second `seen`.
+        rig.terms.seen(&id);
+        seen(3);
+        // Typing clears it, an automatic reply from the terminal does not.
+        rig.terms.inner.raise_attention(&shared, Kind::Waiting);
+        seen(4);
+        rig.terms.write(&id, b"[I").unwrap();
+        assert_eq!(rig.terms.list()[0].attention, Some(Kind::Waiting));
+        rig.terms.write(&id, b"y").unwrap();
+        seen(5);
+        assert_eq!(rig.terms.list()[0].attention, None);
+        // A named tab uses its name for the notification.
+        rig.agents.amend(&id, |info| info.name = Some("Importer".into())).unwrap();
+        rig.terms.inner.raise_attention(&shared, Kind::Done);
+        assert_eq!(rig.attention.lock().unwrap()[5].2, "Importer");
+        rig.terms.close(&id);
+        rig.wait_exits(1);
+        rig.clean();
+    }
+
+    #[test]
+    fn a_claude_start_writes_its_hooks_and_follows_its_signals() {
+        let rig = Rig::new("hooks");
+        let id = rig.session(Some(rig.plain_tree()));
+        let (output, _) = collector();
+        let folder = rig.dir.join("terminals").join(&id);
+        // Left over from an earlier run: removed at the start.
+        write_file(&folder.join(signal::SIGNALS), "{\"kind\":\"done\"}
+");
+        rig.terms.open(&id, 80, 24, Some(StartMode::Fresh), false, output).unwrap();
+        let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(folder.join(signal::SETTINGS)).unwrap()).unwrap();
+        assert_eq!(settings, signal::claude_settings(&std::env::current_exe().unwrap()));
+        assert!(!folder.join(signal::SIGNALS).exists());
+        assert!(rig.attention.lock().unwrap().is_empty());
+        // A hook line becomes the terminal's attention within a second or so.
+        write_file(&folder.join(signal::SIGNALS), "{\"kind\":\"waiting\",\"type\":\"permission_prompt\",\"at\":1}
+");
+        wait_for("the signal", || rig.terms.list().first().is_some_and(|t| t.attention == Some(Kind::Waiting)));
+        assert_eq!(rig.attention.lock().unwrap().len(), 1);
+        rig.terms.close(&id);
+        rig.wait_exits(1);
+        rig.clean();
+    }
+
+    #[test]
+    fn a_codex_osc_9_sets_attention() {
+        let rig = Rig::new("osc9");
+        let id = rig.session(Some(rig.plain_tree()));
+        let cwd = PathBuf::from(&rig.agents.info(&id).unwrap().worktree.as_ref().unwrap().path);
+        rig.agents.amend(&id, |info| info.status = Status::Running).unwrap();
+        // Windows: an interactive `cmd` whose prompt is the notification. Elsewhere: printf.
+        let cli = if cfg!(windows) {
+            Cli { program: "cmd.exe".into(), args: vec!["/d".into(), "/k".into(), "prompt $E]9;Approval requested$E\\".into()] }
+        } else {
+            Cli { program: "sh".into(), args: vec!["-c".into(), "printf '\\033]9;Approval requested\\007'; sleep 60".into()] }
+        };
+        let run = |engine, output| Run {
+            id: id.clone(), session_id: Some(id.clone()), engine, cli: cli.clone(), cwd: cwd.clone(), label: None, memory_root: None,
+            cols: 200, rows: 24, scrollback: None, output, signal_dir: None, before: Vec::new(),
+        };
+        rig.terms.spawn(run(Engine::Codex, collector().0)).unwrap();
+        wait_for("the notification", || rig.terms.list().first().is_some_and(|t| t.attention == Some(Kind::Waiting)));
+        rig.terms.close(&id);
+        rig.wait_exits(1);
+        // Claude's output is not scanned: the same program raises nothing.
+        rig.attention.lock().unwrap().clear();
+        rig.agents.amend(&id, |info| info.status = Status::Running).unwrap();
+        rig.terms.spawn(run(Engine::Claude, collector().0)).unwrap();
+        std::thread::sleep(Duration::from_millis(1500));
+        assert!(rig.attention.lock().unwrap().is_empty());
+        rig.terms.close(&id);
+        rig.wait_exits(2);
+        rig.clean();
+    }
+
     #[test]
     fn stale_folders_are_removed_at_start() {
         let rig = Rig::new("stale");
@@ -1253,7 +1741,7 @@ mod tests {
             write_briefing(&terminals, id, "Briefing").unwrap();
         }
         std::fs::create_dir_all(terminals.join("login-claude")).unwrap();
-        Manager::new(terminals.clone(), rig.agents.clone(), rig.dir.join("settings.json"), rig_sink(&rig.exits));
+        Manager::new(terminals.clone(), rig.agents.clone(), rig.dir.join("settings.json"), rig_sink(&rig.exits, &rig.attention));
         assert!(terminals.join(&kept).is_dir());
         assert!(!terminals.join(&stale).exists());
         assert!(terminals.join("login-claude").is_dir());

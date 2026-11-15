@@ -8,7 +8,7 @@ const session = (o: Partial<SessionInfo>): SessionInfo => ({
   id: `s${++n}`, adapter: "claude-code", cliVersion: null, task: { kind: "work", project: "paystream", repo: "C:/src/app" }, title: "t",
   workspace: [], status: "idle", startedAt: n, endedAt: null, costUsd: null, error: null, structured: null,
   mode: "interactive", policy: "ask", project: "paystream", worktree: wt, turns: 0, filesChanged: null, context: [], model: null, system: null,
-  review: null, sourceSha: null, interface: "terminal", name: null, cliTitle: null, direct: null, noTask: false, access: null, effort: null, ...o,
+  review: null, sourceSha: null, interface: "terminal", name: null, cliTitle: null, direct: null, noTask: false, access: null, effort: null, engineSession: null, ...o,
 });
 
 describe("terminal tabs", () => {
@@ -77,6 +77,7 @@ describe("terminal tabs", () => {
     for (const status of ["idle", "running", "ended", "failed"] as const) {
       expect(statusLine(session({ status }), true)).toEqual({ tone: "on", text: "Session active" });
     }
+    expect(statusLine(session({ status: "running" }), true, "12.4k tokens · $0.31").text).toBe("Session active · 12.4k tokens · $0.31");
     expect(statusLine(session({ status: "idle" }), false)).toEqual({ tone: "off", text: "Starting…" });
     expect(statusLine(session({ status: "running" }), false)).toEqual({ tone: "off", text: "Starting…" });
     expect(statusLine(session({ status: "ended" }), false)).toEqual({ tone: "off", text: "Session ended" });
@@ -84,6 +85,9 @@ describe("terminal tabs", () => {
       .toEqual({ tone: "failed", text: "Session failed · The program exited with code 1." });
     expect(statusLine(session({ status: "ended", worktree: null }), false).text).toBe("Session ended · worktree removed");
     expect(statusLine(session({ status: "failed", error: "x", worktree: null }), false).text).toBe("Session failed · x · worktree removed");
+    // A checkout session never had a worktree; an ended session still shows what it used.
+    const direct = { path: "C:/src/app", repo: "C:/src/app", headSha: null, startTree: null };
+    expect(statusLine(session({ status: "ended", worktree: null, direct }), false, "12.4k tokens · ≈ $0.31").text).toBe("Session ended · 12.4k tokens · ≈ $0.31");
   });
 });
 

@@ -1,7 +1,7 @@
 // Pure helpers behind the Start screen: the options the form builds, the modes' words, and the same-folder check.
 import {
   accessLabel, asksNobody, type Access, type AgentModels, type AgentTask, type ClaudeMode, type Engine, type Interface, type Policy,
-  type SessionInfo, type StartOptions, type Approval, type Sandbox,
+  type SessionInfo, type StartOptions, type Approval, type Sandbox, type CliConversation, type HistoryTarget,
 } from "../../lib/agent";
 import { samePath } from "../../lib/folders";
 import { isEnded } from "./session";
@@ -91,3 +91,12 @@ export function buildStart(f: StartForm): { task: AgentTask; prompt: string; opt
     : { kind: "work", project: f.project!, repo: f.repo, ...(f.where === "worktree" ? { branch: f.branch } : {}), ...change };
   return { task, prompt, options };
 }
+
+/** Where "Resume a CLI conversation" looks: the checkout or the folder the form points at. A new worktree has no history. */
+export function historyTarget(f: Pick<StartForm, "where" | "project" | "repo" | "folder">): HistoryTarget | null {
+  if (f.where === "folder" || !f.project) return f.folder ? { folder: f.folder } : null;
+  return f.where === "checkout" && f.repo ? { checkout: { project: f.project, repo: f.repo } } : null;
+}
+
+/** What clicking a saved conversation does: open the Hivemind session that holds it, else import it. */
+export const conversationAction = (c: Pick<CliConversation, "hivemindSession">): "open" | "import" => (c.hivemindSession ? "open" : "import");

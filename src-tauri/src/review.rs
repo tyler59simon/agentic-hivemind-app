@@ -397,6 +397,7 @@ mod tests {
             no_task: false,
             access: None,
             effort: None,
+            engine_session: None,
         }
     }
 

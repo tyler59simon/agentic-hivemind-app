@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fuzzy, highlight, terms } from "./text";
+import { ago, fuzzy, highlight, terms } from "./text";
 
 describe("fuzzy", () => {
   it("matches subsequences and rejects others", () => {
@@ -26,5 +26,19 @@ describe("highlight", () => {
 
   it("escapes regex characters", () => {
     expect(highlight("a+b", ["a+b"])).toEqual([{ text: "a+b", hit: true }]);
+  });
+});
+
+describe("ago", () => {
+  const now = Date.parse("2026-11-15T12:00:00Z");
+  it("says today, yesterday and a day count, for dates and for milliseconds", () => {
+    expect(ago("2026-11-15T01:00:00Z", now)).toBe("today");
+    expect(ago(now - 86_400_000 * 1.5, now)).toBe("yesterday");
+    expect(ago("2026-11-10T12:00:00Z", now)).toBe("5 days ago");
+  });
+  it("falls back to the date after two months, and to nothing for a bad time", () => {
+    expect(ago("2026-01-02T03:00:00Z", now)).toBe("2026-01-02");
+    expect(ago(Date.parse("2026-01-02T03:00:00Z"), now)).toBe("2026-01-02");
+    expect(ago(Number.NaN, now)).toBe("");
   });
 });

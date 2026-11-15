@@ -24,9 +24,10 @@ import { systemsQuery, useSystem } from "../systems/useSystem";
 import { tabLabel } from "../terminal/tabs";
 import { noteQuery } from "../viewer/NoteView";
 import { ConnectionDialog } from "./ConnectionDialog";
+import { ResumeCli } from "./ResumeCli";
 import { useSessionDraft } from "./draft";
 import { ALLOWED_NOTE, draftCounts, permissionLines, POLICIES, repoName, sessionBriefing } from "./session";
-import { accessLines, buildStart, defaultAccess, effortOptions, terminalsIn, WHERE_HELP, withApproval, type Where } from "./start";
+import { accessLines, buildStart, defaultAccess, effortOptions, historyTarget, terminalsIn, WHERE_HELP, withApproval, type Where } from "./start";
 
 const MODELS = [
   { id: "", label: "Default (your Claude Code setting)" },
@@ -46,7 +47,7 @@ function toolLines(engine: Engine, face: Interface): string[] {
   if (face === "terminal") {
     return engine === "claude"
       ? [TERMINAL_APPROVALS, "Never: Living Memory plan, apply and undo commands. Claude Code is started with rules that deny them.", "Loaded from your own Claude Code setup: settings, hooks, plugins and MCP servers."]
-      : [TERMINAL_APPROVALS, "Hivemind cannot refuse Living Memory plan, apply and undo commands in a Codex terminal. The briefing tells the agent not to run them; do not approve one if Codex asks.", "Loaded from your own Codex setup: its configuration, AGENTS.md, plugins and MCP servers."];
+      : [TERMINAL_APPROVALS, "Never: applying or undoing Living Memory plans. Living Memory's own hook in your Codex setup refuses them in Hivemind terminals.", "Loaded from your own Codex setup: its configuration, AGENTS.md, plugins and MCP servers."];
   }
   return engine === "claude"
     ? [
@@ -200,6 +201,7 @@ function StartForm({ project }: { project: Project | null }) {
     } catch (e) { toast(String(e), "error"); }
   };
   const sessions = useQuery({ ...sessionsQuery(), enabled: terminal });
+  const resumeTarget = historyTarget({ where, project: project?.slug ?? null, repo, folder });
   const placePath = folderMode ? folder : where === "checkout" ? repo : null;
   const clashes = terminal && placePath ? terminalsIn(sessions.data ?? [], placePath) : [];
 
@@ -415,6 +417,9 @@ function StartForm({ project }: { project: Project | null }) {
                 </>
               )}
             </section>
+            {terminal && resumeTarget && (
+              <ResumeCli engine={draft.engine} target={resumeTarget} access={access} model={model} effort={effort} confirmed={confirmed} />
+            )}
             <section className="start-section">
               <h2>Permissions</h2>
               {terminal ? (
