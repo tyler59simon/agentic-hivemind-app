@@ -23,6 +23,10 @@ pub struct Settings {
     pub agent_budget_usd: Option<f64>,
     /// Folder of the Architecture Suite plugin, for when Claude Code does not have it installed.
     pub architecture_suite_plugin: Option<String>,
+    /// Folders the user picked with the native dialog, for sessions outside a project. Changed only by `folder_pick` and
+    /// `folder_forget`.
+    #[serde(default)]
+    pub other_folders: Option<Vec<String>>,
 }
 
 pub const DEFAULT_CAPTURE_SHORTCUT: &str = "CommandOrControl+Alt+M";

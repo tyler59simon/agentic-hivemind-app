@@ -8,10 +8,16 @@ const session = (o: Partial<SessionInfo>): SessionInfo => ({
   id: `s${++n}`, adapter: "claude-code", cliVersion: null, task: { kind: "work", project: "paystream", repo: "C:/src/app" }, title: "t",
   workspace: [], status: "idle", startedAt: n, endedAt: null, costUsd: null, error: null, structured: null,
   mode: "interactive", policy: "ask", project: "paystream", worktree: wt, turns: 0, filesChanged: null, context: [], model: null, system: null,
-  review: null, sourceSha: null, interface: "terminal", name: null, cliTitle: null, ...o,
+  review: null, sourceSha: null, interface: "terminal", name: null, cliTitle: null, direct: null, noTask: false, ...o,
 });
 
 describe("terminal tabs", () => {
+  it("names a session in a picked folder by the folder", () => {
+    const folder = session({ task: { kind: "folder", path: "C:/Users/me/Notes/" }, project: null, worktree: null, noTask: true });
+    expect(tabLabel(folder)).toBe("Claude Code · Notes");
+    expect(tabLabel({ ...folder, adapter: "codex" })).toBe("Codex · Notes");
+  });
+
   it("labels and lists the terminal tabs", () => {
     const codex = session({ adapter: "codex", task: { kind: "work", project: "p", repo: "C:\\src\\ingestion-service" } });
     expect(tabLabel(codex)).toBe("Codex · ingestion-service");

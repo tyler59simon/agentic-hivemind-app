@@ -128,9 +128,12 @@ pub fn session_args(
     name: Option<&str>,
     session_id: &str,
     context_dir: &Path,
+    no_task: bool,
 ) -> Vec<String> {
     let text = |s: &str| s.to_string();
     let prompt = pointer_prompt(&context_dir.join("briefing.md"));
+    // Without a task the CLI starts bare: the briefing file exists, but nothing points the CLI at it.
+    let fresh = mode == StartMode::Fresh && !no_task;
     match engine {
         Engine::Claude => {
             let mut args = vec![text("--add-dir"), context_dir.display().to_string()];
@@ -147,7 +150,7 @@ pub fn session_args(
             if let Some(name) = name {
                 args.extend([text("--name"), text(name)]);
             }
-            if mode == StartMode::Fresh {
+            if fresh {
                 args.push(prompt);
             }
             args
@@ -165,7 +168,7 @@ pub fn session_args(
                 text("-a"),
                 text("on-request"),
             ]);
-            if mode == StartMode::Fresh {
+            if fresh {
                 args.push(prompt);
             }
             args
@@ -309,7 +312,7 @@ mod tests {
         let ctx = Path::new("C:/data/terminals/ID/context");
         let c = ctx.display().to_string();
         let prompt = pointer_prompt(&ctx.join("briefing.md"));
-        let args = |engine, mode, edits, model: Option<&str>, deny: &[String]| session_args(engine, mode, edits, model, deny, None, ID, ctx);
+        let args = |engine, mode, edits, model: Option<&str>, deny: &[String]| session_args(engine, mode, edits, model, deny, None, ID, ctx, false);
         let (fresh, resume) = (StartMode::Fresh, StartMode::Resume);
         let none: Vec<String> = vec![];
 
@@ -354,14 +357,29 @@ mod tests {
     fn a_session_name_goes_to_claude_only() {
         let ctx = Path::new("C:/data/terminals/ID/context");
         let prompt = pointer_prompt(&ctx.join("briefing.md"));
-        let named = |engine, mode| session_args(engine, mode, false, None, &[], Some("Fix login"), ID, ctx);
+        let named = |engine, mode| session_args(engine, mode, false, None, &[], Some("Fix login"), ID, ctx, false);
         let fresh = named(Engine::Claude, StartMode::Fresh);
         assert_eq!(fresh[fresh.len() - 3..], strings(&["--name", "Fix login", &prompt])[..]);
         let resume = named(Engine::Claude, StartMode::Resume);
         assert_eq!(resume[resume.len() - 2..], strings(&["--name", "Fix login"])[..]);
         for mode in [StartMode::Fresh, StartMode::Resume] {
-            assert_eq!(named(Engine::Codex, mode), session_args(Engine::Codex, mode, false, None, &[], None, ID, ctx));
+            assert_eq!(named(Engine::Codex, mode), session_args(Engine::Codex, mode, false, None, &[], None, ID, ctx, false));
         }
+    }
+
+    #[test]
+    fn a_session_without_a_task_gets_no_prompt() {
+        let ctx = Path::new("C:/data/terminals/ID/context");
+        let prompt = pointer_prompt(&ctx.join("briefing.md"));
+        for engine in [Engine::Claude, Engine::Codex] {
+            let with = session_args(engine, StartMode::Fresh, false, None, &[], None, ID, ctx, false);
+            let bare = session_args(engine, StartMode::Fresh, false, None, &[], None, ID, ctx, true);
+            assert_eq!(with.last(), Some(&prompt));
+            assert_eq!(bare, with[..with.len() - 1], "only the prompt is left out");
+        }
+        // The briefing folder stays readable to Claude, and a fresh Claude session still gets its id.
+        let bare = session_args(Engine::Claude, StartMode::Fresh, false, None, &[], None, ID, ctx, true);
+        assert!(bare.contains(&"--add-dir".to_string()) && bare.contains(&"--session-id".to_string()));
     }
 
     #[test]
@@ -372,7 +390,7 @@ mod tests {
         assert!(!prompt.contains('"') && !prompt.contains('\n') && !prompt.contains('\r'));
         assert!(prompt.starts_with("Read the file "));
         for accept_edits in [false, true] {
-            let list = session_args(Engine::Claude, StartMode::Fresh, accept_edits, None, &[], None, ID, ctx);
+            let list = session_args(Engine::Claude, StartMode::Fresh, accept_edits, None, &[], None, ID, ctx, false);
             assert_eq!(list.last(), Some(&prompt));
             assert_eq!(list[list.len() - 2], if accept_edits { "acceptEdits" } else { "manual" });
         }

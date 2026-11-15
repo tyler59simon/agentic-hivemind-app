@@ -6,7 +6,7 @@ const tree = { repo: "C:/code/ingestion", path: "C:/data/worktrees/x/1", branch:
 const base: SessionInfo = {
   id: "s", adapter: "claude-code", cliVersion: null, task: { kind: "work", project: "p", repo: "C:/code/ingestion" }, title: "Add a flag",
   workspace: [], status: "idle", startedAt: 1, endedAt: null, costUsd: null, error: null, structured: null, mode: "interactive", policy: "ask",
-  project: "p", worktree: tree, turns: 1, filesChanged: { files: 3, added: 4, removed: 1 }, context: [], model: null, system: null, review: null, sourceSha: null, interface: "chat", name: null, cliTitle: null,
+  project: "p", worktree: tree, turns: 1, filesChanged: { files: 3, added: 4, removed: 1 }, context: [], model: null, system: null, review: null, sourceSha: null, interface: "chat", name: null, cliTitle: null, direct: null, noTask: false,
 };
 const make = (id: string, o: Partial<SessionInfo> = {}): SessionInfo => ({ ...base, id, ...o });
 const review = (state: Review["state"]): Review => ({ state, commit: null, at: 1 });

@@ -52,6 +52,8 @@ export interface Settings {
   python: string | null; script: string | null; root: string | null;
   capture_shortcut?: string | null; close_to_tray?: boolean | null;
   claude_path?: string | null; codex_path?: string | null; agent_budget_usd?: number | null; architecture_suite_plugin?: string | null;
+  /** Folders chosen with the native picker; read-only here, Rust ignores it on save. */
+  other_folders?: string[] | null;
 }
 export interface CaptureStatus { shortcut: string | null; error: string | null; close_to_tray: boolean }
 

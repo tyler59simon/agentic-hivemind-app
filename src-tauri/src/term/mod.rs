@@ -4,7 +4,7 @@ pub mod scrollback;
 
 use crate::agent::events::Status;
 use crate::agent::scope::{self, PolicyMode};
-use crate::agent::{self, Engine, Interface};
+use crate::agent::{self, Engine, Interface, SessionInfo};
 use crate::settings;
 use crate::worktree;
 use launch::Cli;
@@ -191,11 +191,7 @@ impl Manager {
             }
             return Ok(view);
         };
-        let tree = info.worktree.as_ref().ok_or("This session has no worktree")?;
-        let cwd = PathBuf::from(&tree.path);
-        if !cwd.is_dir() {
-            return Err(format!("The session's worktree folder is missing: {}", tree.path));
-        }
+        let cwd = session_cwd(&info)?;
         let mut cli = found?;
         let context = session_dir(&inner.dir, session_id)?.join("context");
         cli.args.extend(launch::session_args(
@@ -207,6 +203,7 @@ impl Manager {
             info.name.as_deref(),
             session_id,
             &context,
+            info.no_task,
         ));
         if replay {
             send_saved(&scrollback_path, &output);
@@ -475,6 +472,17 @@ pub fn session_dir(dir: &Path, session_id: &str) -> Result<PathBuf, String> {
     Ok(dir.join(session_id))
 }
 
+/// The folder a session's program runs in: its worktree, or else the folder it was started in.
+fn session_cwd(info: &SessionInfo) -> Result<PathBuf, String> {
+    let (path, missing) = match (&info.worktree, &info.direct) {
+        (Some(tree), _) => (&tree.path, "The session's worktree folder is missing"),
+        (None, Some(direct)) => (&direct.path, "The session's folder is missing"),
+        (None, None) => return Err("This session has no worktree".into()),
+    };
+    let cwd = PathBuf::from(path);
+    if cwd.is_dir() { Ok(cwd) } else { Err(format!("{missing}: {path}")) }
+}
+
 /// Write `<dir>/<session id>/context/briefing.md` and return the `context` folder.
 pub fn write_briefing(dir: &Path, session_id: &str, text: &str) -> Result<PathBuf, String> {
     let context = session_dir(dir, session_id)?.join("context");
@@ -620,6 +628,8 @@ mod tests {
                 interface: Interface::Terminal,
                 name: None,
                 cli_title: None,
+                direct: None,
+                no_task: false,
             }
         }
 
@@ -846,6 +856,33 @@ mod tests {
         let saved = rig.saved(&id);
         assert!(!saved.is_empty());
         assert_eq!(*bytes.lock().unwrap(), saved);
+        rig.clean();
+    }
+
+    #[test]
+    fn a_session_runs_in_its_worktree_else_in_its_own_folder() {
+        let rig = Rig::new("cwd");
+        let tree = rig.plain_tree();
+        let folder = rig.dir.join("mine");
+        std::fs::create_dir_all(&folder).unwrap();
+        let direct = |path: &std::path::Path| Some(crate::agent::direct::Direct { path: path.display().to_string(), repo: None, head_sha: None, start_tree: None });
+        let with = |tree: Option<Worktree>, direct| SessionInfo { direct, ..Rig::info("x", tree) };
+
+        assert_eq!(session_cwd(&with(Some(tree.clone()), None)), Ok(PathBuf::from(&tree.path)));
+        assert_eq!(session_cwd(&with(None, direct(&folder))), Ok(folder.clone()));
+        assert_eq!(session_cwd(&with(Some(tree.clone()), direct(&folder))), Ok(PathBuf::from(&tree.path)), "a worktree wins");
+        assert_eq!(session_cwd(&with(None, None)), Err("This session has no worktree".to_string()));
+        let gone = rig.dir.join("gone");
+        assert_eq!(session_cwd(&with(None, direct(&gone))), Err(format!("The session's folder is missing: {}", gone.display())));
+        rig.clean();
+    }
+
+    #[test]
+    fn opening_a_session_with_no_place_says_so() {
+        let rig = Rig::new("no-place");
+        let id = rig.session(None);
+        let (output, _) = collector();
+        assert_eq!(rig.terms.open(&id, 80, 24, Some(StartMode::Fresh), false, output).unwrap_err(), "This session has no worktree");
         rig.clean();
     }
 

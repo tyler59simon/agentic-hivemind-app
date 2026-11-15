@@ -393,6 +393,8 @@ mod tests {
             interface: crate::agent::Interface::Chat,
             name: None,
             cli_title: None,
+            direct: None,
+            no_task: false,
         }
     }
 

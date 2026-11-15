@@ -4,7 +4,9 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type AgentTask =
   | { kind: "system_passport"; slug: string }
-  | { kind: "work"; project: string; repo: string; branch?: string; change?: number };
+  | { kind: "work"; project: string; repo: string; branch?: string; change?: number }
+  /** A folder chosen with `folderPick`; terminal only. It always runs in place. */
+  | { kind: "folder"; path: string };
 export type SessionStatus = "running" | "waiting" | "idle" | "succeeded" | "failed" | "cancelled" | "ended";
 export type SessionMode = "unattended" | "interactive";
 export type Policy = "pre_approved" | "ask" | "accept_edits";
@@ -12,8 +14,12 @@ export type Decision = "allow" | "allow_always" | "deny" | "withdrawn";
 export type TurnOutcome = "completed" | "stopped" | "budget" | "error";
 export type Engine = "claude" | "codex";
 export type Interface = "chat" | "terminal";
+/** Where a work session runs: a new worktree, or the project's own checkout. Chat sessions are worktree only. */
+export type Place = "worktree" | "checkout";
 
 export interface Worktree { repo: string; path: string; branch: string; baseBranch: string; baseSha: string; reviewedSha?: string }
+/** A session that runs in a folder of the user's own. `startTree` is a git tree of the folder's files at the start. */
+export interface Direct { path: string; repo: string | null; headSha: string | null; startTree: string | null }
 export interface FileChange { path: string; status: "A" | "M" | "D"; added: number; removed: number; binary?: boolean }
 export interface FileTotals { files: number; added: number; removed: number }
 export interface FileDiff extends FileChange { diff: string; truncated: boolean }
@@ -41,6 +47,10 @@ export interface SessionInfo {
   name: string | null;
   /** The title the CLI gave its conversation. */
   cliTitle: string | null;
+  /** Set when the session runs in the project checkout or another folder, so it has no worktree. */
+  direct: Direct | null;
+  /** A terminal session started with an empty task. */
+  noTask: boolean;
 }
 
 /** The engine of a session, whatever adapter name older code stored. */
@@ -66,7 +76,7 @@ export type RunEvent =
     durationMs: number | null; turns: number | null; result: string | null; structured: unknown; denials: number;
   };
 
-export interface StartOptions { policy: Policy; context: string[]; briefing?: string; model?: string; system?: string; engine?: Engine; interface?: Interface }
+export interface StartOptions { policy: Policy; context: string[]; briefing?: string; model?: string; system?: string; engine?: Engine; interface?: Interface; place?: Place }
 export interface SendOptions { context: string[]; briefing?: string }
 
 export interface SeqEvent { sessionId: string; seq: number; at: number; event: RunEvent }

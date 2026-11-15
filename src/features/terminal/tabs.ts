@@ -4,9 +4,9 @@ import { engineName } from "../changes/changes";
 
 const inProject = (s: SessionInfo, project: string | null) => project === null || s.project === project;
 
-/** "Codex · ingestion-service": the engine and the repository's folder name. The task's repo is used because the worktree can be gone. */
+/** "Codex · ingestion-service": the engine and the repository's (or picked folder's) name. The task is used because the worktree can be gone. */
 export function defaultLabel(s: SessionInfo): string {
-  const repo = s.task.kind === "work" ? repoName(s.task.repo) : s.title;
+  const repo = s.task.kind === "work" ? repoName(s.task.repo) : s.task.kind === "folder" ? repoName(s.task.path) : s.title;
   return `${engineName(s.adapter)} · ${repo}`;
 }
 

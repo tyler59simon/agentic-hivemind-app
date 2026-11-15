@@ -2,6 +2,7 @@
 //! normalised into events for the UI, and kept as history. The unit is a session: an unattended one is a single
 //! prompt, an interactive one takes messages until it is ended, and either may use a process of its own at a time.
 pub mod claude;
+pub mod direct;
 pub mod events;
 pub mod scope;
 pub mod store;
@@ -9,6 +10,7 @@ pub mod store;
 use crate::bridge::Bridge;
 use crate::settings::Settings;
 use crate::worktree::{self, ChangedFiles, FileChange, Totals, Worktree};
+use direct::Direct;
 use events::{Decision, Mode, Outcome, RunEvent, SeqEvent, Status, TurnEnd};
 use scope::{AgentTask, PolicyMode, Scope, Spec};
 use serde::{Deserialize, Serialize};
@@ -166,6 +168,13 @@ pub struct SessionInfo {
     /// The title the CLI gave its conversation (filled from the CLI's own files).
     #[serde(default)]
     pub cli_title: Option<String>,
+    /// Set when the session runs in a folder of the user's own (the project checkout or another folder), not in a
+    /// worktree of Hivemind's. Such a session has no `worktree`.
+    #[serde(default)]
+    pub direct: Option<Direct>,
+    /// A terminal session started with an empty task: the CLI gets no first prompt.
+    #[serde(default)]
+    pub no_task: bool,
 }
 
 /// What the user decided about a work session's edits.
@@ -230,6 +239,19 @@ pub struct StartOptions {
     pub engine: Engine,
     #[serde(default)]
     pub interface: Interface,
+    /// Where a work session runs. None: the checkout for a terminal, a worktree for a chat.
+    #[serde(default)]
+    pub place: Option<Place>,
+}
+
+/// Where a work session runs.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Place {
+    /// A new worktree of Hivemind's, on a branch of its own.
+    Worktree,
+    /// The project's registered repository folder itself.
+    Checkout,
 }
 
 /// What `agent_send` may be told besides the text.
@@ -483,7 +505,7 @@ fn session_info(id: &str, adapter: &str, task: AgentTask, scope: &Scope, options
         cli_version: None,
         project: match &task {
             AgentTask::Work { project, .. } => Some(project.clone()),
-            AgentTask::SystemPassport { .. } => None,
+            AgentTask::SystemPassport { .. } | AgentTask::Folder { .. } => None,
         },
         task,
         title: scope.title.clone(),
@@ -507,6 +529,8 @@ fn session_info(id: &str, adapter: &str, task: AgentTask, scope: &Scope, options
         interface: Interface::Chat,
         name: None,
         cli_title: None,
+        direct: None,
+        no_task: false,
     }
 }
 
@@ -523,10 +547,14 @@ pub fn clean_name(name: &str) -> Option<String> {
 
 fn check_combination(task: &AgentTask, engine: Engine, interface: Interface) -> Result<(), String> {
     let work = matches!(task, AgentTask::Work { .. });
-    if interface == Interface::Terminal && !work {
+    let folder = matches!(task, AgentTask::Folder { .. });
+    if folder && interface != Interface::Terminal {
+        return Err("A session in another folder runs in the terminal.".into());
+    }
+    if interface == Interface::Terminal && !work && !folder {
         return Err("A terminal session needs a project repository.".into());
     }
-    if engine == Engine::Codex && !work {
+    if engine == Engine::Codex && !work && !folder {
         return Err("System passports run with Claude Code.".into());
     }
     if engine == Engine::Codex && interface == Interface::Chat && !CODEX_CHAT {
@@ -1369,8 +1397,60 @@ impl Inner {
     }
 }
 
-/// Work out what `task` may touch (from Living Memory and the settings), then start its session. A work session gets a
-/// worktree of its own first, which is removed again when the session cannot start.
+/// Where a work session runs, from what the user asked for and the interface.
+fn place_of(options: &StartOptions) -> Result<Place, String> {
+    match (options.place, options.interface) {
+        (Some(Place::Checkout), Interface::Chat) => Err("A chat session always works in a worktree.".into()),
+        (Some(Place::Worktree) | None, Interface::Chat) | (Some(Place::Worktree), Interface::Terminal) => Ok(Place::Worktree),
+        (Some(Place::Checkout) | None, Interface::Terminal) => Ok(Place::Checkout),
+    }
+}
+
+/// The title of a session started with no task: the engine and the folder's name.
+fn bare_title(engine: Engine, folder: &Path) -> String {
+    let name = folder.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| folder.display().to_string());
+    format!("{} \u{b7} {name}", engine.label())
+}
+
+/// List a terminal session at rest, with its briefing written; the program starts when the terminal is opened.
+#[allow(clippy::too_many_arguments)] // each argument is one independent part of the new session
+fn register_terminal(
+    manager: &Manager,
+    terminals: &Path,
+    id: &str,
+    task: AgentTask,
+    scope: &Scope,
+    direct: Option<Direct>,
+    prompt: &str,
+    options: &StartOptions,
+) -> Result<SessionInfo, String> {
+    let mut info = session_info(id, options.engine.adapter_name(), task, scope, options);
+    info.status = Status::Idle;
+    info.interface = Interface::Terminal;
+    info.direct = direct;
+    info.no_task = prompt.trim().is_empty();
+    if options.engine == Engine::Codex {
+        info.model = None;
+    }
+    let context = crate::term::write_briefing(terminals, id, &first_text(options.briefing.as_deref(), prompt))?;
+    info.workspace.push(context.display().to_string());
+    manager.register(info)
+}
+
+/// Start a terminal session in `folder` itself: no worktree is made, and nothing here changes the folder. When it is
+/// inside a git work tree, the files it holds now are recorded so a later review can tell what the session changed.
+fn start_direct(manager: &Manager, terminals: &Path, id: &str, task: AgentTask, folder: &Path, prompt: &str, options: &StartOptions) -> Result<SessionInfo, String> {
+    if !folder.is_dir() {
+        return Err(format!("The folder does not exist: {}", folder.display()));
+    }
+    let title = if prompt.trim().is_empty() { bare_title(options.engine, folder) } else { scope::task_title(prompt) };
+    let scope = scope::direct(folder, options.policy.unwrap_or(PolicyMode::Ask), title)?;
+    register_terminal(manager, terminals, id, task, &scope, Some(direct::describe(folder)), prompt, options)
+}
+
+/// Work out what `task` may touch (from Living Memory and the settings), then start its session. A work session in a
+/// worktree gets one of its own first, which is removed again when the session cannot start. A terminal session may run
+/// in the project's checkout or in a picked folder instead; nothing is created or removed for those.
 #[allow(clippy::too_many_arguments)] // the signature section 6.6 of the Phase 5 plan fixes
 pub fn start_task(
     manager: &Manager,
@@ -1388,12 +1468,21 @@ pub fn start_task(
     let program = if terminal { crate::term::launch::program(options.engine, saved).map(|_| String::new())? } else { claude::available(saved)? };
     let id = uuid::Uuid::new_v4().to_string();
     let launch = |scope| Launch { scope, program: program.clone(), budget_usd: saved.agent_budget_usd(), memory_root: bridge.launch().root };
-    let AgentTask::Work { project, repo, branch, change } = &task else {
-        let home = dirs::home_dir().ok_or("Could not find your home folder")?;
-        let scope = scope::for_task(bridge, &task, saved, &home)?;
-        return manager.start(id, task, launch(scope), prompt, &options);
+    let (project, repo, branch, change) = match &task {
+        AgentTask::Work { project, repo, branch, change } => (project, repo, branch, change),
+        AgentTask::Folder { path } => {
+            let folder = scope::other_folder(saved, path)?;
+            return start_direct(manager, terminals, &id, task.clone(), &folder, prompt, &options);
+        }
+        AgentTask::SystemPassport { .. } => {
+            let home = dirs::home_dir().ok_or("Could not find your home folder")?;
+            let scope = scope::for_task(bridge, &task, saved, &home)?;
+            return manager.start(id, task, launch(scope), prompt, &options);
+        }
     };
-    if prompt.trim().is_empty() {
+    let place = place_of(&options)?;
+    // A terminal can start bare; a chat session needs its first message.
+    if prompt.trim().is_empty() && !terminal {
         return Err("Write a task for the session first".into());
     }
     if let Some(model) = options.model.as_deref().filter(|model| !matches!(*model, "sonnet" | "opus" | "haiku")) {
@@ -1405,20 +1494,18 @@ pub fn start_task(
     if let Some(id) = change {
         scope::check_change(&scope::change_entry(bridge, *id)?, project, &repo.to_string_lossy())?;
     }
+    if place == Place::Checkout {
+        return start_direct(manager, terminals, &id, task.clone(), &repo, prompt, &options);
+    }
     let tree = worktree::create(worktrees, &repo, branch.as_deref(), &id)?;
-    let started = scope::work(tree.clone(), policy, prompt).and_then(|scope| {
+    let started = scope::work(tree.clone(), policy, prompt).and_then(|mut scope| {
         if !terminal {
-            return manager.start(id, task.clone(), launch(scope), prompt, &options);
+            return manager.start(id.clone(), task.clone(), launch(scope), prompt, &options);
         }
-        let mut info = session_info(&id, options.engine.adapter_name(), task.clone(), &scope, &options);
-        info.status = Status::Idle;
-        info.interface = Interface::Terminal;
-        if options.engine == Engine::Codex {
-            info.model = None;
+        if prompt.trim().is_empty() {
+            scope.title = bare_title(options.engine, &repo);
         }
-        let context = crate::term::write_briefing(terminals, &id, &first_text(options.briefing.as_deref(), prompt))?;
-        info.workspace.push(context.display().to_string());
-        manager.register(info)
+        register_terminal(manager, terminals, &id, task.clone(), &scope, None, prompt, &options)
     });
     if started.is_err() {
         let _ = worktree::remove(&tree);
@@ -2650,6 +2737,8 @@ mod tests {
             interface: Interface::Chat,
             name: None,
             cli_title: None,
+            direct: None,
+            no_task: false,
         }
     }
 
@@ -2730,6 +2819,146 @@ mod tests {
     /// A terminal session at rest, as `start_task` registers it.
     fn terminal(id: &str) -> SessionInfo {
         SessionInfo { interface: Interface::Terminal, status: Status::Idle, turns: 0, ..resting(id) }
+    }
+
+    fn terminal_options(engine: Engine) -> StartOptions {
+        StartOptions { engine, interface: Interface::Terminal, ..Default::default() }
+    }
+
+    #[test]
+    fn a_folder_task_is_for_terminals_only() {
+        let folder = AgentTask::Folder { path: "C:/notes".into() };
+        assert!(check_combination(&folder, Engine::Claude, Interface::Terminal).is_ok());
+        assert!(check_combination(&folder, Engine::Codex, Interface::Terminal).is_ok());
+        for engine in [Engine::Claude, Engine::Codex] {
+            assert_eq!(check_combination(&folder, engine, Interface::Chat).unwrap_err(), "A session in another folder runs in the terminal.");
+        }
+        assert_eq!(serde_json::to_value(&folder).unwrap(), json!({"kind": "folder", "path": "C:/notes"}));
+    }
+
+    #[test]
+    fn terminals_default_to_the_checkout_and_chats_to_a_worktree() {
+        let place = |place, interface| place_of(&StartOptions { place, interface, ..Default::default() });
+        assert_eq!(place(None, Interface::Terminal), Ok(Place::Checkout));
+        assert_eq!(place(Some(Place::Worktree), Interface::Terminal), Ok(Place::Worktree));
+        assert_eq!(place(Some(Place::Checkout), Interface::Terminal), Ok(Place::Checkout));
+        assert_eq!(place(None, Interface::Chat), Ok(Place::Worktree));
+        assert_eq!(place(Some(Place::Worktree), Interface::Chat), Ok(Place::Worktree));
+        assert_eq!(place(Some(Place::Checkout), Interface::Chat), Err("A chat session always works in a worktree.".to_string()));
+        let options: StartOptions = serde_json::from_value(json!({"place": "checkout"})).unwrap();
+        assert_eq!(options.place, Some(Place::Checkout));
+        assert!(serde_json::from_value::<StartOptions>(json!({"place": "elsewhere"})).is_err());
+    }
+
+    #[test]
+    fn a_checkout_session_runs_in_the_repository_without_a_worktree() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new("checkout", Fake::scripted("checkout", &[]));
+        rig.tree("other"); // makes `repo` with one commit
+        let repo = rig.dir.join("repo");
+        std::fs::write(repo.join("scratch.txt"), "untracked\n").unwrap();
+        let status = |dir: &Path| Command::new("git").arg("-C").arg(dir).args(["status", "--porcelain"]).output().unwrap().stdout;
+        let before = status(&repo);
+        let worktrees_before = std::fs::read_dir(rig.dir.join("worktrees")).unwrap().count();
+        let (terminals, id) = (rig.dir.join("terminals"), new_id());
+        let options = StartOptions { briefing: Some("Project briefing".into()), ..terminal_options(Engine::Claude) };
+
+        let info = start_direct(&rig.manager, &terminals, &id, work_task(), &repo, "Fix the bug\nsecond line", &options).unwrap();
+        assert_eq!((info.status, info.interface, info.worktree.is_none(), info.no_task), (Status::Idle, Interface::Terminal, true, false));
+        assert_eq!((info.title.as_str(), info.project.as_deref()), ("Fix the bug", Some("paystream")));
+        assert_eq!(info.workspace[0], repo.display().to_string());
+        let direct = info.direct.clone().expect("a direct session");
+        assert_eq!(direct.path, repo.display().to_string());
+        assert!(direct.repo.is_some() && direct.head_sha.is_some());
+        let tree = direct.start_tree.expect("a start tree");
+        let listed = Command::new("git").arg("-C").arg(&repo).args(["ls-tree", "-r", "--name-only", &tree]).output().unwrap().stdout;
+        assert!(String::from_utf8_lossy(&listed).lines().any(|name| name == "scratch.txt"));
+        assert_eq!(rig.manager.info(&id).unwrap(), info);
+
+        let briefing = std::fs::read_to_string(terminals.join(&id).join("context").join("briefing.md")).unwrap();
+        assert_eq!(briefing, "Project briefing\n\n---\n\nFix the bug\nsecond line");
+        assert_eq!(status(&repo), before, "the user's folder is unchanged");
+        assert_eq!(std::fs::read_dir(rig.dir.join("worktrees")).unwrap().count(), worktrees_before, "no worktree was made");
+        let scope = scope::direct(&repo, PolicyMode::Ask, String::new()).unwrap();
+        assert_eq!((scope.cwd, scope.worktree, scope.deny), (repo.clone(), None, scope::governed_rules()));
+    }
+
+    #[test]
+    fn a_session_with_no_task_is_titled_by_engine_and_folder() {
+        let rig = Rig::new("no-task", Fake::scripted("no-task", &[]));
+        let folder = rig.dir.join("Notes");
+        std::fs::create_dir_all(&folder).unwrap();
+        let terminals = rig.dir.join("terminals");
+        for (engine, label) in [(Engine::Claude, "Claude Code"), (Engine::Codex, "Codex")] {
+            let id = new_id();
+            let task = AgentTask::Folder { path: folder.display().to_string() };
+            let info = start_direct(&rig.manager, &terminals, &id, task, &folder, "  \n", &terminal_options(engine)).unwrap();
+            assert_eq!(info.title, format!("{label} \u{b7} Notes"));
+            assert!(info.no_task);
+            assert!(terminals.join(&id).join("context").join("briefing.md").is_file(), "the briefing is still written");
+            assert_eq!(info.direct.map(|direct| direct.path), Some(folder.display().to_string()));
+        }
+        let missing = start_direct(&rig.manager, &terminals, &new_id(), work_task(), &rig.dir.join("gone"), "x", &terminal_options(Engine::Claude));
+        assert!(missing.unwrap_err().starts_with("The folder does not exist: "));
+    }
+
+    #[test]
+    fn start_task_runs_a_folder_session_only_for_a_picked_folder() {
+        let rig = Rig::new("folder-task", Fake::scripted("folder-task", &[]));
+        let folder = rig.dir.join("picked");
+        std::fs::create_dir_all(&folder).unwrap();
+        // A program that exists and is harmless: start_task only looks the CLI up.
+        let harmless = if cfg!(windows) { std::env::var("ComSpec").unwrap_or_else(|_| "C:\\Windows\\System32\\cmd.exe".into()) } else { "/bin/sh".into() };
+        let spelled = folder.display().to_string();
+        let saved = Settings { claude_path: Some(harmless), other_folders: Some(vec![spelled.clone()]), ..Default::default() };
+        let bridge = Bridge::new(crate::settings::resolve(&saved, |_| None));
+        let (worktrees, terminals) = (rig.dir.join("worktrees"), rig.dir.join("terminals"));
+        let start = |path: &str, prompt: &str, options: StartOptions| {
+            start_task(&rig.manager, &bridge, &saved, &worktrees, &terminals, AgentTask::Folder { path: path.into() }, prompt, options)
+        };
+
+        let loud = format!("{}/", spelled.to_uppercase().replace('\\', "/"));
+        let bare = start(&loud, "", terminal_options(Engine::Claude));
+        if cfg!(windows) {
+            let info = bare.unwrap();
+            assert!(info.no_task && info.worktree.is_none() && info.project.is_none());
+            assert_eq!(info.direct.unwrap().path, spelled, "the saved spelling is used");
+        } else {
+            assert!(bare.is_err());
+        }
+        let elsewhere = rig.dir.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let refused = start(&elsewhere.display().to_string(), "Do it", terminal_options(Engine::Claude));
+        assert_eq!(refused.unwrap_err(), "That folder was not chosen with the folder picker");
+        let chat = start(&spelled, "Do it", StartOptions::default());
+        assert_eq!(chat.unwrap_err(), "A session in another folder runs in the terminal.");
+        let task = start(&spelled, "Do it", terminal_options(Engine::Claude)).unwrap();
+        assert_eq!((task.title.as_str(), task.no_task), ("Do it", false));
+    }
+
+    #[test]
+    fn a_direct_session_is_never_reached_by_worktree_code() {
+        let rig = Rig::new("direct-guards", Fake::scripted("direct-guards", &[]));
+        let folder = rig.dir.join("mine");
+        std::fs::create_dir_all(&folder).unwrap();
+        let task = AgentTask::Folder { path: "x".into() };
+        let info = start_direct(&rig.manager, &rig.dir.join("terminals"), &new_id(), task, &folder, "task", &terminal_options(Engine::Claude)).unwrap();
+        rig.manager.amend(&info.id, |info| info.status = Status::Ended).unwrap();
+        assert_eq!(rig.manager.remove_worktree(&info.id).unwrap_err(), "This session has no worktree");
+        assert_eq!(rig.manager.files(&info.id).unwrap_err(), "This session has no worktree");
+        assert!(folder.is_dir());
+    }
+
+    #[test]
+    fn old_session_records_load_without_the_new_fields() {
+        let info = serde_json::to_value(terminal("00000000-0000-4000-8000-000000000001")).unwrap();
+        let mut old = info.as_object().unwrap().clone();
+        old.remove("direct");
+        old.remove("noTask");
+        let loaded: SessionInfo = serde_json::from_value(Value::Object(old)).unwrap();
+        assert_eq!((loaded.direct, loaded.no_task), (None, false));
     }
 
     #[test]

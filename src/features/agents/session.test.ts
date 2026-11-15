@@ -7,7 +7,7 @@ let n = 0;
 const session = (o: Partial<SessionInfo>): SessionInfo => ({
   id: `s${++n}`, adapter: "claude-code", cliVersion: null, task: { kind: "work", project: "paystream", repo: "C:/code/ingestion" }, title: "t",
   workspace: [], status: "idle", startedAt: n, endedAt: null, costUsd: null, error: null, structured: null,
-  mode: "interactive", policy: "ask", project: "paystream", worktree: null, turns: 0, filesChanged: null, context: [], model: null, system: null, review: null, sourceSha: null, interface: "chat", name: null, cliTitle: null, ...o,
+  mode: "interactive", policy: "ask", project: "paystream", worktree: null, turns: 0, filesChanged: null, context: [], model: null, system: null, review: null, sourceSha: null, interface: "chat", name: null, cliTitle: null, direct: null, noTask: false, ...o,
 });
 const project: Project = {
   slug: "paystream", name: "PayStream", status: "active", repos: ["C:/code/ingestion"], aliases: [], description: "",
