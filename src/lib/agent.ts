@@ -75,6 +75,10 @@ export const agentSession = (sessionId: string, fromSeq = 0) => invoke<SessionLo
 
 export const reviewFiles = (sessionId: string) => invoke<FileChange[]>("review_files", { sessionId });
 export const reviewFile = (sessionId: string, path: string) => invoke<FileContents>("review_file", { sessionId, path });
+export const reviewApprove = (sessionId: string, message: string) => invoke<string>("review_approve", { sessionId, message });
+export const reviewRequestChanges = (sessionId: string, text: string) => invoke<void>("review_request_changes", { sessionId, text });
+export const reviewDismiss = (sessionId: string) => invoke<void>("review_dismiss", { sessionId });
+export const reviewDiscard = (sessionId: string) => invoke<void>("review_discard", { sessionId });
 /** Have Rust look at every session's worktree again; resolves to how many sessions changed. */
 export const reviewRefresh = () => invoke<number>("review_refresh");
 

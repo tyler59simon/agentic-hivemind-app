@@ -203,6 +203,34 @@ async fn review_file(state: State<'_, AppState>, session_id: String, path: Strin
     blocking(move || review::file(&agents, &root, &session_id, &path)).await
 }
 
+/// Commit the session's edits on its own branch. Never merges, never pushes.
+#[tauri::command]
+async fn review_approve(state: State<'_, AppState>, session_id: String, message: String) -> Result<String, String> {
+    let (agents, root) = (state.agents.clone(), state.worktrees_dir.clone());
+    blocking(move || review::approve(&agents, &root, &session_id, &message)).await
+}
+
+/// Send the session a message asking for changes.
+#[tauri::command]
+async fn review_request_changes(state: State<'_, AppState>, session_id: String, text: String) -> Result<(), String> {
+    let (agents, bridge, path) = (state.agents.clone(), state.bridge.clone(), state.settings_path.clone());
+    blocking(move || review::request_changes(&agents, &bridge, &settings::load(&path), &session_id, &text)).await
+}
+
+/// Take a session's edits out of the review queue and leave them where they are.
+#[tauri::command]
+async fn review_dismiss(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    let agents = state.agents.clone();
+    blocking(move || review::dismiss(&agents, &session_id)).await
+}
+
+/// Throw the session's edits away: reset its worktree to its review base and remove untracked files.
+#[tauri::command]
+async fn review_discard(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    let (agents, root) = (state.agents.clone(), state.worktrees_dir.clone());
+    blocking(move || review::discard(&agents, &root, &session_id)).await
+}
+
 /// Look at every session's worktree again, so edits made outside a turn are noticed.
 #[tauri::command]
 async fn review_refresh(state: State<'_, AppState>) -> Result<usize, String> {
@@ -349,7 +377,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_remove_worktree, repo_branches,
-            agent_cancel, agent_sessions, agent_session, review_files, review_file, review_refresh
+            agent_cancel, agent_sessions, agent_session, review_files, review_file, review_approve, review_request_changes, review_dismiss, review_discard, review_refresh
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

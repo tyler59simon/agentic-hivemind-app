@@ -786,7 +786,6 @@ impl Manager {
     }
 
     /// Reserve a session for one review action: it must not be mid-turn or already reserved.
-    #[allow(dead_code)] // review.rs calls it from the next commit
     pub fn reserve(&self, id: &str) -> Result<Reservation, String> {
         store::log_path(&self.inner.dir, id)?;
         let mut sessions = self.inner.sessions.lock().unwrap();

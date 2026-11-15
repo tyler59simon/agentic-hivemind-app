@@ -74,8 +74,7 @@ pub struct ChangedFiles {
     pub truncated: bool,
 }
 
-/// Phase 4's review is the first caller of `list`; until then only the tests use it and its type.
-#[cfg(test)]
+/// One entry of `git worktree list`.
 #[derive(Debug, PartialEq)]
 pub struct Listed {
     pub path: String,
@@ -290,7 +289,6 @@ pub fn ahead(tree: &Worktree) -> Result<u64, String> {
     text.trim().parse().map_err(|_| format!("Unreadable git output: {}", text.trim()))
 }
 
-#[cfg(test)]
 pub fn list(repo: &Path) -> Result<Vec<Listed>, String> {
     let text = run(repo, &["worktree", "list", "--porcelain"])?;
     let mut all: Vec<Listed> = Vec::new();

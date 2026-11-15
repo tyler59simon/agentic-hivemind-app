@@ -1,9 +1,11 @@
 //! Reviewing a work session's edits: the worktree and its base commits come from the session's stored details, never from
 //! the webview. It lists nothing itself: the listing is `crate::worktree::changes`.
-use crate::agent::{self, Manager, SessionInfo};
-use crate::git::{is_sha, run_captured};
 use crate::agent::events::Status;
-use crate::worktree::{self, FileChange, Worktree};
+use crate::agent::{self, Manager, Review, ReviewState, SendOptions, SessionInfo};
+use crate::bridge::Bridge;
+use crate::git::{is_sha, run_captured};
+use crate::settings::Settings;
+use crate::worktree::{self, FileChange, Totals, Worktree};
 use serde::Serialize;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -12,6 +14,9 @@ use std::time::Duration;
 pub const MAX_FILE: u64 = 2 * 1024 * 1024; // bytes, per side of a diff
 const SNIFF: usize = 8000; // bytes git looks at to call a file binary
 const READ: Duration = Duration::from_secs(20);
+const WRITE: Duration = Duration::from_secs(120);
+const NO_IDENTITY: &str = "Git has no author identity, so it cannot commit. Set one with: git config --global user.name \"Your Name\" and git config --global user.email \"you@example.com\". Then approve again.";
+const OUTPUT_LINES: usize = 20; // lines of a failed commit's output that are shown
 pub const REFRESH_CAP: usize = 20; // worktrees one review_refresh looks at
 
 /// The two versions of one changed file.
@@ -102,6 +107,48 @@ pub fn file_contents(tree: &Worktree, path: &str) -> Result<FileContents, String
     Ok(FileContents { base, head, binary, too_large })
 }
 
+/// Everything the worktree changed goes into one commit on its branch; returns the commit id. When nothing is left to
+/// stage but the branch is ahead of the review base (the agent committed its own work), that commit is the result.
+pub fn commit_all(tree: &Worktree, message: &str) -> Result<String, String> {
+    if message.trim().is_empty() {
+        return Err("Write a commit message first.".into());
+    }
+    let dir = Path::new(&tree.path);
+    run(dir, &["add", "-A"], WRITE)?;
+    if !run(dir, &["diff", "--cached", "--name-only", "-z", "HEAD"], READ)?.is_empty() {
+        let mut command = worktree::git(dir);
+        command.args(["commit", "-m", message]);
+        let ran = run_captured(command, WRITE)?;
+        if !ran.status.success() {
+            if ran.stderr.contains("Author identity unknown") || ran.stderr.contains("empty ident name") {
+                return Err(NO_IDENTITY.into());
+            }
+            let last = |text: &str| -> Vec<String> {
+                let lines: Vec<&str> = text.lines().map(str::trim_end).filter(|line| !line.trim().is_empty()).collect();
+                lines[lines.len().saturating_sub(OUTPUT_LINES)..].iter().map(|line| line.to_string()).collect()
+            };
+            let shown: Vec<String> = last(&ran.stderr).into_iter().chain(last(&ran.stdout)).collect();
+            return Err(format!("The commit did not go through:\n{}", shown.join("\n")));
+        }
+    }
+    let head = run(dir, &["rev-parse", "HEAD"], READ)?.trim().to_string();
+    if !is_sha(&head) {
+        return Err("git did not print a commit id".into());
+    }
+    if head == tree.review_base() {
+        return Err("There is nothing to approve: the worktree matches its base commit.".into());
+    }
+    Ok(head)
+}
+
+/// Throw the edits away: the branch goes back to the review base and untracked files are removed.
+pub fn reset_to_base(tree: &Worktree) -> Result<(), String> {
+    let dir = Path::new(&tree.path);
+    run(dir, &["reset", "--hard", tree.review_base()], WRITE)?;
+    run(dir, &["clean", "-fd"], WRITE)?;
+    Ok(())
+}
+
 // ---- the same for a session (what the commands call) ----
 
 /// The session's worktree, once it is known to be one of Hivemind's: base commits that are commit ids, and a folder that
@@ -117,6 +164,30 @@ fn checked_worktree(info: &SessionInfo, worktrees_dir: &Path) -> Result<Worktree
     }
     tree.path = real.display().to_string();
     Ok(tree)
+}
+
+/// Being inside the worktrees folder does not make a folder the session's own branch: someone may have checked out
+/// another branch there, or the record may be damaged. Refuses to go on unless git agrees that the folder is a worktree of
+/// the session's repository, is its own top level, and is on `hivemind/<first 8 of the id>`.
+fn checked_for_write(id: &str, tree: &Worktree) -> Result<(), String> {
+    if tree.branch != format!("hivemind/{}", id.chars().take(8).collect::<String>()) {
+        return Err(format!("This session's branch name does not match its id: {}", tree.branch));
+    }
+    let dir = Path::new(&tree.path);
+    let here = canonical(dir).map_err(|_| format!("The session's worktree folder is missing: {}", tree.path))?;
+    let registered = worktree::list(Path::new(&tree.repo))?.iter().any(|listed| canonical(Path::new(&listed.path)).is_ok_and(|path| path == here));
+    if !registered {
+        return Err(format!("The session's folder is not a worktree of {}", tree.repo));
+    }
+    let top = run(dir, &["rev-parse", "--show-toplevel"], READ)?;
+    if !canonical(Path::new(top.trim())).is_ok_and(|path| path == here) {
+        return Err(format!("The session's folder is inside another git checkout: {}", top.trim()));
+    }
+    match run(dir, &["symbolic-ref", "--short", "HEAD"], READ) {
+        Ok(name) if name.trim() == tree.branch => Ok(()),
+        Ok(name) => Err(format!("The session's worktree is on branch {}, not on its own branch {}", name.trim(), tree.branch)),
+        Err(_) => Err(format!("The session's worktree is on a detached commit, not on its own branch {}", tree.branch)),
+    }
 }
 
 /// Store new totals (and the review decision they imply) when a listing differs from what the session lists. Not for a
@@ -166,6 +237,53 @@ pub fn refresh(agents: &Manager, worktrees_dir: &Path) -> usize {
 pub fn file(agents: &Manager, worktrees_dir: &Path, id: &str, path: &str) -> Result<FileContents, String> {
     let info = agents.info(id)?;
     file_contents(&checked_worktree(&info, worktrees_dir)?, path)
+}
+
+/// Commit the session's edits on its own branch. Never merges, never pushes. Returns the commit id.
+pub fn approve(agents: &Manager, worktrees_dir: &Path, id: &str, message: &str) -> Result<String, String> {
+    let _held = agents.reserve(id)?;
+    let tree = checked_worktree(&agents.info(id)?, worktrees_dir)?;
+    checked_for_write(id, &tree)?;
+    let commit = commit_all(&tree, message)?;
+    // `base_sha` stays where the branch started: Phase 2 counts commits ahead of it before it deletes a branch.
+    agents.amend(id, |info| {
+        if let Some(tree) = &mut info.worktree {
+            tree.reviewed_sha = Some(commit.clone());
+        }
+        info.files_changed = Some(Totals::default());
+        info.review = Some(Review { state: ReviewState::Approved, commit: Some(commit.clone()), at: agent::now_ms() });
+    })?;
+    Ok(commit)
+}
+
+/// Send the text to the session as a new message, and record that changes were requested once it is on its way.
+pub fn request_changes(agents: &Manager, bridge: &Bridge, saved: &Settings, id: &str, text: &str) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Err("Write what should change first.".into());
+    }
+    let held = agents.reserve(id)?;
+    agent::send_task(agents, bridge, saved, id, text, SendOptions::default(), Some(&held))?;
+    agents.amend(id, |info| info.review = Some(Review { state: ReviewState::ChangesRequested, commit: None, at: agent::now_ms() }))?;
+    Ok(())
+}
+
+/// The user leaves the edits where they are and takes the session out of the queue.
+pub fn dismiss(agents: &Manager, id: &str) -> Result<(), String> {
+    agents.amend(id, |info| info.review = Some(Review { state: ReviewState::Dismissed, commit: None, at: agent::now_ms() }))?;
+    Ok(())
+}
+
+/// Reset the session's worktree to its review base and remove what git does not know. Approved work stays.
+pub fn discard(agents: &Manager, worktrees_dir: &Path, id: &str) -> Result<(), String> {
+    let _held = agents.reserve(id)?;
+    let tree = checked_worktree(&agents.info(id)?, worktrees_dir)?;
+    checked_for_write(id, &tree)?;
+    reset_to_base(&tree)?;
+    agents.amend(id, |info| {
+        info.files_changed = Some(Totals::default());
+        info.review = Some(Review { state: ReviewState::Dismissed, commit: None, at: agent::now_ms() });
+    })?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -412,5 +530,271 @@ mod tests {
         assert_eq!(refresh(&manager, &many.worktrees), 0);
         assert_eq!(manager.info(&id(1)).unwrap().files_changed, Some(stale));
         assert_eq!(manager.info(&id(2)).unwrap().files_changed, None);
+    }
+
+    /// Edits the way an agent leaves them: one file changed, one deleted, one new.
+    fn make_edits(tree: &Worktree) {
+        let dir = Path::new(&tree.path);
+        std::fs::write(dir.join("a.txt"), "one\nTWO\n").unwrap();
+        std::fs::remove_file(dir.join("b.txt")).unwrap();
+        std::fs::write(dir.join("new.txt"), "fresh\n").unwrap();
+    }
+
+    fn head(dir: &Path) -> String {
+        sh(dir, &["rev-parse", "HEAD"]).trim().to_string()
+    }
+
+    fn status(dir: &Path) -> String {
+        sh(dir, &["status", "--porcelain"])
+    }
+
+    #[test]
+    fn approve_commits_everything_on_the_branch() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let mut tree = rig.tree(1);
+        make_edits(&tree);
+        let dir = Path::new(&tree.path);
+        let (repo_head, repo_status) = (head(&rig.repo), status(&rig.repo));
+        let commit = commit_all(&tree, "Prevent duplicate payment alerts").unwrap();
+        assert!(is_sha(&commit));
+        assert_eq!(commit, head(dir));
+        assert_eq!(sh(dir, &["log", "-1", "--format=%s"]).trim(), "Prevent duplicate payment alerts");
+        assert_eq!(sh(dir, &["symbolic-ref", "--short", "HEAD"]).trim(), tree.branch);
+        assert_eq!((head(&rig.repo), status(&rig.repo)), (repo_head, repo_status));
+        tree.reviewed_sha = Some(commit);
+        assert_eq!(worktree::changes(&tree).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn approve_needs_a_message_and_something_to_commit() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let tree = rig.tree(1);
+        assert_eq!(commit_all(&tree, "  \n"), Err("Write a commit message first.".to_string()));
+        assert_eq!(
+            commit_all(&tree, "msg"),
+            Err("There is nothing to approve: the worktree matches its base commit.".to_string())
+        );
+    }
+
+    #[test]
+    fn approve_after_the_agent_committed_returns_its_commit() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let tree = rig.tree(1);
+        make_edits(&tree);
+        let dir = Path::new(&tree.path);
+        sh(dir, &["add", "-A"]);
+        sh(dir, &["commit", "-q", "-m", "the agent's own commit"]);
+        let theirs = head(dir);
+        assert_eq!(commit_all(&tree, "my message"), Ok(theirs.clone()));
+        assert_eq!(head(dir), theirs);
+        assert_eq!(sh(dir, &["rev-list", "--count", &format!("{}..HEAD", tree.base_sha)]).trim(), "1");
+    }
+
+    #[test]
+    fn approve_without_an_identity_says_how_to_set_one() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let tree = rig.tree(1);
+        make_edits(&tree);
+        sh(&rig.repo, &["config", "user.name", ""]);
+        sh(&rig.repo, &["config", "user.email", ""]);
+        assert_eq!(commit_all(&tree, "msg"), Err(NO_IDENTITY.to_string()));
+    }
+
+    #[test]
+    fn approve_reports_a_failing_hook() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let tree = rig.tree(1);
+        make_edits(&tree);
+        let hooks = rig.root.join("hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let hook = hooks.join("pre-commit");
+        std::fs::write(&hook, "#!/bin/sh\necho \"hook says no\" >&2\nexit 1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        sh(&rig.repo, &["config", "core.hooksPath", &hooks.display().to_string().replace('\\', "/")]);
+        let error = commit_all(&tree, "msg").unwrap_err();
+        assert!(error.starts_with("The commit did not go through:"), "{error}");
+        assert!(error.contains("hook says no"), "{error}");
+    }
+
+    #[test]
+    fn discard_resets_and_removes_untracked() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let tree = rig.tree(1);
+        let dir = Path::new(&tree.path);
+        std::fs::write(dir.join("later.txt"), "committed after the base\n").unwrap();
+        sh(dir, &["add", "-A"]);
+        sh(dir, &["commit", "-q", "-m", "after the base"]);
+        make_edits(&tree);
+        std::fs::create_dir_all(dir.join("junk").join("deep")).unwrap();
+        std::fs::write(dir.join("junk").join("deep").join("x.txt"), "x\n").unwrap();
+        reset_to_base(&tree).unwrap();
+        assert_eq!(worktree::changes(&tree).unwrap(), vec![]);
+        assert!(!dir.join("new.txt").exists() && !dir.join("junk").exists() && !dir.join("later.txt").exists());
+        assert_eq!(std::fs::read_to_string(dir.join("b.txt")).unwrap().replace("\r\n", "\n"), "bee\n");
+        assert_eq!(head(dir), tree.base_sha);
+    }
+
+    #[test]
+    fn approving_a_session_records_the_commit_as_its_review_base() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let tree = rig.tree(1);
+        make_edits(&tree);
+        let (manager, seen) = rig.manager(&[session(1, Some(tree.clone()))]);
+        let before = seen.lock().unwrap().len();
+        let commit = approve(&manager, &rig.worktrees, &id(1), "msg").unwrap();
+        let info = manager.info(&id(1)).unwrap();
+        let stored = info.worktree.clone().unwrap();
+        assert_eq!(info.review.as_ref().map(|review| (review.state, review.commit.clone())), Some((ReviewState::Approved, Some(commit.clone()))));
+        assert_eq!(stored.reviewed_sha, Some(commit.clone()));
+        assert_eq!(stored.base_sha, tree.base_sha);
+        assert_eq!(info.files_changed.map_or(0, |totals| totals.files), 0);
+        assert_eq!(worktree::ahead(&stored), Ok(1));
+        assert!(seen.lock().unwrap()[before..].iter().any(|emit| matches!(emit, Emit::SessionsChanged)));
+        assert_eq!(
+            approve(&manager, &rig.worktrees, &id(1), "again"),
+            Err("There is nothing to approve: the worktree matches its base commit.".to_string())
+        );
+        std::fs::write(Path::new(&stored.path).join("a.txt"), "more edits\n").unwrap();
+        discard(&manager, &rig.worktrees, &id(1)).unwrap();
+        assert_eq!(head(Path::new(&stored.path)), commit);
+        assert_eq!(std::fs::read_to_string(Path::new(&stored.path).join("a.txt")).unwrap().replace("\r\n", "\n"), "one\nTWO\n");
+    }
+
+    #[test]
+    fn discarding_and_dismissing_a_session() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let tree = rig.tree(1);
+        make_edits(&tree);
+        let (manager, _) = rig.manager(&[session(1, Some(tree.clone()))]);
+        dismiss(&manager, &id(1)).unwrap();
+        let info = manager.info(&id(1)).unwrap();
+        assert_eq!(info.review.map(|review| (review.state, review.commit)), Some((ReviewState::Dismissed, None)));
+        assert_eq!(worktree::changes(&tree).unwrap().len(), 3);
+        assert_eq!(dismiss(&manager, "../index"), Err("Invalid session id".to_string()));
+        assert_eq!(dismiss(&manager, "00000000-0000-4000-8000-000000000009"), Err("Unknown session".to_string()));
+        manager.amend(&id(1), |info| info.review = None).unwrap();
+        discard(&manager, &rig.worktrees, &id(1)).unwrap();
+        let info = manager.info(&id(1)).unwrap();
+        assert_eq!(info.review.map(|review| (review.state, review.commit)), Some((ReviewState::Dismissed, None)));
+        assert_eq!(info.files_changed.map_or(0, |totals| totals.files), 0);
+        assert_eq!(worktree::changes(&tree).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn a_review_action_holds_and_releases_its_session() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let tree = rig.tree(1);
+        make_edits(&tree);
+        let (manager, _) = rig.manager(&[session(1, Some(tree.clone()))]);
+        let (me, root) = (id(1), rig.worktrees.clone());
+        let free = |manager: &Manager| assert!(manager.reserve(&me).is_ok());
+        assert_eq!(approve(&manager, &root, &me, " "), Err("Write a commit message first.".to_string()));
+        free(&manager);
+
+        // While someone else holds the session, nothing is touched.
+        let before = worktree::changes(&tree).unwrap();
+        let held = manager.reserve(&me).unwrap();
+        let busy = "A review action is already running for this session".to_string();
+        assert_eq!(approve(&manager, &root, &me, "msg"), Err(busy.clone()));
+        assert_eq!(discard(&manager, &root, &me), Err(busy));
+        assert_eq!(worktree::changes(&tree).unwrap(), before);
+        drop(held);
+
+        sh(&rig.repo, &["config", "user.name", ""]);
+        sh(&rig.repo, &["config", "user.email", ""]);
+        assert_eq!(approve(&manager, &root, &me, "msg"), Err(NO_IDENTITY.to_string()));
+        free(&manager);
+        sh(&rig.repo, &["config", "user.name", "Tester"]);
+        sh(&rig.repo, &["config", "user.email", "t@example.com"]);
+
+        sh(Path::new(&tree.path), &["checkout", "-q", "-b", "other"]);
+        assert!(discard(&manager, &root, &me).unwrap_err().starts_with("The session's worktree is on branch other"));
+        free(&manager);
+    }
+
+    #[test]
+    fn writes_need_the_sessions_own_worktree_and_branch() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let other_repo = Rig::new();
+        let id8 = |n: u32| format!("{:08x}", 0x1a2b3c00 + n);
+        let (good, branched, detached, renamed, foreign, plain) = (rig.tree(1), rig.tree(2), rig.tree(3), rig.tree(4), rig.tree(5), rig.tree(6));
+        sh(Path::new(&branched.path), &["checkout", "-q", "-b", "other"]);
+        sh(Path::new(&detached.path), &["checkout", "-q", "--detach"]);
+        let not_registered = rig.worktrees.join("plain-folder");
+        std::fs::create_dir_all(&not_registered).unwrap();
+        let cases = vec![
+            (1, good.clone(), None),
+            (2, branched, Some(format!("The session's worktree is on branch other, not on its own branch hivemind/{}", id8(2)))),
+            (3, detached, Some(format!("The session's worktree is on a detached commit, not on its own branch hivemind/{}", id8(3)))),
+            (4, Worktree { branch: "main".into(), ..renamed }, Some("This session's branch name does not match its id: main".to_string())),
+            (5, Worktree { repo: other_repo.repo.display().to_string(), ..foreign }, Some(format!("The session's folder is not a worktree of {}", other_repo.repo.display()))),
+            (6, Worktree { path: not_registered.display().to_string(), ..plain }, Some(format!("The session's folder is not a worktree of {}", rig.repo.display()))),
+        ];
+        let infos: Vec<SessionInfo> = cases.iter().map(|(n, tree, _)| session(*n, Some(tree.clone()))).collect();
+        let (manager, _) = rig.manager(&infos);
+        for (n, tree, expected) in cases {
+            let checked = checked_worktree(&session(n, Some(tree.clone())), &rig.worktrees).unwrap();
+            assert_eq!(checked_for_write(&id(n), &checked), expected.clone().map_or(Ok(()), Err), "case {n}");
+            let Some(expected) = expected else { continue };
+            let dir = PathBuf::from(&tree.path);
+            if n <= 5 {
+                make_edits(&tree);
+            }
+            let snapshot = |dir: &Path| if n <= 5 { (Some(status(dir)), Some(head(dir))) } else { (None, None) };
+            let before = snapshot(&dir);
+            assert_eq!(approve(&manager, &rig.worktrees, &id(n), "msg"), Err(expected.clone()), "approve {n}");
+            assert_eq!(discard(&manager, &rig.worktrees, &id(n)), Err(expected), "discard {n}");
+            assert_eq!(snapshot(&dir), before, "case {n}");
+        }
+    }
+
+    #[test]
+    fn request_changes_needs_text_and_a_session_that_takes_messages() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let ended = SessionInfo { status: Status::Ended, ended_at: Some(2000), ..session(1, Some(rig.tree(1))) };
+        let (manager, _) = rig.manager(&[ended]);
+        let bridge = Bridge::new(crate::settings::Launch { program: "unused".into(), args: vec![], script: "unused".into(), root: None });
+        let saved = Settings::default();
+        assert_eq!(request_changes(&manager, &bridge, &saved, &id(1), "  "), Err("Write what should change first.".to_string()));
+        assert_eq!(request_changes(&manager, &bridge, &saved, &id(1), "add a test"), Err("This session has ended".to_string()));
+        assert_eq!(manager.info(&id(1)).unwrap().review, None);
+        assert!(manager.reserve(&id(1)).is_ok());
     }
 }
