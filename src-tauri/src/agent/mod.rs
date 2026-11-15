@@ -50,7 +50,6 @@ pub enum Engine {
 
 impl Engine {
     /// The engine of a stored session. Anything that is not Codex is Claude Code, whatever name Phase 1 or 2 stored.
-    #[allow(dead_code)] // used from commit 5
     pub fn of(adapter: &str) -> Engine {
         if adapter == "codex" { Engine::Codex } else { Engine::Claude }
     }
@@ -913,6 +912,11 @@ impl Manager {
             return Ok(ToolOutput { text, ok, truncated: false });
         }
         Ok(ToolOutput { text: text.chars().skip(length - MAX_OUTPUT).collect(), ok, truncated: true })
+    }
+
+    /// Whether a review action holds the session.
+    pub fn is_reserved(&self, id: &str) -> bool {
+        self.inner.sessions.lock().unwrap().get(id).is_some_and(|session| session.reserved)
     }
 
     /// Reserve a session for one review action: it must not be mid-turn or already reserved.

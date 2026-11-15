@@ -6,7 +6,6 @@ mod drafts;
 mod git;
 mod review;
 mod settings;
-#[allow(dead_code)] // used from commit 5
 mod term;
 mod watcher;
 mod worktree;
@@ -17,6 +16,7 @@ use serde_json::Value;
 use settings::Settings;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 struct AppState {
@@ -27,6 +27,7 @@ struct AppState {
     terminals_dir: PathBuf,
     snapshots_dir: PathBuf,
     agents: agent::Manager,
+    terminals: term::Manager,
     watcher: Mutex<Option<notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>>,
     /// Why the quick-capture hotkey could not be registered, for the settings screen.
     shortcut_error: Mutex<Option<String>>,
@@ -301,6 +302,61 @@ async fn agent_session(state: State<'_, AppState>, session_id: String, from_seq:
     blocking(move || agents.session(&session_id, from_seq)).await
 }
 
+fn raw(output: Channel<InvokeResponseBody>) -> term::Output {
+    Arc::new(move |bytes| output.send(InvokeResponseBody::Raw(bytes)).is_ok())
+}
+
+/// Attach to a session's terminal, show its saved history, and start its program when asked.
+#[tauri::command]
+async fn term_open(
+    state: State<'_, AppState>,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+    start: Option<term::StartMode>,
+    replay: bool,
+    output: Channel<InvokeResponseBody>,
+) -> Result<term::TermInfo, String> {
+    let terminals = state.terminals.clone();
+    blocking(move || terminals.open(&session_id, cols, rows, start, replay, raw(output))).await
+}
+
+/// Open the CLI's own sign-in in a terminal of its own.
+#[tauri::command]
+async fn term_login(state: State<'_, AppState>, engine: agent::Engine, cols: u16, rows: u16, output: Channel<InvokeResponseBody>) -> Result<term::TermInfo, String> {
+    let terminals = state.terminals.clone();
+    blocking(move || terminals.login(engine, cols, rows, raw(output))).await
+}
+
+#[tauri::command]
+async fn term_write(state: State<'_, AppState>, id: String, data: String) -> Result<(), String> {
+    let terminals = state.terminals.clone();
+    blocking(move || terminals.write(&id, data.as_bytes())).await
+}
+
+#[tauri::command]
+async fn term_resize(state: State<'_, AppState>, id: String, cols: u16, rows: u16) -> Result<(), String> {
+    let terminals = state.terminals.clone();
+    blocking(move || terminals.resize(&id, cols, rows)).await
+}
+
+/// Close a terminal; this can wait up to 3 seconds for the program to leave.
+#[tauri::command]
+async fn term_close(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let terminals = state.terminals.clone();
+    blocking(move || {
+        terminals.close(&id);
+        Ok(())
+    })
+    .await
+}
+
+/// The terminals with a running program.
+#[tauri::command]
+fn term_list(state: State<'_, AppState>) -> Vec<term::TermInfo> {
+    state.terminals.list()
+}
+
 #[tauri::command]
 fn get_settings(state: State<'_, AppState>) -> Settings {
     settings::load(&state.settings_path)
@@ -382,6 +438,7 @@ pub fn run() {
                 eprintln!("Hivemind: no tray icon ({e})");
             }
             let events = app.handle().clone();
+            let exits = app.handle().clone();
             let agents = agent::Manager::new(
                 sessions_dir,
                 Arc::new(agent::claude::ClaudeCode),
@@ -392,6 +449,15 @@ pub fn run() {
                     };
                 }),
             );
+            let terminals = term::Manager::new(
+                terminals_dir.clone(),
+                agents.clone(),
+                settings_path.clone(),
+                Arc::new(move |emit| {
+                    let term::Emit::Exit(exit) = emit;
+                    let _ = exits.emit("term-exit", exit);
+                }),
+            );
             app.manage(AppState {
                 bridge: Arc::new(Bridge::new(launch)),
                 settings_path,
@@ -400,6 +466,7 @@ pub fn run() {
                 terminals_dir,
                 snapshots_dir,
                 agents,
+                terminals,
                 watcher: Mutex::new(None),
                 shortcut_error: Mutex::new(shortcut_error),
             });
@@ -415,16 +482,17 @@ pub fn run() {
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_remove_worktree, repo_branches,
             agent_cancel, agent_sessions, agent_session, review_files, review_file, review_approve, review_request_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
-            system_staleness, system_snapshots, system_snapshot
+            system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_write, term_resize, term_close, term_list
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|app, event| {
-            // An agent session must not outlive the app that started it.
+            // An agent session or a terminal must not outlive the app that started it.
             if let tauri::RunEvent::Exit = event
                 && let Some(state) = app.try_state::<AppState>()
             {
                 state.agents.stop_all();
+                state.terminals.stop_all();
             }
         });
 }
