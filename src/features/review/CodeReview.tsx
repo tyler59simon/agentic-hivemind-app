@@ -12,6 +12,7 @@ import { Confirm, Modal } from "../../ui/Modal";
 import { ArrowLink } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { isEnded, repoName } from "../agents/session";
+import { dispose } from "../terminal/registry";
 import { tabLabel } from "../terminal/tabs";
 import { CodeDiff } from "./CodeDiff";
 import { baseName, directBase, DIRECT_NOTE, EARLIER_NOTE, filesWord, NOT_GIT_NOTE, reviewActions, reviewVersion, sessionHeading } from "./review";
@@ -148,6 +149,9 @@ export function ReviewBar({ info, files, title, onDecided }: { info: SessionInfo
     mutationFn: () => (terminal ? reviewRequestTerminalChanges(info.id, text) : reviewRequestChanges(info.id, text)),
     onSuccess: () => {
       setDialog(null); setText(""); sessionsChanged();
+      // The program was started again by Hivemind, not by a terminal view. Drop the view's old terminal so the next
+      // view of this session attaches to the new run (with its scrollback) instead of showing the ended one.
+      if (terminal) dispose(info.id);
       if (terminal) toast("Sent your feedback; the terminal is working on it", "info", { label: "Open terminal", run: () => openSession(info.id) });
       else toast("Sent to the session");
     },
