@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { create } from "zustand";
-import { systemArchitecture, systemDiagram } from "../../lib/architecture";
+import { systemArchitecture, systemDiagram, systemSnapshots, systemStaleness } from "../../lib/architecture";
 import { useSystemsEnabled } from "../../lib/connection";
 import { sessionsQuery } from "../../lib/agent";
 import { list, systems, type System } from "../../lib/lm";
@@ -46,6 +46,25 @@ export function useDiagram(slug: string, path: string, version: number | null, e
     queryKey: ["architecture", slug, "diagram", path, version],
     queryFn: () => systemDiagram(slug, path),
     enabled, staleTime: Infinity, retry: false,
+  });
+}
+
+/** How many commits the system's repository is ahead of its architecture output. */
+export function useStaleness(slug: string | undefined, generatedAt: number | null | undefined) {
+  return useQuery({
+    queryKey: ["architecture", slug, "staleness", generatedAt],
+    queryFn: () => systemStaleness(slug!),
+    enabled: !!slug && !!generatedAt, staleTime: 60_000, retry: false,
+  });
+}
+
+/** Earlier baselines of the system's model: the stored snapshots older than the current output, newest first. */
+export function useOlderSnapshots(slug: string | undefined, generatedAt: number | null | undefined) {
+  return useQuery({
+    queryKey: ["architecture", slug, "snapshots", generatedAt],
+    queryFn: () => systemSnapshots(slug!),
+    select: (all) => all.filter((s) => s.takenAt < generatedAt!),
+    enabled: !!slug && !!generatedAt, staleTime: 60_000, retry: false,
   });
 }
 

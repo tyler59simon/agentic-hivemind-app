@@ -1,8 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Ellipsis, MessageCircle, Plus, X } from "lucide-react";
+import { ArrowRight, Ellipsis, MessageCircle, Plus, TriangleAlert, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { agentAvailable, agentStart } from "../../lib/agent";
-import type { ArchModel } from "../../lib/architecture";
+import type { ArchModel, Staleness } from "../../lib/architecture";
 import { useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { systemPlan, type NoteRow, type System } from "../../lib/lm";
@@ -26,7 +26,7 @@ import { buildBrief } from "./brief";
 import type { CanvasNode } from "./canvas";
 import { cloudResources, diagramList, externalSystems, interfaces, passportSections, techStack, type DiagramEntry } from "./passport";
 import { SystemWizard } from "./SystemWizard";
-import { systemsQuery, useDiagram, useSystem, useSystemIntent, useSystemProposal } from "./useSystem";
+import { systemsQuery, useDiagram, useStaleness, useSystem, useSystemIntent, useSystemProposal } from "./useSystem";
 
 const oneLine = (text?: string) => (text ?? "").replace(/\s+/g, " ").trim();
 const MAX_ROWS = 40;
@@ -176,8 +176,19 @@ function Diagrams({ slug, entries, version }: { slug: string; entries: DiagramEn
   );
 }
 
+/** The repository has commits the architecture output has not seen. Nothing when that is not known or not so. */
+function StaleBanner({ stale }: { stale?: Staleness }) {
+  const behind = stale?.behind ?? 0;
+  if (behind <= 0 || !stale) return null;
+  return (
+    <div className="banner warn stale" title={stale.exact && stale.sourceSha ? `Commits on the repository since ${stale.sourceSha.slice(0, 7)}.` : "Commits made since the output was generated."}>
+      <TriangleAlert size="1.2em" aria-hidden />Snapshot is {behind} commit{behind === 1 ? "" : "s"} behind
+    </div>
+  );
+}
+
 /** What is known about the box selected on the canvas: what it is, what it talks to, and the decisions that mention it. */
-function Inspector({ slug, node, model, decisions, onClose }: { slug: string; node: CanvasNode; model: ArchModel; decisions: NoteRow[]; onClose: () => void }) {
+function Inspector({ slug, node, model, decisions, stale, onClose }: { slug: string; node: CanvasNode; model: ArchModel; decisions: NoteRow[]; stale?: Staleness; onClose: () => void }) {
   const names = useMemo(() => new Map((model.elements ?? []).map((e) => [e.id, e.name])), [model]);
   const flows = (model.relationships ?? []).filter((r) => r.source_id === node.id || r.destination_id === node.id);
   const name = node.name.toLowerCase();
@@ -205,6 +216,7 @@ function Inspector({ slug, node, model, decisions, onClose }: { slug: string; no
           </ul>
         </>
       )}
+      <StaleBanner stale={stale} />
       <ArrowLink onClick={() => { useSessionDraft.getState().setSystem(slug, node.name); toast("Attached " + node.name + " to the next session's context"); }}>Attach to agent context</ArrowLink>
     </Section>
   );
@@ -219,6 +231,7 @@ function SystemView({ system, all }: { system: System; all: System[] }) {
   const parts = useMemo(() => passportSections(members, system.passport), [members, system.passport]);
   const arch = architecture.data;
   const model = arch?.model ?? null;
+  const stale = useStaleness(system.slug, arch?.generatedAt).data;
   const stack = useMemo(() => techStack(model), [model]);
   const outside = useMemo(() => externalSystems(model), [model]);
   const io = useMemo(() => interfaces(model, arch?.inventory ?? null), [model, arch?.inventory]);
@@ -236,7 +249,7 @@ function SystemView({ system, all }: { system: System; all: System[] }) {
   return (
     <>
       <Split rail={<>
-        {picked && model && <Inspector slug={system.slug} node={picked} model={model} decisions={parts.decisions} onClose={() => setPicked(null)} />}
+        {picked && model && <Inspector slug={system.slug} node={picked} model={model} decisions={parts.decisions} stale={stale} onClose={() => setPicked(null)} />}
         <Section title={system.name} actions={
           <Menu label="System actions" align="right" button={<Ellipsis size="1.3em" aria-hidden />} className="icon-menu">
             {(close) => (
@@ -248,6 +261,7 @@ function SystemView({ system, all }: { system: System; all: System[] }) {
               </>
             )}
           </Menu>}>
+          {!picked && <StaleBanner stale={stale} />}
           <p className="muted"><span className={`status-chip cap ${system.status}`}>{system.status}</span> {system.repos.length ? "System" : "External system"}</p>
           {system.description ? <p>{system.description}</p> : <p className="muted">No purpose recorded yet.</p>}
           {!!system.capabilities.length && <ul className="capabilities">{system.capabilities.map((c) => <li key={c}>{c}</li>)}</ul>}

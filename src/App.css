@@ -707,6 +707,8 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .canvas-picture { position: absolute; inset: 0; overflow: auto; background: #fff; cursor: default; }
 .canvas-picture img { display: block; max-width: none; }
 .canvas-source { position: absolute; inset: 0; margin: 0; overflow: auto; padding: 1rem; background: var(--bg-code); font-family: var(--font-mono); font-size: .86rem; cursor: text; user-select: text; }
+.banner.stale { flex-direction: row; align-items: center; gap: .7rem; }
+.banner.stale svg { flex: none; }
 .switch { display: inline-flex; align-items: center; gap: .6rem; cursor: pointer; }
 .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
 .switch span { width: 2.3rem; height: 1.25rem; border-radius: 999px; background: #d9cbe4; position: relative; transition: background .15s; }

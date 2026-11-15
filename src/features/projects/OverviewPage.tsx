@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ArrowRight, Bookmark, CircleCheck, CircleEllipsis, Clock, Ellipsis, Laptop, Layers, Link as LinkIcon, Network, Plus } from "lucide-react";
+import { ArrowRight, Bookmark, CircleCheck, CircleEllipsis, Clock, CodeXml, Ellipsis, Laptop, Layers, Link as LinkIcon, Network, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { sessionsQuery } from "../../lib/agent";
-import { useChangesEnabled, useSystemsEnabled } from "../../lib/connection";
+import { reviewRefresh, sessionsQuery } from "../../lib/agent";
+import { useChangesEnabled, useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import type { RepoActivity } from "../../lib/git";
 import { list, openWork, projectPlan, review, type NoteRow, type Project } from "../../lib/lm";
@@ -22,10 +22,11 @@ import { startSessionFor, useChangeViews } from "../changes/useChanges";
 import { PlanDialog } from "../plans/PlanDialog";
 import { HoverPreview } from "../preview/HoverPreview";
 import { MiniDiagram } from "../systems/MiniDiagram";
-import { systemsQuery, useSystem } from "../systems/useSystem";
+import { systemsQuery, useStaleness, useSystem } from "../systems/useSystem";
 import { groupOpenItems } from "../work/work";
 import { WorkView } from "../work/WorkView";
 import { buildBriefing } from "./briefing";
+import { proposedFiles } from "../review/review";
 import { useProjectIntent } from "./intent";
 import { dashboardSections, progress } from "./projects";
 import { ProjectWizard } from "./ProjectWizard";
@@ -79,7 +80,7 @@ function Commits({ repos }: { repos: RepoActivity[] }) {
 }
 
 /** The system registered for the project's repositories, as a row of its containers. */
-function SystemContext({ project, commits }: { project: Project; commits: { date: string }[] }) {
+function SystemContext({ project }: { project: Project }) {
   const systemsOn = useSystemsEnabled();
   const registry = useQuery({ ...systemsQuery(), enabled: systemsOn });
   const matched = useMemo(() => systemsForProject(project, (registry.data?.systems ?? []).filter((s) => s.status !== "retired")), [project, registry.data]);
@@ -87,31 +88,53 @@ function SystemContext({ project, commits }: { project: Project; commits: { date
   const { architecture } = useSystem(system?.slug);
   const go = useApp((s) => s.go);
   const arch = architecture.data;
-  // Commits made after the architecture output was last generated.
-  const behind = arch?.generatedAt ? commits.filter((c) => new Date(c.date).getTime() > arch.generatedAt!).length : 0;
   if (!systemsOn) return null;
   return (
-    <>
-      <Section title="System context" loading={registry.isLoading} error={registry.error}>
-        {system ? (
-          <>
-            {arch?.model ? <MiniDiagram model={arch.model} />
-              : <p className="muted">{architecture.isLoading ? "Loading…" : arch?.error ?? `${system.name} has no architecture output yet.`}</p>}
-            <ArrowLink onClick={() => openSystem(system.slug)}>{arch?.model ? "Open diagram" : `Open ${system.name}`}</ArrowLink>
-          </>
-        ) : (
-          <>
-            <p className="muted">No system is registered for this project's repositories.</p>
-            <ArrowLink onClick={() => go({ page: "architecture" })}>Open Architecture</ArrowLink>
-          </>
-        )}
-      </Section>
-      {system && behind > 0 && (
-        <Row icon={<Layers size="1.3em" aria-hidden />} onClick={() => openSystem(system.slug)}>
-          Architecture snapshot is {behind} commit{behind === 1 ? "" : "s"} behind
-        </Row>
+    <Section title="System context" loading={registry.isLoading} error={registry.error}>
+      {system ? (
+        <>
+          {arch?.model ? <MiniDiagram model={arch.model} />
+            : <p className="muted">{architecture.isLoading ? "Loading…" : arch?.error ?? `${system.name} has no architecture output yet.`}</p>}
+          <ArrowLink onClick={() => openSystem(system.slug)}>{arch?.model ? "Open diagram" : `Open ${system.name}`}</ArrowLink>
+        </>
+      ) : (
+        <>
+          <p className="muted">No system is registered for this project's repositories.</p>
+          <ArrowLink onClick={() => go({ page: "architecture" })}>Open Architecture</ArrowLink>
+        </>
       )}
-    </>
+    </Section>
+  );
+}
+
+/** What waits for the user: proposed file changes, an architecture output that is behind its repository, and notes due. */
+function NeedsReview({ project }: { project?: Project }) {
+  const go = useApp((s) => s.go);
+  const projectsOn = useProjectsEnabled();
+  const systemsOn = useSystemsEnabled();
+  const sessions = useQuery(sessionsQuery());
+  const mine = useProject(project?.slug).due;
+  const everything = useQuery({ queryKey: ["review", "*"], queryFn: () => review({ allDomains: true, limit: 100 }), enabled: projectsOn && !project });
+  const due = project ? mine : everything;
+  // Edits made in a worktree by hand count too, so every worktree is looked at once when this is shown.
+  useEffect(() => { reviewRefresh().catch(() => undefined); }, []);
+  const registry = useQuery({ ...systemsQuery(), enabled: systemsOn && !!project });
+  const system = useMemo(() => (project ? systemsForProject(project, (registry.data?.systems ?? []).filter((s) => s.status !== "retired"))[0] : undefined), [project, registry.data]);
+  const { architecture } = useSystem(system?.slug);
+  const stale = useStaleness(system?.slug, architecture.data?.generatedAt);
+  const files = proposedFiles((sessions.data ?? []).filter((s) => !project || s.project === project.slug));
+  const behind = system && stale.data?.behind ? stale.data.behind : 0;
+  const notes = due.data?.due ?? 0;
+  return (
+    <Section title="Needs your review" loading={due.isLoading} error={due.error} empty={due.data && !files && !behind && !notes ? "Nothing is waiting for you." : undefined}>
+      {files > 0 && (
+        <Row icon={<CodeXml size="1.3em" aria-hidden />} onClick={() => go({ page: "review" })}>{files} proposed file change{files === 1 ? "" : "s"}</Row>
+      )}
+      {behind > 0 && system && (
+        <Row icon={<Layers size="1.3em" aria-hidden />} onClick={() => openSystem(system.slug)}>Architecture snapshot is {behind} commit{behind === 1 ? "" : "s"} behind</Row>
+      )}
+      {notes > 0 && <Row icon={<Clock size="1.3em" aria-hidden />} onClick={() => go({ page: "review" })}>{notes} note{notes === 1 ? "" : "s"} due for review</Row>}
+    </Section>
   );
 }
 
@@ -172,13 +195,8 @@ function ProjectOverview({ project }: { project: Project }) {
           <button className="primary big" onClick={startSession} title="Start an agent session in this project"><Plus size="1.2em" aria-hidden />Start a session</button>
         </>} />
       <Split rail={<>
-        <SystemContext project={project} commits={commits} />
-        <Section title="Needs your review" loading={due.isLoading} error={due.error}
-          empty={due.data && !due.data.notes.length ? "Nothing is waiting for you." : undefined}>
-          <Row icon={<Clock size="1.3em" aria-hidden />} onClick={() => go({ page: "review" })}>
-            {due.data?.due} note{due.data?.due === 1 ? "" : "s"} due for review
-          </Row>
-        </Section>
+        <SystemContext project={project} />
+        <NeedsReview project={project} />
       </>}>
         <Section title="Continue your work" loading={rows.isLoading} error={rows.error}
           empty={rows.data && !focus && !top ? "Nothing is in progress. A plan note with action items shows up here." : undefined}>
@@ -283,7 +301,6 @@ function ProjectOverview({ project }: { project: Project }) {
 function StoreOverview({ projectsOn }: { projectsOn: boolean }) {
   const go = useApp((s) => s.go);
   const open = useQuery({ queryKey: ["open", "*"], queryFn: () => openWork({ allDomains: true, limit: 500 }), enabled: projectsOn });
-  const due = useQuery({ queryKey: ["review", "*"], queryFn: () => review({ allDomains: true, limit: 100 }), enabled: projectsOn });
   const rows = useQuery({ queryKey: ["list", "*"], queryFn: () => list({ allDomains: true }) });
   const next = groupOpenItems(open.data?.items ?? []).slice(0, 6);
   const recent = useMemo(() => [...(rows.data?.notes ?? [])].sort((a, b) => b.updated.localeCompare(a.updated)).slice(0, 8), [rows.data]);
@@ -292,11 +309,7 @@ function StoreOverview({ projectsOn }: { projectsOn: boolean }) {
       <PageHeader title="All memory" subtitle="Everything your agents and you have recorded, across projects."
         actions={projectsOn && <button className="primary big" onClick={() => useProjectIntent.getState().openWizard()}><Plus size="1.2em" aria-hidden />New project</button>} />
       {!projectsOn && <div className="banner warn">Projects, open work and review need a newer Living Memory (API 2 with the <code>projects</code> command). Notes, search, the graph and activity work as they are.</div>}
-      <Split rail={projectsOn && (
-        <Section title="Needs your review" loading={due.isLoading} error={due.error} empty={due.data && !due.data.notes.length ? "Nothing is waiting for you." : undefined}>
-          <Row icon={<Clock size="1.3em" aria-hidden />} onClick={() => go({ page: "review" })}>{due.data?.due} note{due.data?.due === 1 ? "" : "s"} due for review</Row>
-        </Section>
-      )}>
+      <Split rail={projectsOn && <NeedsReview />}>
         {projectsOn && (
           <Section title="Open work" loading={open.isLoading} error={open.error} empty={open.data && !next.length ? "No open action items." : undefined}
             actions={!!open.data?.count && <ArrowLink onClick={() => go({ page: "overview", view: "work" })}>All open work</ArrowLink>}>

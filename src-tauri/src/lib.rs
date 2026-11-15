@@ -22,6 +22,7 @@ struct AppState {
     settings_path: PathBuf,
     drafts_dir: PathBuf,
     worktrees_dir: PathBuf,
+    snapshots_dir: PathBuf,
     agents: agent::Manager,
     watcher: Mutex<Option<notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>>,
     /// Why the quick-capture hotkey could not be registered, for the settings screen.
@@ -119,6 +120,27 @@ async fn system_diagram(state: State<'_, AppState>, slug: String, path: String) 
 async fn system_diagram_source(state: State<'_, AppState>, slug: String, path: String) -> Result<String, String> {
     let bridge = state.bridge.clone();
     blocking(move || architecture::source_for_system(&bridge, &slug, &path)).await
+}
+
+/// How many commits a system's repository is ahead of its architecture output.
+#[tauri::command]
+async fn system_staleness(state: State<'_, AppState>, slug: String) -> Result<architecture::Staleness, String> {
+    let (bridge, agents) = (state.bridge.clone(), state.agents.clone());
+    blocking(move || architecture::staleness(&bridge, &agents.sessions(), &slug)).await
+}
+
+/// The stored copies of a system's architecture model, newest first.
+#[tauri::command]
+async fn system_snapshots(state: State<'_, AppState>, slug: String) -> Result<Vec<architecture::SnapshotInfo>, String> {
+    let root = state.snapshots_dir.clone();
+    blocking(move || architecture::list_snapshots(&root, &slug)).await
+}
+
+/// One stored copy of a system's architecture model; the id must be one the listing gave.
+#[tauri::command]
+async fn system_snapshot(state: State<'_, AppState>, slug: String, id: String) -> Result<architecture::Snapshot, String> {
+    let root = state.snapshots_dir.clone();
+    blocking(move || architecture::read_snapshot(&root, &slug, &id)).await
 }
 
 /// The coding-agent CLI a session would launch, or why there is none.
@@ -346,6 +368,7 @@ pub fn run() {
             let drafts_dir = app.path().app_data_dir()?.join("drafts");
             let sessions_dir = app.path().app_data_dir()?.join("agent-sessions");
             let worktrees_dir = app.path().app_data_dir()?.join("worktrees");
+            let snapshots_dir = architecture::snapshots_root(&sessions_dir);
             let saved = settings::load(&settings_path);
             let launch = settings::resolve(&saved, |k| std::env::var(k).ok());
             // A taken or invalid hotkey must not stop the app; the settings screen shows why.
@@ -369,6 +392,7 @@ pub fn run() {
                 settings_path,
                 drafts_dir,
                 worktrees_dir,
+                snapshots_dir,
                 agents,
                 watcher: Mutex::new(None),
                 shortcut_error: Mutex::new(shortcut_error),
@@ -384,7 +408,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_remove_worktree, repo_branches,
-            agent_cancel, agent_sessions, agent_session, review_files, review_file, review_approve, review_request_changes, review_dismiss, review_discard, review_tool_output, review_refresh
+            agent_cancel, agent_sessions, agent_session, review_files, review_file, review_approve, review_request_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
+            system_staleness, system_snapshots, system_snapshot
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

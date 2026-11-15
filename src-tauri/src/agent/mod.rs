@@ -1125,6 +1125,17 @@ impl Inner {
             self.sync_files(id);
         }
 
+        // A system passport records the commit its output was generated from. The first of `workspace` is the system's
+        // first repository and the last is its architecture folder (`scope.rs` builds it in that order).
+        let passport = self.sessions.lock().unwrap().get(id).and_then(|session| match &session.info.task {
+            AgentTask::SystemPassport { slug } => {
+                Some((slug.clone(), session.info.workspace.first().cloned(), session.info.workspace.last().cloned()))
+            }
+            _ => None,
+        });
+        let head = passport.as_ref().and_then(|(_, repo, _)| repo.as_ref()).and_then(|repo| crate::git::head_sha(Path::new(repo)).ok());
+        let mut succeeded = false;
+
         let mut sessions = self.sessions.lock().unwrap();
         let at = now_ms();
         let stop = sessions.get_mut(id).and_then(|session| session.live.take()).and_then(|live| live.stop);
@@ -1142,6 +1153,10 @@ impl Inner {
             self.record(&mut sessions, id, at, Record::Event { at, event: event.clone() });
             if let Some(session) = sessions.get_mut(id) {
                 close(&mut session.info, at, &event);
+                succeeded = session.info.status == Status::Succeeded;
+                if succeeded {
+                    session.info.source_sha = head.clone();
+                }
             }
         } else if matches!(info.status, Status::Running | Status::Waiting) {
             // Started, never reported the end of this turn, and nobody asked it to stop: it crashed.
@@ -1161,6 +1176,10 @@ impl Inner {
         }
         let _ = self.persist(&mut sessions);
         drop(sessions);
+        if let (true, Some((slug, _, Some(folder)))) = (succeeded, &passport) {
+            // A snapshot that cannot be saved is not a session failure.
+            let _ = crate::architecture::save_snapshot(&crate::architecture::snapshots_root(&self.dir), slug, id, at, head.as_deref(), Path::new(folder));
+        }
         (self.sink)(Emit::SessionsChanged);
     }
 
@@ -1757,6 +1776,39 @@ mod tests {
         let info = rig.info(&started.id);
         assert_eq!((info.status, info.error.as_deref()), (Status::Failed, Some(NO_PLUGIN)));
         assert_eq!(rig.manager.session(&started.id, 0).unwrap().events, live);
+    }
+
+    #[test]
+    fn a_succeeded_passport_records_its_source_and_a_snapshot() {
+        if !git_available() {
+            return;
+        }
+        let lines: Vec<&str> = [BARE_INIT].into_iter().chain(WORK).chain([RESULT]).collect();
+        let repo_with_model = |rig: &Rig| {
+            sh(&rig.dir, &["init", "-q"]);
+            sh(&rig.dir, &["-c", "user.name=T", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "one"]);
+            std::fs::create_dir_all(rig.dir.join("arch")).unwrap();
+            std::fs::write(rig.dir.join("arch/architecture-model.json"), r#"{"schema_version":"2.0","elements":[]}"#).unwrap();
+        };
+        let snapshots = |rig: &Rig| crate::architecture::list_snapshots(&crate::architecture::snapshots_root(&rig.dir.join("sessions")), "billing").unwrap();
+
+        let rig = Rig::printing("passport-source", &lines);
+        repo_with_model(&rig);
+        let started = rig.start(None).unwrap();
+        rig.finish(&started.id);
+        let head = crate::git::head_sha(&rig.dir).unwrap();
+        let info = rig.info(&started.id);
+        assert_eq!((info.status, info.source_sha.as_deref()), (Status::Succeeded, Some(head.as_str())));
+        let listed = snapshots(&rig);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].session_id, started.id);
+
+        let failing = Rig::printing("passport-source-fails", &lines);
+        repo_with_model(&failing);
+        let started = failing.start(Some("architecture-suite")).unwrap();
+        failing.finish(&started.id);
+        assert_eq!((failing.info(&started.id).status, failing.info(&started.id).source_sha), (Status::Failed, None));
+        assert!(snapshots(&failing).is_empty());
     }
 
     #[test]

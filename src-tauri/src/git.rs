@@ -167,7 +167,6 @@ pub fn is_sha(text: &str) -> bool {
 }
 
 /// The commit a repository's HEAD points at.
-#[allow(dead_code)] // first used by the architecture staleness commit
 pub fn head_sha(repo: &Path) -> Result<String, String> {
     let mut command = Command::new("git");
     command.args(["--no-optional-locks", "-C"]).arg(repo).args(["rev-parse", "HEAD"]);
@@ -176,7 +175,6 @@ pub fn head_sha(repo: &Path) -> Result<String, String> {
 }
 
 /// `git rev-list --count <selector...>` in `repo`, e.g. `["abc..HEAD"]` or `["--since=@1794322874", "HEAD"]`.
-#[allow(dead_code)] // first used by the architecture staleness commit
 pub fn rev_count(repo: &Path, selector: &[&str]) -> Result<u64, String> {
     let mut command = Command::new("git");
     command.args(["--no-optional-locks", "-C"]).arg(repo).args(["rev-list", "--count"]).args(selector);
@@ -459,5 +457,32 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
         assert!(activity[0].error.is_some());
         assert!(activity[0].commits.is_none());
+    }
+
+    #[test]
+    fn counts_commits_since_a_commit_and_since_a_time() {
+        if !git_available() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("hivemind-revcount-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let sh = |args: &[&str]| {
+            let mut command = Command::new("git");
+            command.arg("-C").arg(&dir).args(["-c", "user.name=T", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]).args(args);
+            run_with_timeout(command, TIMEOUT).unwrap()
+        };
+        sh(&["init", "-q"]);
+        for n in 0..3 {
+            sh(&["commit", "-q", "--allow-empty", "-m", &format!("c{n}")]);
+        }
+        let first = sh(&["rev-list", "--max-parents=0", "HEAD"]).trim().to_string();
+        assert_eq!(rev_count(&dir, &[&format!("{first}..HEAD")]), Ok(2));
+        assert!(rev_count(&dir, &[&format!("{}..HEAD", "0".repeat(40))]).is_err());
+        assert_eq!(rev_count(&dir, &["--since=@1000000000", "HEAD"]), Ok(3));
+        let head = head_sha(&dir).unwrap();
+        assert!(is_sha(&head) && head.len() == 40);
+        assert_eq!(head, sh(&["rev-parse", "HEAD"]).trim());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

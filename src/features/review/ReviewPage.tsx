@@ -3,6 +3,7 @@ import { CircleCheck, FileText, GraduationCap, Layers, Network } from "lucide-re
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { reviewFiles, reviewRefresh, sessionsQuery, type FileChange, type SessionInfo } from "../../lib/agent";
 import { useChangesEnabled, useConnection, useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
+import { systemStaleness, type Staleness } from "../../lib/architecture";
 import { classify } from "../../lib/errors";
 import { learningList, scopeLearning } from "../../lib/learning";
 import { list as listNotes, meta, review, systemPlan, type ReviewKind, type ReviewRow, type System, type SystemUpdate } from "../../lib/lm";
@@ -37,6 +38,7 @@ type Item =
   | { key: string; type: "session"; info: SessionInfo }
   | { key: string; type: "memory"; row: ReviewRow; due: boolean }
   | { key: string; type: "proposal"; system: System; update: SystemUpdate; fields: string; proposer: SessionInfo }
+  | { key: string; type: "behind"; system: System; stale: Staleness }
   | { key: string; type: "learning" };
 
 /** A Memory item: the existing card, and the note's Executive Summary under it. */
@@ -89,6 +91,15 @@ export function ReviewPage() {
   const scoped = useMemo(() => (project ? systemsForProject(project, all) : all).filter((s) => s.status !== "retired"), [project, all]);
   const { items: proposed, dismiss } = useSystemProposals(scoped, all);
   const proposals = proposed.filter((i) => i.update && i.proposer);
+  // Systems whose architecture output has fallen behind their repository ("newer candidate"). Only systems with both a repository and a folder.
+  const tracked = useMemo(() => scoped.filter((s) => s.repos.length && s.architecture), [scoped]);
+  const staleness = useQueries({
+    queries: tracked.map((s) => ({ queryKey: ["architecture", s.slug, "staleness", "review"], queryFn: () => systemStaleness(s.slug), staleTime: 60_000, retry: false })),
+  });
+  const behind = useMemo(() => tracked.flatMap((system, i) => {
+    const stale = staleness[i]?.data;
+    return stale?.behind ? [{ system, stale }] : [];
+  }), [tracked, staleness]);
   const [kind, setKind] = useState<Kind>("all");
   const [picked, setPicked] = useState<string | null>(null);
   const [kinds, setKinds] = useState<ReviewKind[]>([]);
@@ -115,7 +126,8 @@ export function ReviewPage() {
 
   const codeCount = groups.reduce((sum, g) => sum + (g.filesChanged?.files ?? 0), 0);
   const memoryCount = (due.data?.notes.length ?? 0) + captures.length;
-  const total = codeCount + memoryCount + proposals.length + learningCount;
+  const architectureCount = proposals.length + behind.length;
+  const total = codeCount + memoryCount + architectureCount + learningCount;
   const showCode = kind === "all" || kind === "code";
   const showMemory = kind === "all" || kind === "memory";
   const showArchitecture = kind === "all" || kind === "architecture";
@@ -135,9 +147,10 @@ export function ReviewPage() {
     // A kind filter narrows the due notes only; captures have no kind.
     if (showMemory && !kinds.length) for (const row of captures) out.push({ key: `memory:${row.ref}`, type: "memory", row, due: false });
     if (showArchitecture) for (const p of proposals) out.push({ key: `proposal:${p.system.slug}`, type: "proposal", system: p.system, update: p.update!, fields: p.fields, proposer: p.proposer! });
+    if (showArchitecture) for (const b of behind) out.push({ key: `behind:${b.system.slug}`, type: "behind", system: b.system, stale: b.stale });
     if (showLearning) out.push({ key: "learning", type: "learning" });
     return out;
-  }, [showCode, showMemory, showArchitecture, showLearning, groups, lists, notes, captures, kinds, proposals]);
+  }, [showCode, showMemory, showArchitecture, showLearning, groups, lists, notes, captures, kinds, proposals, behind]);
   const routedKey = routed.session && routed.file ? fileKey(routed.session, routed.file) : null;
   const firstOfRouted = visible.find((i) => (i.type === "file" || i.type === "session") && i.info.id === routed.session);
   const selected = (picked && visible.find((i) => i.key === picked))
@@ -188,7 +201,7 @@ export function ReviewPage() {
       <PageHeader title="Review" subtitle="Inspect agent changes before they become accepted work." />
       <Tabs pill label="Kind" value={kind} onChange={setKind}
         items={[{ id: "all", label: "All", count: total }, { id: "code", label: "Code", count: codeCount }, { id: "memory", label: "Memory", count: memoryCount },
-          { id: "architecture", label: "Architecture", count: proposals.length }, { id: "learning", label: "Learning", count: learningCount }]} />
+          { id: "architecture", label: "Architecture", count: architectureCount }, { id: "learning", label: "Learning", count: learningCount }]} />
       {!projectsOn && <p className="muted">Memory review needs a newer Living Memory (API 2 with the <code>review</code> command).</p>}
       {sessions.error && <p className="error">{classify(sessions.error).message}</p>}
       {loading ? <p className="muted">Loading…</p>
@@ -235,6 +248,7 @@ export function ReviewPage() {
               {memoryRows && !!active.error && <p className="error small pad">{classify(active.error).message}</p>}
               {visible.map((item) => item.type === "memory" ? row(item, <Layers size="1.3em" aria-hidden />, `Memory: ${item.row.title}`, item.due ? null : <span className="muted small">agent</span>)
                 : item.type === "proposal" ? row(item, <Network size="1.3em" aria-hidden />, `Architecture: ${item.system.name} update`)
+                : item.type === "behind" ? row(item, <Layers size="1.3em" aria-hidden />, `Architecture: ${item.system.name} is ${item.stale.behind} commit${item.stale.behind === 1 ? "" : "s"} behind`)
                 : item.type === "learning" ? row(item, <GraduationCap size="1.3em" aria-hidden />, `Learning: ${learningCount} to review`)
                 : null)}
               {!visible.length && kind in EMPTY && <p className="muted pad">{EMPTY[kind as keyof typeof EMPTY]}</p>}
@@ -255,6 +269,14 @@ export function ReviewPage() {
                         <ArrowLink onClick={() => openSession(selected.proposer.id)}>Open session</ArrowLink>
                       </div>
                     </div>
+                  )}
+                  {selected.type === "behind" && (
+                    <>
+                      <h2>{selected.system.name}</h2>
+                      <p>{selected.system.name}'s architecture output is {selected.stale.behind} commit{selected.stale.behind === 1 ? "" : "s"} behind its repository.</p>
+                      {selected.stale.exact && selected.stale.sourceSha && <p className="muted">Generated from <code>{selected.stale.sourceSha.slice(0, 7)}</code>.</p>}
+                      <ArrowLink onClick={() => openSystem(selected.system.slug)}>Open Architecture</ArrowLink>
+                    </>
                   )}
                   {selected.type === "learning" && <LearningReview />}
                 </div>
