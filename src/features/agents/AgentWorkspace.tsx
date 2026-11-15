@@ -127,6 +127,9 @@ export function Transcript({ state, running, chat }: { state: State; running: bo
 
 /** The exact permission flags a terminal session was started with (see `term/launch.rs`). */
 const permissionFlags = (s: SessionInfo) => {
+  const a = s.access;
+  if (a?.engine === "claude") return `Claude Code was started with --permission-mode ${a.mode}`;
+  if (a?.engine === "codex") return a.approval === "approve-for-me" ? "Codex was started with --approve-for-me -s workspace-write" : `Codex was started with -s ${a.sandbox} -a ${a.approval}`;
   const edits = s.policy === "accept_edits";
   return s.adapter === "codex"
     ? `Codex was started with -s ${edits ? "workspace-write" : "read-only"} -a on-request`

@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useRecapEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
+import { realProject } from "../../lib/folders";
 import { recap, type Recap } from "../../lib/lm";
 import { useApp } from "../../store";
 import { PageHeader } from "../../ui/Page";
@@ -98,7 +99,7 @@ function Body({ r }: { r: Recap }) {
 /** Recap: what changed in the store over the last days, from Living Memory's `recap` command. */
 export function RecapPage() {
   const enabled = useRecapEnabled();
-  const project = useApp((s) => s.project) ?? undefined;
+  const project = useApp((s) => realProject(s.project)) ?? undefined;
   const [days, setDays] = useState<number>(7);
   const q = useRecap(days, project, enabled);
   const title = "Recap";

@@ -48,6 +48,21 @@ describe("terminal tabs", () => {
     expect(latestOf([chat], "paystream", "terminal")).toBeUndefined();
   });
 
+  it("lists the sessions without a project under Other folders", () => {
+    const inFolder = session({ id: "folder", task: { kind: "folder", path: "C:/Notes" }, project: null, worktree: null, direct: { path: "C:/Notes", repo: null, headSha: null, startTree: null } });
+    const inProject = session({ id: "proj" });
+    const all = [inFolder, inProject];
+    expect(terminalTabs(all, "~other").map((s) => s.id)).toEqual(["folder"]);
+    expect(terminalTabs(all, "paystream").map((s) => s.id)).toEqual(["proj"]);
+    expect(terminalTabs(all, null).map((s) => s.id)).toEqual(["folder", "proj"]);
+    expect(latestOf(all, "~other", "terminal")?.id).toBe("folder");
+  });
+
+  it("labels the access a session was started with in the CLI's words", () => {
+    expect(accessLabel(session({ access: { engine: "claude", mode: "plan" } }))).toBe("plan");
+    expect(accessLabel(session({ adapter: "codex", access: { engine: "codex", sandbox: "workspace-write", approval: "never" } }))).toBe("workspace-write · never");
+  });
+
   it("labels access for each engine and policy", () => {
     expect(accessLabel(session({ adapter: "codex", policy: "accept_edits" }))).toBe("Workspace access");
     expect(accessLabel(session({ adapter: "codex", policy: "ask" }))).toBe("Read only, asks first");

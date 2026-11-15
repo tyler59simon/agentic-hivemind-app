@@ -1,9 +1,13 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, FileText, Layers, Link as LinkIcon, Play, Plus } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { agentStart, enginesQuery, repoBranches, type Engine, type Interface, type Policy } from "../../lib/agent";
+import {
+  agentStart, APPROVALS, asksNobody, CLAUDE_MODES, enginesQuery, modelsQuery, repoBranches, SANDBOXES, sessionsQuery,
+  type Access, type Approval, type ClaudeMode, type Engine, type Interface, type Policy, type Sandbox,
+} from "../../lib/agent";
 import { useChangesEnabled, useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
+import { folderForget, folderPick, OTHER_FOLDERS, otherFolders } from "../../lib/folders";
 import { domainOf, getSettings, type Project } from "../../lib/lm";
 import { actionItems, evidenceItems, stepParts } from "../../lib/note";
 import { openChange, openSession, openSystem, useApp } from "../../store";
@@ -17,13 +21,16 @@ import { buildBriefing, isoDay } from "../projects/briefing";
 import { systemsForProject } from "../projects/scope";
 import { useCurrentProject, useGitActivity, useProject } from "../projects/useProject";
 import { systemsQuery, useSystem } from "../systems/useSystem";
+import { tabLabel } from "../terminal/tabs";
 import { noteQuery } from "../viewer/NoteView";
 import { ConnectionDialog } from "./ConnectionDialog";
 import { useSessionDraft } from "./draft";
 import { ALLOWED_NOTE, draftCounts, permissionLines, POLICIES, repoName, sessionBriefing } from "./session";
+import { accessLines, buildStart, defaultAccess, effortOptions, terminalsIn, WHERE_HELP, withApproval, type Where } from "./start";
 
 const MODELS = [
   { id: "", label: "Default (your Claude Code setting)" },
+  { id: "fable", label: "Fable" },
   { id: "opus", label: "Opus" },
   { id: "sonnet", label: "Sonnet" },
   { id: "haiku", label: "Haiku" },
@@ -32,7 +39,7 @@ const MODELS = [
 const ENGINES: { id: Engine; label: string }[] = [{ id: "claude", label: "Claude Code" }, { id: "codex", label: "Codex" }];
 const INTERFACES: { id: Interface; label: string }[] = [{ id: "chat", label: "Chat" }, { id: "terminal", label: "Terminal" }];
 
-const TERMINAL_APPROVALS = "The program asks for approvals itself, in the terminal. Hivemind does not see or answer those prompts.";
+const TERMINAL_APPROVALS = "The program asks for approvals itself, in the terminal, as its permission mode says. Hivemind does not see or answer those prompts.";
 
 /** The lines under "Tools, MCP & hooks": what is enforced depends on the engine and the interface. */
 function toolLines(engine: Engine, face: Interface): string[] {
@@ -56,6 +63,9 @@ function toolLines(engine: Engine, face: Interface): string[] {
     ];
 }
 
+/** The first option of a model or effort select: the CLI's own choice, named when its configuration names one. */
+const cliDefault = (name: string | null | undefined) => (name ? `CLI default (${name})` : "CLI default");
+
 /** Equal buttons of which one is on. */
 function Choice<T extends string>({ label, value, options, onPick }: {
   label: string; value: T; options: { id: T; label: string; disabled?: boolean; title?: string }[]; onPick: (id: T) => void;
@@ -74,11 +84,13 @@ function Choice<T extends string>({ label, value, options, onPick }: {
 /** Mock 02: scope a session (task, repository, start branch, permissions), inspect its briefing, and start it. */
 export function StartSession() {
   const { enabled, registry, project } = useCurrentProject();
+  const other = useApp((s) => s.project === OTHER_FOLDERS);
   const go = useApp((s) => s.go);
   return (
     <div className="page fill-page">
       <PageHeader title="Start a session" subtitle="Choose an engine, scope the workspace, and inspect the context." />
-      {!enabled ? <p className="muted">Sessions need a newer Living Memory (one with the <code>projects</code> command).</p>
+      {other ? <StartForm key={OTHER_FOLDERS} project={null} />
+        : !enabled ? <p className="muted">Sessions need a newer Living Memory (one with the <code>projects</code> command).</p>
         : !project ? (registry.isLoading ? <p className="muted">Loading…</p>
           : <div className="empty-state"><p className="muted">Pick a project in the sidebar to start a session. A session works in one of the project's repositories.</p></div>)
         : !project.repos.length ? (
@@ -86,20 +98,27 @@ export function StartSession() {
             <p className="muted">This project has no repositories. Add one to the project first.</p>
             <ArrowLink onClick={() => go({ page: "overview" })}>Open the project</ArrowLink>
           </div>
-        ) : <StartForm project={project} />}
+        ) : <StartForm key={project.slug} project={project} />}
     </div>
   );
 }
 
-function StartForm({ project }: { project: Project }) {
+/** `project` is null under "Other folders": a terminal in a folder the user picked, with no project around it. */
+function StartForm({ project }: { project: Project | null }) {
   const client = useQueryClient();
   const go = useApp((s) => s.go);
   const appDomain = useApp((s) => s.domain);
   const draft = useSessionDraft();
-  const [repo, setRepo] = useState(project.repos[0]);
+  const [repo, setRepo] = useState(project?.repos[0] ?? "");
   const [pickedBranch, setPickedBranch] = useState<string | null>(null);
   const [policy, setPolicy] = useState<Policy>("ask");
   const [model, setModel] = useState("");
+  const [effort, setEffort] = useState("");
+  const [picked, setPicked] = useState<Access>(defaultAccess(draft.engine));
+  const [confirmed, setConfirmed] = useState(false);
+  const [whereChoice, setWhere] = useState<Where>("checkout");
+  const [folder, setFolder] = useState<string | null>(null);
+  const [clash, setClash] = useState(false);
   const [starting, setStarting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [picking, setPicking] = useState(false);
@@ -108,11 +127,19 @@ function StartForm({ project }: { project: Project }) {
   const [listed, setListed] = useState(draft.context);
   const touched = useRef(false);
 
-  const branches = useQuery({ queryKey: ["repo", "branches", project.slug, repo], queryFn: () => repoBranches(project.slug, repo), retry: false });
+  const branches = useQuery({ queryKey: ["repo", "branches", project?.slug, repo], queryFn: () => repoBranches(project!.slug, repo), retry: false, enabled: !!project && !!repo });
   const branch = pickedBranch ?? branches.data?.current ?? branches.data?.branches[0] ?? "";
+  // Without a project (Other folders) only a terminal in a picked folder is possible. Chat always works in a worktree.
+  const face: Interface = project ? draft.interface : "terminal";
+  const terminal = face === "terminal";
+  const where: Where = !project ? "folder" : terminal ? whereChoice : "worktree";
+  const folderMode = where === "folder";
+  const needsBranch = where === "worktree";
+  // A change belongs to a work session in a repository; a folder session has none.
+  const change = project && !folderMode ? draft.change : null;
   const changesOn = useChangesEnabled();
-  const registry = useQuery({ ...changesQuery(), enabled: changesOn && draft.change !== null });
-  const linked = draft.change === null ? undefined : registry.data?.changes.find((c) => c.id === draft.change);
+  const registry = useQuery({ ...changesQuery(), enabled: changesOn && change !== null });
+  const linked = change === null ? undefined : registry.data?.changes.find((c) => c.id === change);
   // The brief itself, loaded on its own so nothing below depends on it staying ticked under "Included memory".
   const brief = useQuery({ ...noteQuery(linked?.brief ?? ""), enabled: !!linked && briefState(linked) !== "missing" });
   const briefNote = brief.data;
@@ -120,38 +147,70 @@ function StartForm({ project }: { project: Project }) {
   // The change whose repository and branch have been put into the two selects; null until that is done.
   const [appliedFor, setAppliedFor] = useState<number | null>(null);
   const link = linkState({
-    change: draft.change, changesOn,
+    change, changesOn,
     registryLoading: registry.isLoading, registryError: registry.error ? classify(registry.error).message : null, linked,
     branchesLoading: branches.isLoading, branchesError: branches.error ? String(branches.error) : null,
-    applied: appliedFor === draft.change,
+    applied: appliedFor === change,
     briefLoading: brief.isLoading, briefError: brief.error ? classify(brief.error).message : null,
   });
   const norm = (path: string) => path.split("\\").join("/").replace(/\/+$/, "").toLowerCase();
   const branchList = branches.data?.branches;
   useEffect(() => {
-    if (!linked) return;
+    if (!linked || !project) return;
     if (touched.current) { setAppliedFor(linked.id); return; }
     const entry = linked.repo ? project.repos.find((r) => norm(r) === norm(linked.repo!)) : undefined;
     if (entry && entry !== repo) { setRepo(entry); setPickedBranch(null); return; }
     if (!branchList) return;
     if (linked.branch && branchList.includes(linked.branch)) setPickedBranch(linked.branch);
     setAppliedFor(linked.id);
-  }, [linked, repo, branchList, project.repos]);
+  }, [linked, repo, branchList, project]);
   const engines = useQuery({ ...enginesQuery(), retry: false });
   const selected = engines.data?.find((e) => e.engine === draft.engine);
-  const terminal = draft.interface === "terminal";
   // A draft can arrive with Codex and Chat (another page preselected the engine); Chat is then not allowed.
   useEffect(() => { if (selected && !selected.chat && draft.interface === "chat") draft.setInterface("terminal"); }, [selected, draft]);
   const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
 
-  const { rows, open, charter } = useProject(project.slug);
-  const git = useGitActivity(project.slug);
+  // The engine's own permission modes: what was picked, or the engine's default when the engine has changed since.
+  const access = picked.engine === draft.engine ? picked : defaultAccess(draft.engine);
+  const risky = terminal && asksNobody(access);
+  const accessKey = JSON.stringify(access);
+  useEffect(() => setConfirmed(false), [accessKey]);
+  const models = useQuery({ ...modelsQuery(draft.engine), enabled: terminal, retry: false });
+  useEffect(() => { setModel(""); setEffort(""); }, [draft.engine]);
+  const efforts = effortOptions(models.data, model);
+  const pickModel = (id: string) => {
+    setModel(id);
+    if (effort && !effortOptions(models.data, id).includes(effort)) setEffort("");
+  };
+  const folders = useQuery({ queryKey: ["otherFolders"], queryFn: otherFolders, enabled: folderMode });
+  const folderList = folders.data ?? [];
+  useEffect(() => { if (folders.data && (!folder || !folders.data.includes(folder))) setFolder(folders.data[0] ?? null); }, [folders.data, folder]);
+  const addFolder = async () => {
+    try {
+      const path = await folderPick();
+      if (!path) return;
+      client.setQueryData(["otherFolders"], await otherFolders());
+      setFolder(path);
+    } catch (e) { toast(String(e), "error"); }
+  };
+  const forgetFolder = async (path: string) => {
+    try {
+      await folderForget(path);
+      client.setQueryData(["otherFolders"], await otherFolders());
+    } catch (e) { toast(String(e), "error"); }
+  };
+  const sessions = useQuery({ ...sessionsQuery(), enabled: terminal });
+  const placePath = folderMode ? folder : where === "checkout" ? repo : null;
+  const clashes = terminal && placePath ? terminalsIn(sessions.data ?? [], placePath) : [];
+
+  const { rows, open, charter } = useProject(project?.slug);
+  const git = useGitActivity(project?.slug);
   const commits = useMemo(() => (git.data ?? []).flatMap((r) => r.commits ?? []).sort((a, b) => b.date.localeCompare(a.date)), [git.data]);
   const systemsOn = useSystemsEnabled();
   const systems = useQuery({ ...systemsQuery(), enabled: systemsOn });
   const system = useMemo(() => {
     const live = (systems.data?.systems ?? []).filter((s) => s.status !== "retired");
-    return live.find((s) => s.slug === draft.system) ?? systemsForProject(project, live)[0];
+    return live.find((s) => s.slug === draft.system) ?? (project ? systemsForProject(project, live)[0] : undefined);
   }, [systems.data, project, draft.system]);
   const { architecture } = useSystem(system?.slug);
   const arch = architecture.data;
@@ -166,25 +225,31 @@ function StartForm({ project }: { project: Project }) {
   });
   const loading = draft.context.some((ref) => noteResults[listed.indexOf(ref)]?.isLoading) || rows.isLoading || open.isLoading;
 
-  const domain = project.charter ? domainOf(project.charter) : null;
+  const domain = project?.charter ? domainOf(project.charter) : null;
   const task = draft.task.trim();
-  const briefing = sessionBriefing({
-    project, domain, repo, branch, policy, notes, pack: buildBriefing({ project, charter: charter.data, rows: rows.data?.notes ?? [], open: open.data?.items ?? [], commits, maxChars: 5000 }),
+  // A folder session has no project briefing: its first message is the task alone.
+  const makeBriefing = (w: Where) => project && w !== "folder" ? sessionBriefing({
+    project, domain, repo, branch, policy, place: terminal ? (w === "worktree" ? "worktree" : "checkout") : undefined, notes, pack: buildBriefing({ project, charter: charter.data, rows: rows.data?.notes ?? [], open: open.data?.items ?? [], commits, maxChars: 5000 }),
     change: linked && briefNote ? { display: linked.display, title: linked.title, stage: STAGE_LABELS[linked.stage], briefTitle: briefNote.title, steps: openSteps, evidence: evidenceItems(briefNote.body).filter((e) => !e.done).map((e) => e.text) } : null,
-    architecture: system && {
+    architecture: !system ? null : {
       system: system.name, generated: arch?.generatedAt ? isoDay(new Date(arch.generatedAt)) : null, behind: git.data && arch?.generatedAt ? behind : null,
       element: draft.element, containers: (archModel?.elements ?? []).filter((e) => e.type === "container").map((e) => e.name),
     },
-  });
-  const blocked = !!branches.error || !!selected?.error || link.kind === "loading" || link.kind === "failed";
-  const canStart = !!task && !loading && !starting && !branches.isLoading && !blocked && !!branch;
+  }) : undefined;
+  const briefing = makeBriefing(where);
+  const blocked = (needsBranch && !!branches.error) || !!selected?.error || link.kind === "loading" || link.kind === "failed";
+  const ready = folderMode ? !!folder : needsBranch ? !!branch && !branches.isLoading : !!repo;
+  const canStart = (terminal || !!task) && !loading && !starting && !blocked && ready && (!risky || confirmed);
 
   const add = (ref: string) => { draft.addContext(ref); setListed((l) => (l.includes(ref) ? l : [...l, ref])); };
-  const start = async () => {
-    if (blocked) return;
+  const run = async (w: Where) => {
     setStarting(true);
     try {
-      const info = await agentStart({ kind: "work", project: project.slug, repo, branch, ...(draft.change !== null ? { change: draft.change } : {}) }, task, { policy, context: draft.context, briefing, model: draft.engine === "claude" ? model || undefined : undefined, system: system?.slug, engine: draft.engine, interface: draft.interface });
+      const req = buildStart({
+        engine: draft.engine, face, where: w, project: project?.slug ?? null, repo, branch, change, folder, task, policy, access, model, effort,
+        context: draft.context, briefing: makeBriefing(w), system: system?.slug,
+      });
+      const info = await agentStart(req.task, req.prompt, req.options);
       useSessionDraft.getState().reset();
       client.invalidateQueries({ queryKey: ["agent", "sessions"] });
       openSession(info.id);
@@ -193,6 +258,11 @@ function StartForm({ project }: { project: Project }) {
     } finally {
       setStarting(false);
     }
+  };
+  // Two terminals in one folder can overwrite each other's edits: ask first.
+  const start = () => {
+    if (!canStart) return;
+    if (terminal && where !== "worktree" && clashes.length) setClash(true); else run(where);
   };
   const cancel = () => { if (useApp.getState().back.length) useApp.getState().goBack(); else go({ page: "agents" }); };
 
@@ -207,7 +277,7 @@ function StartForm({ project }: { project: Project }) {
             <div className="actions"><button onClick={() => useSessionDraft.setState({ change: null })}>Unlink the change</button></div>
           </div>
         )}
-        <Split rail={
+        <Split rail={project && !folderMode ? (
           <>
             <Section title="Briefing preview"><p className="muted">Scope: {project.name} / {repoName(repo)}</p></Section>
             <Section title="Included memory">
@@ -241,8 +311,8 @@ function StartForm({ project }: { project: Project }) {
               <ul>
                 <li>Limit edits to {repoName(repo)}</li>
                 {openSteps.slice(0, 3).map((step) => <li key={step}>{step}</li>)}
-                <li>Work on a new branch from {branch}; nothing is pushed or merged</li>
-                <li>{permissionLines(policy)[0]}</li>
+                <li>{needsBranch ? `Work on a new branch from ${branch}; nothing is pushed or merged` : "Work in your real checkout; nothing is pushed or merged for you"}</li>
+                {terminal ? accessLines(access).slice(0, 2).map((line) => <li key={line}>{line}</li>) : <li>{permissionLines(policy)[0]}</li>}
               </ul>
             </Section>
             <div>
@@ -250,16 +320,30 @@ function StartForm({ project }: { project: Project }) {
               <ArrowLink onClick={() => setPreviewing(true)}>View full briefing</ArrowLink>
             </div>
           </>
-        }>
+        ) : (
+          <>
+            <Section title="Briefing preview"><p className="muted" title={folder ?? undefined}>Folder: {folder ? repoName(folder) : "none picked"}</p></Section>
+            <Section title="Task boundaries">
+              <ul>
+                <li>No project briefing: the CLI gets only your task, if you write one</li>
+                {accessLines(access).slice(0, 2).map((line) => <li key={line}>{line}</li>)}
+              </ul>
+            </Section>
+            <div>
+              <p className="muted">Preview the exact first message before starting.</p>
+              <ArrowLink onClick={() => setPreviewing(true)}>View full message</ArrowLink>
+            </div>
+          </>
+        )}>
           <form className="start-form" onSubmit={(e) => e.preventDefault()}>
             <section className="start-section">
               <h2>Task</h2>
-              <textarea className="start-task" aria-label="Task" autoFocus placeholder="What should the agent do?" value={draft.task}
+              <textarea className="start-task" aria-label="Task" autoFocus placeholder={terminal ? "Optional. Leave empty to start the CLI with no task." : "What should the agent do?"} value={draft.task}
                 onChange={(e) => draft.setTask(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && canStart) start(); }} />
-              {draft.change !== null && (
+              {change !== null && (
                 <span>
-                  <button className="linked-chip" onClick={() => openChange(draft.change!)}><LinkIcon size="1.2em" aria-hidden />{displayId(draft.change)}{linked ? " · " + linked.title : ""}</button>
+                  <button className="linked-chip" onClick={() => openChange(change)}><LinkIcon size="1.2em" aria-hidden />{displayId(change)}{linked ? " · " + linked.title : ""}</button>
                   <button type="button" className="tag-x" aria-label="Unlink the change" title="Start the session without the change" onClick={() => useSessionDraft.setState({ change: null })}>×</button>
                 </span>
               )}
@@ -279,36 +363,99 @@ function StartForm({ project }: { project: Project }) {
             </section>
             <section className="start-section">
               <h2>Interface</h2>
-              <Choice label="Interface" value={draft.interface} options={INTERFACES.map((o) => ({ ...o, disabled: o.id === "chat" && selected?.chat === false, title: o.id === "chat" ? selected?.chatReason ?? undefined : undefined }))}
+              <Choice label="Interface" value={face} options={INTERFACES.map((o) => ({ ...o, disabled: o.id === "chat" && (selected?.chat === false || !project), title: o.id === "chat" ? (!project ? "Chat needs a project" : selected?.chatReason ?? undefined) : undefined }))}
                 onPick={(id) => draft.setInterface(id)} />
               {selected?.chat === false && selected.chatReason && <p className="muted small">{selected.chatReason}</p>}
               {terminal && <p className="muted small">The terminal runs the real command-line program. It asks for approvals itself, inside the terminal.</p>}
             </section>
             <section className="start-section">
-              <h2>Workspace</h2>
-              <div className="start-row">
-                <label className="field"><span>Repo</span>
-                  <select aria-label="Repo" value={repo} onChange={(e) => { touched.current = true; setRepo(e.target.value); setPickedBranch(null); }}>
-                    {project.repos.map((r) => <option key={r} value={r} title={r}>{repoName(r)}</option>)}
-                  </select>
-                </label>
-                <label className="field"><span>Start branch</span>
-                  <select aria-label="Start branch" value={branch} disabled={branches.isLoading || !!branches.error} onChange={(e) => { touched.current = true; setPickedBranch(e.target.value); }}>
-                    {branches.isLoading ? <option value="">Loading…</option> : (branches.data?.branches ?? []).map((b) => <option key={b} value={b}>{b}</option>)}
-                  </select>
-                </label>
-              </div>
-              {!!branches.error && <p className="error small">{String(branches.error)}</p>}
-              {linked?.branch && branchList && !branchList.includes(linked.branch) && <p className="muted small">The change names the branch {linked.branch}, which this repository does not have.</p>}
-              <p className="muted small">The session works in a new git worktree on its own branch. Uncommitted changes, ignored files and submodules of your checkout are not in it.</p>
+              <h2>{!project ? "Folder" : terminal ? "Where" : "Workspace"}</h2>
+              {project && terminal && (
+                <Choice label="Where" value={where} onPick={setWhere}
+                  options={[{ id: "checkout", label: "This checkout" }, { id: "worktree", label: "New worktree" }, { id: "folder", label: "Another folder…" }]} />
+              )}
+              {terminal && <p className="muted small">{WHERE_HELP[where]}</p>}
+              {folderMode ? (
+                <>
+                  {!!folderList.length && (
+                    <div className="folder-list" role="radiogroup" aria-label="Folder">
+                      {folderList.map((path) => (
+                        <div key={path} className="folder-row">
+                          <button type="button" role="radio" aria-checked={folder === path} className={`folder-pick ${folder === path ? "on" : ""}`} title={path} onClick={() => setFolder(path)}>
+                            {folder === path && <Check size="1.1em" aria-hidden />}<span className="grow">{repoName(path)}</span><span className="muted small">{path}</span>
+                          </button>
+                          <button type="button" className="text" aria-label={`Remove ${path} from the list`} title="Forget this folder; nothing on disk changes" onClick={() => forgetFolder(path)}>Remove</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {!folderList.length && !folders.isLoading && <p className="muted small">No folders yet. Add one to start a terminal in it.</p>}
+                  {folders.isError && <p className="error small">{String(folders.error)}</p>}
+                  <div><button type="button" className="outline" onClick={addFolder}><Plus size="1.15em" aria-hidden />Add folder…</button></div>
+                </>
+              ) : (
+                <>
+                  <div className="start-row">
+                    <label className="field"><span>Repo</span>
+                      <select aria-label="Repo" value={repo} onChange={(e) => { touched.current = true; setRepo(e.target.value); setPickedBranch(null); }}>
+                        {project?.repos.map((r) => <option key={r} value={r} title={r}>{repoName(r)}</option>)}
+                      </select>
+                    </label>
+                    {needsBranch && (
+                      <label className="field"><span>Start branch</span>
+                        <select aria-label="Start branch" value={branch} disabled={branches.isLoading || !!branches.error} onChange={(e) => { touched.current = true; setPickedBranch(e.target.value); }}>
+                          {branches.isLoading ? <option value="">Loading…</option> : (branches.data?.branches ?? []).map((b) => <option key={b} value={b}>{b}</option>)}
+                        </select>
+                      </label>
+                    )}
+                  </div>
+                  {needsBranch && !!branches.error && <p className="error small">{String(branches.error)}</p>}
+                  {needsBranch && linked?.branch && branchList && !branchList.includes(linked.branch) && <p className="muted small">The change names the branch {linked.branch}, which this repository does not have.</p>}
+                  {needsBranch && <p className="muted small">The session works in a new git worktree on its own branch. Uncommitted changes, ignored files and submodules of your checkout are not in it.</p>}
+                </>
+              )}
             </section>
             <section className="start-section">
               <h2>Permissions</h2>
-              <select aria-label="Permissions" value={policy} onChange={(e) => setPolicy(e.target.value as Policy)}>
-                {POLICIES.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
-              </select>
-              <p className="muted small">{POLICIES.find((p) => p.id === policy)?.help}</p>
-              <p className="muted small">{ALLOWED_NOTE}</p>
+              {terminal ? (
+                <>
+                  {access.engine === "claude" ? (
+                    <label className="field"><span>Mode</span>
+                      <select aria-label="Permission mode" value={access.mode} onChange={(e) => setPicked({ engine: "claude", mode: e.target.value as ClaudeMode })}>
+                        {CLAUDE_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+                      </select>
+                    </label>
+                  ) : (
+                    <div className="start-row">
+                      <label className="field"><span>Sandbox</span>
+                        <select aria-label="Sandbox" value={access.sandbox} disabled={access.approval === "approve-for-me"} onChange={(e) => setPicked({ ...access, sandbox: e.target.value as Sandbox })}>
+                          {SANDBOXES.map((m) => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                      </label>
+                      <label className="field"><span>Approval</span>
+                        <select aria-label="Approval" value={access.approval} onChange={(e) => setPicked(withApproval(access, e.target.value as Approval))}>
+                          {APPROVALS.map((m) => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                      </label>
+                    </div>
+                  )}
+                  {accessLines(access).slice(1).map((line) => <p key={line} className="muted small">{line}</p>)}
+                  {risky && (
+                    <div className="banner error" role="alert">
+                      <strong className="danger-text">This mode never asks before running commands or editing files.</strong>
+                      <label><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> I understand; start without asking</label>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <select aria-label="Permissions" value={policy} onChange={(e) => setPolicy(e.target.value as Policy)}>
+                    {POLICIES.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+                  </select>
+                  <p className="muted small">{POLICIES.find((p) => p.id === policy)?.help}</p>
+                  <p className="muted small">{ALLOWED_NOTE}</p>
+                </>
+              )}
             </section>
             <details className="start-more">
               <summary>Tools, MCP &amp; hooks</summary>
@@ -318,13 +465,31 @@ function StartForm({ project }: { project: Project }) {
             </details>
             <details className="start-more">
               <summary>Environment &amp; session options</summary>
-              {draft.engine === "claude" ? (
+              {terminal ? (
+                <>
+                  <label className="field"><span>Model</span>
+                    <select aria-label="Model" value={model} onChange={(e) => pickModel(e.target.value)}>
+                      <option value="">{cliDefault(models.data?.defaultModel)}</option>
+                      {(models.data?.models ?? []).map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                    </select>
+                  </label>
+                  <label className="field"><span>Effort</span>
+                    <select aria-label="Effort" value={effort} onChange={(e) => setEffort(e.target.value)}>
+                      <option value="">{cliDefault(models.data?.defaultEffort)}</option>
+                      {efforts.map((x) => <option key={x} value={x}>{x}</option>)}
+                    </select>
+                  </label>
+                  {models.isLoading && <p className="muted small">Loading the CLI's models…</p>}
+                  {models.isError && <p className="muted small">The model list could not be read; the CLI's default is used.</p>}
+                  {!!models.data?.note && <p className="muted small">{models.data.note}</p>}
+                </>
+              ) : draft.engine === "claude" && (
                 <label className="field"><span>Model</span>
                   <select aria-label="Model" value={model} onChange={(e) => setModel(e.target.value)}>
                     {MODELS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
                   </select>
                 </label>
-              ) : <p className="muted small">Codex uses the model set in your Codex configuration.</p>}
+              )}
               {draft.engine === "claude" && !terminal
                 ? <p className="muted small">Spending limit: ${(settings.data?.agent_budget_usd ?? 5).toFixed(2)} per run. Change it in Settings.</p>
                 : <p className="muted small">No spending limit applies in the terminal or with Codex.</p>}
@@ -335,11 +500,11 @@ function StartForm({ project }: { project: Project }) {
       </div>
       <footer className="start-footer">
         <Layers size="1.4em" aria-hidden />
-        <span>{draftCounts(draft.context.length, archModel ? 1 : 0)}</span>
+        <span>{project && !folderMode ? draftCounts(draft.context.length, archModel ? 1 : 0) : `Folder: ${folder ? repoName(folder) : "none picked"}`}</span>
         <span className="fill" />
         {link.kind === "loading" && <span className="muted small" role="status">{link.what}</span>}
         <button className="outline" onClick={cancel}>Cancel</button>
-        <button className="primary big" disabled={!canStart} title={link.kind === "loading" ? link.what : link.kind === "failed" ? link.message : task ? undefined : "Write a task first"} onClick={start}>
+        <button className="primary big" disabled={!canStart} title={link.kind === "loading" ? link.what : link.kind === "failed" ? link.message : terminal || task ? undefined : "Write a task first"} onClick={start}>
           <Play size="1.2em" aria-hidden />{starting ? "Starting…" : "Start session"}
         </button>
       </footer>
@@ -347,7 +512,18 @@ function StartForm({ project }: { project: Project }) {
       {picking && <NotePicker title="Add a note to the briefing" domain={domain ?? appDomain ?? ""} exclude="" onPick={(n) => { add(n.ref); setPicking(false); }} onClose={() => setPicking(false)} />}
       {previewing && (
         <Modal title="Briefing" wide onClose={() => setPreviewing(false)}>
-          <textarea className="briefing-text" readOnly value={`${briefing}\n\n---\n\n${task}`} />
+          <textarea className="briefing-text" readOnly value={briefing ? `${briefing}\n\n---\n\n${task}` : task} />
+        </Modal>
+      )}
+      {clash && (
+        <Modal title="Another terminal is in this folder" onClose={() => setClash(false)}>
+          <p>Another terminal is working in this folder; their edits can collide.</p>
+          <ul>{clashes.map((c) => <li key={c.id}>{tabLabel(c)}</li>)}</ul>
+          <div className="actions">
+            <button onClick={() => setClash(false)}>Cancel</button>
+            {project && !!branch && <button onClick={() => { setClash(false); setWhere("worktree"); run("worktree"); }}>Use a new worktree</button>}
+            <button autoFocus className="primary" onClick={() => { setClash(false); run(where); }}>Start anyway</button>
+          </div>
         </Modal>
       )}
     </>

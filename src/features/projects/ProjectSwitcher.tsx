@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { Check, ChevronDown, Layers, Plus, TriangleAlert } from "lucide-react";
+import { Check, ChevronDown, FolderOpen, Layers, Plus, TriangleAlert } from "lucide-react";
 import { useEffect, useMemo } from "react";
+import { OTHER_FOLDERS } from "../../lib/folders";
 import { list, openWork, type Project } from "../../lib/lm";
 import { openProject, useApp } from "../../store";
 import { Menu } from "../../ui/Menu";
@@ -26,7 +27,7 @@ export function ProjectSwitcher() {
 
   // Nothing picked yet, or the picked project is gone: start on the most recently updated active project.
   useEffect(() => {
-    if (!all || picked === null || (picked && all.some((p) => p.slug === picked))) return;
+    if (!all || picked === null || picked === OTHER_FOLDERS || (picked && all.some((p) => p.slug === picked))) return;
     const first = [...all].filter((p) => p.status === "active").sort((a, b) => b.updated.localeCompare(a.updated))[0];
     setProject(first?.slug ?? null);
   }, [all, picked, setProject]);
@@ -49,7 +50,7 @@ export function ProjectSwitcher() {
   return (
     <>
       <Menu className="project-switcher" label="Choose a project"
-        button={<><Layers size="1.25em" aria-hidden /><span className="grow">{project?.name ?? "All memory"}</span>{!!warnings.length && <TriangleAlert size="1em" className="warn-text" aria-label="Registry warnings" />}<ChevronDown size="1.1em" aria-hidden /></>}>
+        button={<><Layers size="1.25em" aria-hidden /><span className="grow">{picked === OTHER_FOLDERS ? "Other folders" : project?.name ?? "All memory"}</span>{!!warnings.length && <TriangleAlert size="1em" className="warn-text" aria-label="Registry warnings" />}<ChevronDown size="1.1em" aria-hidden /></>}>
         {(close) => (
           <>
             {live.map((p) => item(p, close))}
@@ -59,6 +60,11 @@ export function ProjectSwitcher() {
             <li role="none">
               <button role="menuitem" onClick={() => { close(); openProject(null); }}>
                 <span className="grow">All memory</span>{picked === null && <Check size="1em" aria-hidden />}
+              </button>
+            </li>
+            <li role="none">
+              <button role="menuitem" title="Terminals in folders that are not part of a project" onClick={() => { close(); openProject(OTHER_FOLDERS); }}>
+                <FolderOpen size="1em" aria-hidden /><span className="grow">Other folders</span>{picked === OTHER_FOLDERS && <Check size="1em" aria-hidden />}
               </button>
             </li>
             <li role="none"><button role="menuitem" onClick={() => { close(); openWizard(); }}><Plus size="1em" aria-hidden /><span className="grow">New project…</span></button></li>

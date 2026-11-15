@@ -1,5 +1,5 @@
 // Pure helpers for agent sessions: status groups, the words the Start screen and chat use, and the briefing text.
-import type { Policy, SessionInfo, SessionStatus } from "../../lib/agent";
+import type { Place, Policy, SessionInfo, SessionStatus } from "../../lib/agent";
 import type { Project } from "../../lib/lm";
 import { sections } from "../../lib/note";
 import { isoDay } from "../projects/briefing";
@@ -63,21 +63,24 @@ export interface BriefingInput {
   pack: string;
   /** The change the session works on: a "## Change" block is written for it. */
   change?: { display: string; title: string; stage: string; briefTitle: string; steps: string[]; evidence: string[] } | null;
+  /** Set for a terminal session: where it runs. The CLI's own permission mode applies there, so no permission line is written. */
+  place?: Place;
   now?: Date;
 }
 
 /** The Markdown that goes before the task in a session's first message. */
 export function sessionBriefing(input: BriefingInput): string {
   const { project, domain, repo, branch, policy, architecture: arch, now = new Date() } = input;
+  const checkout = input.place === "checkout";
   const workspace = [
     "## Workspace",
     `- Repository: ${repo}`,
-    `- You are in a git worktree of it, on a new branch created from \`${branch}\`. Stay inside this folder.`,
-    "- Do not push, merge, switch branches or delete the worktree.",
-    policy === "accept_edits"
+    checkout ? "- You are in the repository's own checkout, not a copy. Stay inside this folder." : `- You are in a git worktree of it, on a new branch created from \`${branch}\`. Stay inside this folder.`,
+    checkout ? "- Do not push, merge or switch branches." : "- Do not push, merge, switch branches or delete the worktree.",
+    input.place ? "" : policy === "accept_edits"
       ? "- File edits apply at once, and so can simple file commands in this folder. Other commands wait for the user's approval unless something already allows them."
       : "- File edits wait for the user's approval, and so do commands that nothing has allowed yet. A wait can be long; do not work around it.",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
   const change = input.change && [
     "## Change",
     `- This session works on ${input.change.display} ${input.change.title} (stage: ${input.change.stage}).`,

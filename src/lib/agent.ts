@@ -145,3 +145,4 @@ export const reviewBase = (w: Worktree) => w.reviewedSha ?? w.baseSha;
 
 export const sessionsQuery = () => ({ queryKey: ["agent", "sessions"], queryFn: agentSessions });
 export const enginesQuery = () => ({ queryKey: ["agent", "engines"], queryFn: agentEngines, staleTime: 60_000 });
+export const modelsQuery = (engine: Engine) => ({ queryKey: ["agent", "models", engine], queryFn: () => agentModels(engine), staleTime: 600_000 });

@@ -67,6 +67,16 @@ describe("sessionBriefing", () => {
     now: new Date("2026-11-09T12:00:00Z"),
   };
 
+  it("a terminal in the checkout does not claim a worktree or a permission rule", () => {
+    const text = sessionBriefing({ ...input, place: "checkout" });
+    expect(text).toContain("own checkout");
+    expect(text).not.toContain("worktree");
+    expect(text).not.toContain("created from");
+    expect(text).not.toContain("File edits");
+    expect(sessionBriefing({ ...input, place: "worktree" })).toContain("created from `main`");
+    expect(sessionBriefing({ ...input, place: "worktree" })).not.toContain("File edits");
+  });
+
   it("the briefing names the workspace, the notes and the memory rules", () => {
     const text = sessionBriefing(input);
     expect(text).toContain("# Session briefing: PayStream");

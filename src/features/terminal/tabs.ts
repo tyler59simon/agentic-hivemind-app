@@ -1,8 +1,10 @@
-import { engineOf, type SessionInfo } from "../../lib/agent";
+import { accessLabel as cliAccessLabel, engineOf, type SessionInfo } from "../../lib/agent";
+import { OTHER_FOLDERS } from "../../lib/folders";
 import { POLICIES, repoName } from "../agents/session";
 import { engineName } from "../changes/changes";
 
-const inProject = (s: SessionInfo, project: string | null) => project === null || s.project === project;
+/** "Other folders" lists the sessions that belong to no project (the ones in a picked folder). */
+const inProject = (s: SessionInfo, project: string | null) => project === null || (project === OTHER_FOLDERS ? s.project === null : s.project === project);
 
 /** "Codex · ingestion-service": the engine and the repository's (or picked folder's) name. The task is used because the worktree can be gone. */
 export function defaultLabel(s: SessionInfo): string {
@@ -30,8 +32,9 @@ export function latestOf(sessions: SessionInfo[], project: string | null, face: 
     .reduce<SessionInfo | undefined>((best, s) => (best === undefined || s.startedAt > best.startedAt ? s : best), undefined);
 }
 
-/** The shield label in the toolbar for a terminal session. */
+/** The shield label in the toolbar for a terminal session: the CLI's own words when it was started with them. */
 export function accessLabel(s: SessionInfo): string {
+  if (s.access) return cliAccessLabel(s.access);
   if (engineOf(s) === "codex") return s.policy === "accept_edits" ? "Workspace access" : "Read only, asks first";
   return POLICIES.find((p) => p.id === s.policy)?.label ?? "Review edits";
 }

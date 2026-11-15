@@ -807,3 +807,9 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .work-detail > :last-child { margin-bottom: 0; }
 span.chip { display: inline-block; border: 1px solid var(--border-strong); }
 .dash-path { margin: 0; overflow-wrap: anywhere; }
+
+.folder-list { display: flex; flex-direction: column; gap: .3rem; }
+.folder-row { display: flex; align-items: center; gap: .5rem; }
+.folder-pick { flex: 1; display: flex; align-items: center; gap: .6rem; text-align: left; min-width: 0; }
+.folder-pick .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-pick.on { background: var(--accent-strong); border-color: var(--accent-strong); }
