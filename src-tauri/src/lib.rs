@@ -383,6 +383,19 @@ async fn term_login(state: State<'_, AppState>, engine: agent::Engine, cols: u16
     blocking(move || terminals.login(engine, cols, rows, raw(output))).await
 }
 
+/// Open a PowerShell tab in a session's folder, a project's checkout or a picked folder.
+#[tauri::command]
+async fn term_shell(state: State<'_, AppState>, target: term::ShellTarget, cols: u16, rows: u16, output: Channel<InvokeResponseBody>) -> Result<term::TermInfo, String> {
+    let (terminals, agents, bridge, path) = (state.terminals.clone(), state.agents.clone(), state.bridge.clone(), state.settings_path.clone());
+    blocking(move || {
+        let cwd = term::shell_cwd(&target, &agents, &settings::load(&path), |project, repo| {
+            agent::scope::project_repo(&git::project_entry(&bridge, project)?, repo)
+        })?;
+        terminals.shell(cwd, cols, rows, raw(output))
+    })
+    .await
+}
+
 #[tauri::command]
 async fn term_write(state: State<'_, AppState>, id: String, data: String) -> Result<(), String> {
     let terminals = state.terminals.clone();
@@ -572,7 +585,7 @@ pub fn run() {
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, app_quit, quit_ack, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, repo_branches,
             agent_cancel, agent_sessions, agent_session, review_files, review_file, review_approve, review_request_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
-            system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget
+            system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

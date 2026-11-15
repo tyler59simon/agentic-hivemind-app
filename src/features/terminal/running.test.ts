@@ -9,7 +9,7 @@ const session = (o: Partial<SessionInfo>): SessionInfo => ({
   mode: "interactive", policy: "ask", project: "p", worktree: null, turns: 0, filesChanged: null, context: [], model: null, system: null,
   review: null, sourceSha: null, interface: "chat", name: null, cliTitle: null, direct: null, noTask: false, access: null, effort: null, ...o,
 });
-const term = (o: Partial<TermInfo>): TermInfo => ({ id: "s1", sessionId: "s1", engine: "claude", running: true, exitCode: null, windowsBuild: null, ...o });
+const term = (o: Partial<TermInfo>): TermInfo => ({ id: "s1", sessionId: "s1", engine: "claude", running: true, exitCode: null, windowsBuild: null, label: null, cwd: null, ...o });
 
 describe("runningSummary", () => {
   it("is empty when nothing runs", () => {

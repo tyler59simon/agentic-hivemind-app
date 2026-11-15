@@ -204,21 +204,53 @@ pub fn login_args(engine: Engine) -> Vec<String> {
 }
 
 /// Variables to set and names to remove, given the app's own variable names and the terminal's id.
+///
+/// A shell tab (id starting `shell-`) gets no `HIVEMIND_SESSION`, and an inherited one is removed: the user applies memory
+/// plans from a shell, and the Living Memory guard refuses `apply` while the variable is set.
 pub fn environment(own: &[String], memory_root: Option<&Path>, terminal_id: &str) -> (Vec<(String, String)>, Vec<String>) {
-    let mut set = vec![
-        ("TERM".to_string(), "xterm-256color".to_string()),
-        ("COLORTERM".to_string(), "truecolor".to_string()),
-        ("HIVEMIND_SESSION".to_string(), terminal_id.to_string()),
-    ];
+    let shell = terminal_id.starts_with(SHELL_PREFIX);
+    let mut set = vec![("TERM".to_string(), "xterm-256color".to_string()), ("COLORTERM".to_string(), "truecolor".to_string())];
+    if !shell {
+        set.push(("HIVEMIND_SESSION".to_string(), terminal_id.to_string()));
+    }
     if let Some(root) = memory_root {
         set.push(("LIVING_MEMORY_ROOT".to_string(), root.display().to_string()));
     }
-    let remove = if own.iter().any(|name| name == "CLAUDECODE") {
+    let mut remove: Vec<String> = if own.iter().any(|name| name == "CLAUDECODE") {
         own.iter().filter(|name| name.starts_with("CLAUDE") || *name == "NO_COLOR").cloned().collect()
     } else {
         vec![]
     };
+    if shell && own.iter().any(|name| name == "HIVEMIND_SESSION") {
+        remove.push("HIVEMIND_SESSION".to_string());
+    }
     (set, remove)
+}
+
+/// Terminal ids of PowerShell tabs start with this.
+pub const SHELL_PREFIX: &str = "shell-";
+
+/// The shell to start and its tab label: PowerShell 7 when `pwsh` is the path of one, else Windows PowerShell under
+/// `system_root`. Both start with `-NoLogo`.
+pub fn shell_program(pwsh: Option<PathBuf>, system_root: &Path) -> (Cli, &'static str) {
+    match pwsh {
+        Some(path) => (Cli { program: path.display().to_string(), args: vec!["-NoLogo".into()] }, "PowerShell"),
+        None => {
+            let exe = system_root.join("System32").join("WindowsPowerShell").join("v1.0").join("powershell.exe");
+            (Cli { program: exe.display().to_string(), args: vec!["-NoLogo".into()] }, "Windows PowerShell")
+        }
+    }
+}
+
+/// The shell on this machine; an error on systems other than Windows.
+pub fn shell() -> Result<(Cli, &'static str), String> {
+    if !cfg!(windows) {
+        return Err("PowerShell tabs are for Windows".into());
+    }
+    let on_path = std::env::var_os("PATH").and_then(|path| std::env::split_paths(&path).map(|dir| dir.join("pwsh.exe")).find(|exe| exe.is_file()));
+    let installed = std::env::var_os("ProgramFiles").map(|dir| PathBuf::from(dir).join("PowerShell").join("7").join("pwsh.exe")).filter(|exe| exe.is_file());
+    let root = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    Ok(shell_program(on_path.or(installed), &root))
 }
 
 /// The build number in the text `cmd /d /c ver` prints, e.g. 26100 from "Microsoft Windows [Version 10.0.26100.9711]".
@@ -509,6 +541,37 @@ mod tests {
         let (set, remove) = environment(&strings(&["PATH", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CONFIG_DIR", "NO_COLOR"]), None, ID);
         assert_eq!(set, colour);
         assert_eq!(remove, strings(&["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CONFIG_DIR", "NO_COLOR"]));
+    }
+
+    #[test]
+    fn a_shell_gets_no_session_variable_and_loses_an_inherited_one() {
+        let (set, remove) = environment(&strings(&["PATH", "HIVEMIND_SESSION"]), Some(Path::new("C:/demo/store")), "shell-1");
+        assert!(set.iter().all(|(k, _)| k != "HIVEMIND_SESSION"));
+        for key in ["TERM", "COLORTERM", "LIVING_MEMORY_ROOT"] {
+            assert!(set.iter().any(|(k, _)| k == key), "{key}");
+        }
+        assert_eq!(remove, strings(&["HIVEMIND_SESSION"]));
+        let (set, remove) = environment(&strings(&["PATH"]), None, "shell-1");
+        assert!(set.iter().all(|(k, _)| k != "HIVEMIND_SESSION") && remove.is_empty());
+        // Programs of agents still get it, and it is not removed from them.
+        let (set, remove) = environment(&strings(&["HIVEMIND_SESSION"]), None, ID);
+        assert!(set.contains(&("HIVEMIND_SESSION".to_string(), ID.to_string())));
+        assert!(remove.is_empty());
+    }
+
+    #[test]
+    fn the_shell_is_pwsh_when_found_else_windows_powershell() {
+        let (cli, label) = shell_program(Some(PathBuf::from("C:/Program Files/PowerShell/7/pwsh.exe")), Path::new("C:/Windows"));
+        assert_eq!((cli.program.as_str(), cli.args, label), ("C:/Program Files/PowerShell/7/pwsh.exe", vec!["-NoLogo".to_string()], "PowerShell"));
+        let (cli, label) = shell_program(None, Path::new("C:/Windows"));
+        assert!(cli.program.replace('\\', "/").ends_with("Windows/System32/WindowsPowerShell/v1.0/powershell.exe"), "{}", cli.program);
+        assert_eq!((cli.args, label), (vec!["-NoLogo".to_string()], "Windows PowerShell"));
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn shell_tabs_are_for_windows() {
+        assert_eq!(shell().unwrap_err(), "PowerShell tabs are for Windows");
     }
 
     #[test]

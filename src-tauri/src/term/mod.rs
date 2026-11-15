@@ -50,6 +50,22 @@ pub struct TermInfo {
     pub exit_code: Option<u32>,
     /// The Windows build number, for xterm's `windowsPty` option; None on other systems.
     pub windows_build: Option<u32>,
+    /// The tab's name for a PowerShell tab (it has no session to name it); None for the others.
+    pub label: Option<String>,
+    /// The folder a PowerShell tab runs in; None for the others.
+    pub cwd: Option<String>,
+}
+
+/// Where a PowerShell tab starts. Serde's external tag gives `{ session: id }`, `{ checkout: { project, repo } }` and `{ folder: path }`.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum ShellTarget {
+    /// A session's folder: its worktree, or the folder it was started in.
+    Session(String),
+    /// A registered repository of a project.
+    Checkout { project: String, repo: String },
+    /// A folder picked with the folder dialog.
+    Folder(String),
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -81,6 +97,8 @@ struct Shared {
     id: String,
     session_id: Option<String>,
     engine: Engine,
+    /// Set for a PowerShell tab: its label and folder.
+    shell: Option<(String, String)>,
     out: Mutex<Out>,
     close_requested: AtomicBool,
     /// A files-changed refresh is already under way.
@@ -109,6 +127,8 @@ struct Run {
     engine: Engine,
     cli: Cli,
     cwd: PathBuf,
+    /// The tab label of a PowerShell tab; None for every other program.
+    label: Option<String>,
     memory_root: Option<PathBuf>,
     cols: u16,
     rows: u16,
@@ -133,6 +153,8 @@ fn info_of(shared: &Shared) -> TermInfo {
         running: true,
         exit_code: None,
         windows_build: launch::windows_build(),
+        label: shared.shell.as_ref().map(|(label, _)| label.clone()),
+        cwd: shared.shell.as_ref().map(|(_, cwd)| cwd.clone()),
     }
 }
 
@@ -154,6 +176,9 @@ impl Manager {
     /// `term_open` (section 4.3 of the Phase 5 plan).
     pub fn open(&self, session_id: &str, cols: u16, rows: u16, start: Option<StartMode>, replay: bool, output: Output) -> Result<TermInfo, String> {
         let inner = &self.inner;
+        if session_id.starts_with(launch::SHELL_PREFIX) {
+            return inner.attach_shell(session_id, cols, rows, output);
+        }
         let info = inner.agents.info(session_id)?;
         if info.interface != Interface::Terminal {
             return Err("This session is not a terminal session".into());
@@ -184,6 +209,8 @@ impl Manager {
             running: false,
             exit_code: None,
             windows_build: build,
+            label: None,
+            cwd: None,
         };
         let Some((mode, found)) = start else {
             drop(terms);
@@ -225,6 +252,7 @@ impl Manager {
             engine,
             cli,
             cwd,
+            label: None,
             memory_root: settings::resolve(&saved, |k| std::env::var(k).ok()).root,
             cols,
             rows,
@@ -268,12 +296,41 @@ impl Manager {
             engine,
             cli,
             cwd,
+            label: None,
             memory_root: settings::resolve(&saved, |k| std::env::var(k).ok()).root,
             cols,
             rows,
             scrollback: None,
             output,
         };
+        self.spawn_in(&mut terms, run)
+    }
+
+    /// `term_shell`: a PowerShell tab in `cwd` (from `shell_cwd`). No session and no saved history.
+    pub fn shell(&self, cwd: PathBuf, cols: u16, rows: u16, output: Output) -> Result<TermInfo, String> {
+        // Before the lock, as in `open`: looking for `pwsh` touches the disk.
+        let (cli, label) = launch::shell()?;
+        self.start_shell(cli, label, cwd, cols, rows, output)
+    }
+
+    fn start_shell(&self, cli: Cli, label: &str, cwd: PathBuf, cols: u16, rows: u16, output: Output) -> Result<TermInfo, String> {
+        let (cols, rows) = clamp(cols, rows);
+        launch::windows_build();
+        let saved = settings::load(&self.inner.settings_path);
+        let run = Run {
+            id: format!("{}{}", launch::SHELL_PREFIX, uuid::Uuid::new_v4()),
+            session_id: None,
+            engine: Engine::Claude,
+            cli,
+            cwd,
+            label: Some(label.to_string()),
+            memory_root: settings::resolve(&saved, |k| std::env::var(k).ok()).root,
+            cols,
+            rows,
+            scrollback: None,
+            output,
+        };
+        let mut terms = self.inner.terms.lock().unwrap();
         self.spawn_in(&mut terms, run)
     }
 
@@ -361,6 +418,7 @@ impl Manager {
             id: run.id,
             session_id: run.session_id,
             engine: run.engine,
+            shell: run.label.map(|label| (label, run.cwd.display().to_string())),
             out: Mutex::new(Out { output: Some(run.output), scrollback: run.scrollback }),
             close_requested: AtomicBool::new(false),
             refreshing: AtomicBool::new(false),
@@ -393,6 +451,14 @@ impl Manager {
 }
 
 impl Inner {
+    /// Re-attach to a running PowerShell tab after the page reloaded. It has no saved history, so nothing is replayed.
+    fn attach_shell(&self, id: &str, cols: u16, rows: u16, output: Output) -> Result<TermInfo, String> {
+        let (cols, rows) = clamp(cols, rows);
+        let entry = self.terms.lock().unwrap().get(id).filter(|entry| entry.shared.shell.is_some()).cloned().ok_or(NOT_RUNNING)?;
+        self.attach(&entry, cols, rows, None, output);
+        Ok(info_of(&entry.shared))
+    }
+
     fn scrollback_path(&self, session_id: &str) -> Result<PathBuf, String> {
         Ok(session_dir(&self.dir, session_id)?.join("scrollback.bin"))
     }
@@ -483,6 +549,22 @@ fn session_cwd(info: &SessionInfo) -> Result<PathBuf, String> {
     };
     let cwd = PathBuf::from(path);
     if cwd.is_dir() { Ok(cwd) } else { Err(format!("{missing}: {path}")) }
+}
+
+/// The folder a PowerShell tab starts in, which must exist. `checkout` looks up a project's registered repository
+/// (it needs the bridge, so the caller passes it in).
+pub fn shell_cwd(
+    target: &ShellTarget,
+    agents: &agent::Manager,
+    saved: &settings::Settings,
+    checkout: impl FnOnce(&str, &str) -> Result<PathBuf, String>,
+) -> Result<PathBuf, String> {
+    let folder = match target {
+        ShellTarget::Session(id) => return session_cwd(&agents.info(id)?),
+        ShellTarget::Checkout { project, repo } => checkout(project, repo)?,
+        ShellTarget::Folder(path) => return scope::other_folder(saved, path),
+    };
+    if folder.is_dir() { Ok(folder) } else { Err(format!("The folder no longer exists: {}", folder.display())) }
 }
 
 /// Write `<dir>/<session id>/context/briefing.md` and return the `context` folder.
@@ -681,6 +763,7 @@ mod tests {
                 engine: Engine::Claude,
                 cli,
                 cwd,
+                label: None,
                 memory_root: None,
                 cols: 200,
                 rows: 24,
@@ -754,7 +837,7 @@ mod tests {
         let run = |session: &str, memory_root: Option<PathBuf>, output: Output| {
             let cwd = PathBuf::from(&rig.agents.info(session).unwrap().worktree.unwrap().path);
             rig.terms
-                .spawn(Run { id: session.into(), session_id: Some(session.into()), engine: Engine::Claude, cli: echo.clone(), cwd, memory_root, cols: 300, rows: 24, scrollback: None, output })
+                .spawn(Run { id: session.into(), session_id: Some(session.into()), engine: Engine::Claude, cli: echo.clone(), cwd, label: None, memory_root, cols: 300, rows: 24, scrollback: None, output })
                 .unwrap()
         };
         run(&id, Some(root.clone()), output);
@@ -1046,6 +1129,7 @@ mod tests {
                 engine: Engine::Claude,
                 cli: lingering(),
                 cwd: rig.dir.clone(),
+                label: None,
                 memory_root: None,
                 cols: 200,
                 rows: 24,
@@ -1065,6 +1149,98 @@ mod tests {
         assert!(rig.run_with(&extra, lingering(), output).is_err());
         rig.terms.stop_all();
         rig.clean();
+    }
+
+    fn start_shell(rig: &Rig, cli: Cli, cwd: PathBuf, output: Output) -> Result<TermInfo, String> {
+        rig.terms.start_shell(cli, "PowerShell", cwd, 200, 24, output)
+    }
+
+    #[test]
+    fn a_shell_tab_is_listed_with_its_label_and_folder_and_leaves_when_it_exits() {
+        let rig = Rig::new("shell");
+        let (output, bytes) = collector();
+        let started = start_shell(&rig, shell("echo hi-from-shell & ping -n 4 127.0.0.1 >nul", "echo hi-from-shell; sleep 3"), rig.dir.clone(), output).unwrap();
+        assert!(started.id.starts_with("shell-") && started.running && started.session_id.is_none());
+        assert_eq!(started.label.as_deref(), Some("PowerShell"));
+        assert_eq!(started.cwd, Some(rig.dir.display().to_string()));
+        assert_eq!(rig.terms.list(), vec![started.clone()]);
+        // A page reload: the same id re-attaches to the running tab, with the new output.
+        let (second, second_bytes) = collector();
+        let again = rig.terms.open(&started.id, 100, 30, None, true, second).unwrap();
+        assert_eq!(again, started);
+        let exits = rig.wait_exits(1);
+        assert_eq!(exits, vec![TermExit { id: started.id.clone(), session_id: None, code: Some(0) }]);
+        assert!(rig.terms.list().is_empty());
+        assert!(text(&bytes).contains("hi-from-shell") || text(&second_bytes).contains("hi-from-shell"));
+        assert_eq!(rig.terms.write(&started.id, b"x"), Err(NOT_RUNNING.to_string()));
+        assert_eq!(rig.terms.open(&started.id, 80, 24, None, true, collector().0).unwrap_err(), NOT_RUNNING);
+        assert!(!rig.dir.join("terminals").join(&started.id).exists());
+        rig.clean();
+    }
+
+    #[test]
+    fn a_shell_tab_has_no_session_variable_and_counts_toward_the_limit() {
+        let rig = Rig::new("shell-env");
+        let (output, bytes) = collector();
+        let echo = shell("echo session=[%HIVEMIND_SESSION%]", "echo session=[$HIVEMIND_SESSION]");
+        let first = start_shell(&rig, echo, rig.dir.clone(), output).unwrap();
+        rig.wait_exits(1);
+        let seen = text(&bytes);
+        assert!(!seen.contains(&first.id), "{seen}");
+        // An agent terminal does get it.
+        let id = rig.session(Some(rig.plain_tree()));
+        let (output, bytes) = collector();
+        rig.run_with(&id, shell("echo session=[%HIVEMIND_SESSION%]", "echo session=[$HIVEMIND_SESSION]"), output).unwrap();
+        rig.wait_exits(2);
+        assert!(text(&bytes).contains(&format!("session=[{id}]")), "{}", text(&bytes));
+        // Shells count toward the limit and close like the others.
+        let mut shells = vec![];
+        for _ in 0..MAX_TERMINALS {
+            shells.push(start_shell(&rig, lingering(), rig.dir.clone(), collector().0).unwrap());
+        }
+        let error = start_shell(&rig, lingering(), rig.dir.clone(), collector().0).unwrap_err();
+        assert_eq!(error, "Close a terminal first: 8 are already running");
+        rig.terms.close(&shells[0].id);
+        rig.wait_exits(3);
+        assert_eq!(rig.terms.list().len(), MAX_TERMINALS - 1);
+        rig.terms.stop_all();
+        rig.clean();
+    }
+
+    #[test]
+    fn a_shell_target_must_name_a_folder_that_exists() {
+        let rig = Rig::new("shell-target");
+        let picked = rig.dir.join("picked");
+        std::fs::create_dir_all(&picked).unwrap();
+        let gone = rig.dir.join("gone");
+        let saved = settings::Settings { other_folders: Some(vec![picked.display().to_string(), gone.display().to_string()]), ..Default::default() };
+        let cwd = |target: ShellTarget, repo: PathBuf| shell_cwd(&target, &rig.agents, &saved, |_, _| Ok(repo));
+        let folder = |path: &Path| ShellTarget::Folder(path.display().to_string());
+        assert_eq!(cwd(folder(&picked), PathBuf::new()), Ok(picked.clone()));
+        assert_eq!(cwd(folder(&rig.dir), PathBuf::new()), Err("That folder was not chosen with the folder picker".to_string()));
+        assert!(cwd(folder(&gone), PathBuf::new()).unwrap_err().starts_with("The folder no longer exists: "));
+        let checkout = ShellTarget::Checkout { project: "p".into(), repo: "r".into() };
+        assert_eq!(cwd(checkout.clone(), picked.clone()), Ok(picked.clone()));
+        assert!(cwd(checkout.clone(), gone.clone()).unwrap_err().starts_with("The folder no longer exists: "));
+        let unregistered = shell_cwd(&checkout, &rig.agents, &saved, |_, _| Err("That repository is not registered for this project".into()));
+        assert_eq!(unregistered, Err("That repository is not registered for this project".to_string()));
+        let tree = rig.plain_tree();
+        let id = rig.session(Some(tree.clone()));
+        assert_eq!(cwd(ShellTarget::Session(id), PathBuf::new()), Ok(PathBuf::from(tree.path)));
+        assert_eq!(cwd(ShellTarget::Session(uuid::Uuid::new_v4().to_string()), PathBuf::new()), Err("Unknown session".to_string()));
+        assert_eq!(cwd(ShellTarget::Session(rig.session(None)), PathBuf::new()), Err("This session has no worktree".to_string()));
+        rig.clean();
+    }
+
+    #[test]
+    fn a_shell_target_reads_its_tagged_form() {
+        assert_eq!(serde_json::from_value::<ShellTarget>(json!({ "session": "a" })).unwrap(), ShellTarget::Session("a".into()));
+        assert_eq!(serde_json::from_value::<ShellTarget>(json!({ "folder": "C:/x" })).unwrap(), ShellTarget::Folder("C:/x".into()));
+        assert_eq!(
+            serde_json::from_value::<ShellTarget>(json!({ "checkout": { "project": "p", "repo": "r" } })).unwrap(),
+            ShellTarget::Checkout { project: "p".into(), repo: "r".into() }
+        );
+        assert!(serde_json::from_value::<ShellTarget>(json!({ "other": "x" })).is_err());
     }
 
     #[test]
