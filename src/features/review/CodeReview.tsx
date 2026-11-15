@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleCheck, CircleX, Ellipsis, GitBranch, LoaderCircle, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import {
-  agentSession, reviewApprove, reviewBase, reviewDiscard, reviewDismiss, reviewFile, reviewRequestChanges, reviewToolOutput, type FileChange, type SessionInfo,
+  agentSession, reviewApprove, reviewBase, reviewDiscard, reviewDismiss, reviewFile, reviewRequestChanges, reviewRequestTerminalChanges, reviewStopAndApprove, reviewToolOutput, type FileChange, type SessionInfo,
 } from "../../lib/agent";
 import { classify } from "../../lib/errors";
 import { openSession } from "../../store";
@@ -12,6 +12,7 @@ import { Confirm, Modal } from "../../ui/Modal";
 import { ArrowLink } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { isEnded, repoName } from "../agents/session";
+import { tabLabel } from "../terminal/tabs";
 import { CodeDiff } from "./CodeDiff";
 import { baseName, directBase, DIRECT_NOTE, EARLIER_NOTE, filesWord, NOT_GIT_NOTE, reviewActions, reviewVersion, sessionHeading } from "./review";
 import { validation, type Check } from "./validation";
@@ -138,13 +139,18 @@ export function ReviewBar({ info, files, title, onDecided }: { info: SessionInfo
   const branch = info.worktree?.branch ?? "its branch";
   const actions = reviewActions(info);
   const sessionsChanged = () => client.invalidateQueries({ queryKey: ["agent", "sessions"] });
+  const terminal = info.interface === "terminal";
   const approve = useMutation({
-    mutationFn: () => reviewApprove(info.id, message),
+    mutationFn: () => (actions.stopAndApprove ? reviewStopAndApprove(info.id, message) : reviewApprove(info.id, message)),
     onSuccess: (sha) => { setDialog(null); sessionsChanged(); toast(`Committed ${sha.slice(0, 7)} on ${branch}`); onDecided(); },
   });
   const request = useMutation({
-    mutationFn: () => reviewRequestChanges(info.id, text),
-    onSuccess: () => { setDialog(null); setText(""); sessionsChanged(); toast("Sent to the session"); },
+    mutationFn: () => (terminal ? reviewRequestTerminalChanges(info.id, text) : reviewRequestChanges(info.id, text)),
+    onSuccess: () => {
+      setDialog(null); setText(""); sessionsChanged();
+      if (terminal) toast("Sent your feedback; the terminal is working on it", "info", { label: "Open terminal", run: () => openSession(info.id) });
+      else toast("Sent to the session");
+    },
   });
   const dismiss = useMutation({
     mutationFn: () => reviewDismiss(info.id),
@@ -159,6 +165,9 @@ export function ReviewBar({ info, files, title, onDecided }: { info: SessionInfo
 
   const working = info.status === "running" || info.status === "waiting";
   const state = info.review?.state;
+  // A running terminal session can be stopped, so it does not block Stop and approve or Request changes.
+  const stoppable = actions.stopAndApprove;
+  const pending = approve.isPending || request.isPending || dismiss.isPending || discard.isPending;
   const off = working || approve.isPending || request.isPending || dismiss.isPending || discard.isPending;
   const ended = isEnded(info);
   const decide = files > 0;
@@ -180,7 +189,8 @@ export function ReviewBar({ info, files, title, onDecided }: { info: SessionInfo
       {decide && (
         <>
           {actions.approve && <button className="primary big" disabled={off} title={why} onClick={() => { approve.reset(); setMessage(title); setDialog("approve"); }}>Approve proposed edits</button>}
-          {actions.requestChanges && <button className="outline" disabled={off || ended} title={why ?? (ended ? "This session has ended. Start a new session to continue." : undefined)}
+          {actions.stopAndApprove && <button className="primary big" disabled={pending} onClick={() => { approve.reset(); setMessage(title); setDialog("approve"); }}>Stop and approve</button>}
+          {actions.requestChanges && <button className="outline" disabled={(off && !stoppable) || pending || (ended && !terminal)} title={(stoppable ? undefined : why) ?? (ended && !terminal ? "This session has ended. Start a new session to continue." : undefined)}
             onClick={() => { request.reset(); setDialog("request"); }}>Request changes</button>}
           {actions.dismiss && state !== "dismissed" && <button className="text" disabled={off} title={why} onClick={() => dismiss.mutate()}>{dismiss.isPending ? "Dismissing…" : "Dismiss"}</button>}
           {actions.discard && (
@@ -191,7 +201,8 @@ export function ReviewBar({ info, files, title, onDecided }: { info: SessionInfo
         </>
       )}
       {dialog === "approve" && (
-        <Modal title="Approve proposed edits" locked={approve.isPending} onClose={() => setDialog(null)}>
+        <Modal title={stoppable ? "Stop and approve" : "Approve proposed edits"} locked={approve.isPending} onClose={() => setDialog(null)}>
+          {stoppable && <p>Stop {tabLabel(info)} and approve its changes?</p>}
           <p>This commits {filesWord(files)} on <code>{branch}</code>. It does not merge or push, and it does not mark the change complete.</p>
           <label className="field">Commit message
             <textarea className="review-message" autoFocus value={message} onChange={(e) => setMessage(e.target.value)} />
@@ -199,18 +210,20 @@ export function ReviewBar({ info, files, title, onDecided }: { info: SessionInfo
           {approve.error && <p className="error">{classify(approve.error).message}</p>}
           <div className="actions">
             <button onClick={() => setDialog(null)} disabled={approve.isPending}>Cancel</button>
-            <button className="primary" disabled={!message.trim() || approve.isPending} onClick={() => approve.mutate()}>{approve.isPending ? "Committing…" : "Commit edits"}</button>
+            <button className="primary" disabled={!message.trim() || approve.isPending} onClick={() => approve.mutate()}>{approve.isPending ? (stoppable ? "Stopping…" : "Committing…") : stoppable ? "Stop and commit edits" : "Commit edits"}</button>
           </div>
         </Modal>
       )}
       {dialog === "request" && (
         <Modal title="Request changes" locked={request.isPending} onClose={() => setDialog(null)}>
-          <p>Your message is sent to the session as its next prompt.</p>
+          <p>{terminal
+            ? "Your comments are saved to a file. The program is stopped if it runs, then continues its conversation and reads the file."
+            : "Your message is sent to the session as its next prompt."}</p>
           <textarea className="review-message" autoFocus placeholder="What should change?" aria-label="What should change?" value={text} onChange={(e) => setText(e.target.value)} />
           {request.error && <p className="error">{classify(request.error).message}</p>}
           <div className="actions">
             <button onClick={() => setDialog(null)} disabled={request.isPending}>Cancel</button>
-            <button className="primary" disabled={!text.trim() || request.isPending} onClick={() => request.mutate()}>{request.isPending ? "Sending…" : "Send to session"}</button>
+            <button className="primary" disabled={!text.trim() || request.isPending} onClick={() => request.mutate()}>{request.isPending ? "Sending…" : terminal ? "Send to terminal" : "Send to session"}</button>
           </div>
         </Modal>
       )}

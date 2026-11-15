@@ -273,30 +273,40 @@ impl Manager {
             }
             return Ok(view);
         };
-        let cwd = session_cwd(&info)?;
-        let mut cli = found?;
+        self.launch(&mut terms, &info, mode, found?, thread, existing, &saved, (cols, rows), output, replay, None)
+    }
+
+    /// Start the program of a session whose terminal map is locked by the caller (`terms`). `feedback` is set only by
+    /// `resume_with`, which holds the session's reservation: the final argument then points the CLI at that file, and the
+    /// reservation is not a reason to refuse.
+    #[allow(clippy::too_many_arguments)] // each argument is one independent part of one start
+    fn launch(
+        &self,
+        terms: &mut Terms,
+        info: &SessionInfo,
+        mode: StartMode,
+        mut cli: Cli,
+        thread: Option<String>,
+        existing: Vec<String>,
+        saved: &settings::Settings,
+        (cols, rows): (u16, u16),
+        output: Output,
+        replay: bool,
+        feedback: Option<&Path>,
+    ) -> Result<TermInfo, String> {
+        let inner = &self.inner;
+        let session_id = info.id.as_str();
+        let engine = Engine::of(&info.adapter);
+        let scrollback_path = inner.scrollback_path(session_id)?;
+        let cwd = session_cwd(info)?;
         let own_dir = session_dir(&inner.dir, session_id)?;
-        let context = own_dir.join("context");
         // Claude reports attention through hooks in a settings file of its own. If it cannot be written the terminal
         // still starts, only without dots and notifications.
         let signals = match engine {
             Engine::Claude => std::env::current_exe().map_err(|e| e.to_string()).and_then(|exe| signal::prepare_claude(&own_dir, &exe)).ok(),
             Engine::Codex => None,
         };
-        cli.args.extend(launch::signal_args(engine, signals.as_deref()));
-        cli.args.extend(launch::session_args(
-            engine,
-            mode,
-            &info.access.unwrap_or_else(|| Access::from_policy(engine, info.policy)),
-            info.model.as_deref(),
-            info.effort.as_deref(),
-            &scope::governed_rules(),
-            info.name.as_deref(),
-            session_id,
-            &context,
-            info.no_task,
-            thread.as_deref(),
-        ));
+        cli.args.extend(start_args(info, mode, signals.as_deref(), &own_dir.join("context"), thread.as_deref(), feedback));
         if replay {
             send_saved(&scrollback_path, &output);
         }
@@ -304,7 +314,7 @@ impl Manager {
         // reservation is checked again in the same step: the check above and this change take the session lock separately,
         // and once the session is running Phase 4 cannot reserve it.
         let before = (info.status, info.ended_at, info.error.clone());
-        inner.agents.amend_unreserved(session_id, RESERVED, |info| {
+        let set_running = |info: &mut SessionInfo| {
             info.status = Status::Running;
             info.ended_at = None;
             info.error = None;
@@ -313,7 +323,12 @@ impl Manager {
                 info.engine_session = None;
                 info.cli_title = None;
             }
-        })?;
+        };
+        if feedback.is_some() {
+            inner.agents.amend(session_id, set_running)?;
+        } else {
+            inner.agents.amend_unreserved(session_id, RESERVED, set_running)?;
+        }
         let run = Run {
             id: session_id.to_string(),
             session_id: Some(session_id.to_string()),
@@ -321,7 +336,7 @@ impl Manager {
             cli,
             cwd,
             label: None,
-            memory_root: settings::resolve(&saved, |k| std::env::var(k).ok()).root,
+            memory_root: settings::resolve(saved, |k| std::env::var(k).ok()).root,
             cols,
             rows,
             scrollback: Scrollback::open(scrollback_path, scrollback::KEEP).ok(),
@@ -329,7 +344,7 @@ impl Manager {
             signal_dir: signals.map(|_| own_dir),
             before: existing,
         };
-        match self.spawn_in(&mut terms, run) {
+        match self.spawn_in(terms, run) {
             Ok(started) => {
                 if let Some(entry) = terms.get(session_id) {
                     inner.watch(entry.shared.clone());
@@ -345,6 +360,55 @@ impl Manager {
                 Err(error)
             }
         }
+    }
+
+    /// Close a session's program and wait up to `timeout` for it to leave. Returns at once when nothing runs. The close
+    /// runs on a thread of its own, so the wait is bounded even when the program ignores the close for a while.
+    pub fn stop(&self, id: &str, timeout: Duration) -> Result<(), String> {
+        if !self.inner.terms.lock().unwrap().contains_key(id) {
+            return Ok(());
+        }
+        let (manager, name) = (self.clone(), id.to_string());
+        std::thread::spawn(move || manager.close(&name));
+        let waited = Instant::now();
+        // The exit handler removes the entry and stores the status under one lock, so a missing entry means the status is set.
+        while self.inner.terms.lock().unwrap().contains_key(id) {
+            if waited.elapsed() >= timeout {
+                return Err(format!("The program did not stop within {} seconds.", timeout.as_secs()));
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        Ok(())
+    }
+
+    /// Start the session's program again in the CLI's resume form, with one more final argument that points it at
+    /// `feedback`. The caller holds the session's reservation (`held`). Nothing is attached to the program yet: its output
+    /// goes to the saved history, and the view shows it when the terminal is opened.
+    pub fn resume_with(&self, id: &str, feedback: &Path, held: &agent::Reservation) -> Result<TermInfo, String> {
+        if held.id() != id {
+            return Err("The reservation is for another session".into());
+        }
+        let inner = &self.inner;
+        let info = inner.agents.info(id)?;
+        if info.interface != Interface::Terminal {
+            return Err("This session is not a terminal session".into());
+        }
+        let engine = Engine::of(&info.adapter);
+        // Before the lock: finding a program and reading the CLI's files can take a while.
+        let saved = settings::load(&inner.settings_path);
+        let cli = launch::program(engine, &saved)?;
+        let thread = match engine {
+            Engine::Codex => inner.known_thread(&info),
+            Engine::Claude => info.engine_session.clone(),
+        };
+        let existing = if engine == Engine::Codex && !inner.home.as_os_str().is_empty() { cli_files::codex_thread_ids(&inner.home, agent::now_ms()) } else { Vec::new() };
+        let mut terms = inner.terms.lock().unwrap();
+        if terms.contains_key(id) {
+            return Err("This terminal is still running".into());
+        }
+        // Nobody looks at it yet; the view fits the program when it attaches.
+        let nobody: Output = Arc::new(|_| false);
+        self.launch(&mut terms, &info, StartMode::Resume, cli, thread, existing, &saved, (120, 30), nobody, false, Some(feedback))
     }
 
     /// The CLI's own conversation file for a terminal session: its engine and path, None while there is no file yet.
@@ -826,6 +890,30 @@ impl Inner {
     }
 }
 
+/// A session terminal's arguments after the launch prefix: attention, then the session's own (section 5.4), then, for a
+/// resume that carries review feedback, the prompt that points the CLI at that file.
+fn start_args(info: &SessionInfo, mode: StartMode, signals: Option<&Path>, context: &Path, thread: Option<&str>, feedback: Option<&Path>) -> Vec<String> {
+    let engine = Engine::of(&info.adapter);
+    let mut args = launch::signal_args(engine, signals);
+    args.extend(launch::session_args(
+        engine,
+        mode,
+        &info.access.unwrap_or_else(|| Access::from_policy(engine, info.policy)),
+        info.model.as_deref(),
+        info.effort.as_deref(),
+        &scope::governed_rules(),
+        info.name.as_deref(),
+        &info.id,
+        context,
+        info.no_task,
+        thread,
+    ));
+    if let Some(file) = feedback {
+        args.push(launch::review_prompt(file));
+    }
+    args
+}
+
 /// Send the saved history as one message; false when the receiver is gone. Nothing is sent when there is none.
 fn send_saved(path: &Path, output: &Output) -> bool {
     let saved = Scrollback::read(path);
@@ -863,6 +951,29 @@ pub fn shell_cwd(
         ShellTarget::Folder(path) => return scope::other_folder(saved, path),
     };
     if folder.is_dir() { Ok(folder) } else { Err(format!("The folder no longer exists: {}", folder.display())) }
+}
+
+/// Write the user's review comments to `<dir>/<session id>/context/review-<n>.md`, n being the next free number from 1, and
+/// return the file's path. The file holds the comments as they are written.
+pub fn write_feedback(dir: &Path, session_id: &str, text: &str) -> Result<PathBuf, String> {
+    let context = session_dir(dir, session_id)?.join("context");
+    std::fs::create_dir_all(&context).map_err(|e| format!("Could not create {}: {e}", context.display()))?;
+    let taken = std::fs::read_dir(&context)
+        .map_err(|e| format!("Could not read {}: {e}", context.display()))?
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_string_lossy().strip_prefix("review-")?.strip_suffix(".md")?.parse::<u32>().ok())
+        .max()
+        .unwrap_or(0);
+    let file = context.join(format!("review-{}.md", taken + 1));
+    std::fs::write(&file, text).map_err(|e| format!("Could not write {}: {e}", file.display()))?;
+    Ok(file)
+}
+
+impl Manager {
+    /// `write_feedback` into this manager's folder.
+    pub fn feedback_file(&self, session_id: &str, text: &str) -> Result<PathBuf, String> {
+        write_feedback(&self.inner.dir, session_id, text)
+    }
 }
 
 /// Write `<dir>/<session id>/context/briefing.md` and return the `context` folder.
@@ -1751,6 +1862,116 @@ mod tests {
         assert!(terminals.join(&kept).is_dir());
         assert!(!terminals.join(&stale).exists());
         assert!(terminals.join("login-claude").is_dir());
+        rig.clean();
+    }
+
+    #[test]
+    fn stop_waits_for_the_program_to_leave() {
+        let rig = Rig::new("stop");
+        let id = rig.session(Some(rig.plain_tree()));
+        assert_eq!(rig.terms.stop(&id, Duration::from_secs(1)), Ok(()));
+        assert_eq!(rig.agents.info(&id).unwrap().status, Status::Idle);
+        rig.run(&id, lingering());
+        assert_eq!(rig.terms.stop(&id, Duration::from_secs(10)), Ok(()));
+        assert!(rig.terms.list().is_empty());
+        let info = rig.agents.info(&id).unwrap();
+        assert_eq!((info.status, info.error), (Status::Ended, None));
+        rig.clean();
+    }
+
+    #[test]
+    fn stop_gives_up_when_the_program_stays() {
+        let rig = Rig::new("stop-late");
+        let id = rig.session(Some(rig.plain_tree()));
+        rig.run(&id, lingering());
+        // The close needs a moment (the program is asked first); no time at all is never enough.
+        assert_eq!(rig.terms.stop(&id, Duration::ZERO), Err("The program did not stop within 0 seconds.".to_string()));
+        rig.wait_exits(1);
+        assert_eq!(rig.agents.info(&id).unwrap().status, Status::Ended);
+        rig.clean();
+    }
+
+    #[test]
+    fn feedback_files_are_numbered_and_hold_the_comments_only() {
+        let dir = std::env::temp_dir().join(format!("hivemind-feedback-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let id = uuid::Uuid::new_v4().to_string();
+        let first = write_feedback(&dir, &id, "Rename `a` to `b`.
+
+- src/x.rs: add a test").unwrap();
+        let context = dir.join(&id).join("context");
+        assert_eq!(first, context.join("review-1.md"));
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "Rename `a` to `b`.
+
+- src/x.rs: add a test");
+        std::fs::write(context.join("briefing.md"), "Briefing").unwrap();
+        std::fs::write(context.join("review-4.md"), "old").unwrap();
+        let next = write_feedback(&dir, &id, "More").unwrap();
+        assert_eq!(next, context.join("review-5.md"));
+        assert!(!std::fs::read_to_string(context.join("review-1.md")).unwrap().contains("Briefing"));
+        assert_eq!(write_feedback(&dir, "../x", "no").unwrap_err(), "Invalid session id");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_resume_with_feedback_ends_with_the_pointer_prompt() {
+        let rig = Rig::new("resume-args");
+        let id = rig.session(Some(rig.plain_tree()));
+        let file = Path::new("C:/data/terminals/x/context/review-2.md");
+        let pointer = format!("Read the file {}. It holds review feedback on your changes.", file.display());
+        let context = Path::new("C:/data/terminals/x/context");
+        let claude = SessionInfo { id: id.clone(), ..Rig::info(&id, None) };
+        let args = start_args(&claude, StartMode::Resume, Some(Path::new("C:/data/signals.json")), context, None, Some(file));
+        assert_eq!(args.last(), Some(&pointer));
+        assert_eq!(&args[..2], ["--settings", "C:/data/signals.json"]);
+        let at = args.iter().position(|a| a == "--resume").unwrap();
+        assert_eq!(args[at + 1], id);
+        // An imported conversation resumes by its own id.
+        let args = start_args(&claude, StartMode::Resume, None, context, Some("conv-1"), Some(file));
+        assert_eq!(args[args.iter().position(|a| a == "--resume").unwrap() + 1], "conv-1");
+        assert_eq!(args.last(), Some(&pointer));
+        // Without feedback nothing is added.
+        assert_ne!(start_args(&claude, StartMode::Resume, None, context, None, None).last(), Some(&pointer));
+
+        let codex = SessionInfo { adapter: "codex".into(), ..claude.clone() };
+        let args = start_args(&codex, StartMode::Resume, None, context, Some("thread-9"), Some(file));
+        let at = args.iter().position(|a| a == "resume").unwrap();
+        assert_eq!(args[at + 1], "thread-9");
+        assert_eq!(args.last(), Some(&pointer));
+        let args = start_args(&codex, StartMode::Resume, None, context, None, Some(file));
+        assert_eq!(args[args.iter().position(|a| a == "resume").unwrap() + 1], "--last");
+        assert_eq!(args.last(), Some(&pointer));
+        assert!(args.contains(&"--no-alt-screen".to_string()));
+        rig.clean();
+    }
+
+    #[test]
+    fn resume_with_starts_the_program_unattached_under_the_reservation() {
+        let rig = Rig::new("resume-with");
+        let id = rig.session(Some(rig.plain_tree()));
+        let other = rig.session(Some(rig.plain_tree()));
+        let file = rig.terms.feedback_file(&id, "Fix it").unwrap();
+        // Another session's reservation is no reason to start this one; nor is none.
+        let wrong = rig.agents.reserve(&other).unwrap();
+        assert_eq!(rig.terms.resume_with(&id, &file, &wrong).unwrap_err(), "The reservation is for another session");
+        drop(wrong);
+        assert!(rig.terms.list().is_empty());
+
+        let held = rig.agents.reserve(&id).unwrap();
+        // `open` still refuses to start it while the reservation is held; `resume_with` is the holder's way in.
+        let (output, _) = collector();
+        assert_eq!(rig.terms.open(&id, 80, 24, Some(StartMode::Resume), false, output.clone()).unwrap_err(), RESERVED);
+        let started = rig.terms.resume_with(&id, &file, &held).unwrap();
+        assert!(started.running);
+        assert_eq!(rig.agents.info(&id).unwrap().status, Status::Running);
+        assert_eq!(rig.terms.resume_with(&id, &file, &held).unwrap_err(), "This terminal is still running");
+        // Its output is saved although nothing is attached; the view attaches later and replays it.
+        wait_for("output saved", || !rig.saved(&id).is_empty());
+        drop(held);
+        let view = rig.terms.open(&id, 80, 24, None, true, output).unwrap();
+        assert!(view.running || rig.agents.info(&id).unwrap().status != Status::Running);
+        rig.terms.close(&id);
+        rig.wait_exits(1);
         rig.clean();
     }
 }

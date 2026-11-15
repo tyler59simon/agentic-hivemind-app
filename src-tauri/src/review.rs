@@ -7,6 +7,7 @@ use crate::agent::{self, Manager, Review, ReviewState, SendOptions, SessionInfo}
 use crate::bridge::Bridge;
 use crate::git::{is_sha, run_captured};
 use crate::settings::Settings;
+use crate::term;
 use crate::worktree::{self, FileChange, Totals, Worktree};
 use serde::Serialize;
 use serde_json::Value;
@@ -401,6 +402,43 @@ pub fn request_changes(agents: &Manager, bridge: &Bridge, saved: &Settings, id: 
     agent::send_task(agents, bridge, saved, id, text, SendOptions::default(), Some(&held))?;
     agents.amend(id, |info| info.review = Some(Review { state: ReviewState::ChangesRequested, commit: None, at: agent::now_ms() }))?;
     Ok(())
+}
+
+/// How long a terminal program gets to leave before a review action gives up on it.
+const STOP_WAIT: Duration = Duration::from_secs(10);
+
+/// A terminal session that works in its own worktree: the only kind Stop and approve and a terminal Request changes act on.
+fn terminal_in_worktree(info: &SessionInfo) -> Result<(), String> {
+    if info.interface != agent::Interface::Terminal {
+        return Err("This is not a terminal session".into());
+    }
+    if info.worktree.is_none() {
+        return Err("Only a terminal session in its own worktree can be approved here".into());
+    }
+    Ok(())
+}
+
+/// Close the terminal's program, wait for it to leave, then commit the session's edits as `approve` does.
+pub fn stop_and_approve(agents: &Manager, terms: &term::Manager, worktrees_dir: &Path, id: &str, message: &str) -> Result<String, String> {
+    terminal_in_worktree(&agents.info(id)?)?;
+    terms.stop(id, STOP_WAIT)?;
+    approve(agents, worktrees_dir, id, message)
+}
+
+/// Request changes for a terminal session: write the comments to a file in its context folder, close the program if it
+/// runs, and start it again in the CLI's resume form with a prompt that points at the file. Returns the file's path.
+pub fn request_terminal_changes(agents: &Manager, terms: &term::Manager, id: &str, text: &str) -> Result<PathBuf, String> {
+    if text.trim().is_empty() {
+        return Err("Write what should change first.".into());
+    }
+    terminal_in_worktree(&agents.info(id)?)?;
+    // A running session cannot be reserved, so the program leaves first.
+    terms.stop(id, STOP_WAIT)?;
+    let held = agents.reserve(id)?;
+    let file = terms.feedback_file(id, text)?;
+    terms.resume_with(id, &file, &held)?;
+    agents.amend(id, |info| info.review = Some(Review { state: ReviewState::ChangesRequested, commit: None, at: agent::now_ms() }))?;
+    Ok(file)
 }
 
 /// The user leaves the edits where they are and takes the session out of the queue.
@@ -940,6 +978,68 @@ mod tests {
         assert_eq!(request_changes(&manager, &bridge, &saved, &id(1), "add a test"), Err("This session has ended".to_string()));
         assert_eq!(manager.info(&id(1)).unwrap().review, None);
         assert!(manager.reserve(&id(1)).is_ok());
+    }
+
+    // ---- terminal sessions ----
+
+    fn terminals(rig: &Rig, agents: &Manager) -> term::Manager {
+        term::Manager::new_in(rig.root.join("terminals"), agents.clone(), rig.root.join("settings.json"), Arc::new(|_| {}), rig.root.join("home"))
+    }
+
+    #[test]
+    fn stop_and_approve_and_terminal_feedback_refuse_other_sessions() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let tree = rig.tree(1);
+        let chat = session(1, Some(tree.clone()));
+        let direct = checkout_session(2, &rig.repo, Direct { path: rig.repo.display().to_string(), repo: Some(rig.repo.display().to_string()), head_sha: None, start_tree: None });
+        let direct = SessionInfo { interface: agent::Interface::Terminal, ..direct };
+        let (manager, _) = rig.manager(&[chat, direct]);
+        let terms = terminals(&rig, &manager);
+        make_edits(&tree);
+        assert_eq!(stop_and_approve(&manager, &terms, &rig.worktrees, &id(1), "msg"), Err("This is not a terminal session".to_string()));
+        assert_eq!(stop_and_approve(&manager, &terms, &rig.worktrees, &id(2), "msg"), Err("Only a terminal session in its own worktree can be approved here".to_string()));
+        assert_eq!(request_terminal_changes(&manager, &terms, &id(1), "fix"), Err("This is not a terminal session".to_string()));
+        assert_eq!(request_terminal_changes(&manager, &terms, &id(2), "fix"), Err("Only a terminal session in its own worktree can be approved here".to_string()));
+        assert_eq!(request_terminal_changes(&manager, &terms, &id(2), " "), Err("Write what should change first.".to_string()));
+        // Nothing was committed or written.
+        assert_eq!(head(Path::new(&tree.path)), head(&rig.repo));
+        assert!(!rig.root.join("terminals").join(id(2)).exists());
+        assert!(manager.reserve(&id(1)).is_ok());
+    }
+
+    #[test]
+    fn stop_and_approve_commits_a_terminal_session_that_is_not_running() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let tree = rig.tree(1);
+        make_edits(&tree);
+        let ended = SessionInfo { interface: agent::Interface::Terminal, status: Status::Ended, ..session(1, Some(tree.clone())) };
+        let (manager, _) = rig.manager(&[ended]);
+        let terms = terminals(&rig, &manager);
+        let commit = stop_and_approve(&manager, &terms, &rig.worktrees, &id(1), "Terminal edits").unwrap();
+        assert_eq!(commit, head(Path::new(&tree.path)));
+        assert_eq!(manager.info(&id(1)).unwrap().review.map(|review| review.state), Some(ReviewState::Approved));
+    }
+
+    #[test]
+    fn terminal_feedback_waits_while_another_action_holds_the_session() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let at_rest = SessionInfo { interface: agent::Interface::Terminal, status: Status::Ended, ..session(1, Some(rig.tree(1))) };
+        let (manager, _) = rig.manager(&[at_rest]);
+        let terms = terminals(&rig, &manager);
+        let held = manager.reserve(&id(1)).unwrap();
+        assert_eq!(request_terminal_changes(&manager, &terms, &id(1), "fix"), Err("A review action is already running for this session".to_string()));
+        assert!(!rig.root.join("terminals").join(id(1)).exists());
+        assert_eq!(manager.info(&id(1)).unwrap().review, None);
+        drop(held);
     }
 
     // ---- sessions in the user's own folder ----

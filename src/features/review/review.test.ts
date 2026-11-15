@@ -63,9 +63,20 @@ describe("review helpers", () => {
     const direct = { path: "C:/code/app", repo: "C:/code/app", headSha: "a".repeat(40), startTree: "b".repeat(40) };
     const own = make("own", { worktree: null, direct, status: "ended" });
     expect(reviewSessions([own, make("none", { worktree: null })], "p", undefined).map((s) => s.id)).toEqual(["own"]);
-    expect(reviewActions(own)).toEqual({ approve: false, requestChanges: false, discard: false, dismiss: true });
-    expect(reviewActions(a)).toEqual({ approve: true, requestChanges: true, discard: true, dismiss: true });
+    expect(reviewActions(own)).toEqual({ approve: false, stopAndApprove: false, requestChanges: false, discard: false, dismiss: true });
+    expect(reviewActions(a)).toEqual({ approve: true, stopAndApprove: false, requestChanges: true, discard: true, dismiss: true });
     expect(proposedFiles([own])).toBe(3);
+  });
+
+  it("a running terminal session in a worktree offers Stop and approve in place of Approve", () => {
+    const running = make("t", { interface: "terminal", status: "running" });
+    expect(reviewActions(running)).toEqual({ approve: false, stopAndApprove: true, requestChanges: true, discard: true, dismiss: true });
+    expect(reviewActions({ ...running, status: "waiting" }).stopAndApprove).toBe(true);
+    // Ended, a terminal session keeps the normal Approve; a running chat session is not a terminal one.
+    expect(reviewActions({ ...running, status: "ended" })).toEqual({ approve: true, stopAndApprove: false, requestChanges: true, discard: true, dismiss: true });
+    expect(reviewActions({ ...running, interface: "chat" }).stopAndApprove).toBe(false);
+    // A terminal session without a worktree has nothing to commit.
+    expect(reviewActions({ ...running, worktree: null }).stopAndApprove).toBe(false);
   });
 
   it("directBase tells what a direct session is compared with", () => {

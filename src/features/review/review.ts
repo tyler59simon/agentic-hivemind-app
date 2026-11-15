@@ -32,11 +32,16 @@ export function directBase(info: SessionInfo): "snapshot" | "head" | "none" | nu
   return !d ? null : d.startTree ? "snapshot" : d.headSha ? "head" : "none";
 }
 
+/** A terminal session in its own worktree whose program still runs: Approve is "Stop and approve" for it. */
+export const runsInWorktree = (info: SessionInfo): boolean =>
+  info.interface === "terminal" && !!info.worktree && (info.status === "running" || info.status === "waiting");
+
 /** Which decisions the Review bar offers. A session in the user's own folder has no branch to commit to or remove, and
- *  no worktree to discard; Dismiss stays. */
-export function reviewActions(info: SessionInfo): { approve: boolean; requestChanges: boolean; discard: boolean; dismiss: boolean } {
+ *  no worktree to discard; Dismiss stays. A running terminal session stops before it is approved. */
+export function reviewActions(info: SessionInfo): { approve: boolean; stopAndApprove: boolean; requestChanges: boolean; discard: boolean; dismiss: boolean } {
   const direct = !!info.direct;
-  return { approve: !direct, requestChanges: !direct, discard: !direct, dismiss: true };
+  const stop = runsInWorktree(info);
+  return { approve: !direct && !stop, stopAndApprove: stop, requestChanges: !direct, discard: !direct, dismiss: true };
 }
 
 /** Changes whenever the worktree's listing can have changed. */
