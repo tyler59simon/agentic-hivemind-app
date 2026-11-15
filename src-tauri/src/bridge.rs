@@ -64,6 +64,9 @@ impl Bridge {
             .env("PYTHONUTF8", "1")
             // The main actor starts the server; each request picks viewer or main.
             .env_remove("LIVING_MEMORY_ACTOR")
+            // Living Memory refuses plan apply and undo when this is set (it marks an agent in a Hivemind terminal); the
+            // user's own actions run here, even when Hivemind itself was started from such a terminal.
+            .env_remove("HIVEMIND_SESSION")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
