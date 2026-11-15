@@ -1,14 +1,19 @@
 // The right pane for one session: the selected file's diff, or what stands in for it.
-import { useQuery } from "@tanstack/react-query";
-import { CircleCheck, CircleX, GitBranch, LoaderCircle, TriangleAlert } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { CircleCheck, CircleX, Ellipsis, GitBranch, LoaderCircle, TriangleAlert } from "lucide-react";
 import { useState } from "react";
-import { agentSession, reviewBase, reviewFile, reviewToolOutput, type FileChange, type SessionInfo } from "../../lib/agent";
+import {
+  agentSession, reviewApprove, reviewBase, reviewDiscard, reviewDismiss, reviewFile, reviewRequestChanges, reviewToolOutput, type FileChange, type SessionInfo,
+} from "../../lib/agent";
 import { classify } from "../../lib/errors";
 import { openSession } from "../../store";
-import { Modal } from "../../ui/Modal";
+import { Menu } from "../../ui/Menu";
+import { Confirm, Modal } from "../../ui/Modal";
 import { ArrowLink } from "../../ui/Page";
+import { toast } from "../../ui/toast";
+import { isEnded } from "../agents/session";
 import { CodeDiff } from "./CodeDiff";
-import { baseName, reviewVersion, sessionHeading } from "./review";
+import { baseName, filesWord, reviewVersion, sessionHeading } from "./review";
 import { validation, type Check } from "./validation";
 
 /** The selected file of a session: its diff and what the agent ran to check its work. */
@@ -113,5 +118,95 @@ export function SessionPane({ info }: { info: SessionInfo }) {
       </p>
       <div><ArrowLink onClick={() => openSession(info.id)}>Open session</ArrowLink></div>
     </div>
+  );
+}
+
+const BUSY = "The session is still working. Wait for the turn to finish, or stop it first.";
+
+/** "3 files proposed · Waiting for your review", the standing warning, and the decisions. */
+export function ReviewBar({ info, files, title, onDecided }: { info: SessionInfo; files: number; title: string; onDecided: () => void }) {
+  const client = useQueryClient();
+  const [dialog, setDialog] = useState<"approve" | "request" | "discard" | null>(null);
+  const [message, setMessage] = useState("");
+  const [text, setText] = useState("");
+  const branch = info.worktree?.branch ?? "its branch";
+  const sessionsChanged = () => client.invalidateQueries({ queryKey: ["agent", "sessions"] });
+  const approve = useMutation({
+    mutationFn: () => reviewApprove(info.id, message),
+    onSuccess: (sha) => { setDialog(null); sessionsChanged(); toast(`Committed ${sha.slice(0, 7)} on ${branch}`); onDecided(); },
+  });
+  const request = useMutation({
+    mutationFn: () => reviewRequestChanges(info.id, text),
+    onSuccess: () => { setDialog(null); setText(""); sessionsChanged(); toast("Sent to the session"); },
+  });
+  const dismiss = useMutation({
+    mutationFn: () => reviewDismiss(info.id),
+    onSuccess: () => { sessionsChanged(); toast("Dismissed. The edits stay in the session's worktree."); onDecided(); },
+    onError: (e) => toast(classify(e).message, "error"),
+  });
+  const discard = useMutation({
+    mutationFn: () => reviewDiscard(info.id),
+    onSuccess: () => { sessionsChanged(); toast("Edits discarded"); onDecided(); },
+    onError: (e) => toast(classify(e).message, "error"),
+  });
+
+  const working = info.status === "running" || info.status === "waiting";
+  const state = info.review?.state;
+  const off = working || approve.isPending || request.isPending || dismiss.isPending || discard.isPending;
+  const ended = isEnded(info);
+  const decide = files > 0;
+  const first = working || decide
+    ? <><strong>{filesWord(files)} proposed</strong> · {working ? "The agent is working" : state === "changes_requested" ? "Changes requested" : state === "dismissed" ? "Dismissed" : "Waiting for your review"}</>
+    : state === "approved" ? <><strong>Approved</strong> · commit {(info.review?.commit ?? "").slice(0, 7)} on {branch}</>
+    : <strong>No proposed edits</strong>;
+  const why = working ? BUSY : undefined;
+
+  return (
+    <footer className="review-bar">
+      <div className="review-bar-text">
+        <span>{first}</span>
+        <span className="review-warning"><TriangleAlert size="1.2em" aria-hidden />Reviewing code does not mark the change complete.</span>
+      </div>
+      {decide && (
+        <>
+          <button className="primary big" disabled={off} title={why} onClick={() => { approve.reset(); setMessage(title); setDialog("approve"); }}>Approve proposed edits</button>
+          <button className="outline" disabled={off || ended} title={why ?? (ended ? "This session has ended. Start a new session to continue." : undefined)}
+            onClick={() => { request.reset(); setDialog("request"); }}>Request changes</button>
+          {state !== "dismissed" && <button className="text" disabled={off} title={why} onClick={() => dismiss.mutate()}>{dismiss.isPending ? "Dismissing…" : "Dismiss"}</button>}
+          <Menu label="More review actions" up align="right" className="icon-menu" button={<Ellipsis size="1.3em" aria-hidden />}>
+            {(close) => <li role="none"><button role="menuitem" className="danger-text" disabled={off} title={why} onClick={() => { close(); setDialog("discard"); }}>Discard edits…</button></li>}
+          </Menu>
+        </>
+      )}
+      {dialog === "approve" && (
+        <Modal title="Approve proposed edits" locked={approve.isPending} onClose={() => setDialog(null)}>
+          <p>This commits {filesWord(files)} on <code>{branch}</code>. It does not merge or push, and it does not mark the change complete.</p>
+          <label className="field">Commit message
+            <textarea className="review-message" autoFocus value={message} onChange={(e) => setMessage(e.target.value)} />
+          </label>
+          {approve.error && <p className="error">{classify(approve.error).message}</p>}
+          <div className="actions">
+            <button onClick={() => setDialog(null)} disabled={approve.isPending}>Cancel</button>
+            <button className="primary" disabled={!message.trim() || approve.isPending} onClick={() => approve.mutate()}>{approve.isPending ? "Committing…" : "Commit edits"}</button>
+          </div>
+        </Modal>
+      )}
+      {dialog === "request" && (
+        <Modal title="Request changes" locked={request.isPending} onClose={() => setDialog(null)}>
+          <p>Your message is sent to the session as its next prompt.</p>
+          <textarea className="review-message" autoFocus placeholder="What should change?" aria-label="What should change?" value={text} onChange={(e) => setText(e.target.value)} />
+          {request.error && <p className="error">{classify(request.error).message}</p>}
+          <div className="actions">
+            <button onClick={() => setDialog(null)} disabled={request.isPending}>Cancel</button>
+            <button className="primary" disabled={!text.trim() || request.isPending} onClick={() => request.mutate()}>{request.isPending ? "Sending…" : "Send to session"}</button>
+          </div>
+        </Modal>
+      )}
+      {dialog === "discard" && info.worktree && (
+        <Confirm title="Discard this session's edits?" action="Discard edits" danger
+          message={`This resets the session's worktree to commit ${reviewBase(info.worktree).slice(0, 7)} and deletes the files the agent created. It cannot be undone.`}
+          onAnswer={(yes) => { setDialog(null); if (yes) discard.mutate(); }} />
+      )}
+    </footer>
   );
 }

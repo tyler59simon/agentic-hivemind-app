@@ -15,9 +15,9 @@ import { systemsForProject } from "../projects/scope";
 import { useCurrentProject, useProject } from "../projects/useProject";
 import { systemsQuery, useSystemProposals } from "../systems/useSystem";
 import { ReviewQueue } from "../work/ReviewQueue";
-import { FilePane, SessionPane } from "./CodeReview";
+import { FilePane, ReviewBar, SessionPane } from "./CodeReview";
 import { LearningReview } from "./LearningReview";
-import { baseName, changeOf, fileKey, reviewLabel, reviewSessions, reviewVersion, sessionHeading, step } from "./review";
+import { afterDecision, baseName, changeOf, fileKey, reviewLabel, reviewSessions, reviewVersion, sessionHeading, step } from "./review";
 import { countLine, kindCounts } from "./worklist";
 
 type Kind = "all" | "code" | "memory" | "architecture" | "learning";
@@ -150,6 +150,9 @@ export function ReviewPage() {
   const loading = !visible.length && !groups.length && (sessions.isLoading || (projectsOn && due.isLoading) || (systemsOn && registry.isLoading));
   const nothing = !loading && !total && !groups.length && !(kind === "learning" && showLearning);
   const memoryRows = showMemory && projectsOn;
+  const info = selected && (selected.type === "file" || selected.type === "session") ? selected.info : null;
+  const infoFiles = info ? lists[groups.findIndex((g) => g.id === info.id)]?.data?.length ?? info.filesChanged?.files ?? 0 : 0;
+  const changeTitle = info && changes.data?.changes.find((c) => c.id === changeOf(info))?.title;
 
   return (
     <div className="page fill-page">
@@ -162,6 +165,7 @@ export function ReviewPage() {
       {loading ? <p className="muted">Loading…</p>
         : nothing ? <p className="muted">Nothing is waiting for you.</p>
         : (
+          <>
           <div className="review">
             <nav className="review-list" aria-label="Items to review" ref={list} onKeyDown={onKeyDown}>
               {showCode && groups.map((g, i) => {
@@ -227,6 +231,9 @@ export function ReviewPage() {
                 </div>
               ) : <div className="review-pane" />}
           </div>
+          {info && <ReviewBar key={info.id} info={info} files={infoFiles} title={changeTitle ?? info.title}
+            onDecided={() => { setPicked(null); go(afterDecision(groups, info.id), { replace: true }); }} />}
+          </>
         )}
       {reviewing && (
         <PlanDialog title={`Update system ${reviewing.system.name}`} applyLabel="Update system"

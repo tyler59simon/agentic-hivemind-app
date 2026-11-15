@@ -676,6 +676,12 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .validation-row code, .review-pane code { font-family: var(--font-mono); font-size: .9em; }
 .tool-output { margin: 0; padding: .8rem; background: var(--bg-code); border: 1px solid var(--border); border-radius: .45rem; font-family: var(--font-mono); font-size: .86rem; overflow: auto; max-height: 60vh; white-space: pre-wrap; overflow-wrap: anywhere; }
 
+.review-bar { display: flex; align-items: center; flex-wrap: wrap; gap: .8rem 1.2rem; border-top: 1px solid var(--border-strong); padding-top: 1rem; flex: none; }
+.review-bar-text { flex: 1; min-width: 16rem; display: flex; flex-direction: column; gap: .3rem; font-size: 1.1rem; }
+.review-warning { display: flex; align-items: center; gap: .6rem; font-size: 1rem; color: #e9def2; }
+.review-warning svg { color: var(--warn); flex: none; }
+.review-message { width: 100%; min-height: 6rem; font: inherit; color: inherit; background: var(--bg-input); border: 1px solid var(--border-strong); border-radius: .45rem; padding: .5rem; resize: vertical; }
+
 /* ---- Architecture canvas ---- */
 .canvas { display: flex; flex-direction: column; height: clamp(20rem, 52vh, 38rem); border: 1px solid #4c3861; border-radius: .6rem; background-color: #1c0a27; background-image: radial-gradient(#3a224c 1px, transparent 1px); background-size: 22px 22px; overflow: hidden; }
 .canvas.full { position: fixed; inset: 0; z-index: 35; height: auto; border-radius: 0; }
