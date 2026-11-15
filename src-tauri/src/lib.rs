@@ -231,6 +231,13 @@ async fn review_discard(state: State<'_, AppState>, session_id: String) -> Resul
     blocking(move || review::discard(&agents, &root, &session_id)).await
 }
 
+/// The full text of one tool result of a session, read back from its raw log.
+#[tauri::command]
+async fn review_tool_output(state: State<'_, AppState>, session_id: String, tool_use_id: String) -> Result<agent::ToolOutput, String> {
+    let agents = state.agents.clone();
+    blocking(move || agents.tool_output(&session_id, &tool_use_id)).await
+}
+
 /// Look at every session's worktree again, so edits made outside a turn are noticed.
 #[tauri::command]
 async fn review_refresh(state: State<'_, AppState>) -> Result<usize, String> {
@@ -377,7 +384,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_remove_worktree, repo_branches,
-            agent_cancel, agent_sessions, agent_session, review_files, review_file, review_approve, review_request_changes, review_dismiss, review_discard, review_refresh
+            agent_cancel, agent_sessions, agent_session, review_files, review_file, review_approve, review_request_changes, review_dismiss, review_discard, review_tool_output, review_refresh
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

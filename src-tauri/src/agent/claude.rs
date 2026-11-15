@@ -35,13 +35,16 @@ fn input_summary(input: Option<&Value>) -> String {
 }
 
 /// A tool result's content is a string, or a list of blocks of which the text ones matter.
-fn result_summary(content: Option<&Value>) -> String {
-    let text = match content {
+fn result_text(content: Option<&Value>) -> String {
+    match content {
         Some(Value::String(text)) => text.clone(),
         Some(Value::Array(parts)) => parts.iter().filter_map(|part| text_of(part, "text")).collect::<Vec<_>>().join("\n"),
         _ => String::new(),
-    };
-    clip(&text, RESULT_SUMMARY)
+    }
+}
+
+fn result_summary(content: Option<&Value>) -> String {
+    clip(&result_text(content), RESULT_SUMMARY)
 }
 
 fn failure(subtype: &str, result: Option<&str>) -> String {
@@ -307,6 +310,15 @@ impl Adapter for ClaudeCode {
             _ => None,
         }
     }
+
+    fn tool_result(&self, line: &str, tool_use_id: &str) -> Option<(bool, String)> {
+        let value: Value = serde_json::from_str(line).ok()?;
+        if text_of(&value, "type") != Some("user") {
+            return None;
+        }
+        let block = blocks(&value).find(|block| text_of(block, "type") == Some("tool_result") && text_of(block, "tool_use_id") == Some(tool_use_id))?;
+        Some((block.get("is_error").and_then(Value::as_bool) != Some(true), result_text(block.get("content"))))
+    }
 }
 
 /// The CLI to launch: the saved path, else the native installer's place, else `claude` on PATH.
@@ -403,6 +415,22 @@ mod tests {
         );
         // A plain-text user message has no blocks to report.
         assert!(parse(r#"{"type":"user","message":{"role":"user","content":"hello"}}"#).is_empty());
+    }
+
+    #[test]
+    fn tool_result_gives_the_whole_text() {
+        let long = "é".repeat(700);
+        let line = json!({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "toolu_01", "content": long},
+            {"type": "tool_result", "tool_use_id": "toolu_02", "content": "No such file", "is_error": true},
+        ]}})
+        .to_string();
+        assert_eq!(ClaudeCode.tool_result(&line, "toolu_02"), Some((false, "No such file".to_string())));
+        assert_eq!(ClaudeCode.tool_result(&line, "toolu_01"), Some((true, long)));
+        assert_eq!(ClaudeCode.tool_result(&line, "toolu_09"), None);
+        let assistant = r#"{"type":"assistant","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"x"}]}}"#;
+        assert_eq!(ClaudeCode.tool_result(assistant, "toolu_01"), None);
+        assert_eq!(ClaudeCode.tool_result("not json", "toolu_01"), None);
     }
 
     #[test]

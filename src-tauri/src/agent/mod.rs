@@ -34,6 +34,7 @@ const LIMIT: &str = "3 agent sessions are already working; wait for one to finis
 const STOPPED: &str = "The agent process has stopped";
 const STDERR_LINES: usize = 5;
 const TITLE: usize = 60;
+const MAX_OUTPUT: usize = 400_000; // characters of one tool result that `tool_output` returns
 const RESERVED: &str = "A review action is running for this session";
 const BUSY: &str = "This session is busy";
 const ALREADY_RESERVED: &str = "A review action is already running for this session";
@@ -59,6 +60,10 @@ pub trait Adapter: Send + Sync {
     fn mode_line(&self, mode: PolicyMode) -> String;
     /// The permission mode the CLI says it is in now, when the line reports one.
     fn mode_of(&self, line: &str) -> Option<PolicyMode>;
+    /// The whole text and the outcome of the tool result with this id, when the line carries it.
+    fn tool_result(&self, _line: &str, _tool_use_id: &str) -> Option<(bool, String)> {
+        None
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -142,6 +147,15 @@ pub fn review_after_turn(review: Option<Review>, before: Option<&Totals>, after:
         }
         _ => review,
     }
+}
+
+/// The full text of one tool result, read back from the raw log.
+#[derive(Serialize, Debug, PartialEq)]
+pub struct ToolOutput {
+    pub text: String,
+    pub ok: bool,
+    /// The text was longer than MAX_OUTPUT characters; its end is kept.
+    pub truncated: bool,
 }
 
 /// What `agent_start` may be told besides the task and the prompt.
@@ -783,6 +797,23 @@ impl Manager {
         drop(sessions);
         (inner.sink)(Emit::SessionsChanged);
         Ok(info)
+    }
+
+    /// The full text of one tool result, read back from the raw log. The summary in the event is clipped from the start; a
+    /// test run's totals are at the end, so only the end of a very long result is kept.
+    pub fn tool_output(&self, id: &str, tool_use_id: &str) -> Result<ToolOutput, String> {
+        self.info(id)?;
+        let records = store::read_log(&self.inner.dir, id)?;
+        let found = records.iter().rev().find_map(|record| match record {
+            Record::Raw { raw, .. } => self.inner.adapter.tool_result(raw, tool_use_id),
+            Record::Event { .. } => None,
+        });
+        let (ok, text) = found.ok_or("That tool call has no result in this session's log")?;
+        let length = text.chars().count();
+        if length <= MAX_OUTPUT {
+            return Ok(ToolOutput { text, ok, truncated: false });
+        }
+        Ok(ToolOutput { text: text.chars().skip(length - MAX_OUTPUT).collect(), ok, truncated: true })
     }
 
     /// Reserve a session for one review action: it must not be mid-turn or already reserved.
@@ -1428,6 +1459,9 @@ mod tests {
         }
         fn mode_of(&self, line: &str) -> Option<PolicyMode> {
             ClaudeCode.mode_of(line)
+        }
+        fn tool_result(&self, line: &str, id: &str) -> Option<(bool, String)> {
+            ClaudeCode.tool_result(line, id)
         }
     }
 
@@ -2263,6 +2297,33 @@ mod tests {
         assert_eq!(rig.manager.set_policy(&started.id, PolicyMode::PreApproved).unwrap_err(), "Unknown policy");
         rig.manager.end(&started.id).unwrap();
         assert_eq!(rig.manager.set_policy(&started.id, PolicyMode::Ask).unwrap_err(), "This session has ended");
+    }
+
+    #[test]
+    fn tool_output_is_read_from_the_log() {
+        let rig = Rig::printing("tool-output", &WORK);
+        let started = rig.start(None).unwrap();
+        rig.finish(&started.id);
+        assert_eq!(
+            rig.manager.tool_output(&started.id, "toolu_01"),
+            Ok(ToolOutput { text: "print('hi') # 100% <ok> | done".into(), ok: true, truncated: false })
+        );
+        assert_eq!(
+            rig.manager.tool_output(&started.id, "toolu_99"),
+            Err("That tool call has no result in this session's log".to_string())
+        );
+        assert_eq!(rig.manager.tool_output("../index", "toolu_01"), Err("Invalid session id".to_string()));
+        assert_eq!(rig.manager.tool_output("00000000-0000-4000-8000-000000000009", "toolu_01"), Err("Unknown session".to_string()));
+
+        // A result above MAX_OUTPUT keeps its end.
+        let long = format!("{}{}", "a".repeat(10), "é".repeat(MAX_OUTPUT));
+        let line = json!({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_07", "content": long, "is_error": true}]}}).to_string();
+        let big = Rig::printing("tool-output-big", &[line.as_str()]);
+        let started = big.start(None).unwrap();
+        big.finish(&started.id);
+        let output = big.manager.tool_output(&started.id, "toolu_07").unwrap();
+        assert_eq!((output.ok, output.truncated, output.text.chars().count()), (false, true, MAX_OUTPUT));
+        assert!(output.text.chars().all(|c| c == 'é'));
     }
 
     #[test]

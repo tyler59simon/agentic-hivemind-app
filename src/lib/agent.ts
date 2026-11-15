@@ -81,6 +81,7 @@ export const reviewDismiss = (sessionId: string) => invoke<void>("review_dismiss
 export const reviewDiscard = (sessionId: string) => invoke<void>("review_discard", { sessionId });
 /** Have Rust look at every session's worktree again; resolves to how many sessions changed. */
 export const reviewRefresh = () => invoke<number>("review_refresh");
+export const reviewToolOutput = (sessionId: string, toolUseId: string) => invoke<ToolOutput>("review_tool_output", { sessionId, toolUseId });
 
 /** The commit a session's proposed edits are compared with. */
 export const reviewBase = (w: Worktree) => w.reviewedSha ?? w.baseSha;
