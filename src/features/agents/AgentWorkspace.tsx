@@ -21,7 +21,7 @@ import { noteQuery } from "../viewer/NoteView";
 import { ApprovalCard, Composer, FilesCard, RemoveWorktree } from "./Chat";
 import { apply, build, cost, duration, EMPTY, merge, type Finished, type Item, type Transcript as State } from "./events";
 import { filesWord, reviewLabel } from "../review/review";
-import { ALLOWED_NOTE, CODEX_ALLOWED_NOTE, CODEX_COST_NOTE, CODEX_MODE_NOTE, codexPermissionLines, engineLabel, isCodex, isEnded, permissionLines, POLICIES, repoName, waitingForReview } from "./session";
+import { ALLOWED_NOTE, CODEX_ALLOWED_NOTE, CODEX_COST_NOTE, CODEX_MODE_NOTE, codexPermissionLines, engineLabel, isCodex, resumeCommand, isEnded, permissionLines, POLICIES, repoName, waitingForReview } from "./session";
 import { useSessionDraft } from "./draft";
 import { StartSession } from "./StartSession";
 import { accessLabel, latestOf, whereLabel } from "../terminal/tabs";
@@ -216,7 +216,7 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
   const project = registry.data?.projects.find((p) => p.slug === info.project);
   const ended = isEnded(info);
   const files = info.filesChanged?.files ?? 0;
-  const resume = `claude --resume ${info.id}`;
+  const resume = resumeCommand(info);
   const refresh = () => client.invalidateQueries({ queryKey: ["agent", "sessions"] });
   const end = () => agentEnd(info.id).then(refresh).catch((e) => toast(String(e), "error"));
   return (
@@ -254,7 +254,7 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
       <div className="rail-actions">
         {!ended && <button className="danger-text" onClick={() => (info.status === "idle" ? end() : setAsking("end"))}>End session</button>}
         <RemoveWorktree info={info} />
-        {ended && (
+        {ended && resume && (
           <button className="outline" title={`Continue this conversation in a terminal: ${resume}`}
             onClick={() => navigator.clipboard.writeText(resume).then(() => toast("Resume command copied"), () => toast(resume))}>Copy resume command</button>
         )}
@@ -290,7 +290,7 @@ function Session({ id }: { id: string }) {
   if (log.error || !info) return <p className="error pad">{String(log.error ?? "This session is no longer in the history.")}</p>;
   const running = info.status === "running" && !state.finished;
   const status = state.finished?.status ?? info.status;
-  const resume = `claude --resume ${info.id}`;
+  const resume = resumeCommand(info);
   const passport = info.task.kind === "system_passport" ? info.task : null;
   const system = passport ? systems.data?.systems.find((s) => s.slug === passport.slug) : undefined;
   const work = info.task.kind === "work" ? info.task : null;
@@ -331,8 +331,8 @@ function Session({ id }: { id: string }) {
             <p className="muted small">Anything outside the allowed list is refused and shown in the transcript.</p>
           </Section>
           <div className="rail-actions">
-            <button className="outline" title={`Continue this conversation in a terminal: ${resume}`}
-              onClick={() => navigator.clipboard.writeText(resume).then(() => toast("Resume command copied"), () => toast(resume))}>Copy resume command</button>
+            {resume && <button className="outline" title={`Continue this conversation in a terminal: ${resume}`}
+              onClick={() => navigator.clipboard.writeText(resume).then(() => toast("Resume command copied"), () => toast(resume))}>Copy resume command</button>}
             {running && <button className="danger-text" onClick={() => agentCancel(info.id).catch((e) => toast(String(e), "error"))}>Stop session</button>}
           </div>
         </aside>

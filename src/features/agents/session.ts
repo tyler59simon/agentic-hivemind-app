@@ -118,6 +118,13 @@ export function codexPermissionLines(policy: Policy): string[] {
     : ["File edits require review", "Commands ask unless Codex trusts them as read-only"];
 }
 export const CODEX_ALLOWED_NOTE = "Codex decides which commands are safe to run without asking. Codex has no “Always allow”.";
+/** The Start screen's help for a permission choice, in the engine's words. */
+export const policyHelp = (policy: Policy, codex: boolean) =>
+  codex ? codexPermissionLines(policy).join(". ") + "." : POLICIES.find((p) => p.id === policy)?.help;
+
+/** The command that continues a chat session's conversation in a terminal; null for a Codex session with no thread yet. */
+export const resumeCommand = (s: Pick<SessionInfo, "adapter" | "id" | "engineSession">): string | null =>
+  isCodex(s) ? (s.engineSession ? `codex resume ${s.engineSession}` : null) : `claude --resume ${s.id}`;
 
 /** The first line of a transcript: the program the session runs. */
 export const engineLabel = (s: Pick<SessionInfo, "adapter">) => (isCodex(s) ? "Codex" : "Claude Code");

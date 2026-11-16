@@ -131,6 +131,8 @@ pub struct CodexDriver {
     pending_turn: Option<u64>,
     /// A message sent before the thread was open, written as `turn/start` once it is.
     kept: Option<String>,
+    /// Stop was pressed before the turn had an id: `turn/interrupt` is written as soon as `turn/started` names it.
+    stop_asked: bool,
     items: HashMap<String, Item>,
     /// Approval requests not yet answered, in the order they arrived: item id and the server's request id.
     open: Vec<(String, Value)>,
@@ -151,6 +153,7 @@ impl CodexDriver {
             next_id: FIRST_TURN_ID,
             pending_turn: None,
             kept: None,
+            stop_asked: false,
             items: HashMap::new(),
             open: Vec::new(),
             last_text: None,
@@ -166,6 +169,7 @@ impl CodexDriver {
         self.next_id = FIRST_TURN_ID;
         self.pending_turn = None;
         self.kept = None;
+        self.stop_asked = false;
         self.items.clear();
         self.open.clear();
         self.last_text = None;
@@ -222,7 +226,14 @@ impl CodexDriver {
     /// as the reason; otherwise `turn/started` follows.
     fn turn_replied(&mut self, value: &Value) -> Step {
         self.pending_turn = None;
-        let Some(error) = value.get("error") else { return Step::default() };
+        let Some(error) = value.get("error") else {
+            // The reply names the turn, and on 0.169.0 it can come before `turn/started`: a Stop in between can be sent at once.
+            if let Some(turn) = value.pointer("/result/turn/id").and_then(Value::as_str) {
+                self.turn = Some(turn.to_string());
+            }
+            return self.stop_if_asked();
+        };
+        self.stop_asked = false;
         let reason = error_message(error, "Codex did not accept the message");
         let events = self.close_requests();
         self.state = State::Ready;
@@ -331,6 +342,17 @@ impl CodexDriver {
         self.open.push((item.to_string(), id.clone()));
     }
 
+    /// A Stop pressed before the turn had an id, written now that it has one. Only what is written depends on it.
+    fn stop_if_asked(&mut self) -> Step {
+        match (self.stop_asked, self.thread.clone(), self.turn.clone()) {
+            (true, Some(thread), Some(turn)) => {
+                self.stop_asked = false;
+                Step { write: vec![self.client_request("turn/interrupt", json!({"threadId": thread, "turnId": turn}))], ..Step::default() }
+            }
+            _ => Step::default(),
+        }
+    }
+
     fn turn_started(&mut self, params: &Value) -> Step {
         self.state = State::Turn;
         self.pending_turn = None;
@@ -339,7 +361,7 @@ impl CodexDriver {
         self.last_text = None;
         self.last_answer = None;
         self.declined = 0;
-        Step::default()
+        self.stop_if_asked()
     }
 
     fn item_started(&mut self, item: &Value) -> Step {
@@ -426,6 +448,7 @@ impl CodexDriver {
         };
         self.state = State::Ready;
         self.turn = None;
+        self.stop_asked = false;
         self.items.clear();
         self.last_text = None;
         self.declined = 0;
@@ -507,12 +530,16 @@ impl Driver for CodexDriver {
         }
     }
 
+    /// Stops the running turn. A turn that is asked for but has no id yet (the handshake, or `turn/start` not yet
+    /// answered) is stopped as soon as Codex names it.
     fn interrupt(&mut self) -> Option<String> {
-        if self.state != State::Turn {
-            return None;
+        if let (State::Ready | State::Turn, Some(thread), Some(turn)) = (self.state, self.thread.clone(), self.turn.clone()) {
+            return Some(self.client_request("turn/interrupt", json!({"threadId": thread, "turnId": turn})));
         }
-        let (thread, turn) = (self.thread.clone()?, self.turn.clone()?);
-        Some(self.client_request("turn/interrupt", json!({"threadId": thread, "turnId": turn})))
+        if self.kept.is_some() || self.pending_turn.is_some() {
+            self.stop_asked = true;
+        }
+        None
     }
 
     /// Changing the approval policy of a running thread was not verified.
@@ -877,6 +904,33 @@ pub(super) mod tests {
         assert!(d.interrupt().is_none());
         let mut d = ready();
         assert!(d.interrupt().is_none());
+        assert!(d.read(TURN_STARTED).write.is_empty(), "no Stop was asked for");
+    }
+
+    #[test]
+    fn a_stop_before_the_turn_has_an_id_is_sent_when_codex_names_it() {
+        // Stop during the handshake: the kept message starts a turn, and turn/started brings the interrupt.
+        let mut d = driver(PolicyMode::Ask, None);
+        d.note(&RunEvent::ProcessStarted { resume: false });
+        d.open();
+        d.send("hi");
+        assert!(d.interrupt().is_none());
+        d.read(INIT_RESULT);
+        d.read(THREAD_RESULT);
+        let step = d.read(TURN_STARTED);
+        assert!(step.events.is_empty());
+        let [line] = &step.write[..] else { panic!("{:?}", step.write) };
+        let line = json_of(line);
+        assert_eq!((line["method"].as_str(), line["params"]["turnId"].as_str()), (Some("turn/interrupt"), Some(TURN)));
+
+        // Stop after turn/start was written: the reply names the turn first, and the interrupt goes out with it, once.
+        let mut d = ready();
+        d.send("hi");
+        assert!(d.interrupt().is_none());
+        let reply = TURN_START_REPLY.replace(r#""id":21"#, r#""id":3"#);
+        let [line] = &d.read(&reply).write[..] else { panic!("the reply should carry the interrupt") };
+        assert_eq!(json_of(line)["method"], "turn/interrupt");
+        assert!(d.read(TURN_STARTED).write.is_empty());
     }
 
     #[test]
