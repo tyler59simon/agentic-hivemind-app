@@ -978,6 +978,20 @@ Without row 9 a replay could not tell row 11 from a stray reply, and would stay 
 | Plugins (`--plugin-dir`), `--json-schema`, allow rules | None | Not used; Codex is only offered for `work` tasks. |
 | Text deltas | `item/agentMessage/delta` | Ignored (decision D11). The whole text arrives with `item/completed`. |
 
+### 4.12 Part C against the code after PRs #10 to #15 (2026-11-16)
+
+This section was written after Parts A and B (PR #10) and terminal-parity PRs #11 to #15 merged. Where it and the rest of Part C disagree, this section wins.
+
+1. **`engine_session` exists.** `SessionInfo.engine_session` (`agent/mod.rs`, `#[serde(default)]`, `engineSession` in `src/lib/agent.ts`) was added for terminal sessions. It holds the Claude conversation id or the Codex thread id, and the old-index tests are in `agent/store.rs`. Commit 10 does not add it. For a chat session, the pump stores `Step.engine_session` in it; `session_info` still starts it at `None`.
+2. **The terminal transcript reads Claude lines.** `term/transcript.rs` calls `ClaudeCode.parse_line` through the `Adapter` trait. When the per-line methods leave the trait, `parse_line` stays a `pub(crate)` free function in `claude.rs`, and `transcript.rs` calls `claude::parse_line`. The other seven become private as planned.
+3. **Three callers of `events_of`.** Besides `Inner::record` and `Manager::session`, `Inner::fold` calls it; `fold` is where `Session.tape` is filled lazily for a session loaded from disk. `step_of` replaces `events_of` in all three, and `fold` is where `Session.driver` is rebuilt for a loaded session.
+4. **Manager signatures.** `start_task` takes `terminals: &Path` and has folder, checkout and direct branches; a Codex chat session is the worktree chat branch only (a chat session always works in a worktree, `place_of`). `Manager::send` takes `held: Option<&Reservation>` (review), and `Session` has `reserved`; Part C keeps both unchanged. `start_task` and `send_task` call `claude::available(saved)` for chat; for Codex they call `crate::term::launch::program(Engine::Codex, saved)` and use its `Cli { program, args }` as `Launch.program` and `Launch.program_args`. `Launch` also has `memory_root` now.
+5. **Permissions stay `PolicyMode`.** Terminal sessions carry `Access` (`agent/access.rs`), and `check_launch_options` refuses `access` for a chat session ("Permission modes and effort are for terminal sessions."). `Access::Codex` has no `untrusted` approval, and `Access::from_policy(Codex, Ask)` gives `read-only` with `on-request`, which would not put each command and patch in front of the user. So a Codex chat session maps its `PolicyMode` to app-server parameters with section 5.10's table (Ask: `untrusted` and `workspace-write`; AcceptEdits: `on-request` and `workspace-write`), and `Access` is not used for chat.
+6. **Model.** `check_launch_options` checks a chat model against `models::list(Engine::Claude, …)`. For Codex chat it checks against `models::list(Engine::Codex, saved)`, only when a model was given (that list comes from running Codex). `thread/start` gets `model` when the user picked one, and leaves it out otherwise.
+7. **Environment.** The recording in section 5.8.1 shows the user's Codex hooks (Living Memory's included) run inside `app-server`. `Codex::command` sets `LIVING_MEMORY_ROOT` from `Spec.memory_root`, as `claude.rs` does, and `HIVEMIND_SESSION` to the session id, as `term::launch::environment` does for a terminal, so the Living Memory guard refuses plan `apply` and `undo` in a Codex chat too. The driver's own decline of governed commands (section 5.10) stays.
+8. **`thread/resume`.** Send `{"threadId": T, "excludeTurns": true, "cwd": <worktree>, "approvalPolicy": …, "sandbox": …}` (section 5.8.1). Hivemind replays its own log, so it never asks for the turns.
+9. **Two agent messages per turn.** On 0.169.0 a turn can have a `commentary` agent message before its tools and a `final_answer` after them, and both carry the same item id. Each non-blank one gives a `text` event; the driver must not drop the second as a repeat of the first id. `Outcome.result` is the last `final_answer` text, else the last agent message text.
+
 ---
 
 ## 5. Verified external contracts
@@ -1291,6 +1305,20 @@ Facts a client must handle:
 - `ephemeral: true` on `thread/start` avoids writing a session file (`"path":null` in run `d3`).
 - Not verified: the decisions `cancel`, `acceptForSession`, `acceptWithExecpolicyAmendment`; the requests `item/permissions/requestApproval`, `item/tool/requestUserInput` and MCP elicitation; the `thread/resume` parameters (the call was verified, its JSON is not quoted in the spike).
 - `codex app-server generate-json-schema --out DIR` writes the protocol's JSON Schema for the installed version (321 files for 0.166.0). It only writes files into `DIR`.
+
+### 5.8.1 Re-recorded on 0.169.0 (2026-11-16)
+
+Every case above was recorded again on codex-cli 0.169.0 in one process (a non-ephemeral thread with `untrusted` and `workspace-write`, the user's default model, `effort: low`), then `thread/resume` in a second process. The lines are in `docs/plans/spikes/codex-app-server-0.169.0.jsonl`, one `{"dir": "->" | "<-" | "##", "line": …}` per line, with private paths replaced and hook, account and remote-control lines reduced to their method; use them as the test fixtures of commit 11. What changed from 0.166.0:
+
+- Same: the handshake, `thread/start` reply shape (`result.thread.id`, `result.thread.cliVersion`, `result.model`), command and patch approval requests and their `accept` and `decline` replies, `serverRequest/resolved`, declined items (`status: "declined"`, `exitCode: null`), `turn/interrupt` (reply `{}` then `turn/completed` `interrupted`), and the failed turn (`error` with `willRetry: false`, then `turn/completed` `failed` with `turn.error.message`). Every field the driver reads in section 5.10 is still there.
+- New item types `userMessage` (Codex echoes the prompt) and `reasoning`: no event.
+- New notifications, all giving no event: `hook/started` and `hook/completed` (the user's Codex hooks run for `sessionStart`, `userPromptSubmit`, `preToolUse` and `stop`), `remoteControl/status/changed`, `thread/started`, `warning`, `deprecationNotice`, `thread/goal/cleared`.
+- Two `agentMessage` items in one turn with the same id: `phase: "commentary"` before the tools, `phase: "final_answer"` at the end (section 4.12 item 9).
+- The reply to `turn/start` can arrive after `turn/started`.
+- `commandExecution` items gain `processId`, `scriptPath`, `source` and `pluginId`; the approval request gains `environmentId`.
+- U8 (a) holds: `ThreadResumeParams` requires only `threadId` and also takes `cwd`, `approvalPolicy`, `sandbox`, `model` and `excludeTurns`. Without `excludeTurns: true` the server sends `deprecationNotice` "Full-history hydration is deprecated for paginated threads; use `excludeTurns: true` …" and returns the whole history. The reply has `thread` and `model` like `thread/start`'s.
+- U8 (c) is true: `thread/start` with a `cwd` and `workspace-write` added `[projects.'<cwd>']` with `trust_level = "trusted"` to `~/.codex/config.toml`. Report it to the user as a side effect; the code does not change.
+- U8 (b) was not exercised (no request Hivemind cannot answer came up) and stays UNVERIFIED.
 
 ### 5.9 Part C go/no-go check
 
@@ -1885,13 +1913,15 @@ export function RemoveWorktree({ info }: { info: SessionInfo }): JSX.Element;
   - the `ProcessStarted` record: written by `start` and by a resuming `send` right after `spawn`, when `adapter.marks_process_start()`;
   - `Session.driver`, `step_of` in place of `events_of`, and the pump, `start`, `send`, `answer`, `interrupt`, `set_policy` and `session` changes listed in section 4.11;
   - `Inner.claude` and `Inner.codex`; `Manager::new(dir, claude, codex, sink)`; Phase 4's `tool_output` picks the session's adapter;
-  - `engine_session` on `SessionInfo` (`None` in `session_info`);
+  - `engine_session` on `SessionInfo` already exists (section 4.12 item 1); the pump fills it for a chat session;
   - Phase 2's `Launch` and `Spec` each gain `pub program_args: Vec<String>` (empty for Claude Code; `codex.js` for the `node` form), and `spawn` copies it from one to the other;
-  - `start_task` for `Engine::Codex` with `Interface::Chat`: `let cli = crate::term::launch::codex(saved)?;`, the Codex adapter's name in `session_info`, `Launch { scope, program: cli.program, program_args: cli.args, budget_usd }`, `model: None`. `send_task` picks the program the same way from `Engine::of(&info.adapter)`;
+  - `start_task` for `Engine::Codex` with `Interface::Chat`: `let cli = crate::term::launch::program(Engine::Codex, saved)?;`, the Codex adapter's name in `session_info`, `Launch { scope, program: cli.program, program_args: cli.args, budget_usd, memory_root }`; the model as section 4.12 item 6 says. `send_task` picks the program the same way from `Engine::of(&info.adapter)`;
+  - `check_launch_options`: a Codex chat model is checked against the Codex list (section 4.12 item 6);
   - `pub const CODEX_CHAT: bool = true;`.
 - `src-tauri/src/agent/events.rs`: the `RunEvent::ProcessStarted { resume: bool }` variant (section 4.11); extend Phase 2's test `events_serialise_in_the_contract_shape` with `{"type":"processStarted","resume":true}`.
 - `src/lib/agent.ts`: `| { type: "processStarted"; resume: boolean }` in `RunEvent`. `src/features/agents/events.ts` is not changed; add one case to its test: a `processStarted` event advances `next` and adds no item.
-- `src-tauri/src/agent/claude.rs`: `ClaudeDriver` (section 4.11). `ClaudeCode` keeps `name`, `command` and `tool_result` and gains `driver`. Phase 2's eight per-line functions become private functions of the module, called by the driver. `const GOVERNED` becomes `pub(crate)`.
+- `src-tauri/src/agent/claude.rs`: `ClaudeDriver` (section 4.11). `ClaudeCode` keeps `name`, `command` and `tool_result` and gains `driver`. Phase 2's eight per-line functions become functions of the module, called by the driver: `parse_line` is `pub(crate)` for `term/transcript.rs` (section 4.12 item 2), the other seven are private. `const GOVERNED` becomes `pub(crate)`.
+- `src-tauri/src/term/transcript.rs`: `claude::parse_line(line)` in place of `ClaudeCode.parse_line(line)`; drop the `Adapter` import if nothing else uses it.
 - `src-tauri/src/agent/codex.rs` (new):
 
 ```rust
@@ -1901,6 +1931,7 @@ impl Adapter for Codex {
     fn name(&self) -> &'static str { "codex" }
     /// `<program> [program_args] app-server` in the worktree. Never `daemon`, `proxy` or `--listen`.
     /// No budget flag, no model flag, no allow rules: none of them exist for Codex.
+    /// Environment: `LIVING_MEMORY_ROOT` from `spec.memory_root` and `HIVEMIND_SESSION` = the session id (section 4.12 item 7).
     fn command(&self, spec: &Spec) -> Command;
     fn driver(&self, cwd: &Path, policy: PolicyMode, engine_session: Option<&str>) -> Box<dyn Driver>;
     /// For an `item/completed` line of a `commandExecution` item with this id:
@@ -1919,9 +1950,9 @@ pub fn agent_version(user_agent: &str) -> Option<(u32, u32, u32)>;
 ```
 
 - `src-tauri/src/lib.rs`, anchor `let agents = agent::Manager::new(`: pass `Arc::new(agent::codex::Codex)` as the second adapter.
-- `src/features/agents/AgentWorkspace.tsx`: in the interactive rail of a Codex session, under Phase 2's "Duration" row, the muted line of section 4.11 about cost. In `Toolbar`, the permissions `<select>` is `disabled` for a Codex session (section 4.11).
+- `src/features/agents/AgentWorkspace.tsx`: under the "Duration" row of `InteractiveRail` and of the unattended rail, for a Codex session, the muted line of section 4.11 about cost. In `Toolbar`, the chat branch's permissions `<select>` is `disabled` for a Codex session (section 4.11); the terminal branch's access label is unchanged.
 - `src/features/agents/Chat.tsx`, `ApprovalCard`: the branch for an `Edit` request whose input has `changes` (section 5.10).
-- `src/features/review/validation.ts` (Phase 4's, when merged), anchor `const SHELL = new Set(`: add `"Shell"`, so a test run by Codex counts as validation evidence. Add one case to Phase 4's test `takes the outcome from the tool result` with the name `Shell`.
+- `src/features/review/validation.ts`, anchor `const SHELL = new Set(`: add `"Shell"`, so a test run by Codex counts as validation evidence. Add one case to Phase 4's test `takes the outcome from the tool result` with the name `Shell`.
 
 ---
 
@@ -2364,9 +2395,9 @@ Checks: section 11, steps V8 and V9. Parts A and B are complete here. Run the wh
 
 Run the go/no-go check (section 5.9) first. On "no-go", stop after commit 9.
 
-**Commit 10: `refactor(agent): a per-session driver behind the adapter`.** The trait split of section 4.11 with `ClaudeDriver`; `RunEvent::ProcessStarted`, `Adapter::marks_process_start` and the place the manager records it (no adapter returns `true` yet, so nothing is recorded); `Session.driver`; `step_of` in place of `events_of`; the pump, `start`, `send`, `answer`, `interrupt`, `set_policy` and `session` go through the driver; `SessionInfo.engine_session` in Rust and `engineSession` in TypeScript (the pump stores `Step.engine_session` in it, so the field belongs to this commit; add `an_index_from_before_engine_sessions_still_loads` beside commit 4's old-index test). No behaviour change. Tests: every Phase 2 and Phase 4 agent test passes, changed only where it called `user_line`, `parse_line`, `outcome`, `answer_line`, `refusal`, `interrupt_line`, `mode_line` or `mode_of` on an adapter (make a driver with `driver(cwd, PolicyMode::Ask, None)` and call `send`, `read`, `answer`, `interrupt` or `set_mode`). The test module's fake adapter returns `ClaudeCode.driver(...)`. Phase 2's replay test (`session_runs_to_success_and_replays_exactly` and its interactive counterpart) must pass unchanged: that is the proof that `step_of` numbers events as `events_of` did.
+**Commit 10: `refactor(agent): a per-session driver behind the adapter`.** The trait split of section 4.11 with `ClaudeDriver`; `RunEvent::ProcessStarted`, `Adapter::marks_process_start` and the place the manager records it (no adapter returns `true` yet, so nothing is recorded); `Session.driver`; `step_of` in place of `events_of` in `Inner::fold`, `Inner::record` and `Manager::session`; the pump, `start`, `send`, `answer`, `interrupt`, `set_policy` and `session` go through the driver; the pump stores `Step.engine_session` in the existing `SessionInfo.engine_session` (section 4.12 item 1: the field and its old-index test already exist); `term/transcript.rs` calls `claude::parse_line` (section 4.12 item 2). No behaviour change. Tests: every Phase 2 and Phase 4 agent test passes, changed only where it called `user_line`, `parse_line`, `outcome`, `answer_line`, `refusal`, `interrupt_line`, `mode_line` or `mode_of` on an adapter (make a driver with `driver(cwd, PolicyMode::Ask, None)` and call `send`, `read`, `answer`, `interrupt` or `set_mode`). The test module's fake adapter returns `ClaudeCode.driver(...)`. Phase 2's replay test (`session_runs_to_success_and_replays_exactly` and its interactive counterpart) must pass unchanged: that is the proof that `step_of` numbers events as `events_of` did.
 
-**Commit 11: `feat(agent): Codex app-server driver`.** `agent/codex.rs`, with `#![allow(dead_code)]` at its top until commit 12 registers the adapter; `program_args` on Phase 2's `Launch` and `Spec`. Tests, in `codex.rs`, feed the verbatim lines of section 5.8 (put them in `const`s, with `…` parts filled in from `spikes/codex-interfaces.md`). `d` is `Codex.driver(cwd, PolicyMode::Ask, None)` unless a row says otherwise:
+**Commit 11: `feat(agent): Codex app-server driver`.** `agent/codex.rs`, with `#![allow(dead_code)]` at its top until commit 12 registers the adapter; `program_args` on Phase 2's `Launch` and `Spec`. Tests, in `codex.rs`, feed the 0.169.0 lines of section 5.8.1 from `docs/plans/spikes/codex-app-server-0.169.0.jsonl` (put them in `const`s; where a row below names a 0.166.0 value such as `cli_version == "0.166.0"`, a model or an item id, use the recorded line's value). Add rows for section 4.12 item 9 (a `commentary` and a `final_answer` message with the same id give two `text` events, and `Outcome.result` is the final answer), for `hook/*`, `userMessage` and `reasoning` lines giving an empty step, and for the `thread/resume` line carrying `excludeTurns: true`. `d` is `Codex.driver(cwd, PolicyMode::Ask, None)` unless a row says otherwise:
 
 | Test | Assertions |
 | --- | --- |
