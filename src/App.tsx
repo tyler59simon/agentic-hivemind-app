@@ -103,7 +103,6 @@ function useLiveRefresh(enabled: boolean) {
         client.invalidateQueries({ queryKey: ["taxonomy"] });
         client.invalidateQueries({ queryKey: ["changes"] });
         client.invalidateQueries({ queryKey: ["views"] }); // views.json: dashboards added or removed from the CLI
-        client.invalidateQueries({ queryKey: ["learning"] }); // learning.json: the collection switches
         client.invalidateQueries({ queryKey: ["log"] });
         client.invalidateQueries({ queryKey: ["recap"] });
       }),

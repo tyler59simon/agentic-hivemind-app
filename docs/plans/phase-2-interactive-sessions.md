@@ -1193,12 +1193,12 @@ pub fn work(tree: Worktree, policy: PolicyMode, prompt: &str) -> Result<Scope, S
 pub fn for_session(bridge: &Bridge, info: &SessionInfo) -> Result<Scope, String>;
 
 /// The Living Memory commands only the user may run, through Hivemind's reviewed dialogs.
-const GOVERNED_COMMANDS: [&str; 22] = ["apply", "undo", "recover", "plan", "merge-plan", "retag-plan", "taxonomy-plan",
+const GOVERNED_COMMANDS: [&str; 20] = ["apply", "undo", "recover", "plan", "merge-plan", "retag-plan", "taxonomy-plan",
     "project-plan", "system-plan", "promote-plan", "change-plan", "delete-plan", "import-plan", "ingest-plan", "migration-plan",
-    "note-type-plan", "overlay-teardown-plan", "prune-plan", "remap-plan", "restore-plan", "retire-plan", "rollback-plan"];
-// Changed during implementation (2026-11-10): the list first held only the first 11. The Codex review found that `learn`'s
-// rollback-plan and retire-plan (and Living Memory's other plan commands) then reached a user allow rule unopposed; the
-// list now holds every plan command Living Memory has. 88 rules, checked against Claude Code 2.1.322.
+    "note-type-plan", "overlay-teardown-plan", "prune-plan", "remap-plan", "restore-plan"];
+// Changed during implementation (2026-11-10): the list first held only the first 11. The Codex review found that Living
+// Memory's other plan commands then reached a user allow rule unopposed; the list now holds every plan command Living
+// Memory has, 80 rules.
 
 /// A shell command that would change the Living Memory store through a plan. Its hook lets read and capture
 /// commands through before Hivemind is asked; these must never run from a session, whatever the user clicks.

@@ -30,7 +30,7 @@ export const ACTION_TYPES = new Set<NoteType>(["plan", "bug", "risk"]);
 export const TYPE_SECTIONS: Partial<Record<NoteType, readonly string[]>> = {
   decision: ["Why", "Alternatives considered"],
   bug: ["Cause", "Fix", "How to check"],
-  runbook: ["When to use", "When not to use", "Steps", "Check", "Roll back", "If it fails"],
+  runbook: ["When to use", "When not to use", "Steps", "Check", "Roll back"],
   research: ["Findings", "Sources", "Open questions"],
 };
 
@@ -316,8 +316,7 @@ export const TEMPLATE_PROMPTS: Record<NoteType, string> = {
 export function template(type: NoteType): string {
   const own = TYPE_SECTIONS[type];
   const parts = [TEMPLATE_PROMPTS[type], CALLOUT + " "];
-  // A learned runbook's "If it fails" is written by learning, not by hand.
-  if (own) parts.push(...own.filter((h) => h !== "If it fails").map((h) => "## " + h));
+  if (own) parts.push(...own.map((h) => "## " + h));
   if (!own && type !== "knowledge") parts.push(`## ${HEADINGS.details}\n- `);
   parts.push(`## ${HEADINGS.links}\n- `);
   if (ACTION_TYPES.has(type)) parts.push(`## ${HEADINGS.actions}\n- [ ] `);
