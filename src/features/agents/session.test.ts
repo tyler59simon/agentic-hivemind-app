@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionInfo } from "../../lib/agent";
 import type { Project } from "../../lib/lm";
-import { draftCounts, permissionLines, sessionBriefing, sessionForNote, waitingForReview } from "./session";
+import { changeRows, draftCounts, isCodex, permissionLines, relativeTo, sessionBriefing, sessionForNote, waitingForReview } from "./session";
 
 let n = 0;
 const session = (o: Partial<SessionInfo>): SessionInfo => ({
@@ -112,5 +112,23 @@ describe("sessionBriefing", () => {
     expect(empty).not.toContain("Open steps");
     expect(empty).not.toContain("Acceptance evidence still to show");
     expect(sessionBriefing({ ...input, change: null })).toBe(sessionBriefing(input));
+  });
+
+  it("knows a Codex session", () => {
+    expect(isCodex(session({ adapter: "codex" }))).toBe(true);
+    expect(isCodex(session({}))).toBe(false);
+  });
+
+  it("shows a path relative to the worktree when it is inside", () => {
+    expect(relativeTo("C:\\work\\wt\\src\\a.ts", "c:/work/wt")).toBe("src/a.ts");
+    expect(relativeTo("C:\\work\\wt2\\a.ts", "C:\\work\\wt")).toBe("C:\\work\\wt2\\a.ts");
+    expect(relativeTo("/tmp/x.txt", null)).toBe("/tmp/x.txt");
+  });
+
+  it("turns Codex changes into rows, and ignores other inputs", () => {
+    const input = { changes: [{ path: "C:\\work\\wt\\as-patch.txt", kind: { type: "add" }, diff: "hi\n" }, { path: "b.txt" }] };
+    expect(changeRows(input, "C:\\work\\wt")).toEqual([{ path: "as-patch.txt", diff: "hi\n" }, { path: "b.txt", diff: "" }]);
+    expect(changeRows({ file_path: "a.ts", old_string: "x", new_string: "y" })).toBeNull();
+    expect(changeRows(undefined)).toBeNull();
   });
 });

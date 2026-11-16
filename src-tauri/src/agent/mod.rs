@@ -86,9 +86,6 @@ pub enum Interface {
     Terminal,
 }
 
-/// Whether a Codex session may use the Chat interface.
-pub const CODEX_CHAT: bool = true;
-
 /// One coding-agent CLI: how to start it. The conversation itself is driven by a `Driver`.
 pub trait Adapter: Send + Sync {
     fn name(&self) -> &'static str;
@@ -627,9 +624,6 @@ fn check_combination(task: &AgentTask, engine: Engine, interface: Interface) -> 
     }
     if engine == Engine::Codex && !work && !folder {
         return Err("System passports run with Claude Code.".into());
-    }
-    if engine == Engine::Codex && interface == Interface::Chat && !CODEX_CHAT {
-        return Err("Chat with Codex is not available yet. Use Terminal.".into());
     }
     Ok(())
 }

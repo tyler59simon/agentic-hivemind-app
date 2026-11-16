@@ -5,7 +5,7 @@ export type CheckKind = "test" | "build";
 export interface Check { id: string; kind: CheckKind; command: string; outcome: "passed" | "failed" | "running"; seq: number }
 export interface Validation { checks: Check[]; warning: string | null }
 
-const SHELL = new Set(["Bash", "PowerShell"]);
+const SHELL = new Set(["Bash", "PowerShell", "Shell"]);
 const EDITS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const SEGMENTS = /&&|\|\||[;|\n]/;
 const PREFIX = /^(?:\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*|npx|bunx|pnpm\s+exec|sudo|time|uv\s+run|poetry\s+run|pipenv\s+run|bundle\s+exec|cross-env|\.\/|\.\\)\s*)*/;

@@ -105,3 +105,27 @@ export function sessionBriefing(input: BriefingInput): string {
     workspace, change, noteBlock(input.notes, "Included memory"), architecture, memory, "---", input.pack,
   ].filter(Boolean).join("\n\n");
 }
+
+/** True for a session that runs on Codex, in chat or in the terminal. */
+export const isCodex = (s: Pick<SessionInfo, "adapter">) => s.adapter === "codex";
+export const CODEX_COST_NOTE = "Codex does not report cost. The spend cap does not apply.";
+export const CODEX_MODE_NOTE = "Codex keeps the permission mode it was started with.";
+
+/** A path relative to `root` when it lies inside it (either slash style, any drive-letter case), else as given. */
+export function relativeTo(path: string, root: string | null | undefined): string {
+  if (!root) return path;
+  const flat = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+  const p = flat(path);
+  const r = flat(root);
+  return p.toLowerCase().startsWith(r.toLowerCase() + "/") ? p.slice(r.length + 1) : path;
+}
+
+/** The files of a Codex edit request (`input.changes`) as rows to show; null when the input has no `changes` array. */
+export function changeRows(input: unknown, root?: string | null): { path: string; diff: string }[] | null {
+  const changes = (input as { changes?: unknown } | null)?.changes;
+  if (!Array.isArray(changes)) return null;
+  return changes.map((c: { path?: unknown; diff?: unknown }) => ({
+    path: relativeTo(typeof c?.path === "string" ? c.path : "", root),
+    diff: typeof c?.diff === "string" ? c.diff : "",
+  }));
+}

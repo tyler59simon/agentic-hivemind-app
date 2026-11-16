@@ -23,6 +23,7 @@ describe("validation", () => {
     expect(outcome(test("t1"), result("t1", false, "boom"))).toBe("failed");
     expect(outcome(test("t1"), result("t1", true, "Exit code 1\nFAIL"))).toBe("failed");
     expect(outcome(test("t1"))).toBe("running");
+    expect(outcome(use("t1", "Shell", "npm test"), result("t1", true, "ok"))).toBe("passed");
   });
 
   it("shows a repeated command once, with its latest outcome", () => {

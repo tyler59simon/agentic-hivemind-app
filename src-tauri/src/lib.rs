@@ -177,7 +177,6 @@ struct EngineInfo {
 
 /// Turn the result of looking for an engine's program into what the webview shows.
 fn engine_info(engine: agent::Engine, found: Result<term::launch::Cli, String>) -> EngineInfo {
-    let chat = engine == agent::Engine::Claude || agent::CODEX_CHAT;
     let (path, error) = match found {
         Ok(cli) => (Some(cli.args.into_iter().next().unwrap_or(cli.program)), None),
         Err(e) => (None, Some(e)),
@@ -187,8 +186,8 @@ fn engine_info(engine: agent::Engine, found: Result<term::launch::Cli, String>) 
         label: engine.label().to_string(),
         path,
         error,
-        chat,
-        chat_reason: (!chat).then(|| "Chat with Codex is not available yet. Use Terminal.".to_string()),
+        chat: true,
+        chat_reason: None,
     }
 }
 

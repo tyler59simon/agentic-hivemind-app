@@ -21,7 +21,7 @@ import { noteQuery } from "../viewer/NoteView";
 import { ApprovalCard, Composer, FilesCard, RemoveWorktree } from "./Chat";
 import { apply, build, cost, duration, EMPTY, merge, type Finished, type Item, type Transcript as State } from "./events";
 import { filesWord, reviewLabel } from "../review/review";
-import { ALLOWED_NOTE, isEnded, permissionLines, POLICIES, repoName, waitingForReview } from "./session";
+import { ALLOWED_NOTE, CODEX_COST_NOTE, CODEX_MODE_NOTE, isCodex, isEnded, permissionLines, POLICIES, repoName, waitingForReview } from "./session";
 import { useSessionDraft } from "./draft";
 import { StartSession } from "./StartSession";
 import { accessLabel, latestOf, whereLabel } from "../terminal/tabs";
@@ -31,7 +31,7 @@ const when = (ms: number) => new Date(ms).toLocaleString();
 const elapsed = (s: SessionInfo) => duration((s.endedAt ?? Date.now()) - s.startedAt);
 
 /** What an interactive transcript needs beyond the items: the session, which files card is the latest, and how to review it. */
-interface Chat { sessionId: string; latestFiles: number; chip: { text: string; tone: string } | null; onReview?: () => void }
+interface Chat { sessionId: string; root?: string; latestFiles: number; chip: { text: string; tone: string } | null; onReview?: () => void }
 
 function Entry({ item, index, chat }: { item: Item; index: number; chat?: Chat }) {
   const [open, setOpen] = useState(false);
@@ -67,7 +67,7 @@ function Entry({ item, index, chat }: { item: Item; index: number; chat?: Chat }
         </div>
       );
     case "approval":
-      return <ApprovalCard item={item} sessionId={chat?.sessionId ?? ""} />;
+      return <ApprovalCard item={item} sessionId={chat?.sessionId ?? ""} root={chat?.root} />;
     case "files":
       return <FilesCard files={item.files} latest={index === chat?.latestFiles} chip={index === chat?.latestFiles ? chat.chip : null} onReview={chat?.onReview} />;
     case "turn":
@@ -190,7 +190,7 @@ function Toolbar({ info, face, sessions, onAsk }: { info?: SessionInfo; face: In
           {info.interface === "terminal"
             ? <span className="toolbar-fact" title={permissionFlags(info)}><Shield size="1.2em" aria-hidden />{accessLabel(info)}</span>
             : (
-              <select aria-label="Permissions" value={info.policy} disabled={isEnded(info)} onChange={(e) => setPolicy(e.target.value as Policy)}>
+              <select aria-label="Permissions" value={info.policy} disabled={isEnded(info) || isCodex(info)} title={isCodex(info) ? CODEX_MODE_NOTE : undefined} onChange={(e) => setPolicy(e.target.value as Policy)}>
                 {POLICIES.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
               </select>
             )}
@@ -240,6 +240,7 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
         {info.system && <Row icon={<Network size="1.3em" aria-hidden />} onClick={() => openSystem(info.system!)}>1 architecture view</Row>}
         <Row meta={when(info.startedAt)}>Started</Row>
         <Row meta={[elapsed(info), info.costUsd != null ? cost(info.costUsd) : ""].filter(Boolean).join(" · ")}>Duration</Row>
+        {isCodex(info) && <p className="muted small">{CODEX_COST_NOTE}</p>}
       </Section>
       <Section title="Permissions">
         {permissionLines(info.policy).map((line) => <Row key={line} icon={<ShieldCheck size="1.3em" aria-hidden />}>{line}</Row>)}
@@ -309,7 +310,7 @@ function Session({ id }: { id: string }) {
           )}
         </header>
         <div className="chat-scroll">
-          <Transcript state={state} running={running} chat={interactive ? { sessionId: info.id, chip: reviewLabel(live), onReview: review } : undefined} />
+          <Transcript state={state} running={running} chat={interactive ? { sessionId: info.id, root: live.worktree?.path, chip: reviewLabel(live), onReview: review } : undefined} />
         </div>
         {interactive && <Composer info={live} transcript={state} />}
       </div>
@@ -323,6 +324,7 @@ function Session({ id }: { id: string }) {
             {info.workspace.slice(1).map((w) => <Row key={w} icon={<Layers size="1.3em" aria-hidden />} meta={<code title={w}>{w.split(/[\\/]/).filter(Boolean).pop()}</code>}>Can also read</Row>)}
             <Row meta={when(info.startedAt)}>Started</Row>
             <Row meta={[elapsed(info), info.costUsd != null ? cost(info.costUsd) : ""].filter(Boolean).join(" · ")}>Duration</Row>
+            {isCodex(info) && <p className="muted small">{CODEX_COST_NOTE}</p>}
           </Section>
           <Section title="Permissions">
             <Row icon={<ShieldCheck size="1.3em" aria-hidden />}>Unattended: pre-approved actions only</Row>
