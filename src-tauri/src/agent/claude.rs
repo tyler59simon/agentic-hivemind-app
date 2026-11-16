@@ -172,7 +172,7 @@ impl Adapter for ClaudeCode {
         command
     }
 
-    fn driver(&self, _cwd: &Path, _policy: PolicyMode, _engine_session: Option<&str>) -> Box<dyn Driver> {
+    fn driver(&self, _cwd: &Path, _policy: PolicyMode, _engine_session: Option<&str>, _model: Option<&str>) -> Box<dyn Driver> {
         Box::new(ClaudeDriver)
     }
 
@@ -191,7 +191,7 @@ struct ClaudeDriver;
 
 impl Driver for ClaudeDriver {
     fn read(&mut self, line: &str) -> Step {
-        Step { write: refusal(line).into_iter().collect(), events: parse_line(line), turn: outcome(line), mode: mode_of(line), engine_session: None }
+        Step { write: refusal(line).into_iter().collect(), events: parse_line(line), turn: outcome(line), mode: mode_of(line), ..Step::default() }
     }
 
     fn open(&mut self) -> Vec<String> {

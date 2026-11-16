@@ -13,6 +13,7 @@ pub mod store;
 use crate::bridge::Bridge;
 use access::Access;
 use crate::settings::Settings;
+use crate::term::launch::Cli;
 use crate::worktree::{self, ChangedFiles, FileChange, Totals, Worktree};
 use direct::Direct;
 use events::{Decision, Mode, Outcome, RunEvent, SeqEvent, Status, TurnEnd};
@@ -85,8 +86,8 @@ pub enum Interface {
     Terminal,
 }
 
-/// Whether a Codex session may use the Chat interface. Part C turns this on.
-pub const CODEX_CHAT: bool = false;
+/// Whether a Codex session may use the Chat interface.
+pub const CODEX_CHAT: bool = true;
 
 /// One coding-agent CLI: how to start it. The conversation itself is driven by a `Driver`.
 pub trait Adapter: Send + Sync {
@@ -95,8 +96,8 @@ pub trait Adapter: Send + Sync {
     fn command(&self, spec: &Spec) -> Command;
     /// The state of one session's conversation. Everything it needs is in the stored session, so a driver can
     /// also be made to replay a log: the working folder, the permission mode, and the engine's own
-    /// conversation id when the session already has one (`SessionInfo.engine_session`).
-    fn driver(&self, cwd: &Path, policy: PolicyMode, engine_session: Option<&str>) -> Box<dyn Driver>;
+    /// conversation id when the session already has one (`SessionInfo.engine_session`), and the model the user picked.
+    fn driver(&self, cwd: &Path, policy: PolicyMode, engine_session: Option<&str>, model: Option<&str>) -> Box<dyn Driver>;
     /// The whole text and the outcome of the tool result with this id, when the line carries it.
     fn tool_result(&self, _line: &str, _tool_use_id: &str) -> Option<(bool, String)> {
         None
@@ -120,6 +121,9 @@ pub struct Step {
     pub mode: Option<PolicyMode>,
     /// The engine's own conversation id, the first time it is known.
     pub engine_session: Option<String>,
+    /// The driver can go no further with this process (it refused the thread): the manager ends the process after
+    /// closing the turn, and the next message starts a new one.
+    pub end_process: bool,
 }
 
 /// One session's conversation with its process.
@@ -421,7 +425,8 @@ struct Session {
 
 struct Inner {
     dir: PathBuf,
-    adapter: Arc<dyn Adapter>,
+    claude: Arc<dyn Adapter>,
+    codex: Arc<dyn Adapter>,
     sink: Sink,
     sessions: Mutex<HashMap<String, Session>>,
 }
@@ -631,12 +636,12 @@ fn check_combination(task: &AgentTask, engine: Engine, interface: Interface) -> 
 
 impl Manager {
     /// Load the history from `dir`. Sessions left running by a previous run are closed as failed (unattended) or idle.
-    pub fn new(dir: PathBuf, adapter: Arc<dyn Adapter>, sink: Sink) -> Manager {
+    pub fn new(dir: PathBuf, claude: Arc<dyn Adapter>, codex: Arc<dyn Adapter>, sink: Sink) -> Manager {
         let sessions = store::recover(&dir, now_ms())
             .into_iter()
             .map(|info| (info.id.clone(), Session { info, reserved: false, live: None, tape: None, driver: None }))
             .collect();
-        Manager { inner: Arc::new(Inner { dir, adapter, sink, sessions: Mutex::new(sessions) }) }
+        Manager { inner: Arc::new(Inner { dir, claude, codex, sink, sessions: Mutex::new(sessions) }) }
     }
 
     /// Start a session in `launch.scope` and send it `prompt`. Returns as soon as the process is running.
@@ -644,16 +649,16 @@ impl Manager {
         let inner = &self.inner;
         let scope = &launch.scope;
         let interactive = scope.mode == Mode::Interactive;
-        let info = session_info(&id, inner.adapter.name(), task, scope, options);
+        let info = session_info(&id, inner.adapter(options.engine).name(), task, scope, options);
         let text = first_text(options.briefing.as_deref().filter(|_| interactive), prompt);
 
         // Without its folder a session could not be logged or replayed, so find that out first.
         std::fs::create_dir_all(&inner.dir).map_err(|e| format!("Could not create {}: {e}", inner.dir.display()))?;
         let mut sessions = inner.sessions.lock().unwrap();
         inner.free_slot(&mut sessions)?;
-        let (live, stdout, stderr) = inner.spawn(&id, &launch, false, info.model.clone())?;
+        let (live, stdout, stderr) = inner.spawn(&id, &info, &launch, false)?;
         let (child, stdin) = (live.child.clone(), live.stdin.clone());
-        let driver = inner.adapter.driver(&scope.cwd, info.policy, None);
+        let driver = inner.adapter_of(&info).driver(&scope.cwd, info.policy, None, info.model.as_deref());
         let (tape, live) = (Some(Tape::default()), Some(live));
         sessions.insert(id.clone(), Session { info: info.clone(), reserved: false, live, tape, driver: Some(driver) });
         let mut lines = inner.mark_process(&mut sessions, &id, false);
@@ -736,7 +741,7 @@ impl Manager {
                 inner.free_slot(&mut sessions)?;
                 let session = sessions.get_mut(id).ok_or("Unknown session")?;
                 let resume = inner.warm(id, session).0.started;
-                let (live, stdout, stderr) = inner.spawn(id, &launch, resume, info.model.clone())?;
+                let (live, stdout, stderr) = inner.spawn(id, &info, &launch, resume)?;
                 let (child, stdin) = (live.child.clone(), live.stdin.clone());
                 session.live = Some(live);
                 let opened = inner.mark_process(&mut sessions, id, resume);
@@ -1039,10 +1044,10 @@ impl Manager {
     /// The full text of one tool result, read back from the raw log. The summary in the event is clipped from the start; a
     /// test run's totals are at the end, so only the end of a very long result is kept.
     pub fn tool_output(&self, id: &str, tool_use_id: &str) -> Result<ToolOutput, String> {
-        self.info(id)?;
+        let info = self.info(id)?;
         let records = store::read_log(&self.inner.dir, id)?;
         let found = records.iter().rev().find_map(|record| match record {
-            Record::Raw { raw, .. } => self.inner.adapter.tool_result(raw, tool_use_id),
+            Record::Raw { raw, .. } => self.inner.adapter_of(&info).tool_result(raw, tool_use_id),
             Record::Event { .. } => None,
         });
         let (ok, text) = found.ok_or("That tool call has no result in this session's log")?;
@@ -1160,9 +1165,22 @@ impl Inner {
         }
     }
 
+    fn adapter(&self, engine: Engine) -> &Arc<dyn Adapter> {
+        match engine {
+            Engine::Claude => &self.claude,
+            Engine::Codex => &self.codex,
+        }
+    }
+
+    /// The adapter of a stored session.
+    fn adapter_of(&self, info: &SessionInfo) -> &Arc<dyn Adapter> {
+        self.adapter(Engine::of(&info.adapter))
+    }
+
     /// A fresh driver for a session. A replay passes no `engine_session`; a live driver passes the stored one.
     fn driver_of(&self, info: &SessionInfo, engine_session: Option<&str>) -> Box<dyn Driver> {
-        self.adapter.driver(info.workspace.first().map_or(Path::new("."), Path::new), info.policy, engine_session)
+        let cwd = info.workspace.first().map_or(Path::new("."), Path::new);
+        self.adapter_of(info).driver(cwd, info.policy, engine_session, info.model.as_deref())
     }
 
     /// Where the session's log stands and the driver that has read it, from the same fold as `Manager::session`.
@@ -1191,7 +1209,8 @@ impl Inner {
     /// After `spawn`: record `processStarted` when the engine asks for it, and return the lines the driver opens with.
     /// Called with the sessions lock held, before the first message is recorded.
     fn mark_process(&self, sessions: &mut HashMap<String, Session>, id: &str, resume: bool) -> Vec<String> {
-        if self.adapter.marks_process_start() {
+        let marks = sessions.get(id).is_some_and(|session| self.adapter_of(&session.info).marks_process_start());
+        if marks {
             let at = now_ms();
             self.record(sessions, id, at, Record::Event { at, event: RunEvent::ProcessStarted { resume } });
         }
@@ -1244,7 +1263,7 @@ impl Inner {
     }
 
     /// Start the CLI for a session. Returns the live handle and the pipes the pump reads.
-    fn spawn(&self, id: &str, launch: &Launch, resume: bool, model: Option<String>) -> Result<(Live, Option<ChildStdout>, JoinHandle<String>), String> {
+    fn spawn(&self, id: &str, info: &SessionInfo, launch: &Launch, resume: bool) -> Result<(Live, Option<ChildStdout>, JoinHandle<String>), String> {
         let spec = Spec {
             session_id: id.to_string(),
             cwd: launch.scope.cwd.clone(),
@@ -1256,11 +1275,11 @@ impl Inner {
             program: launch.program.clone(),
             program_args: launch.program_args.clone(),
             resume,
-            model,
+            model: info.model.clone(),
             deny: launch.scope.deny.clone(),
             memory_root: launch.memory_root.clone(),
         };
-        let mut command = self.adapter.command(&spec);
+        let mut command = self.adapter_of(info).command(&spec);
         command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         #[cfg(windows)]
         {
@@ -1386,7 +1405,14 @@ impl Inner {
             }
             if let Some(outcome) = step.turn {
                 if interactive {
+                    if step.end_process {
+                        // Closed while the turn still counts as running, so no message can reach the process.
+                        self.close_stdin(id);
+                    }
                     self.end_turn(id, outcome);
+                    if step.end_process {
+                        kill(child);
+                    }
                 } else {
                     self.update(id, |info| info.cost_usd = outcome.cost_usd.or(info.cost_usd));
                     last = Some(outcome);
@@ -1459,15 +1485,20 @@ impl Inner {
         (self.sink)(Emit::SessionsChanged);
     }
 
+    /// Close a session's process input: the process leaves, and a message waits for a new one.
+    fn close_stdin(&self, id: &str) {
+        let stdin = self.sessions.lock().unwrap().get(id).and_then(|session| session.live.as_ref()).map(|live| live.stdin.clone());
+        if let Some(stdin) = stdin {
+            *stdin.lock().unwrap() = None;
+        }
+    }
+
     /// The end of a turn of an interactive session, from the CLI's closing report.
     fn end_turn(&self, id: &str, outcome: Outcome) {
         self.sync_files(id);
         if outcome.budget {
             // A capped process never recovers. Closed while the turn still counts as running, so no message can reach it.
-            let stdin = self.sessions.lock().unwrap().get(id).and_then(|session| session.live.as_ref()).map(|live| live.stdin.clone());
-            if let Some(stdin) = stdin {
-                *stdin.lock().unwrap() = None;
-            }
+            self.close_stdin(id);
         }
         let mut sessions = self.sessions.lock().unwrap();
         let at = now_ms();
@@ -1523,9 +1554,20 @@ fn check_launch_options(saved: &Settings, mut options: StartOptions) -> Result<S
         if options.access.is_some() || options.effort.is_some() {
             return Err("Permission modes and effort are for terminal sessions.".into());
         }
-        models::check(&models::list(Engine::Claude, saved), options.model.as_deref(), None)?;
+        // Codex's list comes from running Codex, so it is only asked for when a model was picked.
+        if options.engine == Engine::Claude || options.model.is_some() {
+            models::check(&models::list(options.engine, saved), options.model.as_deref(), None)?;
+        }
     }
     Ok(options)
+}
+
+/// The program a chat session of `engine` runs: Claude Code's executable, or Codex's with the arguments that go before `app-server`.
+fn chat_program(engine: Engine, saved: &Settings) -> Result<Cli, String> {
+    match engine {
+        Engine::Claude => Ok(Cli { program: claude::available(saved)?, args: vec![] }),
+        Engine::Codex => crate::term::launch::program(Engine::Codex, saved),
+    }
 }
 
 /// Where a work session runs, from what the user asked for and the interface.
@@ -1596,9 +1638,19 @@ pub fn start_task(
     let terminal = options.interface == Interface::Terminal;
     let options = check_launch_options(saved, options)?;
     // A terminal session starts no process here; the lookup only reports a missing CLI on the Start screen.
-    let program = if terminal { crate::term::launch::program(options.engine, saved).map(|_| String::new())? } else { claude::available(saved)? };
+    let cli = if terminal {
+        crate::term::launch::program(options.engine, saved).map(|_| Cli { program: String::new(), args: vec![] })?
+    } else {
+        chat_program(options.engine, saved)?
+    };
     let id = uuid::Uuid::new_v4().to_string();
-    let launch = |scope| Launch { scope, program: program.clone(), program_args: vec![], budget_usd: saved.agent_budget_usd(), memory_root: bridge.launch().root };
+    let launch = |scope| Launch {
+        scope,
+        program: cli.program.clone(),
+        program_args: cli.args.clone(),
+        budget_usd: saved.agent_budget_usd(),
+        memory_root: bridge.launch().root,
+    };
     let (project, repo, branch, change) = match &task {
         AgentTask::Work { project, repo, branch, change } => (project, repo, branch, change),
         AgentTask::Folder { path } => {
@@ -1694,10 +1746,11 @@ pub fn send_task(
         text,
         options,
         |info| {
+            let cli = chat_program(Engine::of(&info.adapter), saved)?;
             Ok(Launch {
                 scope: scope::for_session(bridge, info)?,
-                program: claude::available(saved)?,
-                program_args: vec![],
+                program: cli.program,
+                program_args: cli.args,
                 budget_usd: saved.agent_budget_usd(),
                 memory_root: bridge.launch().root,
             })
@@ -1826,6 +1879,8 @@ mod tests {
     }
 
     /// Reads Claude Code's output format, but runs a harmless local program instead of the CLI.
+    /// What makes this test binary run `fake_cli`.
+    const FAKE_CLI_ARGS: [&str; 4] = ["--exact", "agent::tests::fake_cli", "--nocapture", "--test-threads=1"];
     type Seen = Arc<Mutex<Vec<Emit>>>;
     type Specs = Arc<Mutex<Vec<Spec>>>;
 
@@ -1838,36 +1893,45 @@ mod tests {
         dir: PathBuf,
         /// Every `Spec` a process was started from.
         specs: Specs,
+        /// Behaves as the Codex adapter: its command line, driver and `processStarted` records.
+        codex: bool,
     }
 
     impl Fake {
         fn program(program: &str, args: Vec<String>) -> Fake {
-            Fake { program: program.into(), args, scripts: vec![], dir: PathBuf::new(), specs: Arc::default() }
+            Fake { program: program.into(), args, scripts: vec![], dir: PathBuf::new(), specs: Arc::default(), codex: false }
         }
 
         /// This test binary, run as a CLI that follows one of `scripts` (lines of `fake_cli`'s script language).
         fn scripted(name: &str, scripts: &[&[&str]]) -> Fake {
             Fake {
                 program: std::env::current_exe().unwrap(),
-                args: ["--exact", "agent::tests::fake_cli", "--nocapture", "--test-threads=1"].map(String::from).to_vec(),
+                args: FAKE_CLI_ARGS.map(String::from).to_vec(),
                 scripts: scripts.iter().map(|lines| lines.join("
 ")).collect(),
                 dir: Rig::folder(name),
                 specs: Arc::default(),
+                codex: false,
             }
         }
     }
 
     impl Adapter for Fake {
         fn name(&self) -> &'static str {
-            "fake"
+            if self.codex { "codex" } else { "fake" }
         }
         fn command(&self, spec: &Spec) -> Command {
             let mut specs = self.specs.lock().unwrap();
             let nth = specs.len();
             specs.push(spec.clone());
-            let mut command = Command::new(&self.program);
-            command.args(&self.args).current_dir(&spec.cwd);
+            // A Codex fake builds the real command line (`<program> <args> app-server`) from the launch the test gives it.
+            let mut command = if self.codex {
+                codex::Codex.command(spec)
+            } else {
+                let mut command = Command::new(&self.program);
+                command.args(&self.args).current_dir(&spec.cwd);
+                command
+            };
             if let Some(script) = self.scripts.get(nth).or(self.scripts.last()) {
                 let file = self.dir.join(format!("script-{nth}.txt"));
                 std::fs::write(&file, script).unwrap();
@@ -1875,11 +1939,20 @@ mod tests {
             }
             command
         }
-        fn driver(&self, cwd: &Path, policy: PolicyMode, engine_session: Option<&str>) -> Box<dyn Driver> {
-            ClaudeCode.driver(cwd, policy, engine_session)
+        fn driver(&self, cwd: &Path, policy: PolicyMode, engine_session: Option<&str>, model: Option<&str>) -> Box<dyn Driver> {
+            if self.codex {
+                return codex::Codex.driver(cwd, policy, engine_session, model);
+            }
+            ClaudeCode.driver(cwd, policy, engine_session, model)
         }
         fn tool_result(&self, line: &str, id: &str) -> Option<(bool, String)> {
+            if self.codex {
+                return codex::Codex.tool_result(line, id);
+            }
             ClaudeCode.tool_result(line, id)
+        }
+        fn marks_process_start(&self) -> bool {
+            self.codex
         }
     }
 
@@ -1896,7 +1969,8 @@ mod tests {
             std::fs::create_dir_all(&dir).unwrap();
             let seen: Arc<Mutex<Vec<Emit>>> = Arc::default();
             let (sink, specs) = (seen.clone(), adapter.specs.clone());
-            let manager = Manager::new(dir.join("sessions"), Arc::new(adapter), Arc::new(move |emit| sink.lock().unwrap().push(emit)));
+            let adapter = Arc::new(adapter);
+            let manager = Manager::new(dir.join("sessions"), adapter.clone(), adapter, Arc::new(move |emit| sink.lock().unwrap().push(emit)));
             Rig { dir, manager, seen, specs }
         }
 
@@ -2028,7 +2102,8 @@ mod tests {
             let fake = Fake::scripted(name, scripts);
             let (seen, specs) = (Seen::default(), fake.specs.clone());
             let sink = seen.clone();
-            let manager = Manager::new(self.dir.join("sessions"), Arc::new(fake), Arc::new(move |emit| sink.lock().unwrap().push(emit)));
+            let fake = Arc::new(fake);
+            let manager = Manager::new(self.dir.join("sessions"), fake.clone(), fake, Arc::new(move |emit| sink.lock().unwrap().push(emit)));
             (manager, seen, specs)
         }
 
@@ -2057,13 +2132,178 @@ mod tests {
         }
     }
 
+    impl Rig {
+        /// A rig whose sessions are Codex sessions: the real Codex command line and driver, the fake CLI as the program.
+        fn codex(name: &str, scripts: &[&[&str]]) -> Rig {
+            Rig::new(name, Fake { codex: true, ..Fake::scripted(name, scripts) })
+        }
+
+        /// What `start_task` would hand the manager for Codex: the program and the arguments that come before `app-server`.
+        fn codex_launch(&self) -> Launch {
+            let program = std::env::current_exe().unwrap().display().to_string();
+            Launch { program, program_args: FAKE_CLI_ARGS.map(String::from).to_vec(), ..self.launch(self.scope(None)) }
+        }
+
+        fn codex_start(&self, id: &str, options: &StartOptions) -> SessionInfo {
+            let options = StartOptions { engine: Engine::Codex, ..options.clone() };
+            self.manager.start(id.to_string(), work_task(), self.codex_launch(), "Fix the bug", &options).unwrap()
+        }
+
+        fn codex_send(&self, id: &str, text: &str) -> Result<(), String> {
+            self.manager.send(id, text, SendOptions::default(), |_| Ok(self.codex_launch()), None)
+        }
+    }
+
+    /// The script of a Codex process from its handshake to the end of one turn, where `opening` is the reply to the thread request.
+    /// A `<` waits for one line of stdin.
+    fn codex_turn(opening: &'static str) -> Vec<&'static str> {
+        use codex::tests::{
+            COMMENTARY_COMPLETED, INIT_RESULT, ITEM_COMPLETED_COMMAND, ITEM_COMPLETED_MESSAGE, ITEM_STARTED_COMMAND, THREAD_STATUS, TOKEN_USAGE,
+            TURN_COMPLETED, TURN_STARTED,
+        };
+        vec![
+            "<",
+            INIT_RESULT,
+            "<",
+            "<",
+            opening,
+            "<",
+            THREAD_STATUS,
+            TURN_STARTED,
+            COMMENTARY_COMPLETED,
+            ITEM_STARTED_COMMAND,
+            ITEM_COMPLETED_COMMAND,
+            TOKEN_USAGE,
+            ITEM_COMPLETED_MESSAGE,
+            TURN_COMPLETED,
+        ]
+    }
+
+    fn methods(lines: &[Value]) -> Vec<&str> {
+        lines.iter().map(|line| line["method"].as_str().unwrap_or("")).collect()
+    }
+
+    #[test]
+    fn a_codex_chat_session_runs_a_turn_and_replays_exactly() {
+        use codex::tests::{THREAD, THREAD_RESULT};
+        let script = codex_turn(THREAD_RESULT);
+        let rig = Rig::codex("codex-turn", &[&script]);
+        let options = StartOptions { model: Some("gpt-6.1-sol".into()), ..StartOptions::default() };
+        let started = rig.codex_start("00000000-0000-4000-8000-0000000000c1", &options);
+        assert_eq!((started.adapter.as_str(), started.interface, started.status), ("codex", Interface::Chat, Status::Running));
+
+        let live = rig.turns(&started.id, 1);
+        let kinds: Vec<&RunEvent> = live.iter().map(|event| &event.event).collect();
+        assert!(
+            matches!(
+                kinds[..],
+                [
+                    RunEvent::ProcessStarted { resume: false },
+                    RunEvent::UserMessage { .. },
+                    RunEvent::Started { .. },
+                    RunEvent::Text { .. },
+                    RunEvent::ToolUse { .. },
+                    RunEvent::ToolResult { ok: true, .. },
+                    RunEvent::Text { .. },
+                    RunEvent::TurnFinished { ok: true, outcome: TurnEnd::Completed, .. },
+                ]
+            ),
+            "{kinds:?}"
+        );
+        assert_eq!(live.iter().map(|event| event.seq).collect::<Vec<_>>(), (0..8).collect::<Vec<_>>());
+        assert!(
+            matches!(kinds[2], RunEvent::Started { model: Some(model), cli_version: Some(version), .. } if model == "gpt-6.1-sol" && version == "0.169.0")
+        );
+        assert!(matches!(kinds[7], RunEvent::TurnFinished { result: Some(result), cost_usd: None, .. } if result == "done."));
+
+        let info = rig.info(&started.id);
+        assert_eq!((info.status, info.cost_usd, info.turns, info.engine_session.as_deref()), (Status::Idle, None, 1, Some(THREAD)));
+        assert_eq!((info.adapter.as_str(), info.cli_version.as_deref(), info.model.as_deref()), ("codex", Some("0.169.0"), Some("gpt-6.1-sol")));
+        // The log replays to the same numbered events, and so does a manager started on it again.
+        let replay = rig.manager.session(&started.id, 0).unwrap();
+        assert_eq!(replay.events, live);
+        assert_eq!(rig.manager.session(&started.id, 5).unwrap().events, live[5..]);
+        let reopened = Manager::new(rig.dir.join("sessions"), Arc::new(ClaudeCode), Arc::new(codex::Codex), Arc::new(|_| {}));
+        assert_eq!(reopened.session(&started.id, 0).unwrap().events, live);
+
+        // What Hivemind wrote: the handshake, the thread with the picked model, and the message.
+        rig.gone(&started.id);
+        let written = rig.stdin_lines(&started.id);
+        assert_eq!(methods(&written), ["initialize", "initialized", "thread/start", "turn/start"]);
+        assert_eq!(written[2]["params"]["model"], "gpt-6.1-sol");
+        assert_eq!(written[3]["params"]["input"][0]["text"], "Fix the bug");
+        let specs = rig.specs.lock().unwrap();
+        assert_eq!((specs.len(), specs[0].model.as_deref(), specs[0].resume), (1, Some("gpt-6.1-sol"), false));
+    }
+
+    #[test]
+    fn a_codex_process_that_refuses_the_thread_is_ended_and_the_next_message_starts_another() {
+        use codex::tests::{INIT_RESULT, RESUME_RESULT, THREAD, THREAD_RESULT};
+        let first = codex_turn(THREAD_RESULT);
+        let refused = [
+            "<",
+            INIT_RESULT,
+            "<",
+            "<",
+            r#"{"id":2,"error":{"code":-32600,"message":"no rollout found for thread id gone"}}"#,
+            // This process would stay until its input ends: the manager has to end it.
+            "<",
+        ];
+        let again = codex_turn(RESUME_RESULT);
+        let rig = Rig::codex("codex-refused", &[&first, &refused, &again]);
+        let started = rig.codex_start("00000000-0000-4000-8000-0000000000c2", &StartOptions::default());
+        rig.turns(&started.id, 1);
+        rig.gone(&started.id);
+
+        rig.codex_send(&started.id, "more").unwrap();
+        let failed = rig.turns(&started.id, 2);
+        assert!(matches!(
+            failed.last().map(|event| &event.event),
+            Some(RunEvent::TurnFinished { ok: false, reason: Some(reason), outcome: TurnEnd::Error, .. })
+                if reason == "no rollout found for thread id gone"
+        ));
+        rig.gone(&started.id);
+        let info = rig.info(&started.id);
+        assert_eq!((info.status, info.engine_session.as_deref()), (Status::Idle, Some(THREAD)), "the session shows the failure and can go on");
+
+        rig.codex_send(&started.id, "again").unwrap();
+        let done = rig.turns(&started.id, 3);
+        assert!(matches!(done.last().map(|event| &event.event), Some(RunEvent::TurnFinished { ok: true, outcome: TurnEnd::Completed, .. })));
+        let resumes: Vec<bool> =
+            done.iter().filter_map(|event| if let RunEvent::ProcessStarted { resume } = event.event { Some(resume) } else { None }).collect();
+        assert_eq!(resumes, [false, true, true]);
+        assert_eq!(done.iter().filter(|event| matches!(event.event, RunEvent::Started { .. })).count(), 1);
+        assert_eq!(rig.manager.session(&started.id, 0).unwrap().events, done, "the log of three processes replays the same");
+        rig.gone(&started.id);
+        let written = rig.stdin_lines(&started.id);
+        let resumed: Vec<&Value> = written.iter().filter(|line| line["method"] == "thread/resume").collect();
+        assert_eq!(resumed.len(), 2);
+        assert!(resumed.iter().all(|line| line["params"]["threadId"] == THREAD && line["params"]["excludeTurns"] == true));
+        assert_eq!(rig.specs.lock().unwrap().iter().map(|spec| spec.resume).collect::<Vec<_>>(), [false, true, true]);
+    }
+
+    #[test]
+    fn a_codex_that_is_too_old_fails_a_new_session() {
+        use codex::tests::INIT_RESULT;
+        let old = INIT_RESULT.replace("hivemind/0.169.0", "hivemind/0.150.0");
+        let rig = Rig::codex("codex-old", &[&["<", &old, "<"]]);
+        let started = rig.codex_start("00000000-0000-4000-8000-0000000000c3", &StartOptions::default());
+        let events = rig.finish(&started.id);
+        assert!(events.iter().any(|event| matches!(
+            &event.event,
+            RunEvent::TurnFinished { ok: false, reason: Some(reason), .. } if reason == "This Codex version is not supported for Chat. Use Terminal."
+        )));
+        assert_eq!(rig.info(&started.id).status, Status::Failed);
+        rig.gone(&started.id);
+    }
+
     /// `Manager::send` with the rig's launch, for either manager.
     fn send_on(manager: &Manager, rig: &Rig, id: &str, text: &str) -> Result<(), String> {
         manager.send(id, text, SendOptions::default(), |info| Ok(rig.launch(rig.scope(info.worktree.clone()))), None)
     }
 
     fn last_outcome(lines: &[&str]) -> Option<Outcome> {
-        let mut driver = ClaudeCode.driver(Path::new("."), PolicyMode::Ask, None);
+        let mut driver = ClaudeCode.driver(Path::new("."), PolicyMode::Ask, None, None);
         lines.iter().filter_map(|line| driver.read(line).turn).next_back()
     }
 
@@ -2161,7 +2401,7 @@ mod tests {
         assert!(rig.manager.session("00000000-0000-4000-8000-000000000009", 0).is_err());
         // The raw lines are kept as printed, and the history survives a restart.
         assert_eq!(store::read_log(&rig.dir.join("sessions"), &started.id).unwrap().len(), lines.len() + 1);
-        let reopened = Manager::new(rig.dir.join("sessions"), Arc::new(ClaudeCode), Arc::new(|_| {}));
+        let reopened = Manager::new(rig.dir.join("sessions"), Arc::new(ClaudeCode), Arc::new(codex::Codex), Arc::new(|_| {}));
         assert_eq!(reopened.sessions(), vec![info]);
         assert_eq!(reopened.session(&started.id, 0).unwrap().events, live);
     }
@@ -2360,7 +2600,7 @@ mod tests {
         assert!(live.iter().any(|event| matches!(&event.event, RunEvent::Denied { tool, .. } if tool == "Bash")));
         assert!(!live.iter().any(|event| matches!(event.event, RunEvent::ApprovalRequest { .. })));
         let refusal = &rig.stdin_lines(&started.id)[1];
-        let reply = ClaudeCode.driver(Path::new("."), PolicyMode::Ask, None).read(GOVERNED_REQUEST).write.remove(0);
+        let reply = ClaudeCode.driver(Path::new("."), PolicyMode::Ask, None, None).read(GOVERNED_REQUEST).write.remove(0);
         assert_eq!(*refusal, serde_json::from_str::<Value>(&reply).unwrap());
         assert_eq!((refusal["response"]["request_id"].as_str(), refusal["response"]["response"]["behavior"].as_str()), (Some("r-gov"), Some("deny")));
         assert_eq!(rig.info(&started.id).status, Status::Idle);
@@ -3196,6 +3436,42 @@ mod tests {
     }
 
     #[test]
+    fn a_chat_model_is_checked_against_the_engines_list() {
+        let saved = Settings::default();
+        let chat = |engine, model: Option<&str>, effort: Option<&str>| {
+            let (model, effort) = (model.map(String::from), effort.map(String::from));
+            check_launch_options(&saved, StartOptions { engine, model, effort, ..Default::default() })
+        };
+        assert!(chat(Engine::Codex, None, None).is_ok(), "no model: Codex's list is not asked for");
+        assert!(chat(Engine::Claude, Some("fable"), None).is_ok());
+        assert_eq!(chat(Engine::Claude, Some("gpt-6"), None).unwrap_err(), "Unknown model: gpt-6");
+        // Whether Codex lists nothing or lists other models, a model it does not offer is refused.
+        assert!(chat(Engine::Codex, Some("no-such-model-xyz"), None).is_err());
+        assert_eq!(chat(Engine::Codex, None, Some("high")).unwrap_err(), "Permission modes and effort are for terminal sessions.");
+    }
+
+    #[test]
+    fn a_chat_session_runs_the_program_of_its_engine() {
+        let root = std::env::temp_dir().join(format!("hivemind-chat-program-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let (exe, script) = (root.join("codex.exe"), root.join("codex.js"));
+        std::fs::write(&exe, "").unwrap();
+        std::fs::write(&script, "").unwrap();
+        let saved = |path: &Path| {
+            Settings { codex_path: Some(path.display().to_string()), claude_path: Some(exe.display().to_string()), ..Default::default() }
+        };
+        let direct = chat_program(Engine::Codex, &saved(&exe)).unwrap();
+        assert_eq!(direct, Cli { program: exe.display().to_string(), args: vec![] });
+        if cfg!(windows) {
+            let node = chat_program(Engine::Codex, &saved(&script)).unwrap();
+            assert_eq!(node, Cli { program: "node".into(), args: vec![script.display().to_string()] });
+        }
+        let claude = chat_program(Engine::Claude, &saved(&exe)).unwrap();
+        assert_eq!(claude, Cli { program: exe.display().to_string(), args: vec![] });
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
     fn interface_serialises_in_lowercase() {
         assert_eq!(serde_json::to_value(Interface::Terminal).unwrap(), json!("terminal"));
         assert_eq!(serde_json::to_value(Interface::Chat).unwrap(), json!("chat"));
@@ -3251,7 +3527,7 @@ mod tests {
         let passport = AgentTask::SystemPassport { slug: "billing".into() };
         assert_eq!(check_combination(&passport, Engine::Claude, Interface::Terminal).unwrap_err(), "A terminal session needs a project repository.");
         assert_eq!(check_combination(&passport, Engine::Codex, Interface::Chat).unwrap_err(), "System passports run with Claude Code.");
-        assert_eq!(check_combination(&work_task(), Engine::Codex, Interface::Chat).unwrap_err(), "Chat with Codex is not available yet. Use Terminal.");
+        assert!(check_combination(&work_task(), Engine::Codex, Interface::Chat).is_ok());
         assert!(check_combination(&work_task(), Engine::Codex, Interface::Terminal).is_ok());
         assert!(check_combination(&passport, Engine::Claude, Interface::Chat).is_ok());
     }

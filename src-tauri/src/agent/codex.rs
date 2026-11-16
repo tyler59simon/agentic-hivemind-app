@@ -1,5 +1,4 @@
 //! Codex through `codex app-server` on stdio: JSON-RPC lines both ways, one process per session.
-#![allow(dead_code)] // until the manager registers the adapter
 use super::claude::GOVERNED;
 use super::events::{Decision, Outcome, RunEvent, clip};
 use super::scope::{PolicyMode, Spec, governed_memory_command};
@@ -30,8 +29,9 @@ impl Adapter for Codex {
     }
 
     /// `<program> [program_args] app-server` in the worktree. Never `daemon`, `proxy` or `--listen`.
-    /// No budget flag, no model flag, no allow rules: none of them exist for Codex. The CLI's hooks, Living Memory's
-    /// included, run inside the server, so they get the store and the session id as in a terminal session.
+    /// No budget flag, no model flag, no allow rules: none of them exist for Codex (the model goes in `thread/start`).
+    /// The CLI's hooks, Living Memory's included, run inside the server, so they get the store and the session id as in a
+    /// terminal session.
     fn command(&self, spec: &Spec) -> Command {
         let mut command = Command::new(&spec.program);
         command.current_dir(&spec.cwd).args(&spec.program_args).arg("app-server").env("HIVEMIND_SESSION", &spec.session_id);
@@ -41,8 +41,8 @@ impl Adapter for Codex {
         command
     }
 
-    fn driver(&self, cwd: &Path, policy: PolicyMode, engine_session: Option<&str>) -> Box<dyn Driver> {
-        Box::new(CodexDriver::new(cwd, policy, engine_session))
+    fn driver(&self, cwd: &Path, policy: PolicyMode, engine_session: Option<&str>, model: Option<&str>) -> Box<dyn Driver> {
+        Box::new(CodexDriver::new(cwd, policy, engine_session, model))
     }
 
     fn tool_result(&self, line: &str, tool_use_id: &str) -> Option<(bool, String)> {
@@ -121,10 +121,14 @@ enum State {
 pub struct CodexDriver {
     cwd: PathBuf,
     policy: PolicyMode,
+    /// The model the user picked; left out of the thread request when there is none.
+    model: Option<String>,
     state: State,
     thread: Option<String>,
     turn: Option<String>,
     next_id: u64,
+    /// The id of the `turn/start` written last, until Codex answers it or starts the turn.
+    pending_turn: Option<u64>,
     /// A message sent before the thread was open, written as `turn/start` once it is.
     kept: Option<String>,
     items: HashMap<String, Item>,
@@ -136,14 +140,16 @@ pub struct CodexDriver {
 }
 
 impl CodexDriver {
-    fn new(cwd: &Path, policy: PolicyMode, engine_session: Option<&str>) -> CodexDriver {
+    fn new(cwd: &Path, policy: PolicyMode, engine_session: Option<&str>, model: Option<&str>) -> CodexDriver {
         CodexDriver {
             cwd: cwd.to_path_buf(),
             policy,
+            model: model.map(str::to_string),
             state: State::NoProcess,
             thread: engine_session.map(str::to_string),
             turn: None,
             next_id: FIRST_TURN_ID,
+            pending_turn: None,
             kept: None,
             items: HashMap::new(),
             open: Vec::new(),
@@ -158,6 +164,7 @@ impl CodexDriver {
         self.state = State::Handshake;
         self.turn = None;
         self.next_id = FIRST_TURN_ID;
+        self.pending_turn = None;
         self.kept = None;
         self.items.clear();
         self.open.clear();
@@ -166,9 +173,10 @@ impl CodexDriver {
         self.declined = 0;
     }
 
+    /// This process cannot be used: the turn fails with `reason` and the manager ends the process.
     fn fail(&mut self, reason: String) -> Step {
         self.state = State::Failed;
-        Step { turn: Some(Outcome { ok: false, reason: Some(reason), ..Outcome::default() }), ..Step::default() }
+        Step { turn: Some(Outcome { ok: false, reason: Some(reason), ..Outcome::default() }), end_process: true, ..Step::default() }
     }
 
     /// Codex's approval policy and sandbox for the session's permission mode.
@@ -180,17 +188,22 @@ impl CodexDriver {
         }
     }
 
-    /// `thread/start`, or `thread/resume` once the session has a thread. The model is left out: the user's default applies.
+    /// `thread/start`, or `thread/resume` once the session has a thread. Without a picked model the user's default applies.
     fn thread_request(&self) -> String {
         let (approval, sandbox) = self.permissions();
-        let cwd = self.cwd.display().to_string();
-        match &self.thread {
-            Some(thread) => json!({"method": "thread/resume", "id": THREAD_ID, "params": {
-                "threadId": thread, "excludeTurns": true, "cwd": cwd, "approvalPolicy": approval, "sandbox": sandbox}}),
-            None => json!({"method": "thread/start", "id": THREAD_ID, "params": {
-                "cwd": cwd, "approvalPolicy": approval, "sandbox": sandbox}}),
+        let mut params = json!({"cwd": self.cwd.display().to_string(), "approvalPolicy": approval, "sandbox": sandbox});
+        if let Some(model) = &self.model {
+            params["model"] = json!(model);
         }
-        .to_string()
+        let method = match &self.thread {
+            Some(thread) => {
+                params["threadId"] = json!(thread);
+                params["excludeTurns"] = json!(true);
+                "thread/resume"
+            }
+            None => "thread/start",
+        };
+        json!({"method": method, "id": THREAD_ID, "params": params}).to_string()
     }
 
     fn client_request(&mut self, method: &str, params: Value) -> String {
@@ -201,7 +214,25 @@ impl CodexDriver {
 
     fn turn_start(&mut self, text: &str) -> String {
         let thread = self.thread.clone();
+        self.pending_turn = Some(self.next_id);
         self.client_request("turn/start", json!({"threadId": thread, "input": [{"type": "text", "text": text}]}))
+    }
+
+    /// The reply to the `turn/start` written last. A refusal ends the turn the way `turn/completed` does, with its message
+    /// as the reason; otherwise `turn/started` follows.
+    fn turn_replied(&mut self, value: &Value) -> Step {
+        self.pending_turn = None;
+        let Some(error) = value.get("error") else { return Step::default() };
+        let reason = error_message(error, "Codex did not accept the message");
+        let events = self.close_requests();
+        self.state = State::Ready;
+        self.turn = None;
+        Step { events, turn: Some(Outcome { ok: false, reason: Some(reason), ..Outcome::default() }), ..Step::default() }
+    }
+
+    /// The requests still open when a turn ends are withdrawn.
+    fn close_requests(&mut self) -> Vec<RunEvent> {
+        self.open.drain(..).map(|(item, _)| RunEvent::ApprovalResolved { request_id: item, decision: Decision::Withdrawn }).collect()
     }
 
     /// The path as the user knows it: relative to the worktree when it is inside it.
@@ -300,6 +331,7 @@ impl CodexDriver {
 
     fn turn_started(&mut self, params: &Value) -> Step {
         self.state = State::Turn;
+        self.pending_turn = None;
         self.turn = params.pointer("/turn/id").and_then(Value::as_str).map(str::to_string);
         self.items.clear();
         self.last_text = None;
@@ -381,11 +413,7 @@ impl CodexDriver {
             "failed" => Some(error_message(turn.get("error").unwrap_or(&NULL), "Codex failed the turn")),
             other => Some(format!("Codex ended the turn ({other})")),
         };
-        let events = self
-            .open
-            .drain(..)
-            .map(|(item, _)| RunEvent::ApprovalResolved { request_id: item, decision: Decision::Withdrawn })
-            .collect();
+        let events = self.close_requests();
         let outcome = Outcome {
             ok,
             reason,
@@ -427,6 +455,7 @@ impl Driver for CodexDriver {
             (None, Some(id)) => match (self.state, id.as_u64()) {
                 (State::Handshake, Some(HANDSHAKE_ID)) => self.handshake(&value),
                 (State::Starting, Some(THREAD_ID)) => self.thread_opened(&value),
+                (State::Ready | State::Turn, Some(reply)) if self.pending_turn == Some(reply) => self.turn_replied(&value),
                 // The reply to a `turn/start` or `turn/interrupt`, or to a request of an earlier process.
                 _ => Step::default(),
             },
@@ -491,7 +520,7 @@ impl Driver for CodexDriver {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::super::events::TurnEnd;
     use super::super::scope::Policy;
     use super::super::step_of;
@@ -499,21 +528,21 @@ mod tests {
     use super::*;
 
     // The lines below are `<-` lines of docs/plans/spikes/codex-app-server-0.169.0.jsonl, as codex-cli 0.169.0 printed them.
-    const INIT_RESULT: &str = r##"{"id":1,"result":{"userAgent":"hivemind/0.169.0 (Windows 10.0.26100; x86_64) WindowsTerminal (hivemind; 0.1.0)","codexHome":"C:\\Users\\<user>\\.codex","platformFamily":"windows","platformOs":"windows"}}"##; // line 2
-    const THREAD_RESULT: &str = r##"{"id":2,"result":{"thread":{"id":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","environments":[{"environmentId":"local","cwd":"C:\\work\\codex-check","runtimeWorkspaceRoots":["C:\\work\\codex-check"]}],"extra":null,"sessionId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","forkedFromId":null,"attachedToThreadId":null,"parentThreadId":null,"preview":"","ephemeral":false,"section":null,"sectionEnteredAt":null,"projectId":null,"historyMode":"paginated","modelProvider":"openai","model":"gpt-6.1-sol","reasoningEffort":"high","createdAt":1794801098,"updatedAt":1794801098,"recencyAt":1794801098,"status":{"type":"idle"},"path":"C:\\Users\\<user>\\.codex\\sessions\\2026\\11\\15\\rollout-2026-11-15T21-51-38-01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38.jsonl","cwd":"C:\\work\\codex-check","cliVersion":"0.169.0","originator":"hivemind","source":"vscode","canAcceptDirectInput":true,"threadSource":null,"agentNickname":null,"agentRole":null,"gitInfo":null,"name":null,"daybreakEnabled":null,"turns":[]},"model":"gpt-6.1-sol","modelProvider":"openai","serviceTier":"default","disabledPluginIds":[],"cwd":"C:\\work\\codex-check","runtimeWorkspaceRoots":["C:\\work\\codex-check"],"instructionSources":["C:\\Users\\<user>\\.codex\\AGENTS.md"],"approvalPolicy":"untrusted","approvalsReviewer":"user","sandbox":{"type":"workspaceWrite","writableRoots":[],"networkAccess":false,"excludeTmpdirEnvVar":false,"excludeSlashTmp":false},"activePermissionProfile":null,"reasoningEffort":"high","multiAgentMode":"explicitRequestOnly"}}"##; // line 7
-    const THREAD_STATUS: &str = r##"{"method":"thread/status/changed","params":{"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","status":{"type":"active","activeFlags":[]}},"emittedAtMs":1794801099632}"##; // line 19
-    const TURN_STARTED: &str = r##"{"method":"turn/started","params":{"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turn":{"id":"01a1e27b-5fd8-7241-9725-3b97d589c611","rootTurnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","items":[],"itemsView":"notLoaded","status":"inProgress","error":null,"startedAt":1794801098,"completedAt":null,"durationMs":null}},"emittedAtMs":1794801099632}"##; // line 20
+    pub(crate) const INIT_RESULT: &str = r##"{"id":1,"result":{"userAgent":"hivemind/0.169.0 (Windows 10.0.26100; x86_64) WindowsTerminal (hivemind; 0.1.0)","codexHome":"C:\\Users\\<user>\\.codex","platformFamily":"windows","platformOs":"windows"}}"##; // line 2
+    pub(crate) const THREAD_RESULT: &str = r##"{"id":2,"result":{"thread":{"id":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","environments":[{"environmentId":"local","cwd":"C:\\work\\codex-check","runtimeWorkspaceRoots":["C:\\work\\codex-check"]}],"extra":null,"sessionId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","forkedFromId":null,"attachedToThreadId":null,"parentThreadId":null,"preview":"","ephemeral":false,"section":null,"sectionEnteredAt":null,"projectId":null,"historyMode":"paginated","modelProvider":"openai","model":"gpt-6.1-sol","reasoningEffort":"high","createdAt":1794801098,"updatedAt":1794801098,"recencyAt":1794801098,"status":{"type":"idle"},"path":"C:\\Users\\<user>\\.codex\\sessions\\2026\\11\\15\\rollout-2026-11-15T21-51-38-01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38.jsonl","cwd":"C:\\work\\codex-check","cliVersion":"0.169.0","originator":"hivemind","source":"vscode","canAcceptDirectInput":true,"threadSource":null,"agentNickname":null,"agentRole":null,"gitInfo":null,"name":null,"daybreakEnabled":null,"turns":[]},"model":"gpt-6.1-sol","modelProvider":"openai","serviceTier":"default","disabledPluginIds":[],"cwd":"C:\\work\\codex-check","runtimeWorkspaceRoots":["C:\\work\\codex-check"],"instructionSources":["C:\\Users\\<user>\\.codex\\AGENTS.md"],"approvalPolicy":"untrusted","approvalsReviewer":"user","sandbox":{"type":"workspaceWrite","writableRoots":[],"networkAccess":false,"excludeTmpdirEnvVar":false,"excludeSlashTmp":false},"activePermissionProfile":null,"reasoningEffort":"high","multiAgentMode":"explicitRequestOnly"}}"##; // line 7
+    pub(crate) const THREAD_STATUS: &str = r##"{"method":"thread/status/changed","params":{"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","status":{"type":"active","activeFlags":[]}},"emittedAtMs":1794801099632}"##; // line 19
+    pub(crate) const TURN_STARTED: &str = r##"{"method":"turn/started","params":{"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turn":{"id":"01a1e27b-5fd8-7241-9725-3b97d589c611","rootTurnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","items":[],"itemsView":"notLoaded","status":"inProgress","error":null,"startedAt":1794801098,"completedAt":null,"durationMs":null}},"emittedAtMs":1794801099632}"##; // line 20
     const HOOK_STARTED: &str = r##"{"method":"hook/started","params":{"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","run":{"eventName":"sessionStart","status":"running"}}}"##; // line 21
     const HOOK_COMPLETED: &str = r##"{"method":"hook/completed","params":{"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","run":{"eventName":"sessionStart","status":"completed"}}}"##; // line 22
     const USER_MESSAGE_STARTED: &str = r##"{"method":"item/started","params":{"item":{"type":"userMessage","id":"01a1e27b-6812-7602-a474-3eb8fe8c3977","clientId":null,"content":[{"type":"text","text":"Do these three steps in order, each as its own action, then reply with exactly \"done.\": 1) run the shell command: Set-Content -LiteralPath as-shell.txt -Value hi 2) create the file as-patch.txt containing the single line hi, using your file editing (apply_patch) tool, not a shell command 3) run the shell command: Set-Content -LiteralPath declined.txt -Value no If a step is declined, skip it and continue.","text_elements":[]}],"startedAtMs":1794801100948,"completedAtMs":null},"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","startedAtMs":1794801100948},"emittedAtMs":1794801100948}"##; // line 25
     const USER_MESSAGE_COMPLETED: &str = r##"{"method":"item/completed","params":{"item":{"type":"userMessage","id":"01a1e27b-6812-7602-a474-3eb8fe8c3977","clientId":null,"content":[{"type":"text","text":"Do these three steps in order, each as its own action, then reply with exactly \"done.\": 1) run the shell command: Set-Content -LiteralPath as-shell.txt -Value hi 2) create the file as-patch.txt containing the single line hi, using your file editing (apply_patch) tool, not a shell command 3) run the shell command: Set-Content -LiteralPath declined.txt -Value no If a step is declined, skip it and continue.","text_elements":[]}],"startedAtMs":1794801100948,"completedAtMs":1794801100948},"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","contentTokenCount":null,"completedAtMs":1794801100948},"emittedAtMs":1794801101080}"##; // line 26
     const DELTA: &str = r##"{"method":"item/agentMessage/delta","params":{"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","itemId":"msg_0ac2d3814f2deb42016afa7dcede7c87d1a58c6c5e7364a6eb","delta":"I"},"emittedAtMs":1794801102880}"##; // line 28
-    const COMMENTARY_COMPLETED: &str = r##"{"method":"item/completed","params":{"item":{"type":"agentMessage","moderation":null,"id":"msg_0ac2d3814f2deb42016afa7dcede7c87d1a58c6c5e7364a6eb","text":"I will perform each step in order and skip any declined step.\n","phase":"commentary","memoryCitation":null,"delivery":null,"questions":null,"startedAtMs":1794801102879,"completedAtMs":1794801103315},"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","contentTokenCount":14,"completedAtMs":1794801103315},"emittedAtMs":1794801103431}"##; // line 41
-    const ITEM_STARTED_COMMAND: &str = r##"{"method":"item/started","params":{"item":{"type":"commandExecution","id":"exec-0761b7d0-9001-4bde-b606-650cea373e1d","pluginId":null,"scriptPath":null,"command":"\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command 'Set-Content -LiteralPath as-shell.txt -Value hi'","cwd":"C:\\work\\codex-check","processId":null,"source":"agent","status":"inProgress","commandActions":[{"type":"unknown","command":"Set-Content -LiteralPath as-shell.txt -Value hi"}],"aggregatedOutput":null,"exitCode":null,"durationMs":null,"startedAtMs":1794801104628,"completedAtMs":null},"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","startedAtMs":1794801104628},"emittedAtMs":1794801104631}"##; // line 45
+    pub(crate) const COMMENTARY_COMPLETED: &str = r##"{"method":"item/completed","params":{"item":{"type":"agentMessage","moderation":null,"id":"msg_0ac2d3814f2deb42016afa7dcede7c87d1a58c6c5e7364a6eb","text":"I will perform each step in order and skip any declined step.\n","phase":"commentary","memoryCitation":null,"delivery":null,"questions":null,"startedAtMs":1794801102879,"completedAtMs":1794801103315},"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","contentTokenCount":14,"completedAtMs":1794801103315},"emittedAtMs":1794801103431}"##; // line 41
+    pub(crate) const ITEM_STARTED_COMMAND: &str = r##"{"method":"item/started","params":{"item":{"type":"commandExecution","id":"exec-0761b7d0-9001-4bde-b606-650cea373e1d","pluginId":null,"scriptPath":null,"command":"\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command 'Set-Content -LiteralPath as-shell.txt -Value hi'","cwd":"C:\\work\\codex-check","processId":null,"source":"agent","status":"inProgress","commandActions":[{"type":"unknown","command":"Set-Content -LiteralPath as-shell.txt -Value hi"}],"aggregatedOutput":null,"exitCode":null,"durationMs":null,"startedAtMs":1794801104628,"completedAtMs":null},"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","startedAtMs":1794801104628},"emittedAtMs":1794801104631}"##; // line 45
     const REQUEST_COMMAND: &str = r##"{"method":"item/commandExecution/requestApproval","id":0,"params":{"kind":"command","threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","itemId":"exec-0761b7d0-9001-4bde-b606-650cea373e1d","startedAtMs":1794801104628,"environmentId":"local","command":"\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command 'Set-Content -LiteralPath as-shell.txt -Value hi'","cwd":"C:\\work\\codex-check","commandActions":[{"type":"unknown","command":"Set-Content -LiteralPath as-shell.txt -Value hi"}],"proposedExecpolicyAmendment":["Set-Content","-LiteralPath","as-shell.txt","-Value","hi"],"availableDecisions":["accept",{"acceptWithExecpolicyAmendment":{"execpolicy_amendment":["Set-Content","-LiteralPath","as-shell.txt","-Value","hi"]}},"cancel"]}}"##; // line 46
     const RESOLVED: &str = r##"{"method":"serverRequest/resolved","params":{"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","requestId":0},"emittedAtMs":1794801104634}"##; // line 48
-    const ITEM_COMPLETED_COMMAND: &str = r##"{"method":"item/completed","params":{"item":{"type":"commandExecution","id":"exec-0761b7d0-9001-4bde-b606-650cea373e1d","pluginId":null,"scriptPath":null,"command":"\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command 'Set-Content -LiteralPath as-shell.txt -Value hi'","cwd":"C:\\work\\codex-check","processId":"69973","source":"unifiedExecStartup","status":"completed","commandActions":[{"type":"unknown","command":"Set-Content -LiteralPath as-shell.txt -Value hi"}],"aggregatedOutput":null,"exitCode":0,"durationMs":364,"startedAtMs":1794801104628,"completedAtMs":1794801106220},"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","contentTokenCount":null,"completedAtMs":1794801106220},"emittedAtMs":1794801106340}"##; // line 50
-    const TOKEN_USAGE: &str = r##"{"method":"thread/tokenUsage/updated","params":{"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","tokenUsage":{"total":{"totalTokens":19905,"inputTokens":19847,"cachedInputTokens":13440,"cacheWriteInputTokens":0,"outputTokens":58,"reasoningOutputTokens":0},"last":{"totalTokens":19905,"inputTokens":19847,"cachedInputTokens":13440,"cacheWriteInputTokens":0,"outputTokens":58,"reasoningOutputTokens":0},"modelContextWindow":475000}},"emittedAtMs":1794801106562}"##; // line 51
+    pub(crate) const ITEM_COMPLETED_COMMAND: &str = r##"{"method":"item/completed","params":{"item":{"type":"commandExecution","id":"exec-0761b7d0-9001-4bde-b606-650cea373e1d","pluginId":null,"scriptPath":null,"command":"\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command 'Set-Content -LiteralPath as-shell.txt -Value hi'","cwd":"C:\\work\\codex-check","processId":"69973","source":"unifiedExecStartup","status":"completed","commandActions":[{"type":"unknown","command":"Set-Content -LiteralPath as-shell.txt -Value hi"}],"aggregatedOutput":null,"exitCode":0,"durationMs":364,"startedAtMs":1794801104628,"completedAtMs":1794801106220},"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","contentTokenCount":null,"completedAtMs":1794801106220},"emittedAtMs":1794801106340}"##; // line 50
+    pub(crate) const TOKEN_USAGE: &str = r##"{"method":"thread/tokenUsage/updated","params":{"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","tokenUsage":{"total":{"totalTokens":19905,"inputTokens":19847,"cachedInputTokens":13440,"cacheWriteInputTokens":0,"outputTokens":58,"reasoningOutputTokens":0},"last":{"totalTokens":19905,"inputTokens":19847,"cachedInputTokens":13440,"cacheWriteInputTokens":0,"outputTokens":58,"reasoningOutputTokens":0},"modelContextWindow":475000}},"emittedAtMs":1794801106562}"##; // line 51
     const RATE_LIMITS: &str = r##"{"method":"account/rateLimits/updated","params":{}}"##; // line 52
     const ITEM_STARTED_PATCH: &str = r##"{"method":"item/started","params":{"item":{"type":"fileChange","id":"exec-71bc70e6-55b4-481b-ab24-f4c118d2fa93","changes":[{"path":"C:\\work\\codex-check\\as-patch.txt","kind":{"type":"add"},"diff":"hi\n"}],"status":"inProgress","startedAtMs":1794801110927,"completedAtMs":null},"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","startedAtMs":1794801110927},"emittedAtMs":1794801110928}"##; // line 55
     const REQUEST_PATCH: &str = r##"{"method":"item/fileChange/requestApproval","id":1,"params":{"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","itemId":"exec-71bc70e6-55b4-481b-ab24-f4c118d2fa93","startedAtMs":1794801110932,"reason":null,"grantRoot":null}}"##; // line 57
@@ -521,8 +550,8 @@ mod tests {
     const ITEM_STARTED_DECLINED: &str = r##"{"method":"item/started","params":{"item":{"type":"commandExecution","id":"exec-fdbd310d-f3c4-42d2-b099-bec93e0fefaa","pluginId":null,"scriptPath":null,"command":"\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command 'Set-Content -LiteralPath declined.txt -Value no'","cwd":"C:\\work\\codex-check","processId":null,"source":"agent","status":"inProgress","commandActions":[{"type":"unknown","command":"Set-Content -LiteralPath declined.txt -Value no"}],"aggregatedOutput":null,"exitCode":null,"durationMs":null,"startedAtMs":1794801117400,"completedAtMs":null},"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","startedAtMs":1794801117400},"emittedAtMs":1794801117400}"##; // line 69
     const REQUEST_DECLINED: &str = r##"{"method":"item/commandExecution/requestApproval","id":2,"params":{"kind":"command","threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","itemId":"exec-fdbd310d-f3c4-42d2-b099-bec93e0fefaa","startedAtMs":1794801117400,"environmentId":"local","command":"\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command 'Set-Content -LiteralPath declined.txt -Value no'","cwd":"C:\\work\\codex-check","commandActions":[{"type":"unknown","command":"Set-Content -LiteralPath declined.txt -Value no"}],"proposedExecpolicyAmendment":["Set-Content","-LiteralPath","declined.txt","-Value","no"],"availableDecisions":["accept",{"acceptWithExecpolicyAmendment":{"execpolicy_amendment":["Set-Content","-LiteralPath","declined.txt","-Value","no"]}},"cancel"]}}"##; // line 70
     const ITEM_COMPLETED_DECLINED: &str = r##"{"method":"item/completed","params":{"item":{"type":"commandExecution","id":"exec-fdbd310d-f3c4-42d2-b099-bec93e0fefaa","pluginId":null,"scriptPath":null,"command":"\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command 'Set-Content -LiteralPath declined.txt -Value no'","cwd":"C:\\work\\codex-check","processId":null,"source":"agent","status":"declined","commandActions":[{"type":"unknown","command":"Set-Content -LiteralPath declined.txt -Value no"}],"aggregatedOutput":null,"exitCode":null,"durationMs":null,"startedAtMs":1794801117400,"completedAtMs":1794801117401},"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","contentTokenCount":null,"completedAtMs":1794801117401},"emittedAtMs":1794801117401}"##; // line 73
-    const ITEM_COMPLETED_MESSAGE: &str = r##"{"method":"item/completed","params":{"item":{"type":"agentMessage","moderation":null,"id":"msg_0ac2d3814f2deb42016afa7de0228487d18ea670f20e08abff","text":"done.","phase":"final_answer","memoryCitation":null,"delivery":null,"questions":null,"startedAtMs":1794801120151,"completedAtMs":1794801120225},"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","contentTokenCount":3,"completedAtMs":1794801120225},"emittedAtMs":1794801120312}"##; // line 81
-    const TURN_COMPLETED: &str = r##"{"method":"turn/completed","params":{"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turn":{"id":"01a1e27b-5fd8-7241-9725-3b97d589c611","rootTurnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","items":[{"type":"agentMessage","moderation":null,"id":"msg_0ac2d3814f2deb42016afa7de0228487d18ea670f20e08abff","text":"done.","phase":"final_answer","memoryCitation":null,"delivery":null,"questions":null,"startedAtMs":1794801120151,"completedAtMs":1794801120225}],"itemsView":"summary","status":"completed","error":null,"startedAt":1794801098,"completedAt":1794801120,"durationMs":22090}},"emittedAtMs":1794801120862}"##; // line 88
+    pub(crate) const ITEM_COMPLETED_MESSAGE: &str = r##"{"method":"item/completed","params":{"item":{"type":"agentMessage","moderation":null,"id":"msg_0ac2d3814f2deb42016afa7de0228487d18ea670f20e08abff","text":"done.","phase":"final_answer","memoryCitation":null,"delivery":null,"questions":null,"startedAtMs":1794801120151,"completedAtMs":1794801120225},"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","contentTokenCount":3,"completedAtMs":1794801120225},"emittedAtMs":1794801120312}"##; // line 81
+    pub(crate) const TURN_COMPLETED: &str = r##"{"method":"turn/completed","params":{"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turn":{"id":"01a1e27b-5fd8-7241-9725-3b97d589c611","rootTurnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","items":[{"type":"agentMessage","moderation":null,"id":"msg_0ac2d3814f2deb42016afa7de0228487d18ea670f20e08abff","text":"done.","phase":"final_answer","memoryCitation":null,"delivery":null,"questions":null,"startedAtMs":1794801120151,"completedAtMs":1794801120225}],"itemsView":"summary","status":"completed","error":null,"startedAt":1794801098,"completedAt":1794801120,"durationMs":22090}},"emittedAtMs":1794801120862}"##; // line 88
     const REASONING_STARTED: &str = r##"{"method":"item/started","params":{"item":{"type":"reasoning","id":"rs_0ac2d3814f2deb42016afa7de4298c87d181cbd48cf2d8cdb2","summary":[],"content":[],"startedAtMs":1794801124174,"completedAtMs":null},"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-b660-7d12-aa7b-c17638473741","startedAtMs":1794801124174},"emittedAtMs":1794801124175}"##; // line 98
     const REASONING_COMPLETED: &str = r##"{"method":"item/completed","params":{"item":{"type":"reasoning","id":"rs_0ac2d3814f2deb42016afa7de4298c87d181cbd48cf2d8cdb2","summary":[],"content":[],"startedAtMs":1794801124174,"completedAtMs":1794801124176},"threadId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","turnId":"01a1e27b-b660-7d12-aa7b-c17638473741","contentTokenCount":null,"completedAtMs":1794801124176},"emittedAtMs":1794801124190}"##; // line 99
     const INTERRUPT_REPLY: &str = r##"{"id":11,"result":{}}"##; // line 158
@@ -530,9 +559,9 @@ mod tests {
     const TURN_START_REPLY: &str = r##"{"id":21,"result":{"turn":{"id":"01a1e27b-c7aa-7e60-9d58-856547639d6d","rootTurnId":"01a1e27b-c7aa-7e60-9d58-856547639d6d","items":[],"itemsView":"notLoaded","status":"inProgress","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}"##; // line 172
     const ERROR: &str = r##"{"method":"error","params":{"error":{"message":"The 'no-such-model-xyz' model is not supported when using Codex with a ChatGPT account.","codexErrorInfo":"modelNotFound","additionalDetails":null,"misalignment":null},"willRetry":false,"threadId":"01a1e27b-c765-7f52-b656-1ff5786da017","turnId":"01a1e27b-c7aa-7e60-9d58-856547639d6d"},"emittedAtMs":1794801127357}"##; // line 183
     const TURN_FAILED: &str = r##"{"method":"turn/completed","params":{"threadId":"01a1e27b-c765-7f52-b656-1ff5786da017","turn":{"id":"01a1e27b-c7aa-7e60-9d58-856547639d6d","rootTurnId":"01a1e27b-c7aa-7e60-9d58-856547639d6d","items":[],"itemsView":"notLoaded","status":"failed","error":{"message":"The 'no-such-model-xyz' model is not supported when using Codex with a ChatGPT account.","codexErrorInfo":"modelNotFound","additionalDetails":null,"misalignment":null},"startedAt":1794801125,"completedAt":1794801127,"durationMs":2040}},"emittedAtMs":1794801127357}"##; // line 184
-    const RESUME_RESULT: &str = r##"{"id":2,"result":{"thread":{"id":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","environments":[{"environmentId":"local","cwd":"C:\\work\\codex-check","runtimeWorkspaceRoots":["C:\\work\\codex-check"]}],"extra":null,"sessionId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","forkedFromId":null,"attachedToThreadId":null,"parentThreadId":null,"preview":"Do these three steps in order, each as its own action, then reply with exactly \"done.\": 1) run the shell command: Set-Content -LiteralPath as-shell.txt -Value hi 2) create the file as-patch.txt containing the single line hi, using your file editing (apply_patch) tool, not a shell command 3) run the shell command: Set-Content -LiteralPath declined.txt -Value no If a step is declined, skip it and continue.","ephemeral":false,"section":null,"sectionEnteredAt":null,"projectId":null,"historyMode":"paginated","modelProvider":"openai","model":"gpt-6.1-sol","reasoningEffort":"low","createdAt":1794801098,"updatedAt":1794801128,"recencyAt":1794801120,"status":{"type":"idle"},"path":"C:\\Users\\<user>\\.codex\\sessions\\2026\\11\\15\\rollout-2026-11-15T21-51-38-01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38.jsonl","cwd":"C:\\work\\codex-check","cliVersion":"0.169.0","originator":"hivemind","source":"vscode","canAcceptDirectInput":true,"threadSource":null,"agentNickname":null,"agentRole":null,"gitInfo":{"sha":"8712227990f41a085cc6ca75cfe595b683a7b383","branch":"master","originUrl":null},"name":null,"daybreakEnabled":null,"turns":[{"id":"01a1e27b-5fd8-7241-9725-3b97d589c611","rootTurnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","items":[{"type":"userMessage","id":"01a1e27b-6812-7602-a474-3eb8fe8c3977","clientId":null,"content":[{"type":"text","text":"Do these three steps in order, each as its own action, then reply with exactly \"done.\": 1) run the shell command: Set-Content -LiteralPath as-shell.txt -Value hi 2) create the file as-patch.txt containing the single line hi, using your file editing (apply_patch) tool, not a shell command 3) run the shell command: Set-Content -LiteralPath declined.txt -Value no If a step is declined, skip it and continue.","text_elements":[]}],"startedAtMs":1794801100948,"completedAtMs":1794801100948},{"type":"agentMessage","moderation":null,"id":"msg_0ac2d3814f2deb42016afa7dcede7c87d1a58c6c5e7364a6eb","text":"I will perform each step in order and skip any declined step.\n","phase":"commentary","memoryCitation":null,"delivery":null,"questions":null,"startedAtMs":1794801102879,"completedAtMs":1794801103315},{"type":"commandExecution","id":"exec-0761b7d0-9001-4bde-b606-650cea373e1d","pluginId":null,"scriptPath":null,"command":"\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command 'Set-Content -LiteralPath as-shell.txt -Value hi'","cwd":"C:\\work\\codex-check","processId":"69973","source":"unifiedExecStartup","status":"completed","commandActions":[{"type":"unknown","command":"Set-Content -LiteralPath as-shell.txt -Value hi"}],"aggregatedOutput":null,"exitCode":0,"durationMs":364,"startedAtMs":1794801104628,"completedAtMs":1794801106220},{"type":"fileChange","id":"exec-71bc70e6-55b4-481b-ab24-f4c118d2fa93","changes":[{"path":"C:\\work\\codex-check\\as-patch.txt","kind":{"type":"add"},"diff":"hi\n"}],"status":"completed","startedAtMs":1794801110927,"completedAtMs":1794801113793},{"type":"agentMessage","moderation":null,"id":"msg_0ac2d3814f2deb42016afa7de0228487d18ea670f20e08abff","text":"done.","phase":"final_answer","memoryCitation":null,"delivery":null,"questions":null,"startedAtMs":1794801120151,"completedAtMs":1794801120225}],"itemsView":"full","status":"completed","error":null,"startedAt":1794801098,"completedAt":1794801120,"durationMs":22090},{"id":"01a1e27b-b660-7d12-aa7b-c17638473741","rootTurnId":"01a1e27b-b660-7d12-aa7b-c17638473741","items":[{"type":"userMessage","id":"01a1e27b-b8d1-76a0-815b-6a9546f5b263","clientId":null,"content":[{"type":"text","text":"Count slowly from 1 to 200, one number per line, thinking about each number.","text_elements":[]}],"startedAtMs":1794801121498,"completedAtMs":1794801121498},{"type":"reasoning","id":"rs_0ac2d3814f2deb42016afa7de4298c87d181cbd48cf2d8cdb2","summary":[],"content":[],"startedAtMs":1794801124174,"completedAtMs":1794801124176}],"itemsView":"full","status":"interrupted","error":null,"startedAt":1794801120,"completedAt":1794801125,"durationMs":4303}]},"model":"gpt-6.1-sol","modelProvider":"openai","serviceTier":"default","disabledPluginIds":[],"cwd":"C:\\work\\codex-check","runtimeWorkspaceRoots":["C:\\work\\codex-check"],"instructionSources":["C:\\Users\\<user>\\.codex\\AGENTS.md"],"approvalPolicy":"untrusted","approvalsReviewer":"user","sandbox":{"type":"workspaceWrite","writableRoots":[],"networkAccess":false,"excludeTmpdirEnvVar":false,"excludeSlashTmp":false},"activePermissionProfile":{"id":":workspace","extends":null},"reasoningEffort":"low","collaborationMode":{"mode":"default","settings":{"model":"gpt-6.1-sol","reasoning_effort":"low","developer_instructions":null}},"multiAgentMode":"explicitRequestOnly","initialTurnsPage":null,"turnsBackwardsCursor":"{\"requestedThreadId\":\"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38\",\"rolloutOrdinal\":37,\"includeAnchor\":true,\"scope\":{\"kind\":\"turns\"}}","itemsBackwardsCursor":"{\"requestedThreadId\":\"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38\",\"rolloutOrdinal\":43,\"includeAnchor\":true,\"scope\":{\"kind\":\"itemsByCreatedAtOrdinal\"}}"}}"##; // line 200
+    pub(crate) const RESUME_RESULT: &str = r##"{"id":2,"result":{"thread":{"id":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","environments":[{"environmentId":"local","cwd":"C:\\work\\codex-check","runtimeWorkspaceRoots":["C:\\work\\codex-check"]}],"extra":null,"sessionId":"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38","forkedFromId":null,"attachedToThreadId":null,"parentThreadId":null,"preview":"Do these three steps in order, each as its own action, then reply with exactly \"done.\": 1) run the shell command: Set-Content -LiteralPath as-shell.txt -Value hi 2) create the file as-patch.txt containing the single line hi, using your file editing (apply_patch) tool, not a shell command 3) run the shell command: Set-Content -LiteralPath declined.txt -Value no If a step is declined, skip it and continue.","ephemeral":false,"section":null,"sectionEnteredAt":null,"projectId":null,"historyMode":"paginated","modelProvider":"openai","model":"gpt-6.1-sol","reasoningEffort":"low","createdAt":1794801098,"updatedAt":1794801128,"recencyAt":1794801120,"status":{"type":"idle"},"path":"C:\\Users\\<user>\\.codex\\sessions\\2026\\11\\15\\rollout-2026-11-15T21-51-38-01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38.jsonl","cwd":"C:\\work\\codex-check","cliVersion":"0.169.0","originator":"hivemind","source":"vscode","canAcceptDirectInput":true,"threadSource":null,"agentNickname":null,"agentRole":null,"gitInfo":{"sha":"8712227990f41a085cc6ca75cfe595b683a7b383","branch":"master","originUrl":null},"name":null,"daybreakEnabled":null,"turns":[{"id":"01a1e27b-5fd8-7241-9725-3b97d589c611","rootTurnId":"01a1e27b-5fd8-7241-9725-3b97d589c611","items":[{"type":"userMessage","id":"01a1e27b-6812-7602-a474-3eb8fe8c3977","clientId":null,"content":[{"type":"text","text":"Do these three steps in order, each as its own action, then reply with exactly \"done.\": 1) run the shell command: Set-Content -LiteralPath as-shell.txt -Value hi 2) create the file as-patch.txt containing the single line hi, using your file editing (apply_patch) tool, not a shell command 3) run the shell command: Set-Content -LiteralPath declined.txt -Value no If a step is declined, skip it and continue.","text_elements":[]}],"startedAtMs":1794801100948,"completedAtMs":1794801100948},{"type":"agentMessage","moderation":null,"id":"msg_0ac2d3814f2deb42016afa7dcede7c87d1a58c6c5e7364a6eb","text":"I will perform each step in order and skip any declined step.\n","phase":"commentary","memoryCitation":null,"delivery":null,"questions":null,"startedAtMs":1794801102879,"completedAtMs":1794801103315},{"type":"commandExecution","id":"exec-0761b7d0-9001-4bde-b606-650cea373e1d","pluginId":null,"scriptPath":null,"command":"\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command 'Set-Content -LiteralPath as-shell.txt -Value hi'","cwd":"C:\\work\\codex-check","processId":"69973","source":"unifiedExecStartup","status":"completed","commandActions":[{"type":"unknown","command":"Set-Content -LiteralPath as-shell.txt -Value hi"}],"aggregatedOutput":null,"exitCode":0,"durationMs":364,"startedAtMs":1794801104628,"completedAtMs":1794801106220},{"type":"fileChange","id":"exec-71bc70e6-55b4-481b-ab24-f4c118d2fa93","changes":[{"path":"C:\\work\\codex-check\\as-patch.txt","kind":{"type":"add"},"diff":"hi\n"}],"status":"completed","startedAtMs":1794801110927,"completedAtMs":1794801113793},{"type":"agentMessage","moderation":null,"id":"msg_0ac2d3814f2deb42016afa7de0228487d18ea670f20e08abff","text":"done.","phase":"final_answer","memoryCitation":null,"delivery":null,"questions":null,"startedAtMs":1794801120151,"completedAtMs":1794801120225}],"itemsView":"full","status":"completed","error":null,"startedAt":1794801098,"completedAt":1794801120,"durationMs":22090},{"id":"01a1e27b-b660-7d12-aa7b-c17638473741","rootTurnId":"01a1e27b-b660-7d12-aa7b-c17638473741","items":[{"type":"userMessage","id":"01a1e27b-b8d1-76a0-815b-6a9546f5b263","clientId":null,"content":[{"type":"text","text":"Count slowly from 1 to 200, one number per line, thinking about each number.","text_elements":[]}],"startedAtMs":1794801121498,"completedAtMs":1794801121498},{"type":"reasoning","id":"rs_0ac2d3814f2deb42016afa7de4298c87d181cbd48cf2d8cdb2","summary":[],"content":[],"startedAtMs":1794801124174,"completedAtMs":1794801124176}],"itemsView":"full","status":"interrupted","error":null,"startedAt":1794801120,"completedAt":1794801125,"durationMs":4303}]},"model":"gpt-6.1-sol","modelProvider":"openai","serviceTier":"default","disabledPluginIds":[],"cwd":"C:\\work\\codex-check","runtimeWorkspaceRoots":["C:\\work\\codex-check"],"instructionSources":["C:\\Users\\<user>\\.codex\\AGENTS.md"],"approvalPolicy":"untrusted","approvalsReviewer":"user","sandbox":{"type":"workspaceWrite","writableRoots":[],"networkAccess":false,"excludeTmpdirEnvVar":false,"excludeSlashTmp":false},"activePermissionProfile":{"id":":workspace","extends":null},"reasoningEffort":"low","collaborationMode":{"mode":"default","settings":{"model":"gpt-6.1-sol","reasoning_effort":"low","developer_instructions":null}},"multiAgentMode":"explicitRequestOnly","initialTurnsPage":null,"turnsBackwardsCursor":"{\"requestedThreadId\":\"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38\",\"rolloutOrdinal\":37,\"includeAnchor\":true,\"scope\":{\"kind\":\"turns\"}}","itemsBackwardsCursor":"{\"requestedThreadId\":\"01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38\",\"rolloutOrdinal\":43,\"includeAnchor\":true,\"scope\":{\"kind\":\"itemsByCreatedAtOrdinal\"}}"}}"##; // line 200
 
-    const THREAD: &str = "01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38";
+    pub(crate) const THREAD: &str = "01a1e27b-5c52-7e82-9d72-1eb2d9ff6b38";
     const TURN: &str = "01a1e27b-5fd8-7241-9725-3b97d589c611";
     const COMMAND: &str = "exec-0761b7d0-9001-4bde-b606-650cea373e1d";
     const PATCH: &str = "exec-71bc70e6-55b4-481b-ab24-f4c118d2fa93";
@@ -543,7 +572,7 @@ mod tests {
     }
 
     fn driver(policy: PolicyMode, engine_session: Option<&str>) -> Box<dyn Driver> {
-        Codex.driver(&cwd(), policy, engine_session)
+        Codex.driver(&cwd(), policy, engine_session, None)
     }
 
     fn json_of(line: &str) -> Value {
@@ -617,6 +646,20 @@ mod tests {
         assert_eq!(thread_params(PolicyMode::AcceptEdits)["approvalPolicy"], "on-request");
         assert_eq!(thread_params(PolicyMode::AcceptEdits)["sandbox"], "workspace-write");
         assert_eq!(thread_params(PolicyMode::Ask)["approvalPolicy"], "untrusted");
+    }
+
+    #[test]
+    fn a_picked_model_goes_in_the_thread_request() {
+        let mut start = Codex.driver(&cwd(), PolicyMode::Ask, None, Some("gpt-6.1-sol"));
+        start.note(&RunEvent::ProcessStarted { resume: false });
+        let request = json_of(&start.read(INIT_RESULT).write[1]);
+        assert_eq!(request["method"], "thread/start");
+        assert_eq!(request["params"]["model"], "gpt-6.1-sol");
+        let mut resume = Codex.driver(&cwd(), PolicyMode::Ask, Some("T"), Some("gpt-6.1-sol"));
+        resume.note(&RunEvent::ProcessStarted { resume: true });
+        let request = json_of(&resume.read(INIT_RESULT).write[1]);
+        assert_eq!((request["method"].as_str(), request["params"]["threadId"].as_str()), (Some("thread/resume"), Some("T")));
+        assert_eq!(request["params"]["model"], "gpt-6.1-sol");
     }
 
     #[test]
@@ -792,6 +835,41 @@ mod tests {
     }
 
     #[test]
+    fn a_rejected_turn_start_fails_the_turn() {
+        let mut d = ready();
+        let sent = json_of(&d.send("hi")[0]);
+        assert_eq!(sent["id"], 3);
+        let reply = r#"{"id":3,"error":{"code":-32600,"message":"The 'nope' model is not supported."}}"#;
+        let step = d.read(reply);
+        let outcome = step.turn.expect("the turn ends");
+        assert_eq!((outcome.ok, outcome.reason.as_deref()), (false, Some("The 'nope' model is not supported.")));
+        assert!(step.events.is_empty() && step.write.is_empty() && !step.end_process, "the process stays usable");
+        assert!(empty(&d.read(reply)), "the reply is only taken once");
+        // The next message goes out under a new id and its turn runs as usual.
+        assert_eq!(json_of(&d.send("again")[0])["id"], 4);
+        assert!(empty(&d.read(TURN_STARTED)));
+        assert!(d.read(TURN_COMPLETED).turn.is_some_and(|turn| turn.ok));
+        // An error reply to anything but the turn/start in flight is not a rejected turn.
+        let mut d = ready();
+        d.send("hi");
+        d.read(TURN_STARTED);
+        assert!(empty(&d.read(r#"{"id":3,"error":{"message":"late"}}"#)));
+        assert!(empty(&d.read(r#"{"id":11,"error":{"message":"no turn to interrupt"}}"#)));
+    }
+
+    #[test]
+    fn a_rejected_turn_withdraws_the_open_requests() {
+        let mut d = ready();
+        d.send("hi");
+        d.read(ITEM_STARTED_COMMAND);
+        d.read(REQUEST_COMMAND);
+        let step = d.read(r#"{"id":3,"error":{"message":"no"}}"#);
+        assert_eq!(step.events, vec![RunEvent::ApprovalResolved { request_id: COMMAND.into(), decision: Decision::Withdrawn }]);
+        assert!(step.turn.is_some_and(|turn| !turn.ok));
+        assert!(d.answer(COMMAND, REQUEST_COMMAND, Decision::Allow).is_none());
+    }
+
+    #[test]
     fn interrupt_needs_a_running_turn() {
         let mut d = driver(PolicyMode::Ask, None);
         assert!(d.interrupt().is_none());
@@ -830,7 +908,7 @@ mod tests {
         let step = d.read(&old);
         assert!(step.write.is_empty() && step.events.is_empty());
         let outcome = step.turn.unwrap();
-        assert!(!outcome.ok);
+        assert!(!outcome.ok && step.end_process, "the manager ends this process");
         assert_eq!(outcome.reason.as_deref(), Some("This Codex version is not supported for Chat. Use Terminal."));
         assert!(empty(&d.read(THREAD_RESULT)), "a process that is not usable stays unused");
         assert_eq!(agent_version("hivemind_spike/0.166.0 (Windows 10.0.26100; x86_64) WindowsTerminal (hivemind_spike; 0.0.1)"), Some((0, 166, 0)));
@@ -850,7 +928,7 @@ mod tests {
         d.read(INIT_RESULT);
         let step = d.read(r#"{"id":2,"error":{"code":-32600,"message":"no rollout found for thread id gone"}}"#);
         assert_eq!(step.turn.unwrap().reason.as_deref(), Some("no rollout found for thread id gone"));
-        assert!(step.write.is_empty() && step.events.is_empty());
+        assert!(step.write.is_empty() && step.events.is_empty() && step.end_process);
     }
 
     /// What the manager does with one session's driver and log, reduced to the calls that matter here.

@@ -661,6 +661,7 @@ pub fn run() {
             let agents = agent::Manager::new(
                 sessions_dir,
                 Arc::new(agent::claude::ClaudeCode),
+                Arc::new(agent::codex::Codex),
                 Arc::new(move |emit| {
                     let _ = match emit {
                         agent::Emit::Event(event) => events.emit("agent-event", event),
@@ -743,8 +744,8 @@ mod tests {
 
         let codex = engine_info(agent::Engine::Codex, Ok(Cli { program: "node".into(), args: vec!["C:/n/codex.js".into()] }));
         assert_eq!(codex.path.as_deref(), Some("C:/n/codex.js"));
-        assert_eq!(codex.chat, agent::CODEX_CHAT);
-        assert_eq!(codex.chat_reason.is_some(), !codex.chat);
+        assert!(codex.chat);
+        assert_eq!(codex.chat_reason, None);
 
         let missing = engine_info(agent::Engine::Codex, Err(NO_CODEX.to_string()));
         assert_eq!(missing.path, None);
