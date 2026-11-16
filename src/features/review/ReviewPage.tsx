@@ -1,11 +1,10 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleCheck, FileText, GraduationCap, Layers, Network } from "lucide-react";
+import { CircleCheck, FileText, Layers, Network } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { reviewFiles, reviewRefresh, sessionsQuery, type FileChange, type SessionInfo } from "../../lib/agent";
-import { useChangesEnabled, useConnection, useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
+import { useChangesEnabled, useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { systemStaleness, type Staleness } from "../../lib/architecture";
 import { classify } from "../../lib/errors";
-import { learningList, scopeLearning } from "../../lib/learning";
 import { list as listNotes, meta, review, systemPlan, type ReviewKind, type ReviewRow, type System, type SystemUpdate } from "../../lib/lm";
 import { openSession, openSystem, useApp } from "../../store";
 import { sections } from "../../lib/note";
@@ -20,16 +19,15 @@ import { systemsQuery, useSystemProposals } from "../systems/useSystem";
 import { noteQuery } from "../viewer/NoteView";
 import { ReviewQueue } from "../work/ReviewQueue";
 import { FilePane, ReviewBar, SessionPane } from "./CodeReview";
-import { LearningReview } from "./LearningReview";
 import { afterDecision, baseName, changeOf, fileKey, reviewLabel, reviewSessions, reviewVersion, sessionHeading, step } from "./review";
 import { candidates, CANDIDATES, unconfirmed } from "./memory";
 import { countLine, kindCounts } from "./worklist";
 
-type Kind = "all" | "code" | "memory" | "architecture" | "learning";
+type Kind = "all" | "code" | "memory" | "architecture";
 
 /** The most file rows one session lists; the rest are counted. */
 const MAX_ROWS = 300;
-const EMPTY: Record<Exclude<Kind, "all" | "learning">, string> = {
+const EMPTY: Record<Exclude<Kind, "all">, string> = {
   code: "No code changes are waiting.", memory: "No notes are waiting.", architecture: "No architecture updates are waiting.",
 };
 
@@ -38,8 +36,7 @@ type Item =
   | { key: string; type: "session"; info: SessionInfo }
   | { key: string; type: "memory"; row: ReviewRow; due: boolean }
   | { key: string; type: "proposal"; system: System; update: SystemUpdate; fields: string; proposer: SessionInfo }
-  | { key: string; type: "behind"; system: System; stale: Staleness }
-  | { key: string; type: "learning" };
+  | { key: string; type: "behind"; system: System; stale: Staleness };
 
 /** A Memory item: the existing card, and the note's Executive Summary under it. */
 function MemoryCard({ row, due }: { row: ReviewRow; due: boolean }) {
@@ -54,8 +51,8 @@ function MemoryCard({ row, due }: { row: ReviewRow; due: boolean }) {
   );
 }
 
-/** Review: what waits for you before it counts as accepted. Agent code edits, notes due for confirmation, registry changes an agent
- *  proposed and learned procedures each have their rows in the left list; the right pane shows the selected one. */
+/** Review: what waits for you before it counts as accepted. Agent code edits, notes due for confirmation and registry changes an agent
+ *  proposed each have their rows in the left list; the right pane shows the selected one. */
 export function ReviewPage() {
   const client = useQueryClient();
   const route = useApp((s) => s.route);
@@ -65,10 +62,6 @@ export function ReviewPage() {
   const systemsOn = useSystemsEnabled();
   const changesOn = useChangesEnabled();
   const { project } = useCurrentProject();
-  const learningSupported = useConnection((s) => s.commands.includes("learn"));
-  const learningOn = useConnection((s) => (s.capabilities?.learning ?? 0) >= 1);
-  const learning = useQuery({ queryKey: ["learning", "candidates"], queryFn: () => learningList("candidate"), enabled: learningOn });
-  const learningCount = scopeLearning(learning.data?.records ?? [], project?.slug).filter((r) => r.state === "draft" || r.state === "deferred").length;
 
   // Code: the sessions with edits to review, and each one's files.
   const sessions = useQuery(sessionsQuery());
@@ -127,11 +120,10 @@ export function ReviewPage() {
   const codeCount = groups.reduce((sum, g) => sum + (g.filesChanged?.files ?? 0), 0);
   const memoryCount = (due.data?.notes.length ?? 0) + captures.length;
   const architectureCount = proposals.length + behind.length;
-  const total = codeCount + memoryCount + architectureCount + learningCount;
+  const total = codeCount + memoryCount + architectureCount;
   const showCode = kind === "all" || kind === "code";
   const showMemory = kind === "all" || kind === "memory";
   const showArchitecture = kind === "all" || kind === "architecture";
-  const showLearning = (kind === "all" && learningCount > 0) || (kind === "learning" && learningSupported);
 
   // Everything the left list can hold, in order, and which of it is selected.
   const visible = useMemo(() => {
@@ -148,9 +140,8 @@ export function ReviewPage() {
     if (showMemory && !kinds.length) for (const row of captures) out.push({ key: `memory:${row.ref}`, type: "memory", row, due: false });
     if (showArchitecture) for (const p of proposals) out.push({ key: `proposal:${p.system.slug}`, type: "proposal", system: p.system, update: p.update!, fields: p.fields, proposer: p.proposer! });
     if (showArchitecture) for (const b of behind) out.push({ key: `behind:${b.system.slug}`, type: "behind", system: b.system, stale: b.stale });
-    if (showLearning) out.push({ key: "learning", type: "learning" });
     return out;
-  }, [showCode, showMemory, showArchitecture, showLearning, groups, lists, notes, captures, kinds, proposals, behind]);
+  }, [showCode, showMemory, showArchitecture, groups, lists, notes, captures, kinds, proposals, behind]);
   const routedKey = routed.session && routed.file ? fileKey(routed.session, routed.file) : null;
   const firstOfRouted = visible.find((i) => (i.type === "file" || i.type === "session") && i.info.id === routed.session);
   const selected = (picked && visible.find((i) => i.key === picked))
@@ -190,7 +181,7 @@ export function ReviewPage() {
   };
 
   const loading = !visible.length && !groups.length && (sessions.isLoading || (projectsOn && due.isLoading) || (systemsOn && registry.isLoading));
-  const nothing = !loading && !total && !groups.length && !(kind === "learning" && showLearning);
+  const nothing = !loading && !total && !groups.length;
   const memoryRows = showMemory && projectsOn;
   const info = selected && (selected.type === "file" || selected.type === "session") ? selected.info : null;
   const infoFiles = info ? lists[groups.findIndex((g) => g.id === info.id)]?.data?.length ?? info.filesChanged?.files ?? 0 : 0;
@@ -201,7 +192,7 @@ export function ReviewPage() {
       <PageHeader title="Review" subtitle="Inspect agent changes before they become accepted work." />
       <Tabs pill label="Kind" value={kind} onChange={setKind}
         items={[{ id: "all", label: "All", count: total }, { id: "code", label: "Code", count: codeCount }, { id: "memory", label: "Memory", count: memoryCount },
-          { id: "architecture", label: "Architecture", count: architectureCount }, { id: "learning", label: "Learning", count: learningCount }]} />
+          { id: "architecture", label: "Architecture", count: architectureCount }]} />
       {!projectsOn && <p className="muted">Memory review needs a newer Living Memory (API 2 with the <code>review</code> command).</p>}
       {sessions.error && <p className="error">{classify(sessions.error).message}</p>}
       {loading ? <p className="muted">Loading…</p>
@@ -249,10 +240,8 @@ export function ReviewPage() {
               {visible.map((item) => item.type === "memory" ? row(item, <Layers size="1.3em" aria-hidden />, `Memory: ${item.row.title}`, item.due ? null : <span className="muted small">agent</span>)
                 : item.type === "proposal" ? row(item, <Network size="1.3em" aria-hidden />, `Architecture: ${item.system.name} update`)
                 : item.type === "behind" ? row(item, <Layers size="1.3em" aria-hidden />, `Architecture: ${item.system.name} is ${item.stale.behind} commit${item.stale.behind === 1 ? "" : "s"} behind`)
-                : item.type === "learning" ? row(item, <GraduationCap size="1.3em" aria-hidden />, `Learning: ${learningCount} to review`)
                 : null)}
               {!visible.length && kind in EMPTY && <p className="muted pad">{EMPTY[kind as keyof typeof EMPTY]}</p>}
-              {kind === "learning" && !showLearning && <p className="muted pad">Learning review needs a Living Memory installation with the learn command.</p>}
             </nav>
             {selected?.type === "file" ? <FilePane info={selected.info} file={selected.file} />
               : selected?.type === "session" ? <SessionPane info={selected.info} />
@@ -278,7 +267,6 @@ export function ReviewPage() {
                       <ArrowLink onClick={() => openSystem(selected.system.slug)}>Open Architecture</ArrowLink>
                     </>
                   )}
-                  {selected.type === "learning" && <LearningReview />}
                 </div>
               ) : <div className="review-pane" />}
           </div>
