@@ -87,31 +87,63 @@ pub enum Interface {
 /// Whether a Codex session may use the Chat interface. Part C turns this on.
 pub const CODEX_CHAT: bool = false;
 
-/// One coding-agent CLI: how to start it and how to read what it prints.
+/// One coding-agent CLI: how to start it. The conversation itself is driven by a `Driver`.
 pub trait Adapter: Send + Sync {
     fn name(&self) -> &'static str;
     /// Program, arguments and working directory; the manager sets up the pipes.
     fn command(&self, spec: &Spec) -> Command;
-    /// The stdin line that carries one user message (without the newline).
-    fn user_line(&self, text: &str) -> String;
-    /// The events in one stdout line. Unknown and malformed lines give none; never `Finished` or `TurnFinished`.
-    fn parse_line(&self, line: &str) -> Vec<RunEvent>;
-    /// The CLI's closing report of a turn, when the line is one.
-    fn outcome(&self, line: &str) -> Option<Outcome>;
-    /// The stdin line that answers the permission request in `request` (a stdout line as printed).
-    fn answer_line(&self, request: &str, decision: Decision) -> Option<String>;
-    /// The answer to write at once, without asking the user, when `line` asks for something Hivemind always refuses.
-    fn refusal(&self, line: &str) -> Option<String>;
-    /// The stdin line that stops the running turn.
-    fn interrupt_line(&self) -> String;
-    /// The stdin line that changes the permission mode of a running CLI.
-    fn mode_line(&self, mode: PolicyMode) -> String;
-    /// The permission mode the CLI says it is in now, when the line reports one.
-    fn mode_of(&self, line: &str) -> Option<PolicyMode>;
+    /// The state of one session's conversation. Everything it needs is in the stored session, so a driver can
+    /// also be made to replay a log: the working folder, the permission mode, and the engine's own
+    /// conversation id when the session already has one (`SessionInfo.engine_session`).
+    fn driver(&self, cwd: &Path, policy: PolicyMode, engine_session: Option<&str>) -> Box<dyn Driver>;
     /// The whole text and the outcome of the tool result with this id, when the line carries it.
     fn tool_result(&self, _line: &str, _tool_use_id: &str) -> Option<(bool, String)> {
         None
     }
+    /// Whether the manager records a `processStarted` event each time it starts a process for a session.
+    /// True for an engine whose driver must begin again (a handshake) with every process.
+    fn marks_process_start(&self) -> bool {
+        false
+    }
+}
+
+/// What one log record led to.
+#[derive(Default)]
+pub struct Step {
+    /// Lines to write to the process now, in order (without the newline).
+    pub write: Vec<String>,
+    pub events: Vec<RunEvent>,
+    /// The CLI's closing report of a turn, when this line ends a turn.
+    pub turn: Option<Outcome>,
+    /// The permission mode the CLI says it is in now, when the line reports one.
+    pub mode: Option<PolicyMode>,
+    /// The engine's own conversation id, the first time it is known.
+    pub engine_session: Option<String>,
+}
+
+/// One session's conversation with its process.
+///
+/// THE REPLAY RULE: everything that decides which events a driver gives changes in `read` and `note` only,
+/// that is, only when a log record is fed to it. The other methods render lines to write. They may keep
+/// data that only affects what is written (a message kept until a handshake ends), never anything that
+/// affects events. A replay calls `read` and `note` and nothing else, and must give the same events.
+pub trait Driver: Send {
+    /// One stdout line (a `Record::Raw`). Unknown and malformed lines give an empty step; never `Finished` or `TurnFinished`.
+    fn read(&mut self, line: &str) -> Step;
+    /// One event Hivemind recorded itself (a `Record::Event`): a process was started, an approval was
+    /// answered, a turn was closed by Hivemind. This is how a driver learns what Hivemind did.
+    fn note(&mut self, _event: &RunEvent) {}
+    /// Render only: the lines to write as soon as a process is up, before any message (a handshake). Often none.
+    fn open(&mut self) -> Vec<String>;
+    /// Render only: the lines that carry one user message. A driver still in its handshake keeps the text and
+    /// writes it from `read` later.
+    fn send(&mut self, text: &str) -> Vec<String>;
+    /// Render only: the line that answers a permission request. `request` is the stdout line that asked, as printed.
+    fn answer(&mut self, request_id: &str, request: &str, decision: Decision) -> Option<String>;
+    /// Render only: the line that stops the running turn, when there is one to stop.
+    fn interrupt(&mut self) -> Option<String>;
+    /// Render only: the line that changes the permission mode of a running CLI, when the CLI can do that.
+    fn set_mode(&mut self, mode: PolicyMode) -> Option<String>;
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -380,6 +412,8 @@ struct Session {
     live: Option<Live>,
     /// `None` until first needed for a session loaded from disk; then counted from its log.
     tape: Option<Tape>,
+    /// The conversation with the process, made with `tape` and kept in step with it: the same records have been fed to both.
+    driver: Option<Box<dyn Driver>>,
 }
 
 struct Inner {
@@ -403,16 +437,20 @@ fn is_over(status: Status) -> bool {
     matches!(status, Status::Succeeded | Status::Failed | Status::Cancelled | Status::Ended)
 }
 
-/// The events one log record stands for. `started` is the session's memory across records: a session reports `started`
-/// once, though the CLI prints its init line at the start of every turn.
-pub fn events_of(adapter: &dyn Adapter, record: &Record, started: &mut bool) -> Vec<RunEvent> {
+/// What one log record stands for. `started` is the session's memory across records: a session reports `started`
+/// once, though the CLI prints its init line at the start of every turn. A record Hivemind wrote gives its event as it is,
+/// after the driver has been told of it.
+fn step_of(driver: &mut dyn Driver, record: &Record, started: &mut bool) -> Step {
     match record {
-        Record::Event { event, .. } => vec![event.clone()],
-        Record::Raw { raw, .. } => adapter
-            .parse_line(raw)
-            .into_iter()
-            .filter(|event| !matches!(event, RunEvent::Started { .. }) || !std::mem::replace(started, true))
-            .collect(),
+        Record::Event { event, .. } => {
+            driver.note(event);
+            Step { events: vec![event.clone()], ..Step::default() }
+        }
+        Record::Raw { raw, .. } => {
+            let mut step = driver.read(raw);
+            step.events.retain(|event| !matches!(event, RunEvent::Started { .. }) || !std::mem::replace(started, true));
+            step
+        }
     }
 }
 
@@ -591,8 +629,10 @@ fn check_combination(task: &AgentTask, engine: Engine, interface: Interface) -> 
 impl Manager {
     /// Load the history from `dir`. Sessions left running by a previous run are closed as failed (unattended) or idle.
     pub fn new(dir: PathBuf, adapter: Arc<dyn Adapter>, sink: Sink) -> Manager {
-        let sessions =
-            store::recover(&dir, now_ms()).into_iter().map(|info| (info.id.clone(), Session { info, reserved: false, live: None, tape: None })).collect();
+        let sessions = store::recover(&dir, now_ms())
+            .into_iter()
+            .map(|info| (info.id.clone(), Session { info, reserved: false, live: None, tape: None, driver: None }))
+            .collect();
         Manager { inner: Arc::new(Inner { dir, adapter, sink, sessions: Mutex::new(sessions) }) }
     }
 
@@ -602,6 +642,7 @@ impl Manager {
         let scope = &launch.scope;
         let interactive = scope.mode == Mode::Interactive;
         let info = session_info(&id, inner.adapter.name(), task, scope, options);
+        let text = first_text(options.briefing.as_deref().filter(|_| interactive), prompt);
 
         // Without its folder a session could not be logged or replayed, so find that out first.
         std::fs::create_dir_all(&inner.dir).map_err(|e| format!("Could not create {}: {e}", inner.dir.display()))?;
@@ -609,12 +650,16 @@ impl Manager {
         inner.free_slot(&mut sessions)?;
         let (live, stdout, stderr) = inner.spawn(&id, &launch, false, info.model.clone())?;
         let (child, stdin) = (live.child.clone(), live.stdin.clone());
-        sessions.insert(id.clone(), Session { info: info.clone(), reserved: false, live: Some(live), tape: Some(Tape::default()) });
+        let driver = inner.adapter.driver(&scope.cwd, info.policy, None);
+        let (tape, live) = (Some(Tape::default()), Some(live));
+        sessions.insert(id.clone(), Session { info: info.clone(), reserved: false, live, tape, driver: Some(driver) });
+        let mut lines = inner.mark_process(&mut sessions, &id, false);
         if interactive {
             let at = now_ms();
             let event = RunEvent::UserMessage { text: prompt.to_string(), context: options.context.clone() };
             inner.record(&mut sessions, &id, at, Record::Event { at, event });
         }
+        lines.extend(sessions.get_mut(&id).and_then(|session| session.driver.as_mut()).map(|driver| driver.send(&text)).unwrap_or_default());
         let _ = inner.persist(&mut sessions);
         drop(sessions);
         (inner.sink)(Emit::SessionsChanged);
@@ -622,7 +667,7 @@ impl Manager {
         let (pump, required) = (inner.clone(), launch.scope.required_plugin.clone());
         std::thread::spawn(move || pump.pump(&id, stdout, stderr, &child, required.as_deref()));
         // A CLI that has already died shows up as a failed session, not as an error here.
-        let _ = write(&stdin, &inner.adapter.user_line(&first_text(options.briefing.as_deref().filter(|_| interactive), prompt)));
+        let _ = lines.iter().try_for_each(|line| write(&stdin, line));
         if !interactive {
             // Closing stdin is what makes this a one-prompt session: the CLI exits when the work is done.
             *stdin.lock().unwrap() = None;
@@ -635,7 +680,7 @@ impl Manager {
         let inner = &self.inner;
         std::fs::create_dir_all(&inner.dir).map_err(|e| format!("Could not create {}: {e}", inner.dir.display()))?;
         let mut sessions = inner.sessions.lock().unwrap();
-        sessions.insert(info.id.clone(), Session { info: info.clone(), reserved: false, live: None, tape: None });
+        sessions.insert(info.id.clone(), Session { info: info.clone(), reserved: false, live: None, tape: None, driver: None });
         let saved = inner.persist(&mut sessions);
         drop(sessions);
         (inner.sink)(Emit::SessionsChanged);
@@ -658,7 +703,7 @@ impl Manager {
         if text.trim().is_empty() {
             return Err("Write a message first".into());
         }
-        let line = inner.adapter.user_line(&first_text(options.briefing.as_deref(), text));
+        let sent = first_text(options.briefing.as_deref(), text);
         let mut sessions = inner.sessions.lock().unwrap();
         if sessions.get(id).is_some_and(|session| session.info.interface == Interface::Terminal) {
             return Err("This session runs in the terminal. Resume it there and type your request.".into());
@@ -668,8 +713,8 @@ impl Manager {
             return Err(RESERVED.into());
         }
         let alive = sessions.get(id).and_then(|session| session.live.as_ref()).filter(|live| is_open(&live.stdin)).map(|live| live.stdin.clone());
-        let stdin = match alive {
-            Some(stdin) => stdin,
+        let (stdin, mut lines) = match alive {
+            Some(stdin) => (stdin, vec![]),
             None => {
                 drop(sessions);
                 // A process whose stdin is closed is on its way out; a new one may only start when it has gone.
@@ -687,20 +732,22 @@ impl Manager {
                 }
                 inner.free_slot(&mut sessions)?;
                 let session = sessions.get_mut(id).ok_or("Unknown session")?;
-                let tape = session.tape.get_or_insert_with(|| inner.fold(id));
-                let (live, stdout, stderr) = inner.spawn(id, &launch, tape.started, info.model.clone())?;
+                let resume = inner.warm(id, session).0.started;
+                let (live, stdout, stderr) = inner.spawn(id, &launch, resume, info.model.clone())?;
                 let (child, stdin) = (live.child.clone(), live.stdin.clone());
                 session.live = Some(live);
+                let opened = inner.mark_process(&mut sessions, id, resume);
                 let pump = inner.clone();
                 let id = id.to_string();
                 std::thread::spawn(move || pump.pump(&id, stdout, stderr, &child, None));
-                stdin
+                (stdin, opened)
             }
         };
         let at = now_ms();
         let event = RunEvent::UserMessage { text: text.to_string(), context: options.context.clone() };
         inner.record(&mut sessions, id, at, Record::Event { at, event });
         if let Some(session) = sessions.get_mut(id) {
+            lines.extend(session.driver.as_mut().map(|driver| driver.send(&sent)).unwrap_or_default());
             for note in &options.context {
                 if !session.info.context.contains(note) {
                     session.info.context.push(note.clone());
@@ -712,7 +759,7 @@ impl Manager {
         drop(sessions);
         (inner.sink)(Emit::SessionsChanged);
         // A failed write is reported; the pump closes the turn when the process has really gone.
-        write(&stdin, &line)
+        lines.iter().try_for_each(|line| write(&stdin, line))
     }
 
     /// Answer the permission request `request_id` of a session.
@@ -725,8 +772,8 @@ impl Manager {
         const GONE: &str = "That request is no longer waiting for an answer";
         let mut sessions = inner.sessions.lock().unwrap();
         let session = sessions.get_mut(id).ok_or("Unknown session")?;
-        let live = session.live.as_mut().ok_or(GONE)?;
-        let line = live.pending.get(request_id).and_then(|request| inner.adapter.answer_line(request, decision)).ok_or(GONE)?;
+        let (Some(live), Some(driver)) = (session.live.as_mut(), session.driver.as_mut()) else { return Err(GONE.into()) };
+        let line = live.pending.get(request_id).and_then(|request| driver.answer(request_id, request, decision)).ok_or(GONE)?;
         live.pending.remove(request_id);
         let (stdin, none_left) = (live.stdin.clone(), live.pending.is_empty());
         if none_left && session.info.status == Status::Waiting {
@@ -744,18 +791,19 @@ impl Manager {
     pub fn interrupt(&self, id: &str) -> Result<(), String> {
         let inner = &self.inner;
         store::log_path(&inner.dir, id)?;
-        let stdin = {
+        let stopping = {
             let mut sessions = inner.sessions.lock().unwrap();
             let session = sessions.get_mut(id).ok_or("Unknown session")?;
             let working = matches!(session.info.status, Status::Running | Status::Waiting);
+            let line = session.driver.as_mut().and_then(|driver| driver.interrupt());
             session.live.as_mut().filter(|_| working).map(|live| {
                 live.interrupted = true;
-                live.stdin.clone()
+                (live.stdin.clone(), line)
             })
         };
         // The CLI answers with a closing report; if it is gone, the pump closes the turn.
-        if let Some(stdin) = stdin {
-            let _ = write(&stdin, &inner.adapter.interrupt_line());
+        if let Some((stdin, Some(line))) = stopping {
+            let _ = write(&stdin, &line);
         }
         Ok(())
     }
@@ -781,16 +829,17 @@ impl Manager {
                 return Ok(());
             }
             let turn = matches!(session.info.status, Status::Running | Status::Waiting);
+            let line = session.driver.as_mut().filter(|_| turn).and_then(|driver| driver.interrupt());
             session.live.as_mut().map(|live| {
                 live.stop.get_or_insert(Stop::Ended);
                 live.interrupted |= turn;
-                (live.child.clone(), live.stdin.clone(), turn)
+                (live.child.clone(), live.stdin.clone(), line)
             })
         };
         match process {
-            Some((child, stdin, turn)) => {
-                if turn {
-                    let _ = write(&stdin, &inner.adapter.interrupt_line());
+            Some((child, stdin, line)) => {
+                if let Some(line) = line {
+                    let _ = write(&stdin, &line);
                 }
                 // Without input the CLI finishes and exits by itself; the pump then writes the `finished` event.
                 *stdin.lock().unwrap() = None;
@@ -852,12 +901,15 @@ impl Manager {
             return Err("This session has ended".into());
         }
         session.info.policy = mode;
-        let stdin = session.live.as_ref().map(|live| live.stdin.clone());
+        let writing = match (&session.live, session.driver.as_mut()) {
+            (Some(live), Some(driver)) => Some((live.stdin.clone(), driver.set_mode(mode))),
+            _ => None,
+        };
         let _ = inner.persist(&mut sessions);
         drop(sessions);
         (inner.sink)(Emit::SessionsChanged);
-        if let Some(stdin) = stdin {
-            let _ = write(&stdin, &inner.adapter.mode_line(mode));
+        if let Some((stdin, Some(line))) = writing {
+            let _ = write(&stdin, &line);
         }
         Ok(())
     }
@@ -1034,14 +1086,14 @@ impl Manager {
         let info = sessions.get(id).map(|session| session.info.clone()).ok_or("Unknown session")?;
         let records = store::read_log(&inner.dir, id)?;
         drop(sessions);
-        let mut started = false;
+        let (mut started, mut driver) = (false, inner.driver_of(&info, None));
         let events = records
             .into_iter()
             .flat_map(|record| {
                 let at = match &record {
                     Record::Raw { at, .. } | Record::Event { at, .. } => *at,
                 };
-                events_of(&*inner.adapter, &record, &mut started).into_iter().map(move |event| (at, event)).collect::<Vec<_>>()
+                step_of(&mut *driver, &record, &mut started).events.into_iter().map(move |event| (at, event)).collect::<Vec<_>>()
             })
             .zip(0u64..)
             .filter(|(_, seq)| *seq >= from_seq)
@@ -1105,30 +1157,57 @@ impl Inner {
         }
     }
 
-    /// Where the session's log stands, counted from the log with the same fold as `Manager::session`.
-    fn fold(&self, id: &str) -> Tape {
-        let mut tape = Tape::default();
-        for record in store::read_log(&self.dir, id).unwrap_or_default() {
-            for event in events_of(&*self.adapter, &record, &mut tape.started) {
-                tape.count(&event);
-            }
-        }
-        tape
+    /// A fresh driver for a session. A replay passes no `engine_session`; a live driver passes the stored one.
+    fn driver_of(&self, info: &SessionInfo, engine_session: Option<&str>) -> Box<dyn Driver> {
+        self.adapter.driver(info.workspace.first().map_or(Path::new("."), Path::new), info.policy, engine_session)
     }
 
-    /// Append one record to the session's log and report its events, numbered. Every writer goes through here, with the
-    /// sessions lock held, so the log order and the numbering always agree.
-    fn record(&self, sessions: &mut HashMap<String, Session>, id: &str, at: u64, record: Record) -> Vec<RunEvent> {
-        let Some(session) = sessions.get_mut(id) else { return vec![] };
+    /// Where the session's log stands and the driver that has read it, from the same fold as `Manager::session`.
+    fn fold(&self, id: &str, info: &SessionInfo) -> (Tape, Box<dyn Driver>) {
+        let (mut tape, mut driver) = (Tape::default(), self.driver_of(info, info.engine_session.as_deref()));
+        for record in store::read_log(&self.dir, id).unwrap_or_default() {
+            for event in &step_of(&mut *driver, &record, &mut tape.started).events {
+                tape.count(event);
+            }
+        }
+        (tape, driver)
+    }
+
+    /// The session's tape and driver, folded from its log first when it was loaded from disk.
+    fn warm<'a>(&self, id: &str, session: &'a mut Session) -> (&'a mut Tape, &'a mut Box<dyn Driver>) {
+        let Session { info, tape, driver, .. } = session;
+        let mut folded = None;
+        let tape = tape.get_or_insert_with(|| {
+            let (tape, driver) = self.fold(id, info);
+            folded = Some(driver);
+            tape
+        });
+        (tape, driver.get_or_insert_with(|| folded.take().unwrap_or_else(|| self.fold(id, info).1)))
+    }
+
+    /// After `spawn`: record `processStarted` when the engine asks for it, and return the lines the driver opens with.
+    /// Called with the sessions lock held, before the first message is recorded.
+    fn mark_process(&self, sessions: &mut HashMap<String, Session>, id: &str, resume: bool) -> Vec<String> {
+        if self.adapter.marks_process_start() {
+            let at = now_ms();
+            self.record(sessions, id, at, Record::Event { at, event: RunEvent::ProcessStarted { resume } });
+        }
+        sessions.get_mut(id).and_then(|session| session.driver.as_mut()).map(|driver| driver.open()).unwrap_or_default()
+    }
+
+    /// Append one record to the session's log and report what it led to, its events numbered. Every writer goes through
+    /// here, with the sessions lock held, so the log order and the numbering always agree.
+    fn record(&self, sessions: &mut HashMap<String, Session>, id: &str, at: u64, record: Record) -> Step {
+        let Some(session) = sessions.get_mut(id) else { return Step::default() };
         // Counted before the append, or the record would be counted twice.
-        let tape = session.tape.get_or_insert_with(|| self.fold(id));
+        let (tape, driver) = self.warm(id, session);
         let _ = store::append(&self.dir, id, &record);
-        let events = events_of(&*self.adapter, &record, &mut tape.started);
-        for event in &events {
+        let step = step_of(&mut **driver, &record, &mut tape.started);
+        for event in &step.events {
             (self.sink)(Emit::Event(SeqEvent { session_id: id.to_string(), seq: tape.seq, at, event: event.clone() }));
             tape.count(event);
         }
-        events
+        step
     }
 
     /// Make room for one more process: close the longest-idle one until a slot is free.
@@ -1208,7 +1287,7 @@ impl Inner {
         let mut sessions = self.sessions.lock().unwrap();
         let Some(session) = sessions.get_mut(id) else { return };
         let new = (!files.is_empty()).then(|| worktree::totals(&files));
-        let listed = session.tape.get_or_insert_with(|| self.fold(id)).files != files;
+        let listed = self.warm(id, session).0.files != files;
         // The stored totals can have been changed by `Manager::files` without an event, so they are reconciled on every
         // call and never inferred from the list.
         let recounted = session.info.files_changed != new;
@@ -1240,10 +1319,10 @@ impl Inner {
             // Log first: replay parses the same lines in the same order, so it numbers events the same way.
             let at = now_ms();
             let mut sessions = self.sessions.lock().unwrap();
-            let events = self.record(&mut sessions, id, at, Record::Raw { at, raw: line.to_string() });
+            let step = self.record(&mut sessions, id, at, Record::Raw { at, raw: line.to_string() });
             let (mut changed, mut kill_it, mut answer) = (false, false, None);
             if let Some(session) = sessions.get_mut(id) {
-                for event in &events {
+                for event in &step.events {
                     match event {
                         RunEvent::Started { cli_version, plugins, .. } => {
                             session.info.cli_version = cli_version.clone();
@@ -1275,12 +1354,16 @@ impl Inner {
                         _ => {}
                     }
                 }
-                if interactive && let Some(mode) = self.adapter.mode_of(line).filter(|mode| *mode != session.info.policy) {
+                if interactive && let Some(mode) = step.mode.filter(|mode| *mode != session.info.policy) {
                     session.info.policy = mode;
                     changed = true;
                 }
-                if let (Some(reply), Some(live)) = (self.adapter.refusal(line), &session.live) {
-                    answer = Some((live.stdin.clone(), reply));
+                if let Some(thread) = step.engine_session.as_ref().filter(|thread| session.info.engine_session.as_ref() != Some(thread)) {
+                    session.info.engine_session = Some(thread.clone());
+                    changed = true;
+                }
+                if let (false, Some(live)) = (step.write.is_empty(), &session.live) {
+                    answer = Some(live.stdin.clone());
                 }
             }
             if changed {
@@ -1294,10 +1377,10 @@ impl Inner {
                 kill(child);
             }
             // Written with no lock held but the stdin's own.
-            if let Some((stdin, reply)) = answer {
-                let _ = write(&stdin, &reply);
+            if let Some(stdin) = answer {
+                let _ = step.write.iter().try_for_each(|reply| write(&stdin, reply));
             }
-            if let Some(outcome) = self.adapter.outcome(line) {
+            if let Some(outcome) = step.turn {
                 if interactive {
                     self.end_turn(id, outcome);
                 } else {
@@ -1787,29 +1870,8 @@ mod tests {
             }
             command
         }
-        fn user_line(&self, text: &str) -> String {
-            ClaudeCode.user_line(text)
-        }
-        fn parse_line(&self, line: &str) -> Vec<RunEvent> {
-            ClaudeCode.parse_line(line)
-        }
-        fn outcome(&self, line: &str) -> Option<Outcome> {
-            ClaudeCode.outcome(line)
-        }
-        fn answer_line(&self, request: &str, decision: Decision) -> Option<String> {
-            ClaudeCode.answer_line(request, decision)
-        }
-        fn refusal(&self, line: &str) -> Option<String> {
-            ClaudeCode.refusal(line)
-        }
-        fn interrupt_line(&self) -> String {
-            ClaudeCode.interrupt_line()
-        }
-        fn mode_line(&self, mode: PolicyMode) -> String {
-            ClaudeCode.mode_line(mode)
-        }
-        fn mode_of(&self, line: &str) -> Option<PolicyMode> {
-            ClaudeCode.mode_of(line)
+        fn driver(&self, cwd: &Path, policy: PolicyMode, engine_session: Option<&str>) -> Box<dyn Driver> {
+            ClaudeCode.driver(cwd, policy, engine_session)
         }
         fn tool_result(&self, line: &str, id: &str) -> Option<(bool, String)> {
             ClaudeCode.tool_result(line, id)
@@ -1996,7 +2058,8 @@ mod tests {
     }
 
     fn last_outcome(lines: &[&str]) -> Option<Outcome> {
-        lines.iter().filter_map(|line| ClaudeCode.outcome(line)).next_back()
+        let mut driver = ClaudeCode.driver(Path::new("."), PolicyMode::Ask, None);
+        lines.iter().filter_map(|line| driver.read(line).turn).next_back()
     }
 
     fn status_and_reason(event: &RunEvent) -> (Status, Option<&str>) {
@@ -2292,7 +2355,8 @@ mod tests {
         assert!(live.iter().any(|event| matches!(&event.event, RunEvent::Denied { tool, .. } if tool == "Bash")));
         assert!(!live.iter().any(|event| matches!(event.event, RunEvent::ApprovalRequest { .. })));
         let refusal = &rig.stdin_lines(&started.id)[1];
-        assert_eq!(*refusal, serde_json::from_str::<Value>(&ClaudeCode.refusal(GOVERNED_REQUEST).unwrap()).unwrap());
+        let reply = ClaudeCode.driver(Path::new("."), PolicyMode::Ask, None).read(GOVERNED_REQUEST).write.remove(0);
+        assert_eq!(*refusal, serde_json::from_str::<Value>(&reply).unwrap());
         assert_eq!((refusal["response"]["request_id"].as_str(), refusal["response"]["response"]["behavior"].as_str()), (Some("r-gov"), Some("deny")));
         assert_eq!(rig.info(&started.id).status, Status::Idle);
     }

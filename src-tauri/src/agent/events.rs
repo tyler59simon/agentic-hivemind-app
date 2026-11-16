@@ -108,6 +108,11 @@ pub enum RunEvent {
         #[serde(default)]
         outcome: TurnEnd,
     },
+    /// Written by Hivemind each time it starts a process for a session whose engine asks for it
+    /// (`Adapter::marks_process_start`). `resume` says whether it continues an earlier conversation.
+    ProcessStarted {
+        resume: bool,
+    },
     /// Written by Hivemind: the worktree's diff against its base after a turn.
     FilesChanged {
         files: Vec<crate::worktree::FileChange>,
@@ -251,6 +256,10 @@ mod tests {
         assert_eq!(serde_json::from_value::<RunEvent>(turn_json.clone()).unwrap(), turn);
         turn_json.as_object_mut().unwrap().remove("outcome");
         assert_eq!(serde_json::from_value::<RunEvent>(turn_json).unwrap(), turn, "a turn without `outcome` completed");
+        for (resume, expected) in [(false, json!({"type": "processStarted", "resume": false})), (true, json!({"type": "processStarted", "resume": true}))] {
+            assert_eq!(shape(RunEvent::ProcessStarted { resume }), expected);
+            assert_eq!(serde_json::from_value::<RunEvent>(expected).unwrap(), RunEvent::ProcessStarted { resume });
+        }
         for (outcome, text) in [(TurnEnd::Stopped, "stopped"), (TurnEnd::Budget, "budget"), (TurnEnd::Error, "error")] {
             assert_eq!(serde_json::to_value(outcome).unwrap(), json!(text));
         }

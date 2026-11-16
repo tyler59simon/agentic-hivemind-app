@@ -41,6 +41,13 @@ describe("transcript", () => {
     expect(apply(ahead, events[6])).toBe(ahead);
   });
 
+  it("a processStarted event advances next and adds no item", () => {
+    const t = build([at(0, { type: "processStarted", resume: false }), at(1, { type: "text", text: "Hi." })]);
+    expect(t.next).toBe(2);
+    expect(t.items.map((i) => i.kind)).toEqual(["text"]);
+    expect(t.gap).toBe(false);
+  });
+
   it("shows the user's message and the turn end", () => {
     const t = build([
       at(0, { type: "userMessage", text: "Fix it", context: ["n1"] }), at(1, events[0].event), at(2, { type: "text", text: "Done." }), at(3, turn()),

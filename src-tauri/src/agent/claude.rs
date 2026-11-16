@@ -1,5 +1,5 @@
 //! Claude Code in headless mode: one JSON object per stdout line, the prompt as one JSON line on stdin.
-use super::Adapter;
+use super::{Adapter, Driver, Step};
 use super::events::{Decision, Outcome, RunEvent, clip};
 use super::scope::{Policy, PolicyMode, Spec, governed_memory_command};
 use crate::settings::Settings;
@@ -11,7 +11,7 @@ use std::time::Duration;
 const TOOL_SUMMARY: usize = 300;
 const RESULT_SUMMARY: usize = 500;
 const APPROVAL_INPUT: usize = 4000;
-const GOVERNED: &str = "Hivemind does not let agent sessions run Living Memory plan, apply or undo commands. Describe the change and let the user apply it.";
+pub(crate) const GOVERNED: &str = "Hivemind does not let agent sessions run Living Memory plan, apply or undo commands. Describe the change and let the user apply it.";
 const DECLINED: &str = "The user declined this action in Hivemind.";
 /// What the CLI's accept-edits mode allows, as the label of an always-allow that has no rule to show.
 const EDITS_LABEL: &str = "file edits and simple file commands in the worktree";
@@ -172,143 +172,8 @@ impl Adapter for ClaudeCode {
         command
     }
 
-    fn user_line(&self, text: &str) -> String {
-        json!({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}}).to_string()
-    }
-
-    fn parse_line(&self, line: &str) -> Vec<RunEvent> {
-        let Ok(value) = serde_json::from_str::<Value>(line) else { return vec![] };
-        match (text_of(&value, "type"), text_of(&value, "subtype")) {
-            (Some("control_request"), _) => {
-                let Some(request) = tool_request(&value) else { return vec![] };
-                let tool = text_of(request, "tool_name").unwrap_or_default().to_string();
-                if governed(request) {
-                    return vec![RunEvent::Denied { tool, summary: GOVERNED.into() }];
-                }
-                let summary = match text_of(request, "description").filter(|text| !text.trim().is_empty()) {
-                    Some(description) => clip(description, TOOL_SUMMARY),
-                    None => input_summary(request.get("input")),
-                };
-                let (updates, always_label) = always(request);
-                vec![RunEvent::ApprovalRequest {
-                    request_id: text_of(&value, "request_id").unwrap_or_default().to_string(),
-                    tool,
-                    summary,
-                    input: request.get("input").map_or(Value::Null, |input| clip_strings(input, APPROVAL_INPUT)),
-                    can_always: !updates.is_empty(),
-                    always_label,
-                }]
-            }
-            (Some("control_cancel_request"), _) => vec![RunEvent::ApprovalResolved {
-                request_id: text_of(&value, "request_id").unwrap_or_default().to_string(),
-                decision: Decision::Withdrawn,
-            }],
-            (Some("system"), Some("init")) => vec![RunEvent::Started {
-                model: text_of(&value, "model").map(str::to_string),
-                cli_version: text_of(&value, "claude_code_version").map(str::to_string),
-                plugins: value
-                    .get("plugins")
-                    .and_then(Value::as_array)
-                    .map(|all| all.iter().filter_map(|plugin| text_of(plugin, "name")).map(str::to_string).collect())
-                    .unwrap_or_default(),
-            }],
-            (Some("system"), Some("permission_denied")) => vec![RunEvent::Denied {
-                tool: text_of(&value, "tool_name").unwrap_or_default().to_string(),
-                summary: clip(text_of(&value, "message").unwrap_or_default(), TOOL_SUMMARY),
-            }],
-            (Some("assistant"), _) => blocks(&value)
-                .filter_map(|block| match text_of(block, "type")? {
-                    "text" => {
-                        let text = text_of(block, "text").filter(|text| !text.trim().is_empty())?;
-                        Some(RunEvent::Text { text: text.to_string() })
-                    }
-                    "tool_use" => Some(RunEvent::ToolUse {
-                        id: text_of(block, "id").unwrap_or_default().to_string(),
-                        name: text_of(block, "name").unwrap_or_default().to_string(),
-                        summary: input_summary(block.get("input")),
-                    }),
-                    _ => None,
-                })
-                .collect(),
-            (Some("user"), _) => blocks(&value)
-                .filter(|block| text_of(block, "type") == Some("tool_result"))
-                .map(|block| RunEvent::ToolResult {
-                    id: text_of(block, "tool_use_id").unwrap_or_default().to_string(),
-                    ok: block.get("is_error").and_then(Value::as_bool) != Some(true),
-                    summary: result_summary(block.get("content")),
-                })
-                .collect(),
-            _ => vec![],
-        }
-    }
-
-    fn outcome(&self, line: &str) -> Option<Outcome> {
-        let value: Value = serde_json::from_str(line).ok()?;
-        if text_of(&value, "type") != Some("result") {
-            return None;
-        }
-        let subtype = text_of(&value, "subtype").unwrap_or_default();
-        let result = text_of(&value, "result");
-        let error = value.get("errors").and_then(Value::as_array).and_then(|all| all.first()).and_then(Value::as_str);
-        let ok = subtype == "success" && value.get("is_error").and_then(Value::as_bool) != Some(true);
-        Some(Outcome {
-            ok,
-            reason: (!ok).then(|| failure(subtype, result.or(error))),
-            cost_usd: value.get("total_cost_usd").and_then(Value::as_f64),
-            duration_ms: value.get("duration_ms").and_then(Value::as_u64),
-            turns: value.get("num_turns").and_then(Value::as_u64),
-            result: result.map(str::to_string),
-            structured: value.get("structured_output").filter(|s| !s.is_null()).cloned(),
-            denials: value.get("permission_denials").and_then(Value::as_array).map_or(0, |all| all.len() as u64),
-            budget: subtype == "error_max_budget_usd",
-        })
-    }
-
-    fn answer_line(&self, request: &str, decision: Decision) -> Option<String> {
-        let line: Value = serde_json::from_str(request).ok()?;
-        let asked = tool_request(&line)?;
-        let response = match decision {
-            Decision::Withdrawn => return None,
-            Decision::Allow => json!({"behavior": "allow"}),
-            Decision::AllowAlways => match always(asked).0 {
-                updates if updates.is_empty() => json!({"behavior": "allow"}),
-                updates => json!({"behavior": "allow", "updatedPermissions": updates}),
-            },
-            Decision::Deny => json!({"behavior": "deny", "message": DECLINED}),
-        };
-        Some(envelope(text_of(&line, "request_id")?, response))
-    }
-
-    fn refusal(&self, line: &str) -> Option<String> {
-        let line: Value = serde_json::from_str(line).ok()?;
-        tool_request(&line).filter(|request| governed(request))?;
-        Some(envelope(text_of(&line, "request_id")?, json!({"behavior": "deny", "message": GOVERNED})))
-    }
-
-    fn interrupt_line(&self) -> String {
-        control_request(json!({"subtype": "interrupt"}))
-    }
-
-    fn mode_line(&self, mode: PolicyMode) -> String {
-        // PreApproved is only ever a launch mode; `dontAsk` is what the launch flags call it.
-        let mode = match mode {
-            PolicyMode::Ask => "default",
-            PolicyMode::AcceptEdits => "acceptEdits",
-            PolicyMode::PreApproved => "dontAsk",
-        };
-        control_request(json!({"subtype": "set_permission_mode", "mode": mode}))
-    }
-
-    fn mode_of(&self, line: &str) -> Option<PolicyMode> {
-        let value: Value = serde_json::from_str(line).ok()?;
-        if text_of(&value, "type") != Some("system") || text_of(&value, "subtype") != Some("status") {
-            return None;
-        }
-        match text_of(&value, "permissionMode")? {
-            "acceptEdits" => Some(PolicyMode::AcceptEdits),
-            "default" => Some(PolicyMode::Ask),
-            _ => None,
-        }
+    fn driver(&self, _cwd: &Path, _policy: PolicyMode, _engine_session: Option<&str>) -> Box<dyn Driver> {
+        Box::new(ClaudeDriver)
     }
 
     fn tool_result(&self, line: &str, tool_use_id: &str) -> Option<(bool, String)> {
@@ -318,6 +183,174 @@ impl Adapter for ClaudeCode {
         }
         let block = blocks(&value).find(|block| text_of(block, "type") == Some("tool_result") && text_of(block, "tool_use_id") == Some(tool_use_id))?;
         Some((block.get("is_error").and_then(Value::as_bool) != Some(true), result_text(block.get("content"))))
+    }
+}
+
+/// The Claude Code conversation: stream-json lines both ways, no handshake and no memory between lines.
+struct ClaudeDriver;
+
+impl Driver for ClaudeDriver {
+    fn read(&mut self, line: &str) -> Step {
+        Step { write: refusal(line).into_iter().collect(), events: parse_line(line), turn: outcome(line), mode: mode_of(line), engine_session: None }
+    }
+
+    fn open(&mut self) -> Vec<String> {
+        vec![]
+    }
+
+    fn send(&mut self, text: &str) -> Vec<String> {
+        vec![user_line(text)]
+    }
+
+    fn answer(&mut self, _request_id: &str, request: &str, decision: Decision) -> Option<String> {
+        answer_line(request, decision)
+    }
+
+    fn interrupt(&mut self) -> Option<String> {
+        Some(interrupt_line())
+    }
+
+    fn set_mode(&mut self, mode: PolicyMode) -> Option<String> {
+        Some(mode_line(mode))
+    }
+}
+
+fn user_line(text: &str) -> String {
+    json!({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}}).to_string()
+}
+
+pub(crate) fn parse_line(line: &str) -> Vec<RunEvent> {
+    let Ok(value) = serde_json::from_str::<Value>(line) else { return vec![] };
+    match (text_of(&value, "type"), text_of(&value, "subtype")) {
+        (Some("control_request"), _) => {
+            let Some(request) = tool_request(&value) else { return vec![] };
+            let tool = text_of(request, "tool_name").unwrap_or_default().to_string();
+            if governed(request) {
+                return vec![RunEvent::Denied { tool, summary: GOVERNED.into() }];
+            }
+            let summary = match text_of(request, "description").filter(|text| !text.trim().is_empty()) {
+                Some(description) => clip(description, TOOL_SUMMARY),
+                None => input_summary(request.get("input")),
+            };
+            let (updates, always_label) = always(request);
+            vec![RunEvent::ApprovalRequest {
+                request_id: text_of(&value, "request_id").unwrap_or_default().to_string(),
+                tool,
+                summary,
+                input: request.get("input").map_or(Value::Null, |input| clip_strings(input, APPROVAL_INPUT)),
+                can_always: !updates.is_empty(),
+                always_label,
+            }]
+        }
+        (Some("control_cancel_request"), _) => vec![RunEvent::ApprovalResolved {
+            request_id: text_of(&value, "request_id").unwrap_or_default().to_string(),
+            decision: Decision::Withdrawn,
+        }],
+        (Some("system"), Some("init")) => vec![RunEvent::Started {
+            model: text_of(&value, "model").map(str::to_string),
+            cli_version: text_of(&value, "claude_code_version").map(str::to_string),
+            plugins: value
+                .get("plugins")
+                .and_then(Value::as_array)
+                .map(|all| all.iter().filter_map(|plugin| text_of(plugin, "name")).map(str::to_string).collect())
+                .unwrap_or_default(),
+        }],
+        (Some("system"), Some("permission_denied")) => vec![RunEvent::Denied {
+            tool: text_of(&value, "tool_name").unwrap_or_default().to_string(),
+            summary: clip(text_of(&value, "message").unwrap_or_default(), TOOL_SUMMARY),
+        }],
+        (Some("assistant"), _) => blocks(&value)
+            .filter_map(|block| match text_of(block, "type")? {
+                "text" => {
+                    let text = text_of(block, "text").filter(|text| !text.trim().is_empty())?;
+                    Some(RunEvent::Text { text: text.to_string() })
+                }
+                "tool_use" => Some(RunEvent::ToolUse {
+                    id: text_of(block, "id").unwrap_or_default().to_string(),
+                    name: text_of(block, "name").unwrap_or_default().to_string(),
+                    summary: input_summary(block.get("input")),
+                }),
+                _ => None,
+            })
+            .collect(),
+        (Some("user"), _) => blocks(&value)
+            .filter(|block| text_of(block, "type") == Some("tool_result"))
+            .map(|block| RunEvent::ToolResult {
+                id: text_of(block, "tool_use_id").unwrap_or_default().to_string(),
+                ok: block.get("is_error").and_then(Value::as_bool) != Some(true),
+                summary: result_summary(block.get("content")),
+            })
+            .collect(),
+        _ => vec![],
+    }
+}
+
+fn outcome(line: &str) -> Option<Outcome> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    if text_of(&value, "type") != Some("result") {
+        return None;
+    }
+    let subtype = text_of(&value, "subtype").unwrap_or_default();
+    let result = text_of(&value, "result");
+    let error = value.get("errors").and_then(Value::as_array).and_then(|all| all.first()).and_then(Value::as_str);
+    let ok = subtype == "success" && value.get("is_error").and_then(Value::as_bool) != Some(true);
+    Some(Outcome {
+        ok,
+        reason: (!ok).then(|| failure(subtype, result.or(error))),
+        cost_usd: value.get("total_cost_usd").and_then(Value::as_f64),
+        duration_ms: value.get("duration_ms").and_then(Value::as_u64),
+        turns: value.get("num_turns").and_then(Value::as_u64),
+        result: result.map(str::to_string),
+        structured: value.get("structured_output").filter(|s| !s.is_null()).cloned(),
+        denials: value.get("permission_denials").and_then(Value::as_array).map_or(0, |all| all.len() as u64),
+        budget: subtype == "error_max_budget_usd",
+    })
+}
+
+fn answer_line(request: &str, decision: Decision) -> Option<String> {
+    let line: Value = serde_json::from_str(request).ok()?;
+    let asked = tool_request(&line)?;
+    let response = match decision {
+        Decision::Withdrawn => return None,
+        Decision::Allow => json!({"behavior": "allow"}),
+        Decision::AllowAlways => match always(asked).0 {
+            updates if updates.is_empty() => json!({"behavior": "allow"}),
+            updates => json!({"behavior": "allow", "updatedPermissions": updates}),
+        },
+        Decision::Deny => json!({"behavior": "deny", "message": DECLINED}),
+    };
+    Some(envelope(text_of(&line, "request_id")?, response))
+}
+
+fn refusal(line: &str) -> Option<String> {
+    let line: Value = serde_json::from_str(line).ok()?;
+    tool_request(&line).filter(|request| governed(request))?;
+    Some(envelope(text_of(&line, "request_id")?, json!({"behavior": "deny", "message": GOVERNED})))
+}
+
+fn interrupt_line() -> String {
+    control_request(json!({"subtype": "interrupt"}))
+}
+
+fn mode_line(mode: PolicyMode) -> String {
+    // PreApproved is only ever a launch mode; `dontAsk` is what the launch flags call it.
+    let mode = match mode {
+        PolicyMode::Ask => "default",
+        PolicyMode::AcceptEdits => "acceptEdits",
+        PolicyMode::PreApproved => "dontAsk",
+    };
+    control_request(json!({"subtype": "set_permission_mode", "mode": mode}))
+}
+
+fn mode_of(line: &str) -> Option<PolicyMode> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    if text_of(&value, "type") != Some("system") || text_of(&value, "subtype") != Some("status") {
+        return None;
+    }
+    match text_of(&value, "permissionMode")? {
+        "acceptEdits" => Some(PolicyMode::AcceptEdits),
+        "default" => Some(PolicyMode::Ask),
+        _ => None,
     }
 }
 
@@ -352,7 +385,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn parse(line: &str) -> Vec<RunEvent> {
-        ClaudeCode.parse_line(line)
+        parse_line(line)
     }
 
     #[test]
@@ -464,7 +497,7 @@ mod tests {
             "",
         ] {
             assert!(parse(line).is_empty(), "{line}");
-            assert_eq!(ClaudeCode.outcome(line), None, "{line}");
+            assert_eq!(outcome(line), None, "{line}");
         }
         // The closing report is read by `outcome`; it is not an event.
         assert!(parse(r#"{"type":"result","subtype":"success","is_error":false,"result":"done"}"#).is_empty());
@@ -495,8 +528,7 @@ mod tests {
 
     #[test]
     fn result_lines_give_the_outcome() {
-        let done = ClaudeCode
-            .outcome(
+        let done = outcome(
                 r#"{"type":"result","subtype":"success","is_error":false,"num_turns":3,"duration_ms":4670,"total_cost_usd":0.0066,"result":"All done.",
                 "structured_output":{"summary":"Billing takes payments."},"permission_denials":[{"tool_name":"Bash","tool_use_id":"toolu_05","tool_input":{}}],
                 "session_id":"00000000-0000-4000-8000-000000000001"}"#,
@@ -516,33 +548,30 @@ mod tests {
                 budget: false,
             }
         );
-        let over = ClaudeCode
-            .outcome(
+        let over = outcome(
                 r#"{"type":"result","subtype":"error_max_budget_usd","is_error":false,"total_cost_usd":5.02,"structured_output":null}"#,
             )
             .unwrap();
         assert!(!over.ok);
         assert_eq!(over.reason.as_deref(), Some("Claude Code reached the budget limit for this session"));
         assert_eq!((over.cost_usd, over.structured, over.denials, over.budget), (Some(5.02), None, 0, true));
-        let capped = ClaudeCode
-            .outcome(
+        let capped = outcome(
                 r#"{"type":"result","subtype":"error_max_budget_usd","is_error":true,"num_turns":1,"total_cost_usd":0.0092,
                 "errors":["Reached maximum budget ($0.004)"],"terminal_reason":"budget_exhausted"}"#,
             )
             .unwrap();
         assert!(!capped.ok && capped.budget && capped.result.is_none());
         assert!(capped.reason.as_deref().is_some_and(|reason| reason.contains("Reached maximum budget")), "{:?}", capped.reason);
-        let unknown = ClaudeCode
-            .outcome(
+        let unknown = outcome(
                 r#"{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":0,"errors":["No conversation found with session ID: 0f9e8d7c"]}"#,
             )
             .unwrap();
         assert!(unknown.reason.as_deref().is_some_and(|reason| reason.contains("No conversation found")), "{:?}", unknown.reason);
         assert!(!unknown.budget);
         let flagged =
-            ClaudeCode.outcome(r#"{"type":"result","subtype":"success","is_error":true,"result":"Credit balance is too low"}"#).unwrap();
+            outcome(r#"{"type":"result","subtype":"success","is_error":true,"result":"Credit balance is too low"}"#).unwrap();
         assert_eq!(flagged.reason.as_deref(), Some("Claude Code reported an error: Credit balance is too low"));
-        let new = ClaudeCode.outcome(r#"{"type":"result","subtype":"error_something_new"}"#).unwrap();
+        let new = outcome(r#"{"type":"result","subtype":"error_something_new"}"#).unwrap();
         assert_eq!(new.reason.as_deref(), Some("Claude Code stopped (error something new)"));
     }
 
@@ -588,7 +617,7 @@ mod tests {
     #[test]
     fn governed_memory_requests_are_denied_without_asking() {
         assert_eq!(parse(GOVERNED_REQUEST), vec![RunEvent::Denied { tool: "Bash".into(), summary: GOVERNED.into() }]);
-        let refused = json_of(&ClaudeCode.refusal(GOVERNED_REQUEST).unwrap());
+        let refused = json_of(&refusal(GOVERNED_REQUEST).unwrap());
         assert_eq!(
             refused,
             json!({"type": "control_response", "response": {"subtype": "success", "request_id": "r-gov",
@@ -596,35 +625,35 @@ mod tests {
         );
         let powershell = GOVERNED_REQUEST.replace("\"Bash\"", "\"PowerShell\"");
         assert!(matches!(parse(&powershell)[..], [RunEvent::Denied { .. }]));
-        assert!(ClaudeCode.refusal(&powershell).is_some());
-        assert_eq!(ClaudeCode.refusal(BASH_REQUEST), None);
-        assert_eq!(ClaudeCode.refusal(WRITE_REQUEST), None);
-        assert_eq!(ClaudeCode.refusal("not json"), None);
+        assert!(refusal(&powershell).is_some());
+        assert_eq!(refusal(BASH_REQUEST), None);
+        assert_eq!(refusal(WRITE_REQUEST), None);
+        assert_eq!(refusal("not json"), None);
     }
 
     #[test]
     fn answers_are_one_json_line_in_the_envelope() {
-        let allow = ClaudeCode.answer_line(BASH_REQUEST, Decision::Allow).unwrap();
+        let allow = answer_line(BASH_REQUEST, Decision::Allow).unwrap();
         assert!(!allow.contains('\n'));
         assert_eq!(
             json_of(&allow),
             json!({"type": "control_response", "response": {"subtype": "success", "request_id": "6c738ff4-3b35-4894-acec-1b2806f0b2f4",
                 "response": {"behavior": "allow"}}})
         );
-        let deny = ClaudeCode.answer_line(BASH_REQUEST, Decision::Deny).unwrap();
+        let deny = answer_line(BASH_REQUEST, Decision::Deny).unwrap();
         assert!(!deny.contains('\n'));
         let deny = json_of(&deny);
         assert_eq!(deny["response"]["response"]["behavior"], "deny");
         assert!(!deny["response"]["response"]["message"].as_str().unwrap().is_empty());
-        assert_eq!(ClaudeCode.answer_line(BASH_REQUEST, Decision::Withdrawn), None);
-        assert_eq!(ClaudeCode.answer_line(r#"{"type":"control_cancel_request","request_id":"r1"}"#, Decision::Allow), None);
-        assert_eq!(ClaudeCode.answer_line(r#"{"type":"system","subtype":"init"}"#, Decision::Allow), None);
-        assert_eq!(ClaudeCode.answer_line("not json", Decision::Allow), None);
+        assert_eq!(answer_line(BASH_REQUEST, Decision::Withdrawn), None);
+        assert_eq!(answer_line(r#"{"type":"control_cancel_request","request_id":"r1"}"#, Decision::Allow), None);
+        assert_eq!(answer_line(r#"{"type":"system","subtype":"init"}"#, Decision::Allow), None);
+        assert_eq!(answer_line("not json", Decision::Allow), None);
     }
 
     #[test]
     fn always_allow_is_rewritten_to_the_session() {
-        let line = ClaudeCode.answer_line(BASH_REQUEST, Decision::AllowAlways).unwrap();
+        let line = answer_line(BASH_REQUEST, Decision::AllowAlways).unwrap();
         assert!(!line.contains("localSettings") && !line.contains("addDirectories"), "{line}");
         let response = json_of(&line)["response"]["response"].clone();
         assert_eq!(response["behavior"], "allow");
@@ -634,14 +663,14 @@ mod tests {
                 "destination": "session"}])
         );
 
-        let response = json_of(&ClaudeCode.answer_line(WRITE_REQUEST, Decision::AllowAlways).unwrap())["response"]["response"].clone();
+        let response = json_of(&answer_line(WRITE_REQUEST, Decision::AllowAlways).unwrap())["response"]["response"].clone();
         assert_eq!(response["updatedPermissions"], json!([{"type": "setMode", "mode": "acceptEdits", "destination": "session"}]));
 
         // Nothing to remember, or a request that forbids it: a plain allow.
         let none = r#"{"type":"control_request","request_id":"r4","request":{"subtype":"can_use_tool","tool_name":"Read","input":{}}}"#;
         let suppressed = BASH_REQUEST.replace(r#""description":"Create directory spike_dir_1","permission_suggestions""#, r#""suppress_always_allow_rule":true,"permission_suggestions""#);
         for request in [none, suppressed.as_str()] {
-            let response = json_of(&ClaudeCode.answer_line(request, Decision::AllowAlways).unwrap())["response"]["response"].clone();
+            let response = json_of(&answer_line(request, Decision::AllowAlways).unwrap())["response"]["response"].clone();
             assert_eq!(response, json!({"behavior": "allow"}), "{request}");
         }
         let RunEvent::ApprovalRequest { can_always, always_label, .. } = parse(&suppressed).remove(0) else { panic!("not an approval request") };
@@ -667,18 +696,18 @@ mod tests {
 
     #[test]
     fn control_lines_are_valid_and_never_initialize() {
-        let (first, second) = (json_of(&ClaudeCode.interrupt_line()), json_of(&ClaudeCode.interrupt_line()));
+        let (first, second) = (json_of(&interrupt_line()), json_of(&interrupt_line()));
         assert_eq!((first["type"].as_str(), first["request"]["subtype"].as_str()), (Some("control_request"), Some("interrupt")));
         assert!(first["request_id"].as_str().unwrap().starts_with("hivemind-"));
         assert_ne!(first["request_id"], second["request_id"]);
-        let mode = |mode: PolicyMode| json_of(&ClaudeCode.mode_line(mode))["request"].clone();
+        let mode = |mode: PolicyMode| json_of(&mode_line(mode))["request"].clone();
         assert_eq!(mode(PolicyMode::Ask), json!({"subtype": "set_permission_mode", "mode": "default"}));
         assert_eq!(mode(PolicyMode::AcceptEdits), json!({"subtype": "set_permission_mode", "mode": "acceptEdits"}));
         assert_eq!(mode(PolicyMode::PreApproved), json!({"subtype": "set_permission_mode", "mode": "dontAsk"}));
-        let mut lines = vec![ClaudeCode.interrupt_line(), ClaudeCode.user_line("hello")];
-        lines.extend([PolicyMode::PreApproved, PolicyMode::Ask, PolicyMode::AcceptEdits].map(|mode| ClaudeCode.mode_line(mode)));
-        lines.extend([Decision::Allow, Decision::AllowAlways, Decision::Deny].map(|d| ClaudeCode.answer_line(BASH_REQUEST, d).unwrap()));
-        lines.extend(ClaudeCode.refusal(GOVERNED_REQUEST));
+        let mut lines = vec![interrupt_line(), user_line("hello")];
+        lines.extend([PolicyMode::PreApproved, PolicyMode::Ask, PolicyMode::AcceptEdits].map(mode_line));
+        lines.extend([Decision::Allow, Decision::AllowAlways, Decision::Deny].map(|d| answer_line(BASH_REQUEST, d).unwrap()));
+        lines.extend(refusal(GOVERNED_REQUEST));
         for line in lines {
             assert!(!line.contains('\n') && !line.contains("initialize") && !line.contains("get_status"), "{line}");
         }
@@ -686,13 +715,13 @@ mod tests {
 
     #[test]
     fn status_lines_report_the_mode() {
-        let status = |mode: &str| ClaudeCode.mode_of(&format!(r#"{{"type":"system","subtype":"status","status":null,"permissionMode":"{mode}"}}"#));
+        let status = |mode: &str| mode_of(&format!(r#"{{"type":"system","subtype":"status","status":null,"permissionMode":"{mode}"}}"#));
         assert_eq!(status("acceptEdits"), Some(PolicyMode::AcceptEdits));
         assert_eq!(status("default"), Some(PolicyMode::Ask));
         assert_eq!(status("plan"), None);
-        assert_eq!(ClaudeCode.mode_of(r#"{"type":"system","subtype":"status","status":"requesting"}"#), None);
-        assert_eq!(ClaudeCode.mode_of(r#"{"type":"system","subtype":"init","permissionMode":"acceptEdits"}"#), None);
-        assert_eq!(ClaudeCode.mode_of("not json"), None);
+        assert_eq!(mode_of(r#"{"type":"system","subtype":"status","status":"requesting"}"#), None);
+        assert_eq!(mode_of(r#"{"type":"system","subtype":"init","permissionMode":"acceptEdits"}"#), None);
+        assert_eq!(mode_of("not json"), None);
     }
 
     fn spec(policy: Policy) -> Spec {
@@ -767,7 +796,7 @@ mod tests {
         assert_eq!(resumed[5..5 + head.len()], head);
         assert!(!resumed.contains(&"--session-id".to_string()));
 
-        let line = ClaudeCode.user_line("Say \"hi\"\nthen stop");
+        let line = user_line("Say \"hi\"\nthen stop");
         assert!(!line.contains('\n'), "one line on stdin");
         assert_eq!(
             serde_json::from_str::<Value>(&line).unwrap(),
