@@ -21,7 +21,7 @@ import { noteQuery } from "../viewer/NoteView";
 import { ApprovalCard, Composer, FilesCard, RemoveWorktree } from "./Chat";
 import { apply, build, cost, duration, EMPTY, merge, type Finished, type Item, type Transcript as State } from "./events";
 import { filesWord, reviewLabel } from "../review/review";
-import { ALLOWED_NOTE, CODEX_COST_NOTE, CODEX_MODE_NOTE, isCodex, isEnded, permissionLines, POLICIES, repoName, waitingForReview } from "./session";
+import { ALLOWED_NOTE, CODEX_ALLOWED_NOTE, CODEX_COST_NOTE, CODEX_MODE_NOTE, codexPermissionLines, engineLabel, isCodex, isEnded, permissionLines, POLICIES, repoName, waitingForReview } from "./session";
 import { useSessionDraft } from "./draft";
 import { StartSession } from "./StartSession";
 import { accessLabel, latestOf, whereLabel } from "../terminal/tabs";
@@ -31,14 +31,14 @@ const when = (ms: number) => new Date(ms).toLocaleString();
 const elapsed = (s: SessionInfo) => duration((s.endedAt ?? Date.now()) - s.startedAt);
 
 /** What an interactive transcript needs beyond the items: the session, which files card is the latest, and how to review it. */
-interface Chat { sessionId: string; root?: string; latestFiles: number; chip: { text: string; tone: string } | null; onReview?: () => void }
+interface Chat { sessionId: string; engine: string; root?: string; latestFiles: number; chip: { text: string; tone: string } | null; onReview?: () => void }
 
 function Entry({ item, index, chat }: { item: Item; index: number; chat?: Chat }) {
   const [open, setOpen] = useState(false);
   const link = useQuery({ queryKey: ["connect"], queryFn: connect, retry: false, staleTime: Infinity });
   switch (item.kind) {
     case "started":
-      return <p className="muted small">Claude Code {item.cliVersion ?? ""}{item.model ? ` · ${item.model}` : ""}{item.plugins.length ? ` · plugins: ${item.plugins.join(", ")}` : ""}</p>;
+      return <p className="muted small">{chat?.engine ?? "Claude Code"} {item.cliVersion ?? ""}{item.model ? ` · ${item.model}` : ""}{item.plugins.length ? ` · plugins: ${item.plugins.join(", ")}` : ""}</p>;
     case "text":
       return <div className="chat-message"><img className="chat-avatar" src={logo} alt="" /><div className="markdown"><Markdown>{item.text}</Markdown></div></div>;
     case "tool": {
@@ -243,9 +243,9 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
         {isCodex(info) && <p className="muted small">{CODEX_COST_NOTE}</p>}
       </Section>
       <Section title="Permissions">
-        {permissionLines(info.policy).map((line) => <Row key={line} icon={<ShieldCheck size="1.3em" aria-hidden />}>{line}</Row>)}
+        {(isCodex(info) ? codexPermissionLines : permissionLines)(info.policy).map((line) => <Row key={line} icon={<ShieldCheck size="1.3em" aria-hidden />}>{line}</Row>)}
         <Row>Living Memory plans are never applied</Row>
-        <p className="muted small">{ALLOWED_NOTE}</p>
+        <p className="muted small">{isCodex(info) ? CODEX_ALLOWED_NOTE : ALLOWED_NOTE}</p>
       </Section>
       <Section title="Changes">
         {files ? <Row icon={<FileText size="1.3em" aria-hidden />} onClick={onReview}>{filesWord(files)} {waitingForReview(info) ? "awaiting review" : "changed"}</Row>
@@ -310,7 +310,7 @@ function Session({ id }: { id: string }) {
           )}
         </header>
         <div className="chat-scroll">
-          <Transcript state={state} running={running} chat={interactive ? { sessionId: info.id, root: live.worktree?.path, chip: reviewLabel(live), onReview: review } : undefined} />
+          <Transcript state={state} running={running} chat={interactive ? { sessionId: info.id, engine: engineLabel(info), root: live.worktree?.path, chip: reviewLabel(live), onReview: review } : undefined} />
         </div>
         {interactive && <Composer info={live} transcript={state} />}
       </div>

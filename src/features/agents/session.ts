@@ -111,6 +111,17 @@ export const isCodex = (s: Pick<SessionInfo, "adapter">) => s.adapter === "codex
 export const CODEX_COST_NOTE = "Codex does not report cost. The spend cap does not apply.";
 export const CODEX_MODE_NOTE = "Codex keeps the permission mode it was started with.";
 
+/** A Codex chat's permissions in the words of its app-server policy (section 5.10: untrusted, or on-request, in workspace-write). */
+export function codexPermissionLines(policy: Policy): string[] {
+  return policy === "accept_edits"
+    ? ["File edits and commands in the worktree run without asking", "Codex asks before it goes outside its sandbox"]
+    : ["File edits require review", "Commands ask unless Codex trusts them as read-only"];
+}
+export const CODEX_ALLOWED_NOTE = "Codex decides which commands are safe to run without asking. Codex has no “Always allow”.";
+
+/** The first line of a transcript: the program the session runs. */
+export const engineLabel = (s: Pick<SessionInfo, "adapter">) => (isCodex(s) ? "Codex" : "Claude Code");
+
 /** A path relative to `root` when it lies inside it (either slash style, any drive-letter case), else as given. */
 export function relativeTo(path: string, root: string | null | undefined): string {
   if (!root) return path;

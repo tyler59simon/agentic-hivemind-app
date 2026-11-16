@@ -310,7 +310,9 @@ impl CodexDriver {
         }
         self.ask(id, item);
         let cwd = params.get("cwd").cloned().unwrap_or(Value::Null);
-        let input = json!({"command": clip(command, APPROVAL_INPUT), "cwd": cwd});
+        // The command itself, not the shell wrapper Codex runs it in (`"C:\\…\\powershell.exe" -Command '…'`).
+        let action = params.pointer("/commandActions/0/command").and_then(Value::as_str).filter(|text| !text.trim().is_empty());
+        let input = json!({"command": clip(action.unwrap_or(command), APPROVAL_INPUT), "cwd": cwd});
         Step { events: vec![approval(item, "Shell", summary, input)], ..Step::default() }
     }
 
@@ -695,7 +697,7 @@ pub(super) mod tests {
         assert_eq!((request_id.as_str(), tool.as_str(), *can_always, always_label), (COMMAND, "Shell", false, &None));
         assert_eq!(summary, "Set-Content -LiteralPath as-shell.txt -Value hi");
         assert_eq!(input["cwd"], r"C:\work\codex-check");
-        assert!(input["command"].as_str().unwrap().contains("powershell.exe"));
+        assert_eq!(input["command"], "Set-Content -LiteralPath as-shell.txt -Value hi");
         let accept = r#"{"id":0,"result":{"decision":"accept"}}"#;
         assert_eq!(d.answer(COMMAND, REQUEST_COMMAND, Decision::Allow).as_deref(), Some(accept));
         assert_eq!(d.answer(COMMAND, REQUEST_COMMAND, Decision::AllowAlways).as_deref(), Some(accept));

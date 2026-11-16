@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionInfo } from "../../lib/agent";
 import type { Project } from "../../lib/lm";
-import { changeRows, draftCounts, isCodex, permissionLines, relativeTo, sessionBriefing, sessionForNote, waitingForReview } from "./session";
+import { changeRows, codexPermissionLines, draftCounts, engineLabel, isCodex, permissionLines, relativeTo, sessionBriefing, sessionForNote, waitingForReview } from "./session";
 
 let n = 0;
 const session = (o: Partial<SessionInfo>): SessionInfo => ({
@@ -117,6 +117,13 @@ describe("sessionBriefing", () => {
   it("knows a Codex session", () => {
     expect(isCodex(session({ adapter: "codex" }))).toBe(true);
     expect(isCodex(session({}))).toBe(false);
+    expect(engineLabel(session({ adapter: "codex" }))).toBe("Codex");
+    expect(engineLabel(session({}))).toBe("Claude Code");
+  });
+
+  it("words a Codex chat's permissions by its policy", () => {
+    expect(codexPermissionLines("ask")).toEqual(["File edits require review", "Commands ask unless Codex trusts them as read-only"]);
+    expect(codexPermissionLines("accept_edits")[0]).toBe("File edits and commands in the worktree run without asking");
   });
 
   it("shows a path relative to the worktree when it is inside", () => {
