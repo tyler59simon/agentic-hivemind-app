@@ -4,9 +4,8 @@
 //! `user` and `assistant` records are read; every other record type is ignored by name. Codex's rollout holds injected
 //! instructions, which are skipped.
 use super::cli_files::parse_iso_ms;
-use crate::agent::claude::ClaudeCode;
+use crate::agent::claude;
 use crate::agent::events::{RunEvent, SeqEvent, TurnEnd, clip};
-use crate::agent::Adapter;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -77,7 +76,7 @@ pub fn claude(session_id: &str, file: &str) -> Vec<SeqEvent> {
         }
         let at = stamp(&record);
         if kind == Some("assistant") {
-            for event in ClaudeCode.parse_line(line) {
+            for event in claude::parse_line(line) {
                 if let RunEvent::ToolUse { id, name, .. } = &event {
                     tools.insert(id.clone(), name.clone());
                 }
@@ -93,7 +92,7 @@ pub fn claude(session_id: &str, file: &str) -> Vec<SeqEvent> {
         if !text.trim().is_empty() && !injected(&text) {
             out.push(at, RunEvent::UserMessage { text, context: vec![] });
         }
-        for event in ClaudeCode.parse_line(line) {
+        for event in claude::parse_line(line) {
             match event {
                 RunEvent::ToolResult { id, ok: false, summary } if is_denial(&summary) => {
                     let tool = tools.get(&id).cloned().unwrap_or_default();

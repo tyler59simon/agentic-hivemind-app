@@ -105,3 +105,45 @@ export function sessionBriefing(input: BriefingInput): string {
     workspace, change, noteBlock(input.notes, "Included memory"), architecture, memory, "---", input.pack,
   ].filter(Boolean).join("\n\n");
 }
+
+/** True for a session that runs on Codex, in chat or in the terminal. */
+export const isCodex = (s: Pick<SessionInfo, "adapter">) => s.adapter === "codex";
+export const CODEX_COST_NOTE = "Codex does not report cost. The spend cap does not apply.";
+export const CODEX_MODE_NOTE = "Codex keeps the permission mode it was started with.";
+
+/** A Codex chat's permissions in the words of its app-server policy (section 5.10: untrusted, or on-request, in workspace-write). */
+export function codexPermissionLines(policy: Policy): string[] {
+  return policy === "accept_edits"
+    ? ["File edits and commands in the worktree run without asking", "Codex asks before it goes outside its sandbox"]
+    : ["File edits require review", "Commands ask unless Codex trusts them as read-only"];
+}
+export const CODEX_ALLOWED_NOTE = "Codex decides which commands are safe to run without asking. Codex has no “Always allow”.";
+/** The Start screen's help for a permission choice, in the engine's words. */
+export const policyHelp = (policy: Policy, codex: boolean) =>
+  codex ? codexPermissionLines(policy).join(". ") + "." : POLICIES.find((p) => p.id === policy)?.help;
+
+/** The command that continues a chat session's conversation in a terminal; null for a Codex session with no thread yet. */
+export const resumeCommand = (s: Pick<SessionInfo, "adapter" | "id" | "engineSession">): string | null =>
+  isCodex(s) ? (s.engineSession ? `codex resume ${s.engineSession}` : null) : `claude --resume ${s.id}`;
+
+/** The first line of a transcript: the program the session runs. */
+export const engineLabel = (s: Pick<SessionInfo, "adapter">) => (isCodex(s) ? "Codex" : "Claude Code");
+
+/** A path relative to `root` when it lies inside it (either slash style, any drive-letter case), else as given. */
+export function relativeTo(path: string, root: string | null | undefined): string {
+  if (!root) return path;
+  const flat = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+  const p = flat(path);
+  const r = flat(root);
+  return p.toLowerCase().startsWith(r.toLowerCase() + "/") ? p.slice(r.length + 1) : path;
+}
+
+/** The files of a Codex edit request (`input.changes`) as rows to show; null when the input has no `changes` array. */
+export function changeRows(input: unknown, root?: string | null): { path: string; diff: string }[] | null {
+  const changes = (input as { changes?: unknown } | null)?.changes;
+  if (!Array.isArray(changes)) return null;
+  return changes.map((c: { path?: unknown; diff?: unknown }) => ({
+    path: relativeTo(typeof c?.path === "string" ? c.path : "", root),
+    diff: typeof c?.diff === "string" ? c.diff : "",
+  }));
+}

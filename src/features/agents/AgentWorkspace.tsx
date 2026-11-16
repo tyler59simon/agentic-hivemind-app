@@ -21,7 +21,7 @@ import { noteQuery } from "../viewer/NoteView";
 import { ApprovalCard, Composer, FilesCard, RemoveWorktree } from "./Chat";
 import { apply, build, cost, duration, EMPTY, merge, type Finished, type Item, type Transcript as State } from "./events";
 import { filesWord, reviewLabel } from "../review/review";
-import { ALLOWED_NOTE, isEnded, permissionLines, POLICIES, repoName, waitingForReview } from "./session";
+import { ALLOWED_NOTE, CODEX_ALLOWED_NOTE, CODEX_COST_NOTE, CODEX_MODE_NOTE, codexPermissionLines, engineLabel, isCodex, resumeCommand, isEnded, permissionLines, POLICIES, repoName, waitingForReview } from "./session";
 import { useSessionDraft } from "./draft";
 import { StartSession } from "./StartSession";
 import { accessLabel, latestOf, whereLabel } from "../terminal/tabs";
@@ -31,14 +31,14 @@ const when = (ms: number) => new Date(ms).toLocaleString();
 const elapsed = (s: SessionInfo) => duration((s.endedAt ?? Date.now()) - s.startedAt);
 
 /** What an interactive transcript needs beyond the items: the session, which files card is the latest, and how to review it. */
-interface Chat { sessionId: string; latestFiles: number; chip: { text: string; tone: string } | null; onReview?: () => void }
+interface Chat { sessionId: string; engine: string; root?: string; latestFiles: number; chip: { text: string; tone: string } | null; onReview?: () => void }
 
 function Entry({ item, index, chat }: { item: Item; index: number; chat?: Chat }) {
   const [open, setOpen] = useState(false);
   const link = useQuery({ queryKey: ["connect"], queryFn: connect, retry: false, staleTime: Infinity });
   switch (item.kind) {
     case "started":
-      return <p className="muted small">Claude Code {item.cliVersion ?? ""}{item.model ? ` · ${item.model}` : ""}{item.plugins.length ? ` · plugins: ${item.plugins.join(", ")}` : ""}</p>;
+      return <p className="muted small">{chat?.engine ?? "Claude Code"} {item.cliVersion ?? ""}{item.model ? ` · ${item.model}` : ""}{item.plugins.length ? ` · plugins: ${item.plugins.join(", ")}` : ""}</p>;
     case "text":
       return <div className="chat-message"><img className="chat-avatar" src={logo} alt="" /><div className="markdown"><Markdown>{item.text}</Markdown></div></div>;
     case "tool": {
@@ -67,7 +67,7 @@ function Entry({ item, index, chat }: { item: Item; index: number; chat?: Chat }
         </div>
       );
     case "approval":
-      return <ApprovalCard item={item} sessionId={chat?.sessionId ?? ""} />;
+      return <ApprovalCard item={item} sessionId={chat?.sessionId ?? ""} root={chat?.root} />;
     case "files":
       return <FilesCard files={item.files} latest={index === chat?.latestFiles} chip={index === chat?.latestFiles ? chat.chip : null} onReview={chat?.onReview} />;
     case "turn":
@@ -190,7 +190,7 @@ function Toolbar({ info, face, sessions, onAsk }: { info?: SessionInfo; face: In
           {info.interface === "terminal"
             ? <span className="toolbar-fact" title={permissionFlags(info)}><Shield size="1.2em" aria-hidden />{accessLabel(info)}</span>
             : (
-              <select aria-label="Permissions" value={info.policy} disabled={isEnded(info)} onChange={(e) => setPolicy(e.target.value as Policy)}>
+              <select aria-label="Permissions" value={info.policy} disabled={isEnded(info) || isCodex(info)} title={isCodex(info) ? CODEX_MODE_NOTE : undefined} onChange={(e) => setPolicy(e.target.value as Policy)}>
                 {POLICIES.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
               </select>
             )}
@@ -216,7 +216,7 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
   const project = registry.data?.projects.find((p) => p.slug === info.project);
   const ended = isEnded(info);
   const files = info.filesChanged?.files ?? 0;
-  const resume = `claude --resume ${info.id}`;
+  const resume = resumeCommand(info);
   const refresh = () => client.invalidateQueries({ queryKey: ["agent", "sessions"] });
   const end = () => agentEnd(info.id).then(refresh).catch((e) => toast(String(e), "error"));
   return (
@@ -240,11 +240,12 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
         {info.system && <Row icon={<Network size="1.3em" aria-hidden />} onClick={() => openSystem(info.system!)}>1 architecture view</Row>}
         <Row meta={when(info.startedAt)}>Started</Row>
         <Row meta={[elapsed(info), info.costUsd != null ? cost(info.costUsd) : ""].filter(Boolean).join(" · ")}>Duration</Row>
+        {isCodex(info) && <p className="muted small">{CODEX_COST_NOTE}</p>}
       </Section>
       <Section title="Permissions">
-        {permissionLines(info.policy).map((line) => <Row key={line} icon={<ShieldCheck size="1.3em" aria-hidden />}>{line}</Row>)}
+        {(isCodex(info) ? codexPermissionLines : permissionLines)(info.policy).map((line) => <Row key={line} icon={<ShieldCheck size="1.3em" aria-hidden />}>{line}</Row>)}
         <Row>Living Memory plans are never applied</Row>
-        <p className="muted small">{ALLOWED_NOTE}</p>
+        <p className="muted small">{isCodex(info) ? CODEX_ALLOWED_NOTE : ALLOWED_NOTE}</p>
       </Section>
       <Section title="Changes">
         {files ? <Row icon={<FileText size="1.3em" aria-hidden />} onClick={onReview}>{filesWord(files)} {waitingForReview(info) ? "awaiting review" : "changed"}</Row>
@@ -253,7 +254,7 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
       <div className="rail-actions">
         {!ended && <button className="danger-text" onClick={() => (info.status === "idle" ? end() : setAsking("end"))}>End session</button>}
         <RemoveWorktree info={info} />
-        {ended && (
+        {ended && resume && (
           <button className="outline" title={`Continue this conversation in a terminal: ${resume}`}
             onClick={() => navigator.clipboard.writeText(resume).then(() => toast("Resume command copied"), () => toast(resume))}>Copy resume command</button>
         )}
@@ -289,7 +290,7 @@ function Session({ id }: { id: string }) {
   if (log.error || !info) return <p className="error pad">{String(log.error ?? "This session is no longer in the history.")}</p>;
   const running = info.status === "running" && !state.finished;
   const status = state.finished?.status ?? info.status;
-  const resume = `claude --resume ${info.id}`;
+  const resume = resumeCommand(info);
   const passport = info.task.kind === "system_passport" ? info.task : null;
   const system = passport ? systems.data?.systems.find((s) => s.slug === passport.slug) : undefined;
   const work = info.task.kind === "work" ? info.task : null;
@@ -309,7 +310,7 @@ function Session({ id }: { id: string }) {
           )}
         </header>
         <div className="chat-scroll">
-          <Transcript state={state} running={running} chat={interactive ? { sessionId: info.id, chip: reviewLabel(live), onReview: review } : undefined} />
+          <Transcript state={state} running={running} chat={interactive ? { sessionId: info.id, engine: engineLabel(info), root: live.worktree?.path, chip: reviewLabel(live), onReview: review } : undefined} />
         </div>
         {interactive && <Composer info={live} transcript={state} />}
       </div>
@@ -323,14 +324,15 @@ function Session({ id }: { id: string }) {
             {info.workspace.slice(1).map((w) => <Row key={w} icon={<Layers size="1.3em" aria-hidden />} meta={<code title={w}>{w.split(/[\\/]/).filter(Boolean).pop()}</code>}>Can also read</Row>)}
             <Row meta={when(info.startedAt)}>Started</Row>
             <Row meta={[elapsed(info), info.costUsd != null ? cost(info.costUsd) : ""].filter(Boolean).join(" · ")}>Duration</Row>
+            {isCodex(info) && <p className="muted small">{CODEX_COST_NOTE}</p>}
           </Section>
           <Section title="Permissions">
             <Row icon={<ShieldCheck size="1.3em" aria-hidden />}>Unattended: pre-approved actions only</Row>
             <p className="muted small">Anything outside the allowed list is refused and shown in the transcript.</p>
           </Section>
           <div className="rail-actions">
-            <button className="outline" title={`Continue this conversation in a terminal: ${resume}`}
-              onClick={() => navigator.clipboard.writeText(resume).then(() => toast("Resume command copied"), () => toast(resume))}>Copy resume command</button>
+            {resume && <button className="outline" title={`Continue this conversation in a terminal: ${resume}`}
+              onClick={() => navigator.clipboard.writeText(resume).then(() => toast("Resume command copied"), () => toast(resume))}>Copy resume command</button>}
             {running && <button className="danger-text" onClick={() => agentCancel(info.id).catch((e) => toast(String(e), "error"))}>Stop session</button>}
           </div>
         </aside>

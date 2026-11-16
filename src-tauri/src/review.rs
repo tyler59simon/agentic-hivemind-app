@@ -464,6 +464,7 @@ pub fn discard(agents: &Manager, worktrees_dir: &Path, id: &str) -> Result<(), S
 mod tests {
     use super::*;
     use crate::agent::claude::ClaudeCode;
+    use crate::agent::codex::Codex;
     use crate::agent::events::Mode;
     use crate::agent::scope::{AgentTask, PolicyMode};
     use crate::agent::{store, Emit, Review, ReviewState};
@@ -522,7 +523,8 @@ mod tests {
             store::save_index(&self.sessions, infos).unwrap();
             let seen: Arc<Mutex<Vec<Emit>>> = Arc::default();
             let sink = seen.clone();
-            (Manager::new(self.sessions.clone(), Arc::new(ClaudeCode), Arc::new(move |emit| sink.lock().unwrap().push(emit))), seen)
+            let sink = Arc::new(move |emit| sink.lock().unwrap().push(emit));
+            (Manager::new(self.sessions.clone(), Arc::new(ClaudeCode), Arc::new(Codex), sink), seen)
         }
     }
 

@@ -1089,6 +1089,7 @@ mod tests {
             let agents = agent::Manager::new(
                 dir.join("sessions"),
                 Arc::new(agent::claude::ClaudeCode),
+                Arc::new(agent::codex::Codex),
                 Arc::new(move |emit| {
                     if matches!(emit, agent::Emit::SessionsChanged) {
                         *counted.lock().unwrap() += 1;

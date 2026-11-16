@@ -99,6 +99,7 @@ export type RunEvent =
   | { type: "approvalRequest"; requestId: string; tool: string; summary: string; input: unknown; canAlways: boolean; alwaysLabel: string | null }
   | { type: "approvalResolved"; requestId: string; decision: Decision }
   | { type: "turnFinished"; ok: boolean; reason: string | null; costUsd: number | null; durationMs: number | null; result: string | null; denials: number; outcome: TurnOutcome }
+  | { type: "processStarted"; resume: boolean }
   | { type: "filesChanged"; files: FileChange[] }
   | {
     type: "finished"; status: Exclude<SessionStatus, "running" | "waiting" | "idle">; reason: string | null; costUsd: number | null;

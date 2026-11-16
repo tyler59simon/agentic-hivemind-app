@@ -26,7 +26,7 @@ import { noteQuery } from "../viewer/NoteView";
 import { ConnectionDialog } from "./ConnectionDialog";
 import { ResumeCli } from "./ResumeCli";
 import { useSessionDraft } from "./draft";
-import { ALLOWED_NOTE, draftCounts, permissionLines, POLICIES, repoName, sessionBriefing } from "./session";
+import { ALLOWED_NOTE, CODEX_ALLOWED_NOTE, codexPermissionLines, draftCounts, permissionLines, POLICIES, policyHelp, repoName, sessionBriefing } from "./session";
 import { accessLines, buildStart, defaultAccess, effortOptions, historyTarget, terminalsIn, WHERE_HELP, withApproval, type Where } from "./start";
 
 const MODELS = [
@@ -58,7 +58,8 @@ function toolLines(engine: Engine, face: Interface): string[] {
       "Loaded from your Claude Code setup: settings, hooks, plugins and MCP servers. The first line of the session lists the plugins that loaded.",
     ]
     : [
-      "Asks you first: shell commands and file edits, by Codex's rules for the chosen permission.",
+      "With “Review edits”: every file edit, and every command Codex does not trust as read-only, asks you first.",
+      "With “Accept edits”: file edits and commands in the worktree run without asking; Codex asks before it goes outside its sandbox.",
       "Never: Living Memory plan, apply and undo commands.",
       "Loaded from your Codex setup: its configuration, AGENTS.md, plugins and MCP servers.",
     ];
@@ -314,7 +315,7 @@ function StartForm({ project }: { project: Project | null }) {
                 <li>Limit edits to {repoName(repo)}</li>
                 {openSteps.slice(0, 3).map((step) => <li key={step}>{step}</li>)}
                 <li>{needsBranch ? `Work on a new branch from ${branch}; nothing is pushed or merged` : "Work in your real checkout; nothing is pushed or merged for you"}</li>
-                {terminal ? accessLines(access).slice(0, 2).map((line) => <li key={line}>{line}</li>) : <li>{permissionLines(policy)[0]}</li>}
+                {terminal ? accessLines(access).slice(0, 2).map((line) => <li key={line}>{line}</li>) : <li>{(draft.engine === "codex" ? codexPermissionLines : permissionLines)(policy)[0]}</li>}
               </ul>
             </Section>
             <div>
@@ -457,8 +458,8 @@ function StartForm({ project }: { project: Project | null }) {
                   <select aria-label="Permissions" value={policy} onChange={(e) => setPolicy(e.target.value as Policy)}>
                     {POLICIES.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
                   </select>
-                  <p className="muted small">{POLICIES.find((p) => p.id === policy)?.help}</p>
-                  <p className="muted small">{ALLOWED_NOTE}</p>
+                  <p className="muted small">{policyHelp(policy, draft.engine === "codex")}</p>
+                  <p className="muted small">{draft.engine === "codex" ? CODEX_ALLOWED_NOTE : ALLOWED_NOTE}</p>
                 </>
               )}
             </section>

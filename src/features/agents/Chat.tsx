@@ -13,7 +13,7 @@ import { NotePicker } from "../plans/NotePicker";
 import { projectsQuery } from "../projects/useProject";
 import { noteQuery } from "../viewer/NoteView";
 import { cost, lastTurn, type Item, type Transcript } from "./events";
-import { isEnded, noteBlock } from "./session";
+import { changeRows, isEnded, noteBlock } from "./session";
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 const baseName = (path: string) => path.split(/[\\/]/).pop() || path;
@@ -22,17 +22,20 @@ const totals = (files: FileChange[]) => ({ added: files.reduce((n, f) => n + f.a
 /** What a permission request is about, in one string: the command, or the file. */
 function subject(item: Extract<Item, { kind: "approval" }>): string {
   const input = (item.input ?? {}) as Record<string, unknown>;
-  if (item.tool === "Bash" || item.tool === "PowerShell") return str(input.command);
+  if (item.tool === "Bash" || item.tool === "PowerShell" || item.tool === "Shell") return str(input.command);
   return str(input.file_path) || item.summary;
 }
 
 /** The tool's request in full: a command, a diff, a file, or the raw input for any other tool. */
-function Detail({ tool, input }: { tool: string; input: Record<string, unknown> }) {
+function Detail({ tool, input, root }: { tool: string; input: Record<string, unknown>; root?: string }) {
   switch (tool) {
     case "Bash":
     case "PowerShell":
+    case "Shell":
       return <pre>{str(input.command)}</pre>;
     case "Edit": {
+      const rows = changeRows(input, root);
+      if (rows) return <>{rows.map((r, i) => <div key={i}><code>{r.path}</code><DiffView text={r.diff} /></div>)}</>;
       const lines = (text: string, mark: string) => (text ? text.split("\n").map((l) => mark + l) : []);
       return <><code>{str(input.file_path)}</code><DiffView text={[...lines(str(input.old_string), "-"), ...lines(str(input.new_string), "+")].join("\n")} /></>;
     }
@@ -46,7 +49,7 @@ function Detail({ tool, input }: { tool: string; input: Record<string, unknown> 
 }
 
 /** A permission request: asks while open, then collapses to one line with the answer. */
-export function ApprovalCard({ item, sessionId }: { item: Extract<Item, { kind: "approval" }>; sessionId: string }) {
+export function ApprovalCard({ item, sessionId, root }: { item: Extract<Item, { kind: "approval" }>; sessionId: string; root?: string }) {
   const [answering, setAnswering] = useState(false);
   const input = (item.input ?? {}) as Record<string, unknown>;
   if (item.decision) {
@@ -65,7 +68,7 @@ export function ApprovalCard({ item, sessionId }: { item: Extract<Item, { kind: 
       setAnswering(false);
     }
   };
-  const detail = item.tool === "Bash" || item.tool === "PowerShell" ? str(input.command) : ["Edit", "Write", "Read"].includes(item.tool) ? str(input.file_path) : "";
+  const detail = item.tool === "Bash" || item.tool === "PowerShell" || item.tool === "Shell" ? str(input.command) : ["Edit", "Write", "Read"].includes(item.tool) ? str(input.file_path) : "";
   return (
     <div className="approval" role="group" aria-label={"Permission request: " + item.tool}>
       <div className="approval-head">
@@ -73,7 +76,7 @@ export function ApprovalCard({ item, sessionId }: { item: Extract<Item, { kind: 
         <span className="status-chip waiting">Waiting for you</span>
       </div>
       {item.summary !== detail && <p>{item.summary}</p>}
-      <Detail tool={item.tool} input={input} />
+      <Detail tool={item.tool} input={input} root={root} />
       <div className="approval-actions">
         <button className="primary" disabled={answering} onClick={() => answer("allow")}>Allow once</button>
         {item.canAlways && <button disabled={answering} title={item.alwaysLabel ? "Allow " + item.alwaysLabel + " for the rest of this session" : undefined} onClick={() => answer("allow_always")}>Always allow for this session</button>}
