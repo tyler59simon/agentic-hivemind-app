@@ -3,6 +3,7 @@
 //! prompt, an interactive one takes messages until it is ended, and either may use a process of its own at a time.
 pub mod access;
 pub mod claude;
+pub mod codex;
 pub mod direct;
 pub mod events;
 pub mod models;
@@ -321,6 +322,8 @@ pub struct SendOptions {
 pub struct Launch {
     pub scope: Scope,
     pub program: String,
+    /// Arguments that go between the program and the CLI's own: empty for Claude Code, `codex.js` for Codex run through `node`.
+    pub program_args: Vec<String>,
     pub budget_usd: f64,
     /// The store root the app's bridge is connected to (`bridge.launch().root`); becomes `Spec.memory_root`.
     pub memory_root: Option<PathBuf>,
@@ -1251,6 +1254,7 @@ impl Inner {
             budget_usd: launch.budget_usd,
             schema: launch.scope.schema.clone(),
             program: launch.program.clone(),
+            program_args: launch.program_args.clone(),
             resume,
             model,
             deny: launch.scope.deny.clone(),
@@ -1594,7 +1598,7 @@ pub fn start_task(
     // A terminal session starts no process here; the lookup only reports a missing CLI on the Start screen.
     let program = if terminal { crate::term::launch::program(options.engine, saved).map(|_| String::new())? } else { claude::available(saved)? };
     let id = uuid::Uuid::new_v4().to_string();
-    let launch = |scope| Launch { scope, program: program.clone(), budget_usd: saved.agent_budget_usd(), memory_root: bridge.launch().root };
+    let launch = |scope| Launch { scope, program: program.clone(), program_args: vec![], budget_usd: saved.agent_budget_usd(), memory_root: bridge.launch().root };
     let (project, repo, branch, change) = match &task {
         AgentTask::Work { project, repo, branch, change } => (project, repo, branch, change),
         AgentTask::Folder { path } => {
@@ -1693,6 +1697,7 @@ pub fn send_task(
             Ok(Launch {
                 scope: scope::for_session(bridge, info)?,
                 program: claude::available(saved)?,
+                program_args: vec![],
                 budget_usd: saved.agent_budget_usd(),
                 memory_root: bridge.launch().root,
             })
@@ -1919,7 +1924,7 @@ mod tests {
         }
 
         fn launch(&self, scope: Scope) -> Launch {
-            Launch { scope, program: "unused".into(), budget_usd: 5.0, memory_root: Some(self.dir.join("store")) }
+            Launch { scope, program: "unused".into(), program_args: vec![], budget_usd: 5.0, memory_root: Some(self.dir.join("store")) }
         }
 
         fn start(&self, required_plugin: Option<&str>) -> Result<SessionInfo, String> {

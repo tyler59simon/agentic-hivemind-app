@@ -734,6 +734,7 @@ mod tests {
             budget_usd: 5.0,
             schema: Some(json!({"type": "object"})),
             program: "claude".into(),
+            program_args: vec![],
             resume: false,
             model: None,
             deny: vec![],

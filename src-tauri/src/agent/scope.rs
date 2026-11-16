@@ -97,6 +97,8 @@ pub struct Spec {
     pub budget_usd: f64,
     pub schema: Option<Value>,
     pub program: String,
+    /// Arguments that go between the program and the CLI's own: empty for Claude Code, `codex.js` for Codex run through `node`.
+    pub program_args: Vec<String>,
     /// Continue the CLI's own conversation `session_id` instead of creating it.
     pub resume: bool,
     /// A model alias for `--model`, or None for the user's Claude Code default.
