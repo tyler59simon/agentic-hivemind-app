@@ -22,7 +22,7 @@ const totals = (files: FileChange[]) => ({ added: files.reduce((n, f) => n + f.a
 /** What a permission request is about, in one string: the command, or the file. */
 function subject(item: Extract<Item, { kind: "approval" }>): string {
   const input = (item.input ?? {}) as Record<string, unknown>;
-  if (item.tool === "Bash" || item.tool === "PowerShell") return str(input.command);
+  if (item.tool === "Bash" || item.tool === "PowerShell" || item.tool === "Shell") return str(input.command);
   return str(input.file_path) || item.summary;
 }
 
@@ -31,6 +31,7 @@ function Detail({ tool, input, root }: { tool: string; input: Record<string, unk
   switch (tool) {
     case "Bash":
     case "PowerShell":
+    case "Shell":
       return <pre>{str(input.command)}</pre>;
     case "Edit": {
       const rows = changeRows(input, root);
@@ -67,7 +68,7 @@ export function ApprovalCard({ item, sessionId, root }: { item: Extract<Item, { 
       setAnswering(false);
     }
   };
-  const detail = item.tool === "Bash" || item.tool === "PowerShell" ? str(input.command) : ["Edit", "Write", "Read"].includes(item.tool) ? str(input.file_path) : "";
+  const detail = item.tool === "Bash" || item.tool === "PowerShell" || item.tool === "Shell" ? str(input.command) : ["Edit", "Write", "Read"].includes(item.tool) ? str(input.file_path) : "";
   return (
     <div className="approval" role="group" aria-label={"Permission request: " + item.tool}>
       <div className="approval-head">
