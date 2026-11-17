@@ -12,7 +12,7 @@ export interface WikiIndex {
   projects: Map<string, WikiProject>;
   folders: Map<string, WikiFolder>;
   sections: Map<string, WikiSection>;
-  /** Notes in other domains, keyed like `titles`. The model's own keys are Python casefold (Straße is strasse), which lowercasing does not match. */
+  /** Notes in other domains, by the model's Python casefold key (Straße is strasse) and by lowercased title, which is how links are looked up. */
   external: Map<string, { title: string; domain: string }>;
 }
 
@@ -29,7 +29,7 @@ export function indexModel(model: WikiModel): WikiIndex {
     projects: new Map(model.projects.map((p) => [p.slug, p])),
     folders: new Map(model.folders.map((f) => [f.id, f])),
     sections: new Map(model.sections.map((s) => [s.key, s])),
-    external: new Map(Object.values(model.external).map((x) => [x.title.trim().toLowerCase(), x])),
+    external: new Map(Object.entries(model.external).flatMap(([key, x]) => [[key, x], [x.title.trim().toLowerCase(), x]] as const)),
   };
 }
 

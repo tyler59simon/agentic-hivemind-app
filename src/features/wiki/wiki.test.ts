@@ -139,6 +139,7 @@ describe("resolveLink", () => {
   it("finds an external note whose model key is Python casefold, not lowercase", () => {
     const folded = indexModel({ ...model, external: { strasse: { title: "Straße", domain: "_global" } } });
     expect(resolveLink(folded, "straße")).toEqual({ kind: "external", domain: "_global" });
+    expect(resolveLink(folded, "STRASSE")).toEqual({ kind: "external", domain: "_global" });
   });
   it("prefers the active note over a retired one with the same title", () => {
     expect(indexModel({ ...model, notes: [old, a] }).titles.get("alpha")).toBe(a);
