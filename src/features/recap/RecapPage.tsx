@@ -8,7 +8,7 @@ import { useApp } from "../../store";
 import { PageHeader } from "../../ui/Page";
 import { useWorkspace } from "../../workspace/store";
 import { serverActor } from "../history/activity";
-import { changeGroups, DAY_CHOICES, harnessLine, isQuiet, repeatLabel } from "./recap";
+import { changeGroups, DAY_CHOICES, harnessLine, isQuiet, isUnbound, repeatLabel } from "./recap";
 
 /** The recap for the last `days` days, across every domain or one project. Key starts with "recap" so store changes refetch it. */
 export function useRecap(days: number, project: string | undefined, enabled: boolean) {
@@ -112,7 +112,7 @@ export function RecapPage() {
       </div>
     );
   }
-  const unbound = q.error && (q.error as { code?: string }).code === "unbound_project";
+  const unbound = isUnbound(q.error);
   return (
     <div className="page">
       <PageHeader title={title} subtitle={sub}

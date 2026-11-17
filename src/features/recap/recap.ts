@@ -22,6 +22,14 @@ export function harnessLine(by: Record<string, number>): string {
 /** "3 times" for a note that changed more than once, else nothing. */
 export const repeatLabel = (count: number) => (count > 1 ? `${count} times` : "");
 
+/** Whether an error says the project has no bound domain. Living Memory reports it with code "invalid" and a message
+ *  that starts "unbound_project:"; the code check covers a later version that gives it its own code. */
+export function isUnbound(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const { code, message } = error as { code?: unknown; message?: unknown };
+  return code === "unbound_project" || (typeof message === "string" && message.startsWith("unbound_project"));
+}
+
 /** Whether the recap has anything to show. */
 export const isQuiet = (r: Recap) =>
   !Object.keys(r.changes).length && !r.maintenance.runs && !r.sessions.count && !r.open_work.notes && !r.review.due;

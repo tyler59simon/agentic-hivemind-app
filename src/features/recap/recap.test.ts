@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Recap } from "../../lib/lm";
-import { changeGroups, harnessLine, isQuiet, repeatLabel } from "./recap";
+import { LmError } from "../../lib/lm";
+import { changeGroups, harnessLine, isQuiet, isUnbound, repeatLabel } from "./recap";
 
 const change = (ref: string, count = 1) => ({ ref, title: ref, type: "bug", summary: "s", actor: "command", time: "2026-11-10T10:00:00Z", count });
 
@@ -14,6 +15,12 @@ describe("recap helpers", () => {
   it("lists harnesses by session count", () => {
     expect(harnessLine({ codex: 2, claude: 4 })).toBe("Claude 4, Codex 2");
     expect(harnessLine({})).toBe("");
+  });
+  it("recognises the unbound-project error Living Memory sends", () => {
+    expect(isUnbound(new LmError("invalid", "unbound_project: no memory domain is bound to this folder", 2))).toBe(true);
+    expect(isUnbound(new LmError("unbound_project", "no domain", 2))).toBe(true);
+    expect(isUnbound(new LmError("invalid", "unknown note", 2))).toBe(false);
+    expect(isUnbound(null)).toBe(false);
   });
   it("labels repeats only above one", () => {
     expect(repeatLabel(1)).toBe("");
