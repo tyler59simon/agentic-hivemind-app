@@ -15,6 +15,9 @@ export const prefs = {
   captureProject: () => get("hivemind.captureProject"),
   setCaptureProject: (slug: string) => set("hivemind.captureProject", slug),
   themeKey: "hivemind.theme",
-  theme: (): Theme => (get("hivemind.theme") === "emerald" ? "emerald" : "purple"),
+  theme: (): Theme => {
+    const saved = get("hivemind.theme");
+    return saved === "emerald" || saved === "emerald-light" ? saved : "purple";
+  },
   setTheme: (theme: Theme) => set("hivemind.theme", theme),
 };

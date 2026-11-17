@@ -1,12 +1,14 @@
-// The colour theme: Purple (the default, no attribute) or Emerald Enterprise (<html data-theme="emerald">).
-// App.css holds both palettes as tokens; code that reads tokens at runtime listens with onThemeChange.
+// The colour theme: Purple (the default, no attribute), Emerald Enterprise Dark (<html data-theme="emerald">)
+// or Emerald Enterprise Light (<html data-theme="emerald-light">).
+// App.css holds the palettes as tokens; code that reads tokens at runtime listens with onThemeChange.
 import { useSyncExternalStore } from "react";
 import { prefs } from "./prefs";
 
-export type Theme = "purple" | "emerald";
+export type Theme = "purple" | "emerald" | "emerald-light";
 export const THEMES: { id: Theme; label: string }[] = [
   { id: "purple", label: "Purple" },
-  { id: "emerald", label: "Emerald Enterprise" },
+  { id: "emerald", label: "Emerald Enterprise Dark" },
+  { id: "emerald-light", label: "Emerald Enterprise Light" },
 ];
 
 const listeners = new Set<() => void>();

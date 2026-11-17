@@ -4,6 +4,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView, lineNumbers } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
 import { useEffect, useRef, useState } from "react";
+import { useTheme } from "../../lib/theme";
 import { loadLanguage } from "./language";
 
 const code = HighlightStyle.define([
@@ -15,7 +16,7 @@ const code = HighlightStyle.define([
   { tag: [t.function(t.variableName), t.function(t.propertyName), t.propertyName, t.tagName, t.attributeName], color: "var(--syntax-fn)" },
 ]);
 
-const theme = EditorView.theme({
+const look = {
   "&": { backgroundColor: "var(--bg-code)", color: "var(--fg)", fontSize: ".93rem" },
   "&.cm-focused": { outline: "none" },
   ".cm-scroller": { fontFamily: "var(--font-mono)", lineHeight: "1.6" },
@@ -29,13 +30,17 @@ const theme = EditorView.theme({
   ".cm-deletedChunk .cm-deletedLine": { padding: "0 1rem 0 2.2rem", position: "relative" },
   ".cm-deletedChunk .cm-deletedLine::before": { content: '"\\2212"', position: "absolute", left: ".7rem", color: "var(--error)" },
   ".cm-collapsedLines": { background: "var(--bg-alt)", color: "var(--muted)", fontFamily: "var(--font-sans)", fontSize: ".86rem" },
-}, { dark: true });
+};
+// CodeMirror's own defaults (selection, merge marks) follow the light or dark base.
+const darkTheme = EditorView.theme(look, { dark: true });
+const lightTheme = EditorView.theme(look);
 
 /** One file's changes as a read-only unified diff: line numbers, added and removed lines on the diff colours. */
 export function CodeDiff({ path, base, head }: { path: string; base: string; head: string }) {
   const host = useRef<HTMLDivElement>(null);
   const [language, setLanguage] = useState<{ path: string; support: LanguageSupport | null } | null>(null);
   const [same, setSame] = useState(false);
+  const theme = useTheme() === "emerald-light" ? lightTheme : darkTheme;
 
   useEffect(() => {
     let gone = false;
@@ -58,7 +63,7 @@ export function CodeDiff({ path, base, head }: { path: string; base: string; hea
     });
     setSame(getChunks(view.state)?.chunks.length === 0);
     return () => view.destroy();
-  }, [path, base, head, language]);
+  }, [path, base, head, language, theme]);
 
   return (
     <>

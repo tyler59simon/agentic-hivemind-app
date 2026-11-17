@@ -23,7 +23,7 @@ The user made these on 2026-11-10.
 1. **Full parity with the mocks, in phases**, including backends that did not exist.
 2. **Sections are pages; only notes are tabs.** The sidebar has six sections (Overview, Agent Workspace, Changes, Architecture, Memory, Review), each one page with a breadcrumb. Notes, and only notes, open as tabs and side by side in up to three panes, inside Memory. Do not add tabs or split panes for sessions, changes, diffs or anything else, with one exception already decided: Phase 5's terminal has its own tab strip, and since Phase 6 (user decision 2026-11-15) up to two terminal panes side by side.
 3. **Brand:** the hex/wasp symbol and the word "Hivemind". The name or wordmark "Vesparc" appears nowhere in the product, the code or the documents' user-facing copy. The mock images carry that wordmark; ignore it.
-4. **Dark only.** There is no light theme.
+4. **Dark only** at first. Later decisions added themes in Settings: Emerald Enterprise Dark beside Purple (2026-11-15) and Emerald Enterprise Light (2026-11-17), whose sidebar and terminals stay dark.
 5. **A change (Phase 3)** is a `plan` note (the brief) plus an entry in a new Living Memory `changes` registry. Change numbers (CHG-014) are unique across the whole store.
 6. **Approve (Phase 4)** commits the session's edits on the session's own worktree branch. It never merges and never pushes.
 7. **The terminal (Phase 5)** is a real embedded terminal that runs the actual `claude` and `codex` terminal programs. Approvals inside it happen in the CLI's own prompts. This knowingly differs from mock 04, which draws Hivemind buttons inside the terminal.
@@ -32,7 +32,7 @@ The user made these on 2026-11-10.
 ## 2. What is not in scope for any phase
 
 - Cloud sync, accounts, sharing.
-- A light theme, a theme switch, a collapsible sidebar.
+- A collapsible sidebar.
 - Writing Living Memory's store files directly. Every change goes through Living Memory commands (section 5).
 - Pushing branches, opening pull requests, or merging on the user's behalf, unless a phase document says a button does exactly that and the user clicks it.
 
