@@ -8,6 +8,7 @@ import { OverviewPage } from "../features/projects/OverviewPage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
 import { RecapPage } from "../features/recap/RecapPage";
 import { ReviewPage } from "../features/review/ReviewPage";
+import { WikiPage } from "../features/wiki/WikiPage";
 import { ArchitecturePage } from "../features/systems/ArchitecturePage";
 import type { ConnectInfo } from "../lib/lm";
 import { useApp, type Page } from "../store";
@@ -22,6 +23,7 @@ const PAGES: Record<Page, () => ReactNode> = {
   architecture: () => <ArchitecturePage />,
   memory: () => <MemoryPage />,
   dashboards: () => <DashboardsPage />,
+  wiki: () => <WikiPage />,
   recap: () => <RecapPage />,
   maintenance: () => <MaintenancePage />,
   review: () => <ReviewPage />,

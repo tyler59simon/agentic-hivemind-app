@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { useChangesEnabled, useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
+import { useChangesEnabled, useProjectsEnabled, useSystemsEnabled, useWikiEnabled } from "../../lib/connection";
 import { domains, list } from "../../lib/lm";
 import { refreshStore } from "../../lib/refresh";
 import { fuzzy } from "../../lib/text";
@@ -29,6 +29,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
   const registry = useQuery({ ...projectsQuery(), enabled: projectsOn && app.palette === "commands" });
   const systemsOn = useSystemsEnabled();
   const changesOn = useChangesEnabled();
+  const wikiOn = useWikiEnabled();
   const systems = useQuery({ ...systemsQuery(), enabled: systemsOn && app.palette === "commands" });
   useEffect(() => { setQuery(""); setIndex(0); }, [app.palette]);
 
@@ -51,6 +52,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "tags", label: "Manage tags", run: page({ page: "memory", view: "tags" }) },
       { key: "work", label: "Open work", run: page({ page: "overview", view: "work" }) },
       { key: "review", label: "Review", run: page({ page: "review" }) },
+      ...(wikiOn ? [{ key: "wiki", label: "Wiki", run: page({ page: "wiki" }) }] : []),
       { key: "changes", label: "Changes", run: page({ page: "changes" }) },
       ...(changesOn ? [{ key: "new-change", label: "Start a change…", run: () => { close(); useChangeIntent.getState().open(); } }] : []),
       ...(projectsOn ? [
@@ -86,7 +88,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
         run: () => { app.setDomain(d.name); close(); },
       })),
     ];
-  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, changesOn, client, onSettings, onReconnect]);
+  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, changesOn, wikiOn, client, onSettings, onReconnect]);
 
   const shown = useMemo(() => entries
     .map((e) => ({ e, score: fuzzy(query, e.label) }))

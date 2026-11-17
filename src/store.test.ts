@@ -63,4 +63,11 @@ describe("navigation", () => {
     startSession();
     expect(app().route).toEqual({ page: "agents", view: "new" });
   });
+
+  it("shows a wiki page by its address, in one domain", () => {
+    app().go({ page: "wiki", domain: "demo", at: "p-core" });
+    app().go({ page: "wiki", domain: "demo", at: "n-0a1b2c3d" });
+    expect(app().route).toEqual({ page: "wiki", domain: "demo", at: "n-0a1b2c3d" });
+    expect(app().back).toEqual([{ page: "overview" }, { page: "wiki", domain: "demo", at: "p-core" }]);
+  });
 });

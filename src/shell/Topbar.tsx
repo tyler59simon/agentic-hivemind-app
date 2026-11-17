@@ -20,6 +20,7 @@ function useCrumbs(): Crumb[] {
   const go = useApp((s) => s.go);
   const { project } = useCurrentProject();
   const other = useApp((s) => s.project === OTHER_FOLDERS);
+  const domain = useApp((s) => s.domain);
   const noteTitle = useWorkspace((s) => activeTab(s)?.title);
   const systemsOn = useSystemsEnabled();
   const sessions = useQuery({ ...sessionsQuery(), enabled: systemsOn && route.page === "agents" });
@@ -30,6 +31,7 @@ function useCrumbs(): Crumb[] {
   const leaf = route.page === "memory" ? (route.view === "notes" ? noteTitle : route.view && MEMORY_VIEWS[route.view])
     : route.page === "agents" ? (route.view === "new" ? "New session" : sessions.data?.find((s) => s.id === route.session)?.title)
     : route.page === "architecture" ? systems.data?.systems.find((s) => s.slug === route.system)?.name
+    : route.page === "wiki" ? route.domain ?? domain ?? undefined
     : route.page === "changes" && route.view === "detail" && route.id ? displayId(route.id)
     : undefined;
   return leaf ? [root, section, { label: leaf }] : [root, section];
