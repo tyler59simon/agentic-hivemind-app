@@ -5,6 +5,7 @@ import { ChangesPage } from "../features/changes/ChangesPage";
 import { DashboardsPage } from "../features/dashboards/DashboardsPage";
 import { MemoryPage } from "../features/library/MemoryPage";
 import { OverviewPage } from "../features/projects/OverviewPage";
+import { MaintenancePage } from "../features/maintenance/MaintenancePage";
 import { RecapPage } from "../features/recap/RecapPage";
 import { ReviewPage } from "../features/review/ReviewPage";
 import { ArchitecturePage } from "../features/systems/ArchitecturePage";
@@ -22,6 +23,7 @@ const PAGES: Record<Page, () => ReactNode> = {
   memory: () => <MemoryPage />,
   dashboards: () => <DashboardsPage />,
   recap: () => <RecapPage />,
+  maintenance: () => <MaintenancePage />,
   review: () => <ReviewPage />,
 };
 

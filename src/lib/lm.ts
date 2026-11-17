@@ -40,8 +40,11 @@ export async function run<T>(argv: string[], stdin?: string): Promise<T> {
 
 const view = (argv: string[]) => [...argv, "--actor", "viewer"];
 
+/** What `version` reports under `capabilities`. */
+export interface Capabilities { history?: number; restore?: number; pin?: number; maintenance?: { version: number; actions: string[] } }
+
 export interface ConnectInfo {
-  version: { api: number; python: string; commands: string[]; capabilities?: { history?: number } };
+  version: { api: number; python: string; commands: string[]; capabilities?: Capabilities };
   root: string;
   program: string;
   script: string;
@@ -101,6 +104,8 @@ export interface Note {
   context?: string; files?: string[]; created?: string; updated?: string; review_by?: string;
   confirmed?: string[]; supersedes?: string[]; superseded_by?: string; origin?: string;
   revision: string; body: string; truncated: boolean;
+  /** Absent means not pinned. */
+  pinned?: boolean;
 }
 /** LM's own default is 16,000 characters; Hivemind asks for the most it allows (64,000). */
 export const read = (ref: string, opts: { domain?: string; maxChars?: number } = {}) =>
@@ -442,3 +447,38 @@ export function recapArgs(o: RecapOptions): string[] {
   return view(argv);
 }
 export const recap = (o: RecapOptions = {}) => run<Recap>(recapArgs(o));
+
+// ---- Maintenance: automatic note review, and the two writes it makes possible on a note. ----
+
+export interface MaintenanceRun {
+  id: string; status: string; day: string; attempted_at: string; finished_at: string | null; reason_code: string | null;
+  model: string; reviewed: number; charged_usd: string; cost_complete: boolean;
+  updated: number; confirmed: number; archived: number; superseded: number; resolved: number;
+  kept: number; deferred: number; skipped: number; distinct: number;
+}
+export interface MaintenanceStatus {
+  ok: boolean; enabled: boolean; domains: string[]; policy_version: number; config_revision: string;
+  limits: { model: string; max_notes_per_day: number; timeout_seconds: number; daily_budget_usd: string; min_interval_seconds: number };
+  enabled_at: string | null;
+  accounting: { day: string; reviewed: number; reserved_notes: number; reserved_usd: string; charged_usd: string; cost_complete: boolean };
+  blocked: { reason: string; config_revision?: string } | null; running: boolean; eligible: boolean; next_eligible_at: string | null; skip_reason: string | null;
+  last_run: MaintenanceRun | null; errors: string[];
+}
+export interface MaintenanceDecision {
+  ref: string; action: string; result: string; reason_code: string | null; operation_id: string | null;
+  rule: string | null; reason: string | null;
+}
+export interface MaintenanceRunDetail { ok: boolean; run: MaintenanceRun; selected: string[]; decisions?: MaintenanceDecision[] }
+
+export const maintenanceStatus = () => run<MaintenanceStatus>(view(["maintenance", "status"]));
+export const maintenanceHistory = (limit?: number) =>
+  run<{ ok: boolean; runs: MaintenanceRun[] }>(view(["maintenance", "history", ...(limit ? ["--limit", String(limit)] : [])]));
+export const maintenanceRun = (id: string) => run<MaintenanceRunDetail>(view(["maintenance", "history", "--run", id]));
+/** Turn maintenance on for one domain, or for every configured domain when none is given. */
+export const maintenanceEnable = (domain?: string) =>
+  run<MaintenanceStatus & { operation_id?: string }>(["maintenance", "enable", ...(domain ? ["--domain", domain] : ["--all-domains"])]);
+export const maintenanceDisable = () => run<MaintenanceStatus & { operation_id?: string }>(["maintenance", "disable"]);
+
+/** Bring an archived note back to active; LM pins it so maintenance does not retire it again at once. */
+export const restoreNote = (ref: string) => run<WriteResult>(["restore", ref, "--domain", domainOf(ref)]);
+export const setPin = (ref: string, on: boolean) => run<WriteResult>(["update", ref, "--domain", domainOf(ref), on ? "--pin" : "--unpin"]);

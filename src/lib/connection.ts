@@ -1,7 +1,8 @@
 import { create } from "zustand";
+import type { Capabilities } from "./lm";
 
 /** What the connected Living Memory supports (from `version`), so features can degrade gracefully. */
-export const useConnection = create<{ commands: string[]; api: number; capabilities?: { history?: number }; set: (v: { commands: string[]; api: number; capabilities?: { history?: number } }) => void }>((set) => ({
+export const useConnection = create<{ commands: string[]; api: number; capabilities?: Capabilities; set: (v: { commands: string[]; api: number; capabilities?: Capabilities }) => void }>((set) => ({
   commands: [],
   api: 0,
   set: (v) => set(v),
@@ -27,3 +28,12 @@ export const useHistoryLevel = () => useConnection((s) => s.capabilities?.histor
 
 /** The Recap page needs history level 2 and the `recap` command. */
 export const useRecapEnabled = () => useConnection((s) => (s.capabilities?.history ?? 0) >= 2 && s.commands.includes("recap"));
+
+/** The Maintenance page needs the `maintenance` capability and command. */
+export const useMaintenanceEnabled = () => useConnection((s) => (s.capabilities?.maintenance?.version ?? 0) >= 1 && s.commands.includes("maintenance"));
+
+/** Restoring an archived note needs the `restore` capability and command. */
+export const useRestoreEnabled = () => useConnection((s) => (s.capabilities?.restore ?? 0) >= 1 && s.commands.includes("restore"));
+
+/** Pinning a note needs the `pin` capability. */
+export const usePinEnabled = () => useConnection((s) => (s.capabilities?.pin ?? 0) >= 1);

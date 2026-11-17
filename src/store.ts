@@ -14,6 +14,7 @@ export type Route =
   | { page: "dashboards"; ref?: string }
   | { page: "memory"; view?: "notes" | "graph" | "activity" | "history" | "tags"; q?: string }
   | { page: "recap" }
+  | { page: "maintenance" }
   | { page: "review"; session?: string; file?: string };
 export type Page = Route["page"];
 

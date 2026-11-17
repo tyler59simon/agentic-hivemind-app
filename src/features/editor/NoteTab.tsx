@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, CircleCheck, Play, SquarePen } from "lucide-react";
+import { Check, CircleCheck, Pin, PinOff, Play, SquarePen } from "lucide-react";
 import { useState } from "react";
 import { classify } from "../../lib/errors";
-import { useViewsEnabled } from "../../lib/connection";
-import { confirm } from "../../lib/lm";
+import { usePinEnabled, useViewsEnabled } from "../../lib/connection";
+import { confirm, setPin } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
 import { startSession } from "../../store";
 import { toast } from "../../ui/toast";
@@ -40,7 +40,17 @@ export function NoteTab({ tab }: { tab: Tab }) {
     },
     onError: (e) => toast(classify(e).message, "error"),
   });
+  const pin = useMutation({
+    mutationFn: (on: boolean) => setPin(refId, on),
+    onSuccess: (r, on) => {
+      recordOperation(r.operation_id);
+      client.invalidateQueries({ queryKey: ["note", refId] });
+      toast(on ? "Pinned. Maintenance will not retire this note." : "Unpinned.");
+    },
+    onError: (e) => toast(classify(e).message, "error"),
+  });
   const viewsOn = useViewsEnabled();
+  const pinOn = usePinEnabled();
   const confirmed = n?.confirmed?.length ? n.confirmed[n.confirmed.length - 1] : undefined;
 
   return (
@@ -62,6 +72,12 @@ export function NoteTab({ tab }: { tab: Tab }) {
                 <Play size="1.15em" aria-hidden />Use in agent session
               </button>
             </>
+          )}
+          {pinOn && n?.status === "active" && !editing && (
+            <button className={`text ${n.pinned ? "on" : ""}`} aria-pressed={!!n.pinned} onClick={() => pin.mutate(!n.pinned)} disabled={pin.isPending}
+              title={n.pinned ? "Pinned: automatic maintenance never retires this note. Click to unpin." : "Pin: stop automatic maintenance from retiring this note"}>
+              {n.pinned ? <PinOff size="1.15em" aria-hidden /> : <Pin size="1.15em" aria-hidden />}{n.pinned ? "Unpin" : "Pin"}
+            </button>
           )}
           {viewsOn && n && !editing && <DashboardToggle refId={refId} title={n.title} />}
           <NoteMenu refId={refId} />

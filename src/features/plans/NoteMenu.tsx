@@ -1,7 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useChangesEnabled } from "../../lib/connection";
-import { domainOf, plan } from "../../lib/lm";
+import { useChangesEnabled, useRestoreEnabled } from "../../lib/connection";
+import { classify } from "../../lib/errors";
+import { domainOf, plan, restoreNote } from "../../lib/lm";
+import { recordOperation } from "../../lib/oplog";
+import { refreshStore } from "../../lib/refresh";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
 import { useChangeIntent } from "../changes/intent";
@@ -15,6 +18,8 @@ import { PlanDialog } from "./PlanDialog";
 export function NoteMenu({ refId }: { refId: string }) {
   const note = useQuery(noteQuery(refId));
   const changesOn = useChangesEnabled();
+  const restoreOn = useRestoreEnabled();
+  const client = useQueryClient();
   const all = useQuery({ ...changesQuery(), enabled: changesOn });
   const [open, setOpen] = useState(false);
   const [dialog, setDialog] = useState<ReactNode>(null);
@@ -33,11 +38,17 @@ export function NoteMenu({ refId }: { refId: string }) {
   if (!n) return null;
   const adoptable = changesOn && n.type === "plan" && n.status === "active" && !(all.data?.changes ?? []).some((c) => c.brief === refId);
   const close = () => setDialog(null);
+  const restore = () => {
+    setOpen(false);
+    restoreNote(refId).then((r) => { recordOperation(r.operation_id); refreshStore(client); toast("Restored. The note is active and pinned."); })
+      .catch((e) => toast(classify(e).message, "error"));
+  };
   const run = (node: ReactNode) => { setOpen(false); setDialog(node); };
   const items: { label: string; show: boolean; act: () => void; danger?: boolean }[] = [
     { label: "Archive…", show: n.status === "active", act: () => run(
       <PlanDialog title={`Archive “${n.title}”`} make={() => plan("archive", refId)} applyLabel="Archive" onClose={close}
-        intro={<p>The note moves to the archive. It stays searchable with the archived filter and can be restored by undoing this change.</p>} />) },
+        intro={<p>The note moves to the archive. It stays searchable with the archived filter and can be restored {restoreOn ? "from its page with Restore" : "by undoing this change"}.</p>} />) },
+    { label: "Restore", show: restoreOn && n.status === "archived", act: restore },
     { label: "Resolve bug…", show: n.type === "bug" && n.status === "active", act: () => run(
       <PlanDialog title={`Resolve “${n.title}”`} make={() => plan("resolve", refId)} applyLabel="Resolve" onClose={close} />) },
     { label: "Reopen bug…", show: n.type === "bug" && n.status === "resolved", act: () => run(

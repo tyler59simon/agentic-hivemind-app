@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { LmError, addAction, changePlan, changesArgs, list, listArgs, logArgs, openArgs, projectPlan, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setDetail, setTransport, systemPlan, systemsArgs, timelineArgs, type Invoke } from "./lm";
+import { LmError, addAction, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, setPin, changePlan, changesArgs, list, listArgs, logArgs, openArgs, projectPlan, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setDetail, setTransport, systemPlan, systemsArgs, timelineArgs, type Invoke } from "./lm";
 
 afterEach(() => setTransport(invoke as Invoke));
 
@@ -110,5 +110,28 @@ describe("run", () => {
     await setDetail("demo:abc", "**Where it stands:** now");
     expect(calls[0]).toEqual(["lm", { argv: ["update", "demo:abc", "--domain", "demo", "--set-detail", "**Where it stands:** now", "--expected-revision", "rev1"], stdin: null }]);
     expect(calls[1]).toEqual(["lm", { argv: ["update", "demo:abc", "--domain", "demo", "--set-detail", "**Where it stands:** now"], stdin: null }]);
+  });
+});
+
+describe("maintenance, restore and pin argv", () => {
+  const argvOf = (calls: unknown[], i = 0) => (calls[i] as [string, { argv: string[] }])[1].argv;
+  it("reads run as viewer", async () => {
+    const calls = fake({ exit_code: 0, result: {}, error: null });
+    await maintenanceStatus(); await maintenanceHistory(); await maintenanceHistory(5); await maintenanceRun("r1");
+    expect(argvOf(calls, 0)).toEqual(["maintenance", "status", "--actor", "viewer"]);
+    expect(argvOf(calls, 1)).toEqual(["maintenance", "history", "--actor", "viewer"]);
+    expect(argvOf(calls, 2)).toEqual(["maintenance", "history", "--limit", "5", "--actor", "viewer"]);
+    expect(argvOf(calls, 3)).toEqual(["maintenance", "history", "--run", "r1", "--actor", "viewer"]);
+  });
+  it("enable, disable, restore and pin are plain writes", async () => {
+    const calls = fake({ exit_code: 0, result: { ok: true }, error: null });
+    await maintenanceEnable("demo"); await maintenanceEnable(); await maintenanceDisable();
+    await restoreNote("demo:abc"); await setPin("demo:abc", true); await setPin("demo:abc", false);
+    expect(argvOf(calls, 0)).toEqual(["maintenance", "enable", "--domain", "demo"]);
+    expect(argvOf(calls, 1)).toEqual(["maintenance", "enable", "--all-domains"]);
+    expect(argvOf(calls, 2)).toEqual(["maintenance", "disable"]);
+    expect(argvOf(calls, 3)).toEqual(["restore", "demo:abc", "--domain", "demo"]);
+    expect(argvOf(calls, 4)).toEqual(["update", "demo:abc", "--domain", "demo", "--pin"]);
+    expect(argvOf(calls, 5)).toEqual(["update", "demo:abc", "--domain", "demo", "--unpin"]);
   });
 });
