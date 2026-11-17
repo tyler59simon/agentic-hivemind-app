@@ -35,6 +35,7 @@ import { Triage } from "./TriageDialog";
 import { useCurrentProject, useGitActivity, useProject } from "./useProject";
 
 const oneLine = (text?: string) => (text ?? "").replace(/\s+/g, " ").trim();
+const folderName = (path: string) => path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
 const openNote = (row: Pick<NoteRow, "ref" | "title">, split = false) => useWorkspace.getState().openNote(row.ref, { title: row.title, split });
 
 /** Recent commits and pull requests of the project's repositories. */
@@ -43,8 +44,8 @@ function Commits({ repos }: { repos: RepoActivity[] }) {
     <>
       {repos.map((r) => (
         <div key={r.repo} className="repo-activity">
-          <div className="repo-name"><code>{r.repo}</code></div>
-          {r.error && <p className="muted small">{r.error}</p>}
+          <div className="repo-name"><code title={r.repo}>{folderName(r.repo)}</code></div>
+          {r.error && <p className="muted small">{/not a git repository/i.test(r.error) ? "This folder is not a git repository." : r.error}</p>}
           {r.commits && !r.commits.length && !r.error && <p className="muted small">No commits in the last 30 days.</p>}
           <ul className="commit-list">
             {(r.commits ?? []).slice(0, 6).map((c) => (
@@ -245,8 +246,10 @@ function ProjectOverview({ project }: { project: Project }) {
           </ul>
         </Section>
         <Section title="Recent memory" loading={rows.isLoading} error={rows.error}
-          empty={rows.data && !recent.length ? `No notes are tagged with ${project.tag} yet.` : undefined}
           actions={!!recent.length && <ArrowLink onClick={() => go({ page: "memory" })}>All memory</ArrowLink>}>
+          {rows.data && !recent.length && (
+            <p className="muted">No notes {project.charter ? "besides the charter " : ""}are tagged with {project.tag} yet. <button className="link" onClick={() => setTriage(true)}>Find existing notes for this project</button></p>
+          )}
           <ul className="item-list">
             {recent.map((r) => (
               <li key={r.ref}>
@@ -259,7 +262,6 @@ function ProjectOverview({ project }: { project: Project }) {
               </li>
             ))}
           </ul>
-          {rows.data && !members.length && <button className="link" onClick={() => setTriage(true)}>Find existing notes for this project</button>}
         </Section>
         {!!project.repos.length && (
           <Section title="Recent commits" loading={git.isLoading} empty={git.error ? `Git activity is unavailable: ${classify(git.error).message}` : undefined}>

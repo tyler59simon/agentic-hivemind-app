@@ -99,7 +99,9 @@ function CreateProject({ onClose, onDone }: ProjectWizardProps) {
             {!charterDomain && <option value="">Choose…</option>}
             {domainNames.map((d) => <option key={d} value={d}>{d}</option>)}
           </select>
-          <span className="muted small">{detected ? <>Detected from the first repository: <code>{detected}</code>.</> : "No bound domain contains the first repository; pick where the charter note lives."}</span></label>
+          <span className="muted small">{detected ? <>Detected from the first repository: <code>{detected}</code>.</>
+            : parsedRepos.length ? "No bound domain contains the first repository; pick where the charter note lives."
+            : "Add a repository to detect it, or pick where the charter note lives."}</span></label>
         <h3>Charter</h3>
         <label className="field"><span>Purpose (required)</span>
           <textarea rows={3} value={purpose} placeholder="What is this project for? One or two sentences." onChange={(e) => setPurpose(e.target.value)} /></label>
