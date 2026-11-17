@@ -5,10 +5,16 @@ import { prefs } from "./prefs";
 
 const css: string = readFileSync(new URL("../App.css", import.meta.url), "utf8");
 
+/** The selectors and body of every top-level rule (App.css has no nested rules). */
+const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({
+  selectors: m[1].replace(/\/\*[\s\S]*?\*\//g, "").split(",").map((s) => s.trim()),
+  body: m[2],
+}));
+/** The body of the token block whose selector list includes `selector`. */
 const block = (selector: string) => {
-  const start = css.indexOf(selector + " {\n") >= 0 ? css.indexOf(selector + " {\n") : css.indexOf(selector + " {\r\n");
-  if (start < 0) throw new Error("no block " + selector);
-  return css.slice(start, css.indexOf("\n}", start));
+  const rule = rules.find((r) => r.selectors.includes(selector) && /^\s*--/m.test(r.body));
+  if (!rule) throw new Error("no block " + selector);
+  return rule.body;
 };
 const values = (selector: string) =>
   new Map([...block(selector).matchAll(/^\s*(--[a-z0-9-]+):\s*([^;]+);/gm)].map((m) => [m[1], m[2].trim()] as [string, string]));
@@ -38,12 +44,12 @@ describe("themes", () => {
   });
 
   it("keeps the Emerald dark colours in the light theme's sidebar and terminal", () => {
-    for (const scope of [':root[data-theme="emerald-light"] .sidebar', ':root[data-theme="emerald-light"] .term-box']) {
-      for (const [token, value] of values(scope)) {
-        if (token === "--bg-sidebar") expect(value).toBe(emerald.get("--bg")); // the requested #002d2a
-        else expect([token, value]).toEqual([token, emerald.get(token)]);
-      }
-    }
+    // Both share the whole Emerald dark block, so nothing inside them mixes dark and light tokens.
+    for (const scope of [':root[data-theme="emerald-light"] .sidebar', ':root[data-theme="emerald-light"] .term-box'])
+      expect(values(scope)).toEqual(emerald);
+    // A dialog opened from the sidebar (Modal has no portal) gets the whole light block back.
+    expect(values(':root[data-theme="emerald-light"] .sidebar .overlay')).toEqual(light);
+    expect(css).toContain(':root[data-theme="emerald-light"] .sidebar { --bg-sidebar: ' + emerald.get("--bg") + "; }"); // the requested #002d2a
     // Purple defines each --term-* token as var(--x); the light theme gives it Emerald dark's --x.
     const source = values(":root");
     for (const [token, value] of light) {

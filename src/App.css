@@ -113,7 +113,9 @@
 }
 /* Emerald Enterprise: sage surfaces, emerald green for actions and selection, teal for agent activity.
    Set by lib/theme.ts as <html data-theme="emerald">; only colours change. */
-:root[data-theme="emerald"] {
+:root[data-theme="emerald"],
+:root[data-theme="emerald-light"] .sidebar,
+:root[data-theme="emerald-light"] .term-box {
   --bg: #002d2a;
   --bg-alt: #0c3835;
   --bg-hover: #194441;
@@ -216,7 +218,8 @@
 }
 /* Emerald Enterprise Light: light grey and white surfaces with deep green text, the dark Emerald sidebar and a dark terminal.
    #7ecf1c stays a fill with dark text; where green or teal is text, a link or a focus ring it is darkened to reach WCAG AA. */
-:root[data-theme="emerald-light"] {
+:root[data-theme="emerald-light"],
+:root[data-theme="emerald-light"] .sidebar .overlay {
   color-scheme: light;
   --bg: #f5f5f5;
   --bg-alt: #ffffff;
@@ -318,54 +321,12 @@
   --term-bright-black: #426461;
   --term-blue: #7fb0ff;
 }
-/* The sidebar keeps the Emerald dark colours, with green active markers. Its menus render inside it and follow. */
-:root[data-theme="emerald-light"] .sidebar {
-  color-scheme: dark;
-  color: var(--fg);
-  --bg-sidebar: #002d2a;
-  --fg: #f5f5f5;
-  --fg-soft: #c8d2d2;
-  --muted: #a7b9b7;
-  --border: #1b4340;
-  --border-soft: #103532;
-  --border-strong: #426461;
-  --bg-alt: #0c3835;
-  --bg-hover: #194441;
-  --bg-active: #214846;
-  --switcher-bg: #0a3431;
-  --switcher-border: #214846;
-  --nav-on-end: #214846;
-  --nav-on-marker: #7ecf1c;
-  --avatar: #426461;
-  --accent: #7ecf1c;
-  --kbd-bg: #194441;
-  --badge-bg: #123d3a;
-  --teal: #3accdf;
-  --warn: #f2b54a;
-  --warn-fg: #f7d65e;
-  --success: #62d6a2;
-  --unsaved: #7ecf1c;
-  --scrollbar: #426461;
-}
-/* The terminal box (terminal, find bar, status line) stays dark too; xterm itself reads the --term-* tokens. */
-:root[data-theme="emerald-light"] .term-box {
-  color-scheme: dark;
-  color: var(--fg);
-  --bg-code: #001f1c;
-  --bg-alt: #0c3835;
-  --bg-hover: #194441;
-  --bg-input: #002522;
-  --fg: #f5f5f5;
-  --muted: #a7b9b7;
-  --border: #1b4340;
-  --border-strong: #426461;
-  --accent: #7ecf1c;
-  --teal: #3accdf;
-  --error: #ff8f8f;
-  --warn-fg: #f7d65e;
-  --kbd-bg: #194441;
-  --scrollbar: #426461;
-}
+/* The sidebar and the terminal box keep the Emerald dark colours (they share its token block above); the sidebar's
+   background is the page colour of Emerald dark. Their text colour is recomputed from the dark tokens, and a dialog
+   opened from the sidebar recomputes it from the light ones. */
+:root[data-theme="emerald-light"] .sidebar { --bg-sidebar: #002d2a; }
+:root[data-theme="emerald-light"] .sidebar, :root[data-theme="emerald-light"] .term-box { color-scheme: dark; color: var(--fg); }
+:root[data-theme="emerald-light"] .sidebar .overlay { color-scheme: light; color: var(--fg); }
 * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--scrollbar) transparent; }
 body { margin: 0; background: var(--bg); }
 button, input, select, textarea { font: inherit; color: inherit; }
