@@ -36,9 +36,11 @@ function StatusCard({ s }: { s: MaintenanceStatus }) {
   // Enabling gives a model edit and archive authority over a domain, so the user names it here; nothing is inferred.
   const known = useQuery({ queryKey: ["domains"], queryFn: listDomains });
   const choices = (known.data?.domains ?? []).filter((d) => d.bound && !(known.data?.global_domains ?? []).includes(d.name)).map((d) => d.name);
-  const [picked, setPicked] = useState<string>(s.domains[0] ?? "");
+  const [picked, setPicked] = useState("");
+  // Only a domain the picker lists can be enabled; until the user picks, default to a configured domain that is still listed.
+  const target = choices.includes(picked) ? picked : (s.domains.find((d) => choices.includes(d)) ?? "");
   const toggle = useMutation({
-    mutationFn: () => (s.enabled ? maintenanceDisable() : maintenanceEnable(picked)),
+    mutationFn: () => (s.enabled ? maintenanceDisable() : maintenanceEnable(target)),
     onSuccess: (r) => {
       recordOperation(r.operation_id);
       client.invalidateQueries({ queryKey: ["maintenance"] });
@@ -54,12 +56,12 @@ function StatusCard({ s }: { s: MaintenanceStatus }) {
         <h2>{s.enabled ? "On" : "Off"}</h2>
         <span className="fill" />
         {!s.enabled && (
-          <select aria-label="Domain to maintain" value={picked} onChange={(e) => setPicked(e.target.value)}>
+          <select aria-label="Domain to maintain" value={target} onChange={(e) => setPicked(e.target.value)}>
             <option value="">Choose a domain…</option>
             {choices.map((d) => <option key={d} value={d}>{d}</option>)}
           </select>
         )}
-        <button className={s.enabled ? "" : "primary"} onClick={() => toggle.mutate()} disabled={toggle.isPending || (!s.enabled && !picked)}>
+        <button className={s.enabled ? "" : "primary"} onClick={() => toggle.mutate()} disabled={toggle.isPending || (!s.enabled && !target)}>
           {s.enabled ? "Disable" : "Enable"}
         </button>
       </div>
