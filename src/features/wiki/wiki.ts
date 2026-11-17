@@ -1,6 +1,6 @@
 // The domain wiki, as pure functions over the model Living Memory returns (`wiki --format json`): which page an address
 // names, its breadcrumbs, previous and next pages, groupings, search and [[link]] resolution. The addresses are the
-// same as the exported file's hash names: "" (main page), p-<slug>, s-<slug>-<section>, c-<n>, n-<ref>, az, recent.
+// same as the exported file's hash names: "" (main page), p-<slug>, s-<slug>-<section>, c-<id>, n-<ref>, az, recent.
 import type { WikiFolder, WikiModel, WikiNote, WikiProject, WikiSection } from "../../lib/lm";
 
 export interface WikiIndex {
@@ -12,6 +12,8 @@ export interface WikiIndex {
   projects: Map<string, WikiProject>;
   folders: Map<string, WikiFolder>;
   sections: Map<string, WikiSection>;
+  /** Notes in other domains, keyed like `titles`. The model's own keys are Python casefold (Straße is strasse), which lowercasing does not match. */
+  external: Map<string, { title: string; domain: string }>;
 }
 
 export function indexModel(model: WikiModel): WikiIndex {
@@ -27,6 +29,7 @@ export function indexModel(model: WikiModel): WikiIndex {
     projects: new Map(model.projects.map((p) => [p.slug, p])),
     folders: new Map(model.folders.map((f) => [f.id, f])),
     sections: new Map(model.sections.map((s) => [s.key, s])),
+    external: new Map(Object.values(model.external).map((x) => [x.title.trim().toLowerCase(), x])),
   };
 }
 
@@ -192,7 +195,7 @@ export function resolveLink(ix: WikiIndex, target: string): LinkTarget {
   const key = target.trim().toLowerCase();
   const note = ix.titles.get(key);
   if (note) return { kind: "note", note };
-  const external = ix.model.external[key];
+  const external = ix.external.get(key);
   return external ? { kind: "external", domain: external.domain } : { kind: "unresolved" };
 }
 

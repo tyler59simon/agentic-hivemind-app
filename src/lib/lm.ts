@@ -485,7 +485,7 @@ export const restoreNote = (ref: string) => run<WriteResult>(["restore", ref, "-
 export const setPin = (ref: string, on: boolean) => run<WriteResult>(["update", ref, "--domain", domainOf(ref), on ? "--pin" : "--unpin"]);
 
 /** The domain wiki (`wiki --format json`): every note as an article, grouped into projects, sections and a code-folder tree.
- *  Notes carry their id; `ref` is the 8-character prefix used in page addresses; folders are `c-N`. */
+ *  Notes carry their id; `ref` is the 8-character prefix used in page addresses; folder ids are `c-` plus a hash of project and path, stable across rebuilds. */
 export interface WikiNote {
   id: string; ref: string; title: string; type: string; status: string; retired?: boolean; tags: string[]; files: string[];
   updated: string; created: string; lead: string; body: string; out: string[]; backlinks: string[];
