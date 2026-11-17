@@ -460,7 +460,8 @@ export interface MaintenanceStatus {
   ok: boolean; enabled: boolean; domains: string[]; policy_version: number; config_revision: string;
   limits: { model: string; max_notes_per_day: number; timeout_seconds: number; daily_budget_usd: string; min_interval_seconds: number };
   enabled_at: string | null;
-  accounting: { day: string; reviewed: number; reserved_notes: number; reserved_usd: string; charged_usd: string; cost_complete: boolean };
+  /** null when LM could not read the accounting files; `errors` then says why. */
+  accounting: { day: string; reviewed: number; reserved_notes: number; reserved_usd: string; charged_usd: string; cost_complete: boolean } | null;
   blocked: { reason: string; config_revision?: string } | null; running: boolean; eligible: boolean; next_eligible_at: string | null; skip_reason: string | null;
   last_run: MaintenanceRun | null; errors: string[];
 }
@@ -474,9 +475,9 @@ export const maintenanceStatus = () => run<MaintenanceStatus>(view(["maintenance
 export const maintenanceHistory = (limit?: number) =>
   run<{ ok: boolean; runs: MaintenanceRun[] }>(view(["maintenance", "history", ...(limit ? ["--limit", String(limit)] : [])]));
 export const maintenanceRun = (id: string) => run<MaintenanceRunDetail>(view(["maintenance", "history", "--run", id]));
-/** Turn maintenance on for one domain, or for every configured domain when none is given. */
-export const maintenanceEnable = (domain?: string) =>
-  run<MaintenanceStatus & { operation_id?: string }>(["maintenance", "enable", ...(domain ? ["--domain", domain] : ["--all-domains"])]);
+/** Turn maintenance on and add one domain to the ones it covers. The domain is always named: without --domain, LM would take it from the server's folder. */
+export const maintenanceEnable = (domain: string) =>
+  run<MaintenanceStatus & { operation_id?: string }>(["maintenance", "enable", "--domain", domain]);
 export const maintenanceDisable = () => run<MaintenanceStatus & { operation_id?: string }>(["maintenance", "disable"]);
 
 /** Bring an archived note back to active; LM pins it so maintenance does not retire it again at once. */

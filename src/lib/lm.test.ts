@@ -125,10 +125,10 @@ describe("maintenance, restore and pin argv", () => {
   });
   it("enable, disable, restore and pin are plain writes", async () => {
     const calls = fake({ exit_code: 0, result: { ok: true }, error: null });
-    await maintenanceEnable("demo"); await maintenanceEnable(); await maintenanceDisable();
+    await maintenanceEnable("demo"); await maintenanceEnable("other"); await maintenanceDisable();
     await restoreNote("demo:abc"); await setPin("demo:abc", true); await setPin("demo:abc", false);
     expect(argvOf(calls, 0)).toEqual(["maintenance", "enable", "--domain", "demo"]);
-    expect(argvOf(calls, 1)).toEqual(["maintenance", "enable", "--all-domains"]);
+    expect(argvOf(calls, 1)).toEqual(["maintenance", "enable", "--domain", "other"]);
     expect(argvOf(calls, 2)).toEqual(["maintenance", "disable"]);
     expect(argvOf(calls, 3)).toEqual(["restore", "demo:abc", "--domain", "demo"]);
     expect(argvOf(calls, 4)).toEqual(["update", "demo:abc", "--domain", "demo", "--pin"]);

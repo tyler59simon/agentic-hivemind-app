@@ -2,9 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useMaintenanceEnabled, useRestoreEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
-import { realProject } from "../../lib/folders";
 import {
-  maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, meta, restoreNote,
+  domains as listDomains, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, meta, restoreNote,
   type MaintenanceDecision, type MaintenanceRun, type MaintenanceStatus,
 } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
@@ -17,6 +16,8 @@ import { isUnbound } from "../recap/recap";
 import { costText, nextRunText, resultText, runSummary, sortDecisions, usd, wasArchived } from "./maintenance";
 
 const HISTORY_LIMIT = 30;
+// The store's file watcher does not cover maintenance/ (run records and accounting), so the open page polls.
+const POLL_MS = 60_000;
 
 function NoteLink({ refId, title }: { refId: string; title?: string | null }) {
   const go = useApp((s) => s.go);
@@ -32,10 +33,12 @@ const when = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleSt
 
 function StatusCard({ s }: { s: MaintenanceStatus }) {
   const client = useQueryClient();
-  const restricted = realProject(useApp((x) => x.project));
-  const appDomain = useApp((x) => x.domain);
+  // Enabling gives a model edit and archive authority over a domain, so the user names it here; nothing is inferred.
+  const known = useQuery({ queryKey: ["domains"], queryFn: listDomains });
+  const choices = (known.data?.domains ?? []).filter((d) => d.bound && !(known.data?.global_domains ?? []).includes(d.name)).map((d) => d.name);
+  const [picked, setPicked] = useState<string>(s.domains[0] ?? "");
   const toggle = useMutation({
-    mutationFn: () => (s.enabled ? maintenanceDisable() : maintenanceEnable(restricted && appDomain ? appDomain : undefined)),
+    mutationFn: () => (s.enabled ? maintenanceDisable() : maintenanceEnable(picked)),
     onSuccess: (r) => {
       recordOperation(r.operation_id);
       client.invalidateQueries({ queryKey: ["maintenance"] });
@@ -50,7 +53,13 @@ function StatusCard({ s }: { s: MaintenanceStatus }) {
       <div className="section-head">
         <h2>{s.enabled ? "On" : "Off"}</h2>
         <span className="fill" />
-        <button className={s.enabled ? "" : "primary"} onClick={() => toggle.mutate()} disabled={toggle.isPending}>
+        {!s.enabled && (
+          <select aria-label="Domain to maintain" value={picked} onChange={(e) => setPicked(e.target.value)}>
+            <option value="">Choose a domain…</option>
+            {choices.map((d) => <option key={d} value={d}>{d}</option>)}
+          </select>
+        )}
+        <button className={s.enabled ? "" : "primary"} onClick={() => toggle.mutate()} disabled={toggle.isPending || (!s.enabled && !picked)}>
           {s.enabled ? "Disable" : "Enable"}
         </button>
       </div>
@@ -67,8 +76,10 @@ function StatusCard({ s }: { s: MaintenanceStatus }) {
         <div><dt>Domains</dt><dd>{s.domains.length ? s.domains.join(", ") : "none"}</dd></div>
         {s.enabled_at && <div><dt>Enabled</dt><dd>{when(s.enabled_at)}</dd></div>}
       </dl>
-      <h4 className="work-day">Today ({a.day})</h4>
-      <p>{a.reviewed} notes reviewed, {costText(a.charged_usd, a.cost_complete)} charged{Number(a.reserved_usd) > 0 ? `, ${usd(a.reserved_usd)} reserved for a run in progress` : ""}.</p>
+      {a && <>
+        <h4 className="work-day">Today ({a.day})</h4>
+        <p>{a.reviewed} notes reviewed, {costText(a.charged_usd, a.cost_complete)} charged{Number(a.reserved_usd) > 0 ? `, ${usd(a.reserved_usd)} reserved for a run in progress` : ""}.</p>
+      </>}
       {last && <p className="muted">Last run: {when(last.attempted_at)}, {last.status}. {runSummary(last)}.</p>}
       {s.errors.map((e, i) => <p key={i} className="error">{e}</p>)}
     </section>
@@ -127,8 +138,8 @@ function RunRow({ r, open, onToggle }: { r: MaintenanceRun; open: boolean; onTog
 /** Maintenance: automatic note review, from Living Memory's `maintenance` commands. */
 export function MaintenancePage() {
   const enabled = useMaintenanceEnabled();
-  const status = useQuery({ queryKey: ["maintenance", "status"], queryFn: maintenanceStatus, enabled });
-  const history = useQuery({ queryKey: ["maintenance", "history"], queryFn: () => maintenanceHistory(HISTORY_LIMIT), enabled });
+  const status = useQuery({ queryKey: ["maintenance", "status"], queryFn: maintenanceStatus, enabled, refetchInterval: POLL_MS });
+  const history = useQuery({ queryKey: ["maintenance", "history"], queryFn: () => maintenanceHistory(HISTORY_LIMIT), enabled, refetchInterval: POLL_MS });
   const [open, setOpen] = useState<string | null>(null);
   const title = "Maintenance";
   const sub = "Automatic review of notes: what it checks, what it changed, and how to undo it.";
