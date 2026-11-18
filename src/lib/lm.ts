@@ -41,7 +41,7 @@ export async function run<T>(argv: string[], stdin?: string): Promise<T> {
 const view = (argv: string[]) => [...argv, "--actor", "viewer"];
 
 /** What `version` reports under `capabilities`. */
-export interface Capabilities { direct_writes?: number; history?: number; restore?: number; pin?: number; maintenance?: { version: number; actions: string[] } }
+export interface Capabilities { direct_writes?: number; history?: number; restore?: number; pin?: number; rule?: number; maintenance?: { version: number; actions: string[] } }
 
 export interface ConnectInfo {
   version: { api: number; python: string; commands: string[]; capabilities?: Capabilities };
@@ -106,6 +106,8 @@ export interface Note {
   revision: string; body: string; truncated: boolean;
   /** Absent means not pinned. */
   pinned?: boolean;
+  /** Absent means not a rule. Only policy and preference notes can be rules. */
+  rule?: boolean;
 }
 /** LM's own default is 16,000 characters; Hivemind asks for the most it allows (64,000). */
 export const read = (ref: string, opts: { domain?: string; maxChars?: number } = {}) =>
@@ -496,6 +498,9 @@ export const maintenanceDisable = () => run<MaintenanceStatus & { operation_id?:
 /** Bring an archived note back to active; LM pins it so maintenance does not retire it again at once. */
 export const restoreNote = (ref: string) => run<WriteResult>(["restore", ref, "--domain", domainOf(ref)]);
 export const setPin = (ref: string, on: boolean) => run<WriteResult>(["update", ref, "--domain", domainOf(ref), on ? "--pin" : "--unpin"]);
+/** A rule note is shown in full at every session start. LM refuses the flag on types other than policy and preference. */
+export const ruleAllowed = (type: string | undefined) => type === "policy" || type === "preference";
+export const setRule = (ref: string, on: boolean) => run<WriteResult>(["update", ref, "--domain", domainOf(ref), on ? "--rule" : "--no-rule"]);
 
 /** The domain wiki (`wiki --format json`): every note as an article, grouped into projects, sections and a code-folder tree.
  *  Notes carry their id; `ref` is the 8-character prefix used in page addresses; folder ids are `c-` plus a hash of project and path, stable across rebuilds. */

@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, CircleCheck, Pin, PinOff, Play, SquarePen } from "lucide-react";
+import { Check, CircleCheck, Pin, PinOff, Play, ScrollText, SquarePen } from "lucide-react";
 import { useState } from "react";
 import { classify } from "../../lib/errors";
-import { usePinEnabled, useViewsEnabled } from "../../lib/connection";
-import { confirm, setPin } from "../../lib/lm";
+import { usePinEnabled, useRuleEnabled, useViewsEnabled } from "../../lib/connection";
+import { confirm, ruleAllowed, setPin, setRule } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
 import { startSession } from "../../store";
 import { toast } from "../../ui/toast";
@@ -49,8 +49,18 @@ export function NoteTab({ tab }: { tab: Tab }) {
     },
     onError: (e) => toast(classify(e).message, "error"),
   });
+  const rule = useMutation({
+    mutationFn: (on: boolean) => setRule(refId, on),
+    onSuccess: (r, on) => {
+      recordOperation(r.operation_id);
+      client.invalidateQueries({ queryKey: ["note", refId] });
+      toast(on ? "Made a rule. It is shown in full at every session start." : "Rule removed.");
+    },
+    onError: (e) => toast(classify(e).message, "error"),
+  });
   const viewsOn = useViewsEnabled();
   const pinOn = usePinEnabled();
+  const ruleOn = useRuleEnabled();
   const confirmed = n?.confirmed?.length ? n.confirmed[n.confirmed.length - 1] : undefined;
 
   return (
@@ -77,6 +87,12 @@ export function NoteTab({ tab }: { tab: Tab }) {
             <button className={`text ${n.pinned ? "on" : ""}`} aria-pressed={!!n.pinned} onClick={() => pin.mutate(!n.pinned)} disabled={pin.isPending}
               title={n.pinned ? "Pinned: automatic maintenance never retires this note. Click to unpin." : "Pin: stop automatic maintenance from retiring this note"}>
               {n.pinned ? <PinOff size="1.15em" aria-hidden /> : <Pin size="1.15em" aria-hidden />}{n.pinned ? "Unpin" : "Pin"}
+            </button>
+          )}
+          {ruleOn && ruleAllowed(n?.type) && n?.status === "active" && !editing && (
+            <button className={`text ${n.rule ? "on" : ""}`} aria-pressed={!!n.rule} onClick={() => rule.mutate(!n.rule)} disabled={rule.isPending}
+              title={n.rule ? "Rule: shown in full at every session start. Click to remove the rule." : "Make rule: show this note in full at every session start"}>
+              <ScrollText size="1.15em" aria-hidden />{n.rule ? "Remove rule" : "Make rule"}
             </button>
           )}
           {viewsOn && n && !editing && <DashboardToggle refId={refId} title={n.title} />}

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { LmError, addAction, archiveNote, isPlan, supersedeNote, taxonomyAdd, undo, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, setPin, writeChange, changesArgs, list, listArgs, logArgs, openArgs, writeProject, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setDetail, setTransport, writeSystem, systemsArgs, timelineArgs, wikiModel, type Invoke } from "./lm";
+import { LmError, addAction, archiveNote, isPlan, supersedeNote, taxonomyAdd, undo, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, ruleAllowed, setPin, setRule, writeChange, changesArgs, list, listArgs, logArgs, openArgs, writeProject, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setDetail, setTransport, writeSystem, systemsArgs, timelineArgs, wikiModel, type Invoke } from "./lm";
 
 afterEach(() => setTransport(invoke as Invoke));
 
@@ -125,7 +125,7 @@ describe("run", () => {
   });
 });
 
-describe("maintenance, restore and pin argv", () => {
+describe("maintenance, restore, pin and rule argv", () => {
   const argvOf = (calls: unknown[], i = 0) => (calls[i] as [string, { argv: string[] }])[1].argv;
   it("reads run as viewer", async () => {
     const calls = fake({ exit_code: 0, result: {}, error: null });
@@ -145,6 +145,17 @@ describe("maintenance, restore and pin argv", () => {
     expect(argvOf(calls, 3)).toEqual(["restore", "demo:abc", "--domain", "demo"]);
     expect(argvOf(calls, 4)).toEqual(["update", "demo:abc", "--domain", "demo", "--pin"]);
     expect(argvOf(calls, 5)).toEqual(["update", "demo:abc", "--domain", "demo", "--unpin"]);
+  });
+  it("rule is a plain write, offered on policy and preference notes only", async () => {
+    const calls = fake({ exit_code: 0, result: { ok: true }, error: null });
+    await setRule("demo:abc", true); await setRule("demo:abc", false);
+    expect(argvOf(calls, 0)).toEqual(["update", "demo:abc", "--domain", "demo", "--rule"]);
+    expect(argvOf(calls, 1)).toEqual(["update", "demo:abc", "--domain", "demo", "--no-rule"]);
+    expect(["policy", "preference", "decision", "knowledge", undefined].map(ruleAllowed)).toEqual([true, true, false, false, false]);
+  });
+  it("a rule on the wrong note type comes back as an LM error", async () => {
+    fake({ exit_code: 2, result: null, error: { code: "invalid", message: "Only policy and preference notes can be rules" } });
+    await expect(setRule("demo:abc", true)).rejects.toBeInstanceOf(LmError);
   });
 });
 
