@@ -1,4 +1,4 @@
-// Pure helpers for the project create/edit wizard; the limits mirror Living Memory's `project-plan` validation.
+// Pure helpers for the project create/edit wizard; the limits mirror Living Memory's `project` validation.
 import type { DomainInfo, Project, ProjectStatus, ProjectUpdate } from "../../lib/lm";
 import { HEADINGS } from "../../lib/note";
 

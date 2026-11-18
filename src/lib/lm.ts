@@ -181,7 +181,8 @@ export const setDetail = (ref: string, text: string, expectedRevision?: string) 
 
 // ---- Direct writes: one journaled step, no plan. The receipt names the operation, so it can be undone. ----
 
-export interface Receipt { ok: true; operation_id: string; state: string; kind: string; summary: Record<string, unknown>; undo: string; warnings?: string[] }
+/** `kind` and `summary` are absent from the receipt of a note write such as archive. */
+export interface Receipt { ok: true; operation_id: string; state: string; kind?: string; summary?: Record<string, unknown>; undo: string; warnings?: string[] }
 
 const direct = (argv: string[], payload?: object) => run<Receipt>(argv, payload ? JSON.stringify(payload) : undefined);
 

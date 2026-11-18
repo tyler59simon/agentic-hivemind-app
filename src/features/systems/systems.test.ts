@@ -171,7 +171,7 @@ describe("buildBrief", () => {
   });
   it("tells the agent it is unattended and what it must not do", () => {
     expect(text).toMatch(/never ask/);
-    expect(text).toMatch(/Do not run `system-plan`, `apply`/);
+    expect(text).toMatch(/Do not run `system update`, `apply`/);
     expect(text).toMatch(/Write files only inside the architecture folder/);
   });
 });

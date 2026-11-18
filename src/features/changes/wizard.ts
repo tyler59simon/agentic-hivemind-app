@@ -1,4 +1,4 @@
-// Pure helpers for the change wizard; the limits mirror Living Memory's `change-plan` validation.
+// Pure helpers for the change wizard; the limits mirror Living Memory's `change` validation.
 import type { Change, ChangeCreate, ChangeStage, ChangeUpdate } from "../../lib/lm";
 
 export const MAX_TITLE = 120;

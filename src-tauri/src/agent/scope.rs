@@ -299,22 +299,30 @@ pub fn for_session(bridge: &Bridge, info: &SessionInfo) -> Result<Scope, String>
     work(tree.ok_or("This session's worktree no longer exists; end the session")?, info.policy, &info.title)
 }
 
-/// The Living Memory commands only the user may run, through Hivemind's reviewed dialogs: every plan command Living
-/// Memory has, since a user allow rule would let any one missing here run without a question.
-const GOVERNED_COMMANDS: [&str; 20] = [
+/// The Living Memory commands only the user may run, through Hivemind's own dialogs: every plan command Living
+/// Memory has and every direct write (archive, rewrite, remap, promote, taxonomy add and the source, project, system and
+/// change registries), since a user allow rule would let any one missing here run without a question. A phrase such as
+/// `project create` keeps a search for the word "project" from matching.
+const GOVERNED_COMMANDS: [&str; 37] = [
     "apply", "undo", "recover", "plan", "merge-plan", "retag-plan", "taxonomy-plan", "project-plan", "system-plan", "promote-plan", "change-plan",
     "delete-plan", "import-plan", "ingest-plan", "migration-plan", "note-type-plan", "overlay-teardown-plan", "prune-plan", "remap-plan",
     "restore-plan",
+    "archive", "rewrite", "remap", "promote", "taxonomy add", "source add", "source remove", "source implicit",
+    "project create", "project update", "project archive", "system create", "system update", "system retire",
+    "change create", "change update", "change close",
 ];
 
-/// A shell command that would change the Living Memory store through a plan. Its hook lets read and capture commands
+/// A shell command that would change the Living Memory store through a plan or a direct write. Its hook lets read and capture commands
 /// through before Hivemind is asked; these must never run from a session, whatever the user clicks.
 pub fn governed_memory_command(command: &str) -> bool {
     let text = command.to_lowercase();
+    let words: Vec<&str> = text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_')).collect();
     text.contains("living_memory")
-        && text
-            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
-            .any(|word| GOVERNED_COMMANDS.contains(&word) || (word.ends_with("-plan") && word != "inspect-plan"))
+        && (words.iter().any(|word| word.ends_with("-plan") && *word != "inspect-plan")
+            || GOVERNED_COMMANDS.iter().any(|command| {
+                let parts: Vec<&str> = command.split(' ').collect();
+                words.windows(parts.len()).any(|window| window == parts.as_slice())
+            }))
 }
 
 /// Deny rules for the same commands, for the CLI's own rule engine: they hold even where the user's settings allow the
@@ -430,6 +438,10 @@ mod tests {
             r#"python "C:\x\living_memory.py" apply abc --expected-plan-sha256 d"#,
             r#"python "C:\x\living_memory.py" --domain a plan archive x"#,
             r#"python "C:\x\living_memory.py" project-plan create"#,
+            r#"python "C:\x\living_memory.py" --domain a archive x"#,
+            r#"python "C:\x\living_memory.py" project create --payload-file p.json"#,
+            r#"python "C:\x\living_memory.py" taxonomy add concern/security"#,
+            r#"python "C:\x\living_memory.py" change close"#,
             r#"python "C:\x\LIVING_MEMORY.PY" undo 123"#,
             // The word `apply` is there even inside a search; a refused search is the safe side.
             r#"python "C:\x\living_memory.py" search "apply the plan""#,
@@ -441,6 +453,9 @@ mod tests {
         for command in [
             r#"python "C:\x\living_memory.py" search retries"#,
             r#"python "C:\x\living_memory.py" inspect-plan abc"#,
+            r#"python "C:\x\living_memory.py" taxonomy"#,
+            r#"python "C:\x\living_memory.py" projects --status active"#,
+            r#"python "C:\x\living_memory.py" search "project change""#,
             r#"python "C:\x\living_memory.py" capture --title x"#,
             "git apply patch.diff",
         ] {
@@ -451,13 +466,15 @@ mod tests {
     #[test]
     fn governed_rules_cover_every_command_for_both_shells() {
         let rules = governed_rules();
-        assert_eq!(rules.len(), 80);
-        assert_eq!(rules.iter().collect::<std::collections::HashSet<_>>().len(), 80, "all different");
+        assert_eq!(rules.len(), 148);
+        assert_eq!(rules.iter().collect::<std::collections::HashSet<_>>().len(), 148, "all different");
         for rule in [
             "Bash(*living_memory.py* apply *)",
             "Bash(*living_memory.py* apply)",
             "PowerShell(*living_memory.py* undo *)",
             "PowerShell(*living_memory.py* change-plan)",
+            "Bash(*living_memory.py* project create *)",
+            "PowerShell(*living_memory.py* archive)",
         ] {
             assert!(rules.iter().any(|r| r == rule), "{rule}");
         }

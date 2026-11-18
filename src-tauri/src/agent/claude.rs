@@ -11,7 +11,7 @@ use std::time::Duration;
 const TOOL_SUMMARY: usize = 300;
 const RESULT_SUMMARY: usize = 500;
 const APPROVAL_INPUT: usize = 4000;
-pub(crate) const GOVERNED: &str = "Hivemind does not let agent sessions run Living Memory plan, apply or undo commands. Describe the change and let the user apply it.";
+pub(crate) const GOVERNED: &str = "Hivemind does not let agent sessions run Living Memory plan, apply or undo commands, or its direct writes (archive, rewrite, remap, promote, taxonomy add, source, project, system, change). Describe the change and let the user apply it.";
 const DECLINED: &str = "The user declined this action in Hivemind.";
 /// What the CLI's accept-edits mode allows, as the label of an always-allow that has no rule to show.
 const EDITS_LABEL: &str = "file edits and simple file commands in the worktree";
@@ -113,7 +113,7 @@ fn tool_request(line: &Value) -> Option<&Value> {
     (text_of(line, "type") == Some("control_request") && text_of(request, "subtype") == Some("can_use_tool")).then_some(request)
 }
 
-/// A shell call that would change the Living Memory store through a plan.
+/// A shell call that would change the Living Memory store through a plan or a direct write.
 fn governed(request: &Value) -> bool {
     matches!(text_of(request, "tool_name"), Some("Bash" | "PowerShell"))
         && request.get("input").and_then(|input| text_of(input, "command")).is_some_and(governed_memory_command)

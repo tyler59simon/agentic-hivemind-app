@@ -231,7 +231,7 @@ pub fn login_args(engine: Engine) -> Vec<String> {
 /// Variables to set and names to remove, given the app's own variable names and the terminal's id.
 ///
 /// A shell tab (id starting `shell-`) gets no `HIVEMIND_SESSION`, and an inherited one is removed: the user applies memory
-/// plans from a shell, and the Living Memory guard refuses `apply` while the variable is set.
+/// plans and direct writes from a shell, and the Living Memory guard refuses them while the variable is set.
 pub fn environment(own: &[String], memory_root: Option<&Path>, terminal_id: &str) -> (Vec<(String, String)>, Vec<String>) {
     let shell = terminal_id.starts_with(SHELL_PREFIX);
     let mut set = vec![("TERM".to_string(), "xterm-256color".to_string()), ("COLORTERM".to_string(), "truecolor".to_string())];

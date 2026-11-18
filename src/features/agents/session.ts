@@ -97,7 +97,7 @@ export function sessionBriefing(input: BriefingInput): string {
   const memory = [
     "## Living Memory",
     `- Record decisions and gotchas with \`--project ${project.slug}\`${domain ? ` \`--domain ${domain}\`` : ""}.`,
-    "- Do not run its plan, apply or undo commands; describe the change and the user will apply it.",
+    "- Do not run its plan, apply or undo commands, or its archive, rewrite, remap, promote, taxonomy add, source, project, system or change writes; describe the change and the user will apply it.",
   ].join("\n");
   return [
     `# Session briefing: ${project.name}`,

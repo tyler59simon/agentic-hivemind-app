@@ -58,10 +58,6 @@ def lm(*argv, payload=None, check=True):
     return json.loads(out) if out[:1] in "{[" and out else out
 
 
-def apply(plan):
-    return lm("apply", plan["plan_id"], "--expected-plan-sha256", plan["digest"])
-
-
 def note(domain, kind, title, summary, concern, details=(), links=(), actions=(), done=(), important=None,
          tags=(), project=None, system=None, supersedes=None, files=()):
     """Capture one note in the standard section layout; returns its ref (domain:id)."""
@@ -82,7 +78,7 @@ def note(domain, kind, title, summary, concern, details=(), links=(), actions=()
 
 
 def body(summary, details=(), links=()):
-    """A charter or passport body in the standard layout (project-plan and system-plan take a body)."""
+    """A charter or passport body in the standard layout (project create and system create take a body)."""
     parts = [summary]
     if details: parts.append("## Details\n" + "\n".join("- " + d for d in details))
     if links: parts.append("## Links\n" + "\n".join("- " + l for l in links))
@@ -179,13 +175,13 @@ def main():
 
     # ---- Store: two bound domains and the vocabulary.
     lm("bind", "paystream", str(REPO)); lm("bind", "platform", str(PLATFORM_DIR))
-    apply(lm("taxonomy-plan", "subject/project", "subject/user", "concern/architecture", "concern/decision", "concern/knowledge",
+    lm("taxonomy", "add", "subject/project", "subject/user", "concern/architecture", "concern/decision", "concern/knowledge",
              "concern/workflow", "concern/bug", "concern/risk", "concern/planning", "concern/operations", "concern/status",
-             "concern/research", "technology/kafka", "technology/postgres", "technology/redis", "platform/aws"))
+             "concern/research", "technology/kafka", "technology/postgres", "technology/redis", "platform/aws")
 
-    # ---- Registries: projects and systems, each with its note, through reviewed plans.
+    # ---- Registries: projects and systems, each with its note, through direct writes.
     repo = REPO.as_posix()
-    apply(lm("system-plan", "create", payload={
+    lm("system", "create", payload={
         "slug": "notification-provider", "name": "Notification Provider",
         "description": "External SMS, email and push gateway that PayStream hands alerts to.",
         "owners": ["vendor: Relaywave"], "capabilities": ["Send SMS", "Send email", "Send push notifications"], "repos": [],
@@ -193,8 +189,8 @@ def main():
             "Notification Provider is the external gateway that delivers alerts by SMS, email and push. We do not own its code.",
             ["**Contract:** at-least-once delivery; a 504 does not mean the message was dropped",
              "**Limits:** 200 requests per second per sender, burst 400",
-             "**Support:** vendor status page and a shared incident channel"])}}))
-    apply(lm("project-plan", "create", payload={
+             "**Support:** vendor status page and a shared incident channel"])}})
+    lm("project", "create", payload={
         "slug": "paystream", "name": "PayStream", "description": "Payment events, decisions, delivery.", "repos": [repo],
         "charter": {"body": body(
             "PayStream turns payment events into timely, non-duplicated alerts for merchants. This charter states its goal, scope and how work is tracked.",
@@ -202,15 +198,15 @@ def main():
              "**Scope:** ingestion, alert rules and notification delivery; ledger reconciliation is out of scope",
              "**Team:** payments-team; weekly status every Monday",
              "**Agent guidance:** read the decisions before changing ingestion or delivery; run the replay suite first"],
-            ["[[Prevent duplicate payment alerts]]", "[[Extract notification delivery]]", "[[Ingestion service map]]"])}}))
-    apply(lm("project-plan", "create", payload={
+            ["[[Prevent duplicate payment alerts]]", "[[Extract notification delivery]]", "[[Ingestion service map]]"])}})
+    lm("project", "create", payload={
         "slug": "ledger-sync", "name": "Ledger Sync", "description": "Nightly reconciliation of payment events against the ledger.",
         "repos": [LEDGER_REPO.as_posix()],
         "charter": {"domain": "platform", "body": body(
             "Ledger Sync reconciles settled payment events against the finance ledger every night. It is paused until the ledger API v2 ships.",
-            ["**Goal:** zero unexplained differences older than one day", "**Status:** paused; waiting on the ledger API v2"])}}))
-    apply(lm("project-plan", "update", payload={"slug": "ledger-sync", "status": "paused"}))
-    apply(lm("system-plan", "create", payload={
+            ["**Goal:** zero unexplained differences older than one day", "**Status:** paused; waiting on the ledger API v2"])}})
+    lm("project", "update", payload={"slug": "ledger-sync", "status": "paused"})
+    lm("system", "create", payload={
         "slug": "paystream", "name": "PayStream",
         "description": "Ingests payment events, decides which ones deserve an alert and delivers notifications to merchants.",
         "owners": ["payments-team"],
@@ -222,7 +218,7 @@ def main():
              "**Data:** events are kept 30 days; idempotency keys 14 days",
              "**On call:** payments-team, business hours plus a paging rota",
              "**Depends on:** Notification Provider for SMS, email and push"],
-            ["[[Restart recovery runbook]]", "[[Ingestion service map]]", "[[Use event ID as the idempotency key]]"])}}))
+            ["[[Restart recovery runbook]]", "[[Ingestion service map]]", "[[Use event ID as the idempotency key]]"])}})
 
     # ---- PayStream notes (domain paystream, tagged project/paystream).
     P = dict(project="paystream")
@@ -372,20 +368,19 @@ def main():
     # ---- Lifecycle: finish and resolve a plan, archive a note, make two notes due for review.
     for _ in range(2): lm("check", refs["plan_review"], "--index", "1", "--domain", "paystream")
     if "changes" in lm("version")["commands"]:
-        adopt = lambda key, title, **kw: apply(lm("change-plan", "create", payload={"project": "paystream", "title": title, "brief": refs[key], **kw}))
+        adopt = lambda key, title, **kw: lm("change", "create", payload={"project": "paystream", "title": title, "brief": refs[key], **kw})
         adopt("plan_review", "Review retry policy", stage="validate")                                              # CHG-001
         adopt("plan_extract", "Extract notification delivery", stage="design", repo=repo, system="paystream", element="Delivery")   # CHG-002
         adopt("plan_dupes", "Prevent duplicate payment alerts", stage="implement", repo=repo, branch="feature/idempotency",
               system="paystream", element="Ingestion")                                                             # CHG-003
         add_section(refs["plan_dupes"], "## Acceptance evidence\n- [ ] Replay produces no duplicate alert\n- [ ] Suppression survives a restart")
-        made = lm("change-plan", "create", payload={"project": "paystream", "title": "Decide the key retention window", "repo": repo,
-                  "brief": {"body": body("Choose between a 30-day key window and rejecting late events.", links=["[[Key retention period]]"])}})
-        apply(made)                                                                                                # CHG-004
+        made = lm("change", "create", payload={"project": "paystream", "title": "Decide the key retention window", "repo": repo,
+                  "brief": {"body": body("Choose between a 30-day key window and rejecting late events.", links=["[[Key retention period]]"])}})  # CHG-004
         lm("update", made["summary"]["brief"], "--domain", "paystream", "--review-by", (date.today() - timedelta(days=2)).isoformat())
-        apply(lm("change-plan", "close", payload={"id": 1}))                                                       # resolves the brief too
+        lm("change", "close", payload={"id": 1})                                                       # resolves the brief too
     else:
         lm("resolve", refs["plan_review"], "--domain", "paystream")
-    apply(lm("plan", "archive", refs["archived"], "--domain", "paystream"))
+    lm("archive", refs["archived"], "--domain", "paystream")
     lm("update", refs["risk"], "--domain", "paystream", "--pin")  # one pinned note for the Pin toggle
     today = date.today()
     lm("update", refs["map"], "--domain", "paystream", "--review-by", (today - timedelta(days=12)).isoformat())

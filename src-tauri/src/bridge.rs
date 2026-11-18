@@ -64,7 +64,7 @@ impl Bridge {
             .env("PYTHONUTF8", "1")
             // The main actor starts the server; each request picks viewer or main.
             .env_remove("LIVING_MEMORY_ACTOR")
-            // Living Memory refuses plan apply and undo when this is set (it marks an agent in a Hivemind terminal); the
+            // Living Memory refuses apply, undo and the direct writes (archive, rewrite, remap, promote, taxonomy add, source, project, system, change) when this is set (it marks an agent in a Hivemind terminal); the
             // user's own actions run here, even when Hivemind itself was started from such a terminal.
             .env_remove("HIVEMIND_SESSION")
             .stdin(Stdio::piped())
@@ -167,6 +167,8 @@ mod tests {
         let base = std::env::temp_dir().join(format!("hivemind-bridge-{}", std::process::id()));
         let (store, project) = (base.join("store"), base.join("project"));
         std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&store).unwrap(); // `serve` needs an existing store: a folder with bindings.json
+        std::fs::write(store.join("bindings.json"), "{}").unwrap();
         let (program, args) = match std::env::var("HIVEMIND_TEST_PYTHON") {
             Ok(p) => (p, vec![]),
             Err(_) if cfg!(windows) => ("py".to_string(), vec!["-3".to_string()]),
@@ -208,6 +210,8 @@ mod tests {
         let base = std::env::temp_dir().join(format!("hivemind-bridge2-{}", std::process::id()));
         let (store, project) = (base.join("store"), base.join("project"));
         std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&store).unwrap(); // `serve` needs an existing store: a folder with bindings.json
+        std::fs::write(store.join("bindings.json"), "{}").unwrap();
         let (program, args) = match std::env::var("HIVEMIND_TEST_PYTHON") {
             Ok(p) => (p, vec![]),
             Err(_) if cfg!(windows) => ("py".to_string(), vec!["-3".to_string()]),
@@ -240,18 +244,19 @@ mod tests {
         assert_eq!(links["edges"][0]["from"], rollout.as_str());
         assert_eq!(links["edges"][0]["to"], cache.as_str());
 
-        let plan = ok(call(&["plan", "archive", &rollout, "--domain", "demo"], None));
-        let inspected = ok(call(&["inspect-plan", plan["plan_id"].as_str().unwrap(), "--actor", "viewer"], None));
-        assert_eq!(inspected["effects"].as_array().unwrap().len(), 2);
-        let applied = ok(call(&["apply", plan["plan_id"].as_str().unwrap(), "--expected-plan-sha256", plan["digest"].as_str().unwrap()], None));
-        let archive_op = applied["operation_id"].as_str().unwrap().to_string();
+        // Archive is a direct write: one journaled step, a receipt and no plan.
+        let archived = ok(call(&["archive", &rollout, "--domain", "demo"], None));
+        assert!(archived.get("plan_id").is_none(), "{archived}");
+        let archive_op = archived["operation_id"].as_str().unwrap().to_string();
+        assert_eq!(ok(call(&["read", &rollout, "--actor", "viewer"], None))["status"], "archived");
 
         let history = ok(call(&["history", "--note", plan_note["id"].as_str().unwrap(), "--actor", "viewer"], None));
         assert_eq!(history[0]["operation_id"], archive_op.as_str());
         let diff = ok(call(&["diff", &archive_op, "--actor", "viewer"], None));
         assert!(!diff.as_array().unwrap().is_empty());
-        let undo = ok(call(&["undo", &archive_op], None));
-        ok(call(&["apply", undo["plan_id"].as_str().unwrap(), "--expected-plan-sha256", undo["digest"].as_str().unwrap()], None));
+        // Undoing a direct write is direct too.
+        let undone = ok(call(&["undo", &archive_op], None));
+        assert!(undone.get("plan_id").is_none(), "{undone}");
         assert_eq!(ok(call(&["read", &rollout, "--actor", "viewer"], None))["status"], "active");
         assert_eq!(ok(call(&["validate", "demo"], None))["issues"].as_array().unwrap().len(), 0);
         drop(bridge);
@@ -260,12 +265,14 @@ mod tests {
 
     /// Project command centers, end to end (same gating; needs an LM with api 2 and `projects`).
     #[test]
-    fn live_projects_plan_and_cross_domain_reads() {
+    fn live_projects_write_and_cross_domain_reads() {
         let Ok(script) = std::env::var("HIVEMIND_TEST_LM_SCRIPT") else { return };
         let base = std::env::temp_dir().join(format!("hivemind-bridge3-{}", std::process::id()));
         let (store, demo, other) = (base.join("store"), base.join("demo"), base.join("other"));
         let repo = demo.join("app");
         std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&store).unwrap(); // `serve` needs an existing store: a folder with bindings.json
+        std::fs::write(store.join("bindings.json"), "{}").unwrap();
         std::fs::create_dir_all(&other).unwrap();
         let (program, args) = match std::env::var("HIVEMIND_TEST_PYTHON") {
             Ok(p) => (p, vec![]),
@@ -282,16 +289,15 @@ mod tests {
         ok(call(&["bind", "other", other.to_str().unwrap()], None));
         std::fs::write(store.join("tag_taxonomy.json"), r#"{"tags":["subject/project","concern/knowledge","concern/decision"]}"#).unwrap();
 
-        // One plan: taxonomy tag, registry entry and charter note.
+        // One direct write: taxonomy tag, registry entry and charter note.
         let create = json!({"slug": "app", "name": "App", "repos": [repo.to_str().unwrap()],
             "charter": {"body": "## 📌 Executive Summary\nBuild the app.\n\n---\n\n## 📝 Key Details\n* **Agent guidance:** run tests first."}});
-        let plan = ok(call(&["project-plan", "create"], Some(&create.to_string())));
-        let inspected = ok(call(&["inspect-plan", plan["plan_id"].as_str().unwrap(), "--actor", "viewer"], None));
-        assert_eq!(inspected["effects"].as_array().unwrap().len(), 3);
-        ok(call(&["apply", plan["plan_id"].as_str().unwrap(), "--expected-plan-sha256", plan["digest"].as_str().unwrap()], None));
+        let created = ok(call(&["project", "create"], Some(&create.to_string())));
+        assert!(created.get("plan_id").is_none(), "{created}");
+        assert_eq!(created["kind"], "project_create");
         let listed = ok(call(&["projects", "--actor", "viewer"], None));
         assert_eq!((listed["projects"][0]["slug"].as_str(), listed["projects"][0]["tag_registered"].as_bool()), (Some("app"), Some(true)));
-        assert_eq!(call(&["project-plan", "archive", "--actor", "viewer"], Some(r#"{"slug":"app"}"#)).exit_code, 2);
+        assert_eq!(call(&["project", "archive", "--actor", "viewer"], Some(r#"{"slug":"app"}"#)).exit_code, 2);
 
         // A tagged plan in another domain, and an untagged note to triage.
         let rollout = ok(call(&["capture", "--domain", "other"], Some(

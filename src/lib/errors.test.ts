@@ -17,6 +17,8 @@ describe("classify", () => {
     expect(classify(err("Potential credential detected (API key at character 12); remove it")).kind).toBe("credential");
     expect(classify(err("Unknown tags require an approved taxonomy plan: concern/new, platform/x")))
       .toMatchObject({ kind: "unknown-tags", tags: ["concern/new", "platform/x"] });
+    expect(classify(err("Unknown tags must be added to the taxonomy first (taxonomy add): concern/new")))
+      .toMatchObject({ kind: "unknown-tags", tags: ["concern/new"] });
     expect(classify(err("Note needs a summary: start the body with one or two sentences, or pass --summary")).kind).toBe("layout");
     expect(classify(err("Action items are only for plan, bug and risk notes; record lasting facts in the body instead")).kind).toBe("layout");
     // Older Living Memory wording.

@@ -1,4 +1,4 @@
-// Pure helpers for the system create/edit wizard; the limits mirror Living Memory's `system-plan` validation.
+// Pure helpers for the system create/edit wizard; the limits mirror Living Memory's `system` validation.
 import type { System, SystemStatus, SystemUpdate } from "../../lib/lm";
 import { HEADINGS } from "../../lib/note";
 import { MAX_DESCRIPTION, MAX_NAME, MAX_REPOS, parseRepos, SLUG_RE } from "../projects/wizard";
@@ -74,7 +74,7 @@ export function validateSystem(form: SystemForm, create?: { slug: string; existi
   return problems;
 }
 
-/** The registry fields of a form, as `system-plan` takes them. */
+/** The registry fields of a form, as `system` takes them. */
 export function formFields(form: SystemForm) {
   return {
     name: form.name.trim(),

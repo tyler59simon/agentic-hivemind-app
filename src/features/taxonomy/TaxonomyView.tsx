@@ -52,7 +52,7 @@ export function TaxonomyView() {
       const receipt = await taxonomyAdd(tags);
       await finishDirect(client, receipt);
       setAdding("");
-      const alternatives = (receipt.summary.alternatives ?? {}) as Record<string, string[]>;
+      const alternatives = (receipt.summary?.alternatives ?? {}) as Record<string, string[]>;
       const close_ = Object.entries(alternatives).filter(([, alts]) => alts.length);
       const similar = close_.map(([tag, alts]) => `${tag} is close to ${alts.join(", ")}`).join("; ");
       undoToast(client, `Added ${tags.join(", ")} to the taxonomy.${similar ? ` Similar tags exist: ${similar}.` : ""}`, receipt);

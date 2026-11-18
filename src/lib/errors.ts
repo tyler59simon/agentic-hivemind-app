@@ -21,7 +21,7 @@ export function classify(error: unknown): Problem {
     return { kind: "similar", message, ref: m?.[1], title: m?.[2] };
   }
   if (/^Potential credential/.test(message)) return { kind: "credential", message };
-  const tags = /^Unknown tags require an approved taxonomy plan: (.*)$/s.exec(message);
+  const tags = /^Unknown tags (?:require an approved taxonomy plan|must be added to the taxonomy first \(taxonomy add\)): (.*)$/s.exec(message);
   if (tags) return { kind: "unknown-tags", message, tags: tags[1].split(",").map((t) => t.trim()).filter(Boolean) };
   // Also matches the wording of Living Memory versions before the current note layout ("an Executive Summary", "Action Items").
   if (/^(Note needs a summary|Note needs an Executive Summary|Action items are only for)/i.test(message)) return { kind: "layout", message };
