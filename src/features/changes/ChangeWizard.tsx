@@ -75,7 +75,7 @@ function ChangeWizard({ form, onClose }: { form: ChangeForm; onClose: () => void
   const edit = form.mode === "edit";
   const title = form.mode === "create" ? "Start a change" : form.mode === "adopt" ? "Adopt as change" : `Edit ${displayId(form.change.id)}`;
   return (
-    <Modal title={title} onClose={onClose} wide>
+    <Modal title={title} onClose={onClose} wide locked={busy}>
       <form className="settings" onSubmit={(e) => {
         e.preventDefault(); setShown(true);
         if (!problems.length && (!edit || update)) submit();

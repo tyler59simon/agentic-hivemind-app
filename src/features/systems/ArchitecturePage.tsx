@@ -18,6 +18,7 @@ import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
 import { useSessionDraft } from "../agents/draft";
 import { DirectDialog } from "../plans/DirectDialog";
+import { ProposedFields } from "./ProposedFields";
 import { NoteLink } from "../preview/NoteLink";
 import { systemsForProject } from "../projects/scope";
 import { useCurrentProject } from "../projects/useProject";
@@ -117,7 +118,7 @@ function AgentActions({ system, all }: { system: System; all: System[] }) {
       )}
       {reviewing && update && (
         <DirectDialog title={`Update system ${system.name}`} applyLabel="Update system"
-          intro={<p>These are the registry fields the agent proposed. Nothing changes until you apply them.</p>}
+          intro={<ProposedFields system={system} update={update} />}
           run={() => writeSystem("update", update)} done={`Updated ${system.name}`}
           onApplied={() => client.invalidateQueries({ queryKey: ["systems"] })}
           onClose={() => setReviewing(false)} />

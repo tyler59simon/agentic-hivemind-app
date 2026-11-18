@@ -68,7 +68,7 @@ function CreateProject({ onClose, onDone }: ProjectWizardProps) {
   });
 
   return (
-    <Modal title="New project" onClose={onClose} wide>
+    <Modal title="New project" onClose={onClose} wide locked={busy}>
       <form className="settings" onSubmit={(e) => { e.preventDefault(); setShown(true); if (!problems.length) create(); }}>
         <label className="field"><span>Name</span>
           <input autoFocus value={name} placeholder="Hivemind" onChange={(e) => setName(e.target.value)} /></label>
@@ -131,7 +131,7 @@ function EditProject({ project, onClose, onDone }: ProjectWizardProps & { projec
   });
 
   return (
-    <Modal title={`Edit ${project.name}`} onClose={onClose} wide>
+    <Modal title={`Edit ${project.name}`} onClose={onClose} wide locked={busy}>
       <form className="settings" onSubmit={(e) => { e.preventDefault(); if (change && !problems.length) save(); }}>
         <label className="field"><span>Name</span><input autoFocus value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label className="field"><span>Slug</span><input value={project.slug} readOnly disabled /></label>

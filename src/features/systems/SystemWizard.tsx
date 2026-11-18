@@ -90,7 +90,7 @@ function CreateSystem({ onClose, onDone }: SystemWizardProps) {
   });
 
   return (
-    <Modal title="New system" onClose={onClose} wide>
+    <Modal title="New system" onClose={onClose} wide locked={busy}>
       <form className="settings" onSubmit={(e) => { e.preventDefault(); setShown(true); if (!problems.length) create(); }}>
         <label className="field"><span>Name</span>
           <input autoFocus value={form.name} placeholder="Billing" onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
@@ -140,7 +140,7 @@ function EditSystem({ system, onClose, onDone }: SystemWizardProps & { system: S
   });
 
   return (
-    <Modal title={`Edit ${system.name}`} onClose={onClose} wide>
+    <Modal title={`Edit ${system.name}`} onClose={onClose} wide locked={busy}>
       <form className="settings" onSubmit={(e) => { e.preventDefault(); if (change && !problems.length) save(); }}>
         <label className="field"><span>Name</span><input autoFocus value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
         <label className="field"><span>Slug</span><input value={system.slug} readOnly disabled /></label>

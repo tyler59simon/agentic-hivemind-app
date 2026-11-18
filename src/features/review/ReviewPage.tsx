@@ -12,6 +12,7 @@ import { Markdown } from "../../ui/Markdown";
 import { ArrowLink, PageHeader, Tabs } from "../../ui/Page";
 import { changesQuery } from "../changes/useChanges";
 import { DirectDialog } from "../plans/DirectDialog";
+import { ProposedFields } from "../systems/ProposedFields";
 import { systemsForProject } from "../projects/scope";
 import { useCurrentProject, useProject } from "../projects/useProject";
 import { systemsQuery, useSystemProposals } from "../systems/useSystem";
@@ -275,7 +276,7 @@ export function ReviewPage() {
         )}
       {reviewing && (
         <DirectDialog title={`Update system ${reviewing.system.name}`} applyLabel="Update system"
-          intro={<p>These are the registry fields the agent proposed. Nothing changes until you apply them.</p>}
+          intro={<ProposedFields system={reviewing.system} update={reviewing.update} />}
           run={() => writeSystem("update", reviewing.update)} done={`Updated ${reviewing.system.name}`}
           onApplied={() => client.invalidateQueries({ queryKey: ["systems"] })}
           onClose={() => setReviewing(null)} />
