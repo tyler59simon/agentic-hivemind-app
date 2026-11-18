@@ -1,5 +1,5 @@
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { classify } from "../../lib/errors";
 import { isPlan, undo, type Receipt } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
@@ -41,17 +41,16 @@ export function useDirect() {
   const client = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const alive = useRef(true); // a late callback must not act for a form that is gone
-  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const go = async (write: () => Promise<Receipt>, onDone?: (receipt: Receipt) => void) => {
     setBusy(true);
     setError(null);
     try {
       const receipt = await write();
       await finishDirect(client, receipt);
-      if (alive.current) onDone?.(receipt);
+      onDone?.(receipt); // runs even when the refresh unmounted the form: the toast and the parent's cleanup still belong to this write
     } catch (e) {
-      if (alive.current) { setError(explain(e)); setBusy(false); }
+      setError(explain(e));
+      setBusy(false);
     }
   };
   return { busy, error, go };
