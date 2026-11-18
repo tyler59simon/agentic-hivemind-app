@@ -5,14 +5,13 @@ import { reviewFiles, reviewRefresh, sessionsQuery, type FileChange, type Sessio
 import { useChangesEnabled, useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { systemStaleness, type Staleness } from "../../lib/architecture";
 import { classify } from "../../lib/errors";
-import { list as listNotes, meta, review, systemPlan, type ReviewKind, type ReviewRow, type System, type SystemUpdate } from "../../lib/lm";
+import { list as listNotes, meta, review, writeSystem, type ReviewKind, type ReviewRow, type System, type SystemUpdate } from "../../lib/lm";
 import { openSession, openSystem, useApp } from "../../store";
 import { sections } from "../../lib/note";
 import { Markdown } from "../../ui/Markdown";
 import { ArrowLink, PageHeader, Tabs } from "../../ui/Page";
-import { toast } from "../../ui/toast";
 import { changesQuery } from "../changes/useChanges";
-import { PlanDialog } from "../plans/PlanDialog";
+import { DirectDialog } from "../plans/DirectDialog";
 import { systemsForProject } from "../projects/scope";
 import { useCurrentProject, useProject } from "../projects/useProject";
 import { systemsQuery, useSystemProposals } from "../systems/useSystem";
@@ -275,10 +274,10 @@ export function ReviewPage() {
           </>
         )}
       {reviewing && (
-        <PlanDialog title={`Update system ${reviewing.system.name}`} applyLabel="Update system"
-          intro={<p>These are the registry fields the agent proposed. Nothing changes until you apply the plan.</p>}
-          make={() => systemPlan("update", reviewing.update)}
-          onApplied={() => { client.invalidateQueries({ queryKey: ["systems"] }); toast(`Updated ${reviewing.system.name}`); }}
+        <DirectDialog title={`Update system ${reviewing.system.name}`} applyLabel="Update system"
+          intro={<p>These are the registry fields the agent proposed. Nothing changes until you apply them.</p>}
+          run={() => writeSystem("update", reviewing.update)} done={`Updated ${reviewing.system.name}`}
+          onApplied={() => client.invalidateQueries({ queryKey: ["systems"] })}
           onClose={() => setReviewing(null)} />
       )}
     </div>

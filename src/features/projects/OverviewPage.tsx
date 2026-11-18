@@ -6,7 +6,7 @@ import { reviewRefresh, sessionsQuery } from "../../lib/agent";
 import { useChangesEnabled, useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import type { RepoActivity } from "../../lib/git";
-import { list, openWork, projectPlan, review, type NoteRow, type Project } from "../../lib/lm";
+import { list, openWork, review, writeProject, type NoteRow, type Project } from "../../lib/lm";
 import { sections } from "../../lib/note";
 import { ago } from "../../lib/text";
 import { openChange, openSession, openSystem, startSession, useApp } from "../../store";
@@ -19,7 +19,7 @@ import { isEnded, sessionForNote, waitingForReview } from "../agents/session";
 import { briefState, engineName, topChange } from "../changes/changes";
 import { useChangeIntent } from "../changes/intent";
 import { startSessionFor, useChangeViews } from "../changes/useChanges";
-import { PlanDialog } from "../plans/PlanDialog";
+import { DirectDialog } from "../plans/DirectDialog";
 import { HoverPreview } from "../preview/HoverPreview";
 import { MiniDiagram } from "../systems/MiniDiagram";
 import { systemsQuery, useStaleness, useSystem } from "../systems/useSystem";
@@ -276,10 +276,10 @@ function ProjectOverview({ project }: { project: Project }) {
       {editing && <ProjectWizard mode="edit" project={project} onClose={() => setEditing(false)} />}
       {triage && <Triage project={project} onClose={() => setTriage(false)} />}
       {archiving && (
-        <PlanDialog title={`Archive ${project.name}`} applyLabel="Archive" danger
+        <DirectDialog title={`Archive ${project.name}`} applyLabel="Archive" danger
           intro={<p>The project is marked archived. Its notes and tag stay in place.</p>}
-          make={() => projectPlan("archive", { slug: project.slug })}
-          onApplied={() => { toast(`Archived ${project.name}`); setArchiving(false); }} onClose={() => setArchiving(false)} />
+          run={() => writeProject("archive", { slug: project.slug })} done={`Archived ${project.name}`}
+          onApplied={() => setArchiving(false)} onClose={() => setArchiving(false)} />
       )}
       {fallback !== null && (
         <Modal title="Briefing" wide onClose={() => setFallback(null)}>

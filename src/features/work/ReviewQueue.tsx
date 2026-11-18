@@ -1,13 +1,13 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { confirm, LmError, meta, plan, update, type ReviewRow } from "../../lib/lm";
+import { archiveNote, confirm, LmError, meta, resolveNote, update, type ReviewRow } from "../../lib/lm";
 import { classify } from "../../lib/errors";
 import { recordOperation } from "../../lib/oplog";
 import { shortDate } from "../../lib/text";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
 import { MergeComposer } from "../plans/MergeComposer";
-import { PlanDialog } from "../plans/PlanDialog";
+import { DirectDialog } from "../plans/DirectDialog";
 import { HoverPreview } from "../preview/HoverPreview";
 import { primaryAction } from "../review/worklist";
 import { snoozeDate } from "./work";
@@ -73,13 +73,14 @@ function ReviewItem({ row, snooze: snoozing = true }: { row: ReviewRow; snooze?:
         {primary.kind !== "archive" && <button disabled={busy} onClick={() => setDialog("archive")}>Archive…</button>}
       </div>
       {dialog === "archive" && (
-        <PlanDialog title={`Archive “${row.title}”`} make={() => plan("archive", row.ref)} applyLabel="Archive" danger
-          onApplied={done} onClose={() => setDialog(null)}
+        <DirectDialog title={`Archive “${row.title}”`} run={() => archiveNote(row.ref)} applyLabel="Archive" danger
+          done={`Archived “${row.title}”.`} onApplied={(r) => done(r.operation_id)} onClose={() => setDialog(null)}
           intro={<p>The note moves to the archive. Undoing this change restores it.</p>} />
       )}
       {dialog === "resolve" && (
-        <PlanDialog title={`Resolve “${row.title}”`} make={() => plan("resolve", row.ref)} applyLabel="Resolve"
-          onApplied={done} onClose={() => setDialog(null)} />
+        <DirectDialog title={`Resolve “${row.title}”`} run={() => resolveNote(row.ref)} applyLabel="Resolve"
+          done={`Resolved “${row.title}”.`} onApplied={(r) => done(r.operation_id)} onClose={() => setDialog(null)}
+          intro={<p>The note is marked resolved and moves to the archive.</p>} />
       )}
       {dialog === "merge" && row.pair && <MergeComposer source={row.pair} target={row} onClose={() => setDialog(null)} />}
     </div>

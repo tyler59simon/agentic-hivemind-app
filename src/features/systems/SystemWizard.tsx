@@ -1,19 +1,19 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useRef, useState } from "react";
-import { domains, systemPlan, systems, type System, type SystemStatus } from "../../lib/lm";
+import { useMemo, useState } from "react";
+import { domains, systems, writeSystem, type System, type SystemStatus } from "../../lib/lm";
 import { Modal } from "../../ui/Modal";
 import { useWorkspace } from "../../workspace/store";
-import { PlanDialog } from "../plans/PlanDialog";
+import { useDirect } from "../plans/DirectDialog";
 import { defaultCharterDomain, MAX_DESCRIPTION, parseRepos, slugify } from "../projects/wizard";
 import { changedSystem, formFields, formOf, passportBody, validateSystem, type SystemForm } from "./wizard";
 
 export interface SystemWizardProps {
-  /** "create" makes a system (registry entry, system/<slug> tag and passport note in one plan); "edit" updates the registry entry. */
+  /** "create" makes a system (registry entry, system/<slug> tag and passport note in one step); "edit" updates the registry entry. */
   mode: "create" | "edit";
   /** The system being edited (mode "edit"). */
   system?: System;
   onClose: () => void;
-  /** Called after the plan was applied. */
+  /** Called after the write. */
   onDone?: (slug: string, name: string) => void;
 }
 
@@ -67,9 +67,8 @@ function CreateSystem({ onClose, onDone }: SystemWizardProps) {
   const [boundaries, setBoundaries] = useState("");
   const [operations, setOperations] = useState("");
   const [guidance, setGuidance] = useState("");
-  const [review, setReview] = useState(false);
+  const { busy, error, go } = useDirect();
   const [shown, setShown] = useState(false); // show problems once the user tried to continue
-  const applied = useRef(false); // PlanDialog closes after apply and on cancel: cancel returns to the form
 
   const all = existing.data?.systems ?? [];
   const effectiveSlug = slugTouched ? slug : slugify(form.name);
@@ -84,26 +83,15 @@ function CreateSystem({ onClose, onDone }: SystemWizardProps) {
     passport: { domain: passportDomain, body: passportBody({ purpose: form.purpose, boundaries, operations, guidance }) },
   });
 
-  if (review) {
-    return (
-      <PlanDialog
-        title={`Create system ${form.name.trim()}`}
-        intro={<p>One plan adds the <code>system/{effectiveSlug}</code> tag, registers the system and creates its passport note. One undo from History reverses all three.</p>}
-        make={() => systemPlan("create", payload())}
-        applyLabel="Create system"
-        onApplied={() => {
-          applied.current = true;
-          ["systems", "taxonomy", "list", "domains"].forEach((k) => client.invalidateQueries({ queryKey: [k] }));
-          onDone?.(effectiveSlug, form.name.trim());
-        }}
-        onClose={() => (applied.current ? onClose() : setReview(false))}
-      />
-    );
-  }
+  const create = () => go(() => writeSystem("create", payload()), () => {
+    ["systems", "taxonomy", "list", "domains"].forEach((k) => client.invalidateQueries({ queryKey: [k] }));
+    onDone?.(effectiveSlug, form.name.trim());
+    onClose();
+  });
 
   return (
     <Modal title="New system" onClose={onClose} wide>
-      <form className="settings" onSubmit={(e) => { e.preventDefault(); setShown(true); if (!problems.length) setReview(true); }}>
+      <form className="settings" onSubmit={(e) => { e.preventDefault(); setShown(true); if (!problems.length) create(); }}>
         <label className="field"><span>Name</span>
           <input autoFocus value={form.name} placeholder="Billing" onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
         <label className="field"><span>Slug</span>
@@ -124,9 +112,10 @@ function CreateSystem({ onClose, onDone }: SystemWizardProps) {
           <textarea rows={2} value={guidance} onChange={(e) => setGuidance(e.target.value)} />
           <span className="muted small">The purpose above becomes the note's summary. Agents working on the system read this note.</span></label>
         {shown && problems.length > 0 && <div className="banner error"><ul>{problems.map((p) => <li key={p}>{p}</li>)}</ul></div>}
+        {error && <div className="banner error">{error}</div>}
         <div className="actions">
-          <button type="button" onClick={onClose}>Cancel</button>
-          <button className="primary" type="submit">Review plan…</button>
+          <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="primary" type="submit" disabled={busy}>{busy ? "Creating…" : "Create system"}</button>
         </div>
       </form>
     </Modal>
@@ -137,34 +126,22 @@ function EditSystem({ system, onClose, onDone }: SystemWizardProps & { system: S
   const client = useQueryClient();
   const existing = useQuery({ queryKey: ["systems", "any"], queryFn: () => systems({ status: "any" }) });
   const [form, setForm] = useState<SystemForm>(() => formOf(system));
-  const [review, setReview] = useState(false);
-  const applied = useRef(false); // PlanDialog closes after apply and on cancel: cancel returns to the form
+  const { busy, error, go } = useDirect();
 
   const problems = validateSystem(form);
   const change = changedSystem(system, form);
   // A dependency that was since retired stays listed so it can be unticked.
   const others = (existing.data?.systems ?? []).filter((s) => s.slug !== system.slug && (s.status !== "retired" || form.dependsOn.includes(s.slug)));
 
-  if (review && change) {
-    return (
-      <PlanDialog
-        title={`Update system ${system.name}`}
-        intro={<p>This changes the registry entry of the system only.</p>}
-        make={() => systemPlan("update", change)}
-        applyLabel="Update system"
-        onApplied={() => {
-          applied.current = true;
-          ["systems", "list", "architecture"].forEach((k) => client.invalidateQueries({ queryKey: [k] }));
-          onDone?.(system.slug, form.name.trim());
-        }}
-        onClose={() => (applied.current ? onClose() : setReview(false))}
-      />
-    );
-  }
+  const save = () => change && go(() => writeSystem("update", change), () => {
+    ["systems", "list", "architecture"].forEach((k) => client.invalidateQueries({ queryKey: [k] }));
+    onDone?.(system.slug, form.name.trim());
+    onClose();
+  });
 
   return (
     <Modal title={`Edit ${system.name}`} onClose={onClose} wide>
-      <form className="settings" onSubmit={(e) => { e.preventDefault(); if (change && !problems.length) setReview(true); }}>
+      <form className="settings" onSubmit={(e) => { e.preventDefault(); if (change && !problems.length) save(); }}>
         <label className="field"><span>Name</span><input autoFocus value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
         <label className="field"><span>Slug</span><input value={system.slug} readOnly disabled /></label>
         <Fields form={form} set={(patch) => setForm({ ...form, ...patch })} others={others} />
@@ -182,9 +159,10 @@ function EditSystem({ system, onClose, onDone }: SystemWizardProps & { system: S
           </div>
         </div>
         {problems.length > 0 && <div className="banner error"><ul>{problems.map((p) => <li key={p}>{p}</li>)}</ul></div>}
+        {error && <div className="banner error">{error}</div>}
         <div className="actions">
           <button type="button" onClick={onClose}>Cancel</button>
-          <button className="primary" type="submit" disabled={!change || problems.length > 0}>Review plan…</button>
+          <button className="primary" type="submit" disabled={!change || problems.length > 0 || busy}>{busy ? "Saving…" : "Update system"}</button>
         </div>
       </form>
     </Modal>

@@ -16,8 +16,10 @@ describe("activity", () => {
     const mine = new Set(["mine"]);
     expect(actorOf(op("update", [], "mine"), mine).label).toBe("You · Hivemind");
     expect(actorOf(op("overlay_auto_update"), mine).kind).toBe("obsidian");
-    expect(actorOf(op("archive"), mine).label).toBe("Approved plan");
+    expect(actorOf(op("merge"), mine).label).toBe("Approved plan");
+    expect(actorOf(op("archive"), mine).label).toBe("Agent or CLI");
     expect(actorOf(op("undo:abc"), mine).kind).toBe("plan");
+    expect(actorOf(op("undo:d-abc", [], "d-9"), mine).kind).toBe("agent"); // a direct undo is not a plan
     expect(actorOf(op("capture"), mine, "claude:3f2a9c1b0d4e").label).toBe("Claude");
     expect(actorOf(op("capture"), mine, "codex:aa").label).toBe("Codex");
     expect(actorOf(op("capture"), mine, "hivemind:local").kind).toBe("you");
@@ -39,6 +41,10 @@ describe("activity", () => {
     expect(dayLabel(new Date("2026-11-09T08:00:00").toISOString(), now)).toBe("Today");
     expect(dayLabel(new Date("2026-11-08T23:00:00").toISOString(), now)).toBe("Yesterday");
     expect(dayLabel(new Date("2026-11-01T08:00:00").toISOString(), now)).not.toMatch(/Today|Yesterday/);
+  });
+
+  it("labels a direct write by its ID, not its kind", () => {
+    expect(actorOf({ operation_id: "d-1", kind: "project_create" }, new Set()).label).toBe("Agent or CLI");
   });
 
   it("knows project plan kinds", () => {

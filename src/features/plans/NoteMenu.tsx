@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useChangesEnabled, useRestoreEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
-import { domainOf, plan, restoreNote } from "../../lib/lm";
+import { archiveNote, domainOf, plan, reopenNote, resolveNote, restoreNote, supersedeNote } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
 import { toast } from "../../ui/toast";
@@ -12,9 +12,10 @@ import { changesQuery } from "../changes/useChanges";
 import { noteQuery } from "../viewer/NoteView";
 import { MergeComposer } from "./MergeComposer";
 import { NotePicker } from "./NotePicker";
+import { DirectDialog } from "./DirectDialog";
 import { PlanDialog } from "./PlanDialog";
 
-/** Lifecycle actions for a note. Every one is a reviewed Living Memory plan. */
+/** Lifecycle actions for a note. Delete and merge are reviewed Living Memory plans; the rest are direct, journaled writes with Undo. */
 export function NoteMenu({ refId }: { refId: string }) {
   const note = useQuery(noteQuery(refId));
   const changesOn = useChangesEnabled();
@@ -46,17 +47,19 @@ export function NoteMenu({ refId }: { refId: string }) {
   const run = (node: ReactNode) => { setOpen(false); setDialog(node); };
   const items: { label: string; show: boolean; act: () => void; danger?: boolean }[] = [
     { label: "Archive…", show: n.status === "active", act: () => run(
-      <PlanDialog title={`Archive “${n.title}”`} make={() => plan("archive", refId)} applyLabel="Archive" onClose={close}
+      <DirectDialog title={`Archive “${n.title}”`} run={() => archiveNote(refId)} applyLabel="Archive" done={`Archived “${n.title}”.`} onClose={close}
         intro={<p>The note moves to the archive. It stays searchable with the archived filter and can be restored {restoreOn ? "from its page with Restore" : "by undoing this change"}.</p>} />) },
     { label: "Restore", show: restoreOn && n.status === "archived", act: restore },
     { label: "Resolve bug…", show: n.type === "bug" && n.status === "active", act: () => run(
-      <PlanDialog title={`Resolve “${n.title}”`} make={() => plan("resolve", refId)} applyLabel="Resolve" onClose={close} />) },
+      <DirectDialog title={`Resolve “${n.title}”`} run={() => resolveNote(refId)} applyLabel="Resolve" done={`Resolved “${n.title}”.`} onClose={close}
+        intro={<p>The bug is marked resolved and moves to the archive.</p>} />) },
     { label: "Reopen bug…", show: n.type === "bug" && n.status === "resolved", act: () => run(
-      <PlanDialog title={`Reopen “${n.title}”`} make={() => plan("reopen", refId)} applyLabel="Reopen" onClose={close} />) },
+      <DirectDialog title={`Reopen “${n.title}”`} run={() => reopenNote(refId)} applyLabel="Reopen" done={`Reopened “${n.title}”.`} onClose={close}
+        intro={<p>The bug becomes active again.</p>} />) },
     { label: "Superseded by…", show: n.status === "active", act: () => run(
       <NotePicker title="Which note replaces this one?" domain={n.domain} exclude={refId} onClose={close}
-        onPick={(t) => setDialog(<PlanDialog title={`“${t.title}” replaces “${n.title}”`} applyLabel="Supersede" onClose={close}
-          make={() => plan("supersede", refId, { superseded_by: t.id })}
+        onPick={(t) => setDialog(<DirectDialog title={`“${t.title}” replaces “${n.title}”`} applyLabel="Supersede" onClose={close}
+          run={() => supersedeNote(refId, t.id)} done={`Superseded “${n.title}”.`}
           intro={<p>“{n.title}” is marked superseded and moves to the archive; “{t.title}” records that it replaces it.</p>} />)} />) },
     { label: "Merge into…", show: n.status === "active", act: () => run(
       <NotePicker title="Merge this note into…" domain={n.domain} exclude={refId} onClose={close}

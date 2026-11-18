@@ -1,8 +1,10 @@
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState, type ReactNode } from "react";
-import { diff, list, meta, undo, type NoteRow, type Operation } from "../../lib/lm";
+import { diff, isPlan, list, meta, undo, type NoteRow, type Operation } from "../../lib/lm";
 import { myOperations } from "../../lib/oplog";
+import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
+import { explain, finishDirect } from "../plans/DirectDialog";
 import { DiffView, PlanDialog } from "../plans/PlanDialog";
 import { HoverPreview } from "../preview/HoverPreview";
 import { actorOf, dayLabel, noteIdsOf, serverActor, verbOf, type Actor } from "./activity";
@@ -39,6 +41,20 @@ export function OperationList({ ops, notes, actorFor, showNotes = true }: {
   const openNote = useWorkspace((s) => s.openNote);
   const [open, setOpen] = useState<string | null>(null);
   const [dialog, setDialog] = useState<ReactNode>(null);
+  const client = useQueryClient();
+  const undoOp = (op: Operation) => {
+    undo(op.operation_id)
+      .then(async (r) => {
+        if (isPlan(r)) {
+          setDialog(<PlanDialog title={`Undo: ${verbOf(op.kind)}`} make={() => Promise.resolve(r)} applyLabel="Undo"
+            intro={<p>This reverses the change below. It is refused if the files were edited again afterwards.</p>} onClose={() => setDialog(null)} />);
+          return;
+        }
+        await finishDirect(client, r);
+        toast(`Undid: ${verbOf(op.kind)}.`);
+      })
+      .catch((e) => toast(explain(e), "error"));
+  };
   let lastDay = "";
   return (
     <>
@@ -64,10 +80,9 @@ export function OperationList({ ops, notes, actorFor, showNotes = true }: {
               {showNotes && !touched.length && !op.files.some((f) => f.endsWith(".md")) && <span className="muted small">{op.files.filter((f) => !f.endsWith(".derived-dirty")).join(", ")}</span>}
               <span className="tabbar-fill" />
               <button className="ghost small" onClick={() => setOpen(open === op.operation_id ? null : op.operation_id)}>{open === op.operation_id ? "Hide changes" : "Changes"}</button>
-              <button className="ghost small" title="Make a plan that reverses this change, and review it first"
-                onClick={() => setDialog(<PlanDialog title={`Undo: ${verbOf(op.kind)}`} make={() => undo(op.operation_id)} applyLabel="Undo"
-                  intro={<p>This reverses the change below. It is refused if the files were edited again afterwards.</p>} onClose={() => setDialog(null)} />)}>
-                Undo…
+              <button className="ghost small" title="Reverse this change. It is refused if the files were edited again afterwards. A merge or delete opens a plan to review first."
+                onClick={() => undoOp(op)}>
+                Undo
               </button>
             </div>
             {open === op.operation_id && <OperationDiff id={op.operation_id} />}

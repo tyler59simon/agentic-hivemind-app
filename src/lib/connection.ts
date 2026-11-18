@@ -40,3 +40,6 @@ export const useRestoreEnabled = () => useConnection((s) => (s.capabilities?.res
 
 /** Pinning a note needs the `pin` capability. */
 export const usePinEnabled = () => useConnection((s) => (s.capabilities?.pin ?? 0) >= 1);
+
+/** Hivemind writes archive, project, system, change and taxonomy edits as direct commands, which an older Living Memory only has as plans. */
+export const needsLmUpdate = (v: { capabilities?: Capabilities }) => (v.capabilities?.direct_writes ?? 0) < 1;

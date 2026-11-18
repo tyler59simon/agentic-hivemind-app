@@ -1,21 +1,21 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useRef, useState } from "react";
-import { domains, projectPlan, projects, type Project, type ProjectStatus } from "../../lib/lm";
+import { useMemo, useState } from "react";
+import { domains, projects, writeProject, type Project, type ProjectStatus } from "../../lib/lm";
 import { Modal } from "../../ui/Modal";
 import { useWorkspace } from "../../workspace/store";
-import { PlanDialog } from "../plans/PlanDialog";
+import { useDirect } from "../plans/DirectDialog";
 import {
   changedProject, charterBody, defaultCharterDomain, parseAliases, parseRepos, slugify, validateCreate, validateEdit,
   MAX_DESCRIPTION,
 } from "./wizard";
 
 export interface ProjectWizardProps {
-  /** "create" makes a project (registry entry, project/<slug> tag and charter note in one plan); "edit" updates the registry entry. */
+  /** "create" makes a project (registry entry, project/<slug> tag and charter note in one step); "edit" updates the registry entry. */
   mode: "create" | "edit";
   /** The project being edited (mode "edit"). */
   project?: Project;
   onClose: () => void;
-  /** Called after the plan was applied, with the project's slug. */
+  /** Called after the write, with the project's slug. */
   onDone?: (slug: string) => void;
 }
 
@@ -39,8 +39,7 @@ function CreateProject({ onClose, onDone }: ProjectWizardProps) {
   const [objectives, setObjectives] = useState("");
   const [conventions, setConventions] = useState("");
   const [guidance, setGuidance] = useState("");
-  const [review, setReview] = useState(false);
-  const applied = useRef(false); // PlanDialog closes after apply and on cancel: cancel returns to the form
+  const { busy, error, go } = useDirect();
   const [shown, setShown] = useState(false); // show problems once the user tried to continue
 
   const parsedRepos = parseRepos(repos).repos;
@@ -62,26 +61,15 @@ function CreateProject({ onClose, onDone }: ProjectWizardProps) {
     };
   };
 
-  if (review) {
-    return (
-      <PlanDialog
-        title={`Create project ${name.trim()}`}
-        intro={<p>One plan adds the <code>project/{effectiveSlug}</code> tag, registers the project and creates its charter note. One undo from History reverses all three.</p>}
-        make={() => projectPlan("create", payload())}
-        applyLabel="Create project"
-        onApplied={() => {
-          applied.current = true;
-          ["projects", "taxonomy", "list", "domains"].forEach((k) => client.invalidateQueries({ queryKey: [k] }));
-          onDone?.(effectiveSlug);
-        }}
-        onClose={() => (applied.current ? onClose() : setReview(false))}
-      />
-    );
-  }
+  const create = () => go(() => writeProject("create", payload()), () => {
+    ["projects", "taxonomy", "list", "domains"].forEach((k) => client.invalidateQueries({ queryKey: [k] }));
+    onDone?.(effectiveSlug);
+    onClose();
+  });
 
   return (
     <Modal title="New project" onClose={onClose} wide>
-      <form className="settings" onSubmit={(e) => { e.preventDefault(); setShown(true); if (!problems.length) setReview(true); }}>
+      <form className="settings" onSubmit={(e) => { e.preventDefault(); setShown(true); if (!problems.length) create(); }}>
         <label className="field"><span>Name</span>
           <input autoFocus value={name} placeholder="Hivemind" onChange={(e) => setName(e.target.value)} /></label>
         <label className="field"><span>Slug</span>
@@ -113,9 +101,10 @@ function CreateProject({ onClose, onDone }: ProjectWizardProps) {
           <textarea rows={2} value={guidance} onChange={(e) => setGuidance(e.target.value)} />
           <span className="muted small">Agents working in the repositories of this project read the charter, so write what they should know and follow.</span></label>
         {shown && problems.length > 0 && <div className="banner error"><ul>{problems.map((p) => <li key={p}>{p}</li>)}</ul></div>}
+        {error && <div className="banner error">{error}</div>}
         <div className="actions">
-          <button type="button" onClick={onClose}>Cancel</button>
-          <button className="primary" type="submit">Review plan…</button>
+          <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="primary" type="submit" disabled={busy}>{busy ? "Creating…" : "Create project"}</button>
         </div>
       </form>
     </Modal>
@@ -129,33 +118,21 @@ function EditProject({ project, onClose, onDone }: ProjectWizardProps & { projec
   const [aliases, setAliases] = useState(project.aliases.join(", "));
   const [description, setDescription] = useState(project.description ?? "");
   const [status, setStatus] = useState<ProjectStatus>(project.status);
-  const [review, setReview] = useState(false);
-  const applied = useRef(false); // PlanDialog closes after apply and on cancel: cancel returns to the form
+  const { busy, error, go } = useDirect();
 
   const form = { name, repos, aliases, description, status };
   const problems = validateEdit(form);
   const change = changedProject(project, form);
 
-  if (review && change) {
-    return (
-      <PlanDialog
-        title={`Update project ${project.name}`}
-        intro={<p>This changes the registry entry of the project only.</p>}
-        make={() => projectPlan("update", change)}
-        applyLabel="Update project"
-        onApplied={() => {
-          applied.current = true;
-          ["projects", "taxonomy", "list"].forEach((k) => client.invalidateQueries({ queryKey: [k] }));
-          onDone?.(project.slug);
-        }}
-        onClose={() => (applied.current ? onClose() : setReview(false))}
-      />
-    );
-  }
+  const save = () => change && go(() => writeProject("update", change), () => {
+    ["projects", "taxonomy", "list"].forEach((k) => client.invalidateQueries({ queryKey: [k] }));
+    onDone?.(project.slug);
+    onClose();
+  });
 
   return (
     <Modal title={`Edit ${project.name}`} onClose={onClose} wide>
-      <form className="settings" onSubmit={(e) => { e.preventDefault(); if (change && !problems.length) setReview(true); }}>
+      <form className="settings" onSubmit={(e) => { e.preventDefault(); if (change && !problems.length) save(); }}>
         <label className="field"><span>Name</span><input autoFocus value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label className="field"><span>Slug</span><input value={project.slug} readOnly disabled /></label>
         <label className="field"><span>Repositories</span>
@@ -177,9 +154,10 @@ function EditProject({ project, onClose, onDone }: ProjectWizardProps & { projec
           </div>
         </div>
         {problems.length > 0 && <div className="banner error"><ul>{problems.map((p) => <li key={p}>{p}</li>)}</ul></div>}
+        {error && <div className="banner error">{error}</div>}
         <div className="actions">
-          <button type="button" onClick={onClose}>Cancel</button>
-          <button className="primary" type="submit" disabled={!change || problems.length > 0}>Review plan…</button>
+          <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="primary" type="submit" disabled={!change || problems.length > 0 || busy}>{busy ? "Saving…" : "Update project"}</button>
         </div>
       </form>
     </Modal>

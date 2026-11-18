@@ -14,7 +14,7 @@ import { appQuit, notifyTray, quitAck, termList } from "./lib/term";
 import { useAttentionEvents } from "./features/terminal/attention";
 import { QuitDialog } from "./features/terminal/QuitDialog";
 import { runningSummary } from "./features/terminal/running";
-import { useConnection } from "./lib/connection";
+import { needsLmUpdate, useConnection } from "./lib/connection";
 import { refreshStore } from "./lib/refresh";
 import { Shell } from "./shell/Shell";
 import { useApp } from "./store";
@@ -140,15 +140,17 @@ export default function App() {
   // The dialogs belong to every branch: tray Quit must show its dialog while Settings is open or the connection has failed.
   const dialogs = <>{closeGuard}{quitDialog}</>;
   if (link.isLoading) return <><main className="center muted">Connecting to Living Memory…</main>{dialogs}</>;
-  if (link.error || settings) {
+  const outdated = link.isSuccess && needsLmUpdate(link.data.version);
+  if (link.error || outdated || settings) {
     return (
       <>
         <main className="center">
           <div className="card">
             <h1 className="brand"><img src={logo} alt="" />Hivemind</h1>
             {link.error && <p className="error">{String(link.error)}</p>}
+            {outdated && <p className="error">This version of Living Memory is too old: Hivemind needs one with direct writes (<code>alm version</code> lists <code>direct_writes</code> under capabilities). Update Living Memory, then reconnect.</p>}
             <SettingsForm onSaved={reconnect} />
-            {link.isSuccess && <button className="link" onClick={() => setSettings(false)}>Back</button>}
+            {link.isSuccess && !outdated && <button className="link" onClick={() => setSettings(false)}>Back</button>}
           </div>
         </main>
         {dialogs}

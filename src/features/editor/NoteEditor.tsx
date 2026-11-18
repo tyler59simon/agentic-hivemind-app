@@ -3,14 +3,14 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { createPortal } from "react-dom";
 import { deleteDraft, getDraft, putDraft } from "../../lib/drafts";
 import { classify, type Problem } from "../../lib/errors";
-import { domainOf, read, taxonomy, taxonomyPlan, update } from "../../lib/lm";
+import { domainOf, read, taxonomy, taxonomyAdd, update } from "../../lib/lm";
 import { rewriteWikilinks } from "../../lib/note";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
 import { toast } from "../../ui/toast";
 import { useWorkspace, type Tab } from "../../workspace/store";
 import { useNoteLinks } from "../links/useLinks";
-import { PlanDialog } from "../plans/PlanDialog";
+import { DirectDialog } from "../plans/DirectDialog";
 import { noteQuery } from "../viewer/NoteView";
 import { MarkdownEditor } from "./MarkdownEditor";
 import { MergeDialog } from "./MergeDialog";
@@ -172,7 +172,7 @@ export function NoteEditor({ tab, live, head }: { tab: Tab; live: boolean; head:
   }, [ref, tax.data, client]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addTags = (tags: string[]) => setDialog(
-    <PlanDialog title="Add tags to the taxonomy" make={() => taxonomyPlan(tags)} applyLabel="Add tags"
+    <DirectDialog title="Add tags to the taxonomy" run={() => taxonomyAdd(tags)} applyLabel="Add tags"
       intro={<p>Living Memory only accepts registered tags. This adds {tags.join(", ")} to the taxonomy, then your note can be saved.</p>}
       onApplied={() => { client.invalidateQueries({ queryKey: ["taxonomy"] }); setBanner(null); }} onClose={() => setDialog(null)} />,
   );

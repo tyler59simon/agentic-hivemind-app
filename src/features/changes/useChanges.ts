@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { sessionsQuery } from "../../lib/agent";
 import { useChangesEnabled, useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
-import { applyPlan, changePlan, changes, links, list, LmError, review, type ChangeStage, type ChangesResult } from "../../lib/lm";
+import { changes, links, list, LmError, review, writeChange, type ChangeStage, type ChangesResult } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
 import { startSession, useApp } from "../../store";
 import { useSessionDraft } from "../agents/draft";
@@ -37,22 +37,18 @@ export function useChangeViews(): { enabled: boolean; query: UseQueryResult<Chan
   return { enabled, query, views };
 }
 
-/** Plan and apply a stage change at once (section 4.6). Resolves with the operation id; rejects without applying when the plan is not a stage-only, one-file update. */
+/** Move a change to another stage in one direct write (section 4.6). Resolves with the operation id; rejects without writing when the change has moved on since it was shown. */
 export async function moveStage(id: number, stage: ChangeStage, from: ChangeStage): Promise<string> {
   for (let attempt = 0; ; attempt++) {
-    // Someone else may have moved the change since it was shown (or since a stale apply): never overwrite that move.
+    // Someone else may have moved the change since it was shown (or since a stale write): never overwrite that move.
     const now = (await changes()).changes.find((c) => c.id === id);
-    if (now?.stage !== from) throw new Error(`${displayId(id)} is now at ${now ? STAGE_LABELS[now.stage] : "an unknown stage"}; nothing was applied.`);
-    const plan = await changePlan("update", { id, stage });
-    const s = plan.summary;
-    if (plan.kind !== "change_update" || s.id !== id || s.files !== 1 || s.fields.join() !== "stage")
-      throw new Error("Living Memory returned a plan that is not a stage-only update; nothing was applied.");
+    if (now?.stage !== from) throw new Error(`${displayId(id)} is now at ${now ? STAGE_LABELS[now.stage] : "an unknown stage"}; nothing was changed.`);
     try {
-      const done = await applyPlan(plan);
+      const done = await writeChange("update", { id, stage });
       recordOperation(done.operation_id);
       return done.operation_id;
     } catch (e) {
-      if (!(e instanceof LmError && e.stale) || attempt) throw e;   // one fresh plan after a stale apply
+      if (!(e instanceof LmError && e.stale) || attempt) throw e;   // one fresh read after a stale write
     }
   }
 }

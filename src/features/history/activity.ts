@@ -3,7 +3,9 @@
 import type { Operation } from "../../lib/lm";
 
 export const BOOKKEEPING = new Set(["overlay_state", "overlay_sync", "overlay_views", "bind_domain"]);
-const PLAN_KINDS = new Set(["rename", "retag", "archive", "resolve", "reopen", "delete", "merge", "bulk_retag",
+// Kinds that were plan-applied before direct writes (and still are for delete, merge, bulk retag, ...). A direct operation has an ID
+// starting with "d-" and is never labelled a plan, whatever its kind.
+const PLAN_KINDS = new Set(["delete", "merge", "bulk_retag",
   "reference_remap", "taxonomy_expansion", "ingest", "import", "restore", "schema_migration", "note_type_migration", "overlay_delete",
   "project_create", "project_update", "project_archive", "system_create", "system_update", "system_retire",
   "change_create", "change_update", "change_close"]);
@@ -42,7 +44,7 @@ const HARNESSES: Record<string, string> = { claude: "Claude", codex: "Codex", co
 export function actorOf(op: Pick<Operation, "operation_id" | "kind">, mine: Set<string>, origin?: string): Actor {
   if (mine.has(op.operation_id)) return { kind: "you", label: "You · Hivemind" };
   if (op.kind.startsWith("overlay_")) return { kind: "obsidian", label: "You · Obsidian" };
-  if (op.kind.startsWith("undo:") || PLAN_KINDS.has(op.kind)) return { kind: "plan", label: "Approved plan" };
+  if (!op.operation_id.startsWith("d-") && (op.kind.startsWith("undo:") || PLAN_KINDS.has(op.kind))) return { kind: "plan", label: "Approved plan" };
   if (op.kind.startsWith("capture") && origin) {
     const harness = origin.split(":")[0];
     if (harness === "hivemind") return { kind: "you", label: "Hivemind (another device)" };

@@ -23,7 +23,7 @@ export function primaryAction(row: Pick<ReviewRow, "action" | "pair">): Primary 
   switch (row.action) {
     case "update": return { kind: "open", label: "Open" };
     case "resolve": return { kind: "resolve", label: "Resolve…" };
-    case "archive-plan": return { kind: "archive", label: "Archive…" };
+    case "archive": return { kind: "archive", label: "Archive…" };
     case "merge-plan":
     case "supersede": return row.pair ? { kind: "merge", label: "Merge…" } : { kind: "open", label: "Open" };
     default: return { kind: "confirm", label: "Still true" };

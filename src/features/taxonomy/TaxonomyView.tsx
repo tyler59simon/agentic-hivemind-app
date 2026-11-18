@@ -1,10 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState, type ReactNode } from "react";
 import { classify } from "../../lib/errors";
-import { list, retagPlan, taxonomy, taxonomyPlan, type Plan } from "../../lib/lm";
+import { list, retagPlan, taxonomy, taxonomyAdd } from "../../lib/lm";
 import { Modal } from "../../ui/Modal";
 import { useApp } from "../../store";
 import { useWorkspace } from "../../workspace/store";
+import { finishDirect, undoToast } from "../plans/DirectDialog";
 import { PlanDialog } from "../plans/PlanDialog";
 import { facetsOf, parseTags, tagUsage, type TagUsage } from "./taxonomy";
 
@@ -35,6 +36,7 @@ export function TaxonomyView() {
   const tax = useQuery({ queryKey: ["taxonomy"], queryFn: taxonomy });
   const notes = useQuery({ queryKey: ["list", "*", "any"], queryFn: () => list({ allDomains: true, status: "any" }) });
   const usage = useMemo(() => tagUsage(tax.data?.tags ?? [], notes.data?.notes ?? [], facetsOf(tax.data)), [tax.data, notes.data]);
+  const client = useQueryClient();
   const [adding, setAdding] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [dialog, setDialog] = useState<ReactNode>(null);
@@ -43,22 +45,17 @@ export function TaxonomyView() {
   const facets = facetsOf(tax.data);
   const parsed = parseTags(adding, facets);
 
-  /** Make the taxonomy plan first so LM's "close match" warnings can be shown before review. */
+  /** Register tags in one direct write. LM reports close matches only after it wrote, so they go in the toast, which offers Undo. */
   const add = async (tags: string[]) => {
     setError(null);
     try {
-      const plan = await taxonomyPlan(tags);
-      const review = () => setDialog(<PlanDialog title="Add tags to the taxonomy" make={() => Promise.resolve(plan as Plan)} applyLabel="Add tags"
-        onApplied={() => setAdding("")} onClose={close} />);
-      const close_ = Object.entries(plan.summary.alternatives ?? {}).filter(([, alts]) => alts.length);
-      if (!close_.length) return review();
-      setDialog(
-        <Modal title="Similar tags already exist" onClose={close}>
-          <ul>{close_.map(([tag, alts]) => <li key={tag}><code>{tag}</code> is close to {alts.map((a) => <code key={a}>{a} </code>)}</li>)}</ul>
-          <p>Reusing an existing tag keeps search and filters tidy.</p>
-          <div className="actions"><button onClick={close}>Go back</button><button className="primary" onClick={review}>Add anyway…</button></div>
-        </Modal>,
-      );
+      const receipt = await taxonomyAdd(tags);
+      await finishDirect(client, receipt);
+      setAdding("");
+      const alternatives = (receipt.summary.alternatives ?? {}) as Record<string, string[]>;
+      const close_ = Object.entries(alternatives).filter(([, alts]) => alts.length);
+      const similar = close_.map(([tag, alts]) => `${tag} is close to ${alts.join(", ")}`).join("; ");
+      undoToast(client, `Added ${tags.join(", ")} to the taxonomy.${similar ? ` Similar tags exist: ${similar}.` : ""}`, receipt);
     } catch (e) { setError(classify(e).message); }
   };
 

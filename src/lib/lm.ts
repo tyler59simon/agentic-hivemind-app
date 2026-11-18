@@ -41,7 +41,7 @@ export async function run<T>(argv: string[], stdin?: string): Promise<T> {
 const view = (argv: string[]) => [...argv, "--actor", "viewer"];
 
 /** What `version` reports under `capabilities`. */
-export interface Capabilities { history?: number; restore?: number; pin?: number; maintenance?: { version: number; actions: string[] } }
+export interface Capabilities { direct_writes?: number; history?: number; restore?: number; pin?: number; maintenance?: { version: number; actions: string[] } }
 
 export interface ConnectInfo {
   version: { api: number; python: string; commands: string[]; capabilities?: Capabilities };
@@ -179,23 +179,35 @@ export const confirm = (ref: string) =>
 export const setDetail = (ref: string, text: string, expectedRevision?: string) =>
   run<WriteResult>(["update", ref, "--domain", domainOf(ref), "--set-detail", text, ...(expectedRevision ? ["--expected-revision", expectedRevision] : [])]);
 
-// ---- Plans: make, inspect (as a diff), apply with the digest. ----
+// ---- Direct writes: one journaled step, no plan. The receipt names the operation, so it can be undone. ----
+
+export interface Receipt { ok: true; operation_id: string; state: string; kind: string; summary: Record<string, unknown>; undo: string; warnings?: string[] }
+
+const direct = (argv: string[], payload?: object) => run<Receipt>(argv, payload ? JSON.stringify(payload) : undefined);
+
+export const archiveNote = (ref: string) => direct(["archive", ref, "--domain", domainOf(ref)]);
+export const resolveNote = (ref: string) => direct(["resolve", ref, "--domain", domainOf(ref)]);
+export const reopenNote = (ref: string) => direct(["reopen", ref, "--domain", domainOf(ref)]);
+/** `by` is the ID or ref of a note in the same domain. */
+export const supersedeNote = (ref: string, by: string) => direct(["supersede", ref, "--by", by, "--domain", domainOf(ref)]);
+export const taxonomyAdd = (tags: string[]) => direct(["taxonomy", "add", ...tags]);
+
+// ---- Plans (delete, merge, bulk retag and the kept kinds): make, inspect (as a diff), apply with the digest. ----
 
 export interface Plan { ok: true; plan_id: string; digest: string; kind: string; summary: Record<string, unknown> }
 export interface PlanEffect { path: string; expected_revision: string | null; action: "write" | "delete"; diff: string; truncated: boolean }
 export interface PlanInspection extends Plan { effects: PlanEffect[] }
-export type PlanAction = "archive" | "delete" | "resolve" | "reopen" | "rename" | "retag" | "update" | "supersede";
+export type PlanAction = "delete";
 
-export function plan(action: PlanAction, ref: string, payload?: object): Promise<Plan> {
-  const argv = ["plan", action, ref, "--domain", domainOf(ref)];
-  return run<Plan>(argv, payload ? JSON.stringify(payload) : undefined);
+export function plan(action: PlanAction, ref: string): Promise<Plan> {
+  return run<Plan>(["plan", action, ref, "--domain", domainOf(ref)]);
 }
 export const mergePlan = (payload: { target: string; sources: string[]; body: string }) =>
   run<Plan>(["merge-plan"], JSON.stringify(payload));
 export const retagPlan = (renames: Record<string, string>) => run<Plan>(["retag-plan"], JSON.stringify(renames));
-export const taxonomyPlan = (tags: string[]) =>
-  run<Plan & { summary: { added: string[]; alternatives: Record<string, string[]> } }>(["taxonomy-plan", ...tags]);
-export const undo = (operationId: string) => run<Plan>(["undo", operationId]);
+/** Undoing a direct write returns a receipt at once; an operation of a kept plan kind (merge, delete, ...) returns a plan. */
+export const undo = (operationId: string) => run<Receipt | Plan>(["undo", operationId]);
+export const isPlan = (r: Receipt | Plan): r is Plan => "plan_id" in r;
 export const inspectPlan = (planId: string) => run<PlanInspection>(view(["inspect-plan", planId]));
 export const applyPlan = (p: Pick<Plan, "plan_id" | "digest">) =>
   run<{ ok: true; operation_id: string; state: string; idempotent: boolean; warnings?: string[] }>(
@@ -234,8 +246,8 @@ export interface ProjectUpdate {
   slug: string; name?: string; repos?: string[]; aliases?: string[]; description?: string;
   status?: ProjectStatus; charter?: string;
 }
-export const projectPlan = (action: "create" | "update" | "archive", payload: ProjectCreate | ProjectUpdate | { slug: string }) =>
-  run<Plan>(["project-plan", action], JSON.stringify(payload));
+export const writeProject = (action: "create" | "update" | "archive", payload: ProjectCreate | ProjectUpdate | { slug: string }) =>
+  direct(["project", action], payload);
 
 interface ScopeOptions { domain?: string; allDomains?: boolean; tags?: string[]; limit?: number; kind?: string[] }
 function scopeArgs(name: string, o: ScopeOptions): string[] {
@@ -261,7 +273,7 @@ export interface ReviewRow {
 }
 export const REVIEW_KINDS = ["stale", "due", "interim", "duplicate", "warned", "noisy"] as const;
 export type ReviewKind = (typeof REVIEW_KINDS)[number];
-export type ReviewAction = "confirm" | "update" | "supersede" | "resolve" | "merge-plan" | "archive-plan";
+export type ReviewAction = "confirm" | "update" | "supersede" | "resolve" | "merge-plan" | "archive";
 export interface ReviewResult {
   ok: boolean; domain: string | null; due: number; notes: ReviewRow[]; hint?: string;
   counts?: Record<ReviewKind, number>;
@@ -336,8 +348,8 @@ export interface SystemUpdate {
   slug: string; name?: string; description?: string; status?: SystemStatus; owners?: string[]; capabilities?: string[];
   repos?: string[]; depends_on?: string[]; architecture?: string | null; passport?: string;
 }
-export const systemPlan = (action: "create" | "update" | "retire", payload: SystemCreate | SystemUpdate | { slug: string }) =>
-  run<Plan>(["system-plan", action], JSON.stringify(payload));
+export const writeSystem = (action: "create" | "update" | "retire", payload: SystemCreate | SystemUpdate | { slug: string }) =>
+  direct(["system", action], payload);
 
 // ---- Changes (an LM that has the `changes` command). ----
 
@@ -371,17 +383,17 @@ export interface ChangeUpdate {
   repo?: string | null; branch?: string | null; system?: string | null; element?: string | null;
 }
 export interface ChangeClose { id: number | string; status?: "done" | "cancelled" }
-export interface ChangePlanSummary {
+export interface ChangeSummary {
   id: number; display: string; title: string; fields: string[]; files: number;
   brief?: string; adopted?: boolean; brief_action?: "resolve" | "reopen" | null;
 }
-export type ChangePlan = Plan & { summary: ChangePlanSummary };
+export type ChangeReceipt = Receipt & { summary: ChangeSummary };
 
 export const changesArgs = (o: { status?: ChangeStatus | "any"; project?: string } = {}) =>
   view(["changes", ...(o.status ? ["--status", o.status] : []), ...(o.project ? ["--project", o.project] : [])]);
 export const changes = (o: { status?: ChangeStatus | "any"; project?: string } = {}) => run<ChangesResult>(changesArgs(o));
-export const changePlan = (action: "create" | "update" | "close", payload: ChangeCreate | ChangeUpdate | ChangeClose) =>
-  run<ChangePlan>(["change-plan", action], JSON.stringify(payload));
+export const writeChange = (action: "create" | "update" | "close", payload: ChangeCreate | ChangeUpdate | ChangeClose) =>
+  direct(["change", action], payload) as Promise<ChangeReceipt>;
 /** Append one open Action Item; the rest of the body is kept. */
 export const addAction = (ref: string, text: string) =>
   run<WriteResult>(["update", ref, "--domain", domainOf(ref), "--add-action", text]);

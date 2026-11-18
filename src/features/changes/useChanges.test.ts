@@ -9,7 +9,7 @@ afterEach(() => setTransport(invoke as Invoke));
 
 const ok = (result: unknown) => ({ exit_code: 0, result, error: null });
 const registry = (stage: string) => ok({ ok: true, warnings: [], changes: [{ id: 14, stage, status: "active" }] });
-const stagePlan = ok({ ok: true, plan_id: "p", digest: "d", kind: "change_update", summary: { id: 14, display: "CHG-014", title: "T", fields: ["stage"], files: 1 } });
+const stageReceipt = ok({ ok: true, operation_id: "d-1", state: "committed", kind: "change_update", summary: { id: 14, display: "CHG-014", title: "T", fields: ["stage"], files: 1 }, undo: "undo d-1" });
 
 /** Answers each Living Memory command from its own queue and records the commands sent. */
 function script(replies: Record<string, unknown[]>) {
@@ -25,18 +25,23 @@ function script(replies: Record<string, unknown[]>) {
 describe("moveStage", () => {
   it("applies nothing when the change has moved since it was shown", async () => {
     const sent = script({ changes: [registry("implement")] });
-    await expect(moveStage(14, "design", "explore")).rejects.toThrow("CHG-014 is now at Implement; nothing was applied.");
+    await expect(moveStage(14, "design", "explore")).rejects.toThrow("CHG-014 is now at Implement; nothing was changed.");
     expect(sent).toEqual(["changes"]);
   });
 
-  it("does not retry over a move made while the first plan was open", async () => {
+  it("writes the stage in one direct change update", async () => {
+    const sent = script({ changes: [registry("explore")], change: [stageReceipt] });
+    await expect(moveStage(14, "design", "explore")).resolves.toBe("d-1");
+    expect(sent).toEqual(["changes", "change"]);
+  });
+
+  it("does not retry over a move made after a stale write", async () => {
     const sent = script({
       changes: [registry("explore"), registry("implement")],
-      "change-plan": [stagePlan],
-      apply: [{ exit_code: 6, result: null, error: { code: "stale", message: "Stale revision: changes.json" } }],
+      change: [{ exit_code: 6, result: null, error: { code: "stale", message: "Stale revision: changes.json" } }],
     });
     await expect(moveStage(14, "design", "explore")).rejects.toThrow("now at Implement");
-    expect(sent).toEqual(["changes", "change-plan", "apply", "changes"]);
+    expect(sent).toEqual(["changes", "change", "changes"]);
   });
 });
 

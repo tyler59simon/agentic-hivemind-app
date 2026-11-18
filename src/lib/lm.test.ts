@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { LmError, addAction, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, setPin, changePlan, changesArgs, list, listArgs, logArgs, openArgs, projectPlan, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setDetail, setTransport, systemPlan, systemsArgs, timelineArgs, wikiModel, type Invoke } from "./lm";
+import { LmError, addAction, archiveNote, isPlan, supersedeNote, taxonomyAdd, undo, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, setPin, writeChange, changesArgs, list, listArgs, logArgs, openArgs, writeProject, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setDetail, setTransport, writeSystem, systemsArgs, timelineArgs, wikiModel, type Invoke } from "./lm";
 
 afterEach(() => setTransport(invoke as Invoke));
 
@@ -66,31 +66,43 @@ describe("run", () => {
     expect(timelineArgs({})).toEqual(["timeline", "--actor", "viewer"]);
   });
 
-  it("project-plan is a write: stdin payload, no viewer flag", async () => {
+  it("project is a direct write: stdin payload, no viewer flag", async () => {
     const calls = fake({ exit_code: 0, result: { ok: true }, error: null });
-    await projectPlan("archive", { slug: "hive" });
-    expect(calls[0]).toEqual(["lm", { argv: ["project-plan", "archive"], stdin: JSON.stringify({ slug: "hive" }) }]);
+    await writeProject("archive", { slug: "hive" });
+    expect(calls[0]).toEqual(["lm", { argv: ["project", "archive"], stdin: JSON.stringify({ slug: "hive" }) }]);
     const read = fake({ exit_code: 0, result: { ok: true, projects: [], warnings: [] }, error: null });
     await projects({ status: "active" });
     expect((read[0] as [string, { argv: string[] }])[1].argv).toEqual(["projects", "--status", "active", "--actor", "viewer"]);
   });
 
-  it("system-plan is a write and systems is a viewer read", async () => {
+  it("system is a direct write and systems is a viewer read", async () => {
     const calls = fake({ exit_code: 0, result: { ok: true }, error: null });
-    await systemPlan("retire", { slug: "billing" });
-    expect(calls[0]).toEqual(["lm", { argv: ["system-plan", "retire"], stdin: JSON.stringify({ slug: "billing" }) }]);
+    await writeSystem("retire", { slug: "billing" });
+    expect(calls[0]).toEqual(["lm", { argv: ["system", "retire"], stdin: JSON.stringify({ slug: "billing" }) }]);
     expect(systemsArgs({ status: "active" })).toEqual(["systems", "--status", "active", "--actor", "viewer"]);
     expect(systemsArgs()).toEqual(["systems", "--actor", "viewer"]);
   });
 
-  it("changes read as viewer and change plans carry the payload", async () => {
+  it("changes read as viewer and change writes carry the payload", async () => {
     expect(changesArgs()).toEqual(["changes", "--actor", "viewer"]);
     expect(changesArgs({ status: "active", project: "paystream" })).toEqual(["changes", "--status", "active", "--project", "paystream", "--actor", "viewer"]);
     const calls = fake({ exit_code: 0, result: { ok: true }, error: null });
-    await changePlan("update", { id: 14, stage: "design" });
-    expect(calls[0]).toEqual(["lm", { argv: ["change-plan", "update"], stdin: '{"id":14,"stage":"design"}' }]);
+    await writeChange("update", { id: 14, stage: "design" });
+    expect(calls[0]).toEqual(["lm", { argv: ["change", "update"], stdin: '{"id":14,"stage":"design"}' }]);
     await addAction("demo:abc", "Ship it");
     expect(calls[1]).toEqual(["lm", { argv: ["update", "demo:abc", "--domain", "demo", "--add-action", "Ship it"], stdin: null }]);
+  });
+
+  it("lifecycle and taxonomy writes are direct commands, and undo may return a plan", async () => {
+    const calls = fake({ exit_code: 0, result: { ok: true, operation_id: "d-1" }, error: null });
+    await archiveNote("demo:abc");
+    await supersedeNote("demo:abc", "xyz");
+    await taxonomyAdd(["concern/security"]);
+    expect(calls.map((c) => (c as [string, { argv: string[] }])[1].argv)).toEqual([
+      ["archive", "demo:abc", "--domain", "demo"], ["supersede", "demo:abc", "--by", "xyz", "--domain", "demo"], ["taxonomy", "add", "concern/security"]]);
+    expect(isPlan(await undo("op"))).toBe(false);
+    fake({ exit_code: 0, result: { ok: true, plan_id: "p", digest: "d", kind: "undo", summary: {} }, error: null });
+    expect(isPlan(await undo("op"))).toBe(true);
   });
 
   it("log reads as viewer and only sends the filters given", () => {

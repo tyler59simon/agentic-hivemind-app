@@ -4,7 +4,7 @@ import { useState, type FormEvent } from "react";
 import { useChangesEnabled, useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import {
-  addAction, changePlan, check, LmError, read, setDetail, STAGES, update,
+  addAction, check, LmError, read, setDetail, STAGES, update, writeChange,
   type Change, type ChangeStage, type Note,
 } from "../../lib/lm";
 import { actionItems, addEvidence, evidenceItems, sections, setEvidence, stepParts, wikilinks } from "../../lib/note";
@@ -19,7 +19,7 @@ import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
 import { isEnded, waitingForReview } from "../agents/session";
 import { noteLinks } from "../links/useLinks";
-import { PlanDialog } from "../plans/PlanDialog";
+import { DirectDialog } from "../plans/DirectDialog";
 import { useAllLinks } from "../projects/useProject";
 import { MiniDiagram } from "../systems/MiniDiagram";
 import { useSystem } from "../systems/useSystem";
@@ -236,11 +236,11 @@ function ChangeMenu({ change }: { change: Change }) {
   const [plan, setPlan] = useState<"done" | "cancel" | "reopen" | null>(null);
   const active = change.status === "active";
   const dialog = {
-    done: { title: `Mark ${change.display} as done`, label: "Mark as done", danger: false, make: () => changePlan("close", { id: change.id }),
+    done: { title: `Mark ${change.display} as done`, label: "Mark as done", danger: false, run: () => writeChange("close", { id: change.id }), done: `Marked ${change.display} as done.`,
       intro: "The change is marked done and its brief is resolved: it leaves open work and moves to the archive. Reopen the change to bring both back." },
-    cancel: { title: `Cancel ${change.display}`, label: "Cancel change", danger: true, make: () => changePlan("close", { id: change.id, status: "cancelled" }),
+    cancel: { title: `Cancel ${change.display}`, label: "Cancel change", danger: true, run: () => writeChange("close", { id: change.id, status: "cancelled" }), done: `Cancelled ${change.display}.`,
       intro: "The change is marked cancelled and its brief is resolved. Its number is not reused." },
-    reopen: { title: `Reopen ${change.display}`, label: "Reopen", danger: false, make: () => changePlan("update", { id: change.id, status: "active" }),
+    reopen: { title: `Reopen ${change.display}`, label: "Reopen", danger: false, run: () => writeChange("update", { id: change.id, status: "active" }), done: `Reopened ${change.display}.`,
       intro: "The change becomes active again and its brief is reopened." },
   };
   const d = plan && dialog[plan];
@@ -260,7 +260,7 @@ function ChangeMenu({ change }: { change: Change }) {
           );
         }}
       </Menu>
-      {d && <PlanDialog title={d.title} make={d.make} applyLabel={d.label} danger={d.danger} intro={<p>{d.intro}</p>} onClose={() => setPlan(null)} />}
+      {d && <DirectDialog title={d.title} run={d.run} done={d.done} applyLabel={d.label} danger={d.danger} intro={<p>{d.intro}</p>} onClose={() => setPlan(null)} />}
     </>
   );
 }

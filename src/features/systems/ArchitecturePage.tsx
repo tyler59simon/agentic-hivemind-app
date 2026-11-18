@@ -5,7 +5,7 @@ import { agentAvailable, agentStart } from "../../lib/agent";
 import type { ArchModel, Staleness } from "../../lib/architecture";
 import { useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
-import { systemPlan, type NoteRow, type System } from "../../lib/lm";
+import { writeSystem, type NoteRow, type System } from "../../lib/lm";
 import { sections } from "../../lib/note";
 import { refreshStore } from "../../lib/refresh";
 import { shortDate } from "../../lib/text";
@@ -17,7 +17,7 @@ import { ArrowLink, dayMonth, PageHeader, Section, Split } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
 import { useSessionDraft } from "../agents/draft";
-import { PlanDialog } from "../plans/PlanDialog";
+import { DirectDialog } from "../plans/DirectDialog";
 import { NoteLink } from "../preview/NoteLink";
 import { systemsForProject } from "../projects/scope";
 import { useCurrentProject } from "../projects/useProject";
@@ -116,10 +116,10 @@ function AgentActions({ system, all }: { system: System; all: System[] }) {
         </div>
       )}
       {reviewing && update && (
-        <PlanDialog title={`Update system ${system.name}`} applyLabel="Update system"
-          intro={<p>These are the registry fields the agent proposed. Nothing changes until you apply the plan.</p>}
-          make={() => systemPlan("update", update)}
-          onApplied={() => { client.invalidateQueries({ queryKey: ["systems"] }); toast(`Updated ${system.name}`); }}
+        <DirectDialog title={`Update system ${system.name}`} applyLabel="Update system"
+          intro={<p>These are the registry fields the agent proposed. Nothing changes until you apply them.</p>}
+          run={() => writeSystem("update", update)} done={`Updated ${system.name}`}
+          onApplied={() => client.invalidateQueries({ queryKey: ["systems"] })}
           onClose={() => setReviewing(false)} />
       )}
       {fallback !== null && (
@@ -425,10 +425,10 @@ function SystemView({ system, all }: { system: System; all: System[] }) {
       </Split>
       {editing && <SystemWizard mode="edit" system={system} onClose={() => setEditing(false)} />}
       {retiring && (
-        <PlanDialog title={`Retire ${system.name}`} applyLabel="Retire" danger
+        <DirectDialog title={`Retire ${system.name}`} applyLabel="Retire" danger
           intro={<p>The system is marked retired. Its notes, tag and architecture folder stay in place.</p>}
-          make={() => systemPlan("retire", { slug: system.slug })}
-          onApplied={() => { toast(`Retired ${system.name}`); setRetiring(false); }} onClose={() => setRetiring(false)} />
+          run={() => writeSystem("retire", { slug: system.slug })} done={`Retired ${system.name}`}
+          onApplied={() => setRetiring(false)} onClose={() => setRetiring(false)} />
       )}
     </>
   );

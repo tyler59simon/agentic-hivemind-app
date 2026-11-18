@@ -2,14 +2,14 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { deleteDraft, getDraft, putDraft } from "../../lib/drafts";
 import { classify } from "../../lib/errors";
-import { capture, domains, NOTE_TYPES, taxonomy, taxonomyPlan, type CapturePayload, type NoteType } from "../../lib/lm";
+import { capture, domains, NOTE_TYPES, taxonomy, taxonomyAdd, type CapturePayload, type NoteType } from "../../lib/lm";
 import { defaultTags, template } from "../../lib/note";
 import { recordOperation } from "../../lib/oplog";
 import { useApp } from "../../store";
 import { Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 import { useWorkspace, type Tab } from "../../workspace/store";
-import { PlanDialog } from "../plans/PlanDialog";
+import { DirectDialog } from "../plans/DirectDialog";
 import { mergeTags } from "../projects/wizard";
 import { MarkdownEditor } from "./MarkdownEditor";
 import { ProblemBanner } from "./NoteEditor";
@@ -105,7 +105,8 @@ export function NewNote({ tab }: { tab: Tab }) {
   };
 
   const addTags = (tags: string[]) => setDialog(
-    <PlanDialog title="Add tags to the taxonomy" make={() => taxonomyPlan(tags)} applyLabel="Add tags" onClose={() => setDialog(null)}
+    <DirectDialog title="Add tags to the taxonomy" run={() => taxonomyAdd(tags)} applyLabel="Add tags" onClose={() => setDialog(null)}
+      intro={<p>Living Memory only accepts registered tags. This adds {tags.join(", ")} to the taxonomy, then your note can be saved.</p>}
       onApplied={() => { client.invalidateQueries({ queryKey: ["taxonomy"] }); setBanner(null); }} />,
   );
 

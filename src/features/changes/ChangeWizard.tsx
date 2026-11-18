@@ -1,12 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { systemArchitecture } from "../../lib/architecture";
 import { useChangesEnabled, useSystemsEnabled } from "../../lib/connection";
-import { changePlan, STAGES, type ChangePlan, type ChangeStage } from "../../lib/lm";
+import { STAGES, writeChange, type ChangeReceipt, type ChangeStage } from "../../lib/lm";
 import { useApp } from "../../store";
 import { Modal } from "../../ui/Modal";
 import { repoName } from "../agents/session";
-import { PlanDialog } from "../plans/PlanDialog";
+import { useDirect } from "../plans/DirectDialog";
 import { systemsForProject } from "../projects/scope";
 import { projectsQuery } from "../projects/useProject";
 import { ownContainers } from "../systems/diagram";
@@ -40,9 +40,7 @@ function ChangeWizard({ form, onClose }: { form: ChangeForm; onClose: () => void
     const base = { ...EMPTY, project: p?.slug ?? "", repo: p?.repos[0] ?? "" };
     return form.mode === "adopt" ? { ...base, title: form.title } : base;
   });
-  const [review, setReview] = useState(false);
-  const applied = useRef(false); // PlanDialog closes after apply and on cancel: cancel returns to the form
-  const made = useRef<number | null>(null); // the id from the plan summary; final only once applied
+  const { busy, error, go: write } = useDirect();
   const [shown, setShown] = useState(false); // show problems once the user tried to continue
   const set = (patch: Partial<ChangeFields>) => setFields((f) => ({ ...f, ...patch }));
 
@@ -64,35 +62,15 @@ function ChangeWizard({ form, onClose }: { form: ChangeForm; onClose: () => void
   const elements = ownContainers(arch.data?.model ?? null);
   const problems = validateChange(fields, form.mode);
   const update = form.mode === "edit" ? changedChange(form.change, fields) : null;
-  const keep = (p: ChangePlan) => { made.current = p.summary.id; return p; };
 
-  if (review) {
-    const dialog = {
-      create: {
-        title: `Start change: ${fields.title.trim()}`, applyLabel: "Start change", make: () => changePlan("create", createPayload(fields)).then(keep),
-        intro: "One plan gives the change the next free number, registers it and creates its brief (a plan note). One undo from History reverses both, as long as neither was edited since.",
-      },
-      adopt: {
-        title: `Adopt “${form.mode === "adopt" ? form.title : ""}” as a change`, applyLabel: "Adopt as change",
-        make: () => changePlan("create", createPayload(fields, form.mode === "adopt" ? form.ref : undefined)).then(keep),
-        intro: "One plan gives the change the next free number and registers it with this note as its brief. The note keeps its title and text; it gains the project tag if it lacks it.",
-      },
-      edit: {
-        title: `Update ${form.mode === "edit" ? displayId(form.change.id) : ""}`, applyLabel: "Update change",
-        make: () => changePlan("update", update!), intro: "This changes the registry entry of the change only.",
-      },
-    }[form.mode];
-    return (
-      <PlanDialog
-        title={dialog.title} intro={<p>{dialog.intro}</p>} make={dialog.make} applyLabel={dialog.applyLabel}
-        onApplied={() => {
-          applied.current = true;
-          if (form.mode !== "edit") go({ page: "changes", id: made.current!, view: "detail" });
-        }}
-        onClose={() => (applied.current ? onClose() : setReview(false))}
-      />
-    );
-  }
+  const submit = () => {
+    const send = form.mode === "edit" ? () => writeChange("update", update!)
+      : () => writeChange("create", createPayload(fields, form.mode === "adopt" ? form.ref : undefined));
+    return write(send, (receipt) => {
+      onClose();
+      if (form.mode !== "edit") go({ page: "changes", id: (receipt as ChangeReceipt).summary.id, view: "detail" });
+    });
+  };
 
   const edit = form.mode === "edit";
   const title = form.mode === "create" ? "Start a change" : form.mode === "adopt" ? "Adopt as change" : `Edit ${displayId(form.change.id)}`;
@@ -100,7 +78,7 @@ function ChangeWizard({ form, onClose }: { form: ChangeForm; onClose: () => void
     <Modal title={title} onClose={onClose} wide>
       <form className="settings" onSubmit={(e) => {
         e.preventDefault(); setShown(true);
-        if (!problems.length && (!edit || update)) setReview(true);
+        if (!problems.length && (!edit || update)) submit();
       }}>
         {form.mode === "adopt" && <p className="muted">Brief: {form.title}</p>}
         <label className="field"><span>Project</span>
@@ -157,9 +135,11 @@ function ChangeWizard({ form, onClose }: { form: ChangeForm; onClose: () => void
           </>
         )}
         {shown && problems.length > 0 && <div className="banner error"><ul>{problems.map((p) => <li key={p}>{p}</li>)}</ul></div>}
+        {error && <div className="banner error">{error}</div>}
         <div className="actions">
-          <button type="button" onClick={onClose}>Cancel</button>
-          <button className="primary" type="submit" disabled={edit && (!update || problems.length > 0)}>Review plan…</button>
+          <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="primary" type="submit" disabled={busy || (edit && (!update || problems.length > 0))}>
+            {busy ? "Working…" : form.mode === "create" ? "Start change" : form.mode === "adopt" ? "Adopt as change" : "Update change"}</button>
         </div>
       </form>
     </Modal>
