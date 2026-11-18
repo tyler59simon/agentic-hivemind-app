@@ -382,7 +382,8 @@ def main():
         lm("resolve", refs["plan_review"], "--domain", "paystream")
     lm("archive", refs["archived"], "--domain", "paystream")
     lm("update", refs["risk"], "--domain", "paystream", "--pin")  # one pinned note for the Pin toggle
-    lm("update", refs["oncall"], "--domain", "paystream", "--rule")  # one rule note for the Rule toggle
+    if lm("version").get("capabilities", {}).get("rule", 0) >= 1:  # LM releases before rule notes refuse --rule
+        lm("update", refs["oncall"], "--domain", "paystream", "--rule")  # one rule note for the Rule toggle
     today = date.today()
     lm("update", refs["map"], "--domain", "paystream", "--review-by", (today - timedelta(days=12)).isoformat())
     lm("update", refs["risk"], "--domain", "paystream", "--review-by", (today - timedelta(days=3)).isoformat())
