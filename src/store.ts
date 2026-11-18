@@ -13,6 +13,7 @@ export type Route =
   | { page: "architecture"; system?: string }
   | { page: "dashboards"; ref?: string }
   | { page: "memory"; view?: "notes" | "graph" | "activity" | "history" | "tags"; q?: string }
+  | { page: "wiki"; domain?: string; at?: string }
   | { page: "recap" }
   | { page: "maintenance" }
   | { page: "review"; session?: string; file?: string };

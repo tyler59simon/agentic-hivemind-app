@@ -568,6 +568,44 @@ async fn folder_pick(app: AppHandle, state: State<'_, AppState>) -> Result<Optio
     .await
 }
 
+/// The `wiki` argv that writes the page to `path`. It runs as the main actor: a viewer may not write files.
+fn wiki_export_argv(domain: &str, path: &str, archived: bool) -> Vec<String> {
+    let mut argv: Vec<String> = ["wiki", "--domain", domain, "--out", path].map(String::from).into();
+    if archived {
+        argv.push("--archived".into());
+    }
+    argv
+}
+
+/// The save dialog's suggested name: the domain with anything but letters, digits, `-`, `_` and `.` replaced.
+fn wiki_file_name(domain: &str) -> String {
+    let safe: String = domain.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '_' }).collect();
+    format!("{safe}-wiki.html")
+}
+
+/// Export a domain's wiki as one HTML file. A native save dialog picks the path (so the webview never supplies one), Living Memory
+/// writes the file, and it opens in the default browser. None when the dialog was cancelled.
+#[tauri::command]
+async fn wiki_export(app: AppHandle, state: State<'_, AppState>, domain: String, archived: bool) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    use tauri_plugin_opener::OpenerExt;
+    let bridge = state.bridge.clone();
+    blocking(move || {
+        let Some(picked) = app.dialog().file().add_filter("HTML page", &["html"]).set_file_name(wiki_file_name(&domain)).blocking_save_file() else {
+            return Ok(None);
+        };
+        let path = picked.into_path().map_err(|e| e.to_string())?.to_string_lossy().into_owned();
+        let reply = bridge.call(&wiki_export_argv(&domain, &path, archived), None)?;
+        if reply.exit_code != 0 {
+            let message = reply.error.get("message").and_then(Value::as_str).map(String::from);
+            return Err(message.unwrap_or_else(|| format!("Living Memory exited with code {}", reply.exit_code)));
+        }
+        app.opener().open_path(&path, None::<&str>).map_err(|e| format!("Saved {path}, but could not open it: {e}"))?;
+        Ok(Some(path))
+    })
+    .await
+}
+
 /// Take a folder out of the remembered list.
 #[tauri::command]
 async fn folder_forget(state: State<'_, AppState>, path: String) -> Result<(), String> {
@@ -713,7 +751,7 @@ pub fn run() {
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, repo_branches,
             agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_stop_and_approve, review_request_changes, review_request_terminal_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
-            system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status
+            system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
@@ -749,5 +787,15 @@ mod tests {
         let missing = engine_info(agent::Engine::Codex, Err(NO_CODEX.to_string()));
         assert_eq!(missing.path, None);
         assert_eq!(missing.error.as_deref(), Some(NO_CODEX));
+    }
+
+    #[test]
+    fn wiki_export_runs_as_main_and_writes_to_the_chosen_path() {
+        assert_eq!(wiki_export_argv("demo", "C:/x/demo-wiki.html", false), ["wiki", "--domain", "demo", "--out", "C:/x/demo-wiki.html"]);
+        let archived = wiki_export_argv("demo", "p.html", true);
+        assert_eq!(archived.last().map(String::as_str), Some("--archived"));
+        assert!(!archived.iter().any(|a| a == "--actor"));
+        assert_eq!(wiki_file_name("sandbox"), "sandbox-wiki.html");
+        assert_eq!(wiki_file_name("a b/c"), "a_b_c-wiki.html");
     }
 }

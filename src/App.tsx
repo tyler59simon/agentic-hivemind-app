@@ -106,6 +106,7 @@ function useLiveRefresh(enabled: boolean) {
         client.invalidateQueries({ queryKey: ["log"] });
         client.invalidateQueries({ queryKey: ["recap"] });
         client.invalidateQueries({ queryKey: ["maintenance"] });
+        client.invalidateQueries({ queryKey: ["wiki"] }); // projects.json and bindings decide the wiki's projects and folders
       }),
       listen("agent-sessions-changed", () => client.invalidateQueries({ queryKey: ["agent", "sessions"] })),
       listen<{ ref: string }>("open-note", (e) => useWorkspace.getState().openNote(e.payload.ref)),

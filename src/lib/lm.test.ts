@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { LmError, addAction, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, setPin, changePlan, changesArgs, list, listArgs, logArgs, openArgs, projectPlan, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setDetail, setTransport, systemPlan, systemsArgs, timelineArgs, type Invoke } from "./lm";
+import { LmError, addAction, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, setPin, changePlan, changesArgs, list, listArgs, logArgs, openArgs, projectPlan, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setDetail, setTransport, systemPlan, systemsArgs, timelineArgs, wikiModel, type Invoke } from "./lm";
 
 afterEach(() => setTransport(invoke as Invoke));
 
@@ -133,5 +133,16 @@ describe("maintenance, restore and pin argv", () => {
     expect(argvOf(calls, 3)).toEqual(["restore", "demo:abc", "--domain", "demo"]);
     expect(argvOf(calls, 4)).toEqual(["update", "demo:abc", "--domain", "demo", "--pin"]);
     expect(argvOf(calls, 5)).toEqual(["update", "demo:abc", "--domain", "demo", "--unpin"]);
+  });
+});
+
+describe("wiki", () => {
+  const argvOf = (calls: unknown[], i = 0) => (calls[i] as [string, { argv: string[] }])[1].argv;
+  it("reads the model as viewer, and asks for retired notes only when told", async () => {
+    const calls = fake({ exit_code: 0, result: { ok: true, model: { domain: "demo" } }, error: null });
+    await expect(wikiModel("demo")).resolves.toEqual({ domain: "demo" });
+    await wikiModel("demo", { archived: true });
+    expect(argvOf(calls, 0)).toEqual(["wiki", "--format", "json", "--domain", "demo", "--actor", "viewer"]);
+    expect(argvOf(calls, 1)).toEqual(["wiki", "--format", "json", "--domain", "demo", "--archived", "--actor", "viewer"]);
   });
 });

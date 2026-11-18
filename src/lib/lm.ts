@@ -483,3 +483,27 @@ export const maintenanceDisable = () => run<MaintenanceStatus & { operation_id?:
 /** Bring an archived note back to active; LM pins it so maintenance does not retire it again at once. */
 export const restoreNote = (ref: string) => run<WriteResult>(["restore", ref, "--domain", domainOf(ref)]);
 export const setPin = (ref: string, on: boolean) => run<WriteResult>(["update", ref, "--domain", domainOf(ref), on ? "--pin" : "--unpin"]);
+
+/** The domain wiki (`wiki --format json`): every note as an article, grouped into projects, sections and a code-folder tree.
+ *  Notes carry their id; `ref` is the 8-character prefix used in page addresses; folder ids are `c-` plus a hash of project and path, stable across rebuilds. */
+export interface WikiNote {
+  id: string; ref: string; title: string; type: string; status: string; retired?: boolean; tags: string[]; files: string[];
+  updated: string; created: string; lead: string; body: string; out: string[]; backlinks: string[];
+  project: string; section: string; folder: string | null; filename: string | null;
+}
+export interface WikiProject {
+  slug: string; name: string; description: string; aliases: string[]; repos: string[]; status: string; charter: string | null;
+  /** Per section key: its note ids, or for `code` its root folder ids. */
+  sections: Record<string, { notes?: string[]; folders?: string[]; count: number }>;
+  count: number; updated: string; briefs: string[]; maps: string[];
+}
+export interface WikiFolder { id: string; project: string; name: string; path: string; parent: string | null; folders: string[]; notes: string[]; count: number }
+export interface WikiSection { key: string; label: string; blurb: string }
+export interface WikiModel {
+  domain: string; generated: string; renderer: number; archived: boolean;
+  notes: WikiNote[]; projects: WikiProject[]; folders: WikiFolder[]; sections: WikiSection[];
+  /** Notes in other domains that this domain's links name, by casefolded title. */
+  external: Record<string, { title: string; domain: string }>;
+}
+export const wikiModel = (domain: string, o: { archived?: boolean } = {}) =>
+  run<{ ok: boolean; model: WikiModel }>(view(["wiki", "--format", "json", "--domain", domain, ...(o.archived ? ["--archived"] : [])])).then((r) => r.model);
