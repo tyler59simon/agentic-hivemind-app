@@ -7,6 +7,7 @@ pub mod codex;
 pub mod direct;
 pub mod events;
 pub mod models;
+pub mod roles;
 pub mod scope;
 pub mod store;
 
@@ -17,6 +18,7 @@ use crate::term::launch::Cli;
 use crate::worktree::{self, ChangedFiles, FileChange, Totals, Worktree};
 use direct::Direct;
 use events::{Decision, Mode, Outcome, RunEvent, SeqEvent, Status, TurnEnd};
+use roles::{Profile, Role, Verdict};
 use scope::{AgentTask, PolicyMode, Scope, Spec};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -45,6 +47,7 @@ const MAX_OUTPUT: usize = 400_000; // characters of one tool result that `tool_o
 const RESERVED: &str = "A review action is running for this session";
 const BUSY: &str = "This session is busy";
 const ALREADY_RESERVED: &str = "A review action is already running for this session";
+const SUMMARY: usize = 2000; // characters of a final reply a session keeps as its summary
 
 /// Which coding-agent CLI a session uses. `SessionInfo.adapter` stores the adapter's name; this is the same fact as a type.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -221,6 +224,19 @@ pub struct SessionInfo {
     /// The CLI's own id for the conversation, when Hivemind cannot choose it (Codex's thread id).
     #[serde(default)]
     pub engine_session: Option<String>,
+    // Engineering workspace
+    /// The role the session was started in; None for a plain session.
+    #[serde(default)]
+    pub role: Option<Role>,
+    /// The permission profile of a session in a role; it decides the rules again when the session resumes.
+    #[serde(default)]
+    pub profile: Option<Profile>,
+    /// The `## Summary` of the last turn's final reply (or the reply itself), at most `SUMMARY` characters.
+    #[serde(default)]
+    pub summary: Option<String>,
+    /// A reviewer's or tester's conclusion from its last turn.
+    #[serde(default)]
+    pub verdict: Option<Verdict>,
 }
 
 /// What the user decided about a work session's edits.
@@ -298,6 +314,15 @@ pub struct StartOptions {
     /// The user ticked the box that starts a session whose settings never ask.
     #[serde(default)]
     pub confirmed_risky: bool,
+    /// Chat only: the role to start the session in. Its preamble goes before the briefing.
+    #[serde(default)]
+    pub role: Option<Role>,
+    /// Chat only: the permission profile; None takes the role's own.
+    #[serde(default)]
+    pub profile: Option<Profile>,
+    /// Chat only, with a role: nobody answers prompts, so whatever the profile does not allow is refused.
+    #[serde(default)]
+    pub unattended: bool,
 }
 
 /// Where a work session runs.
@@ -341,6 +366,30 @@ pub struct SessionLog {
 pub enum Emit {
     Event(SeqEvent),
     SessionsChanged,
+    Lifecycle(Lifecycle),
+}
+
+/// What happened to a session, for the parts of Hivemind that act on it: notifications, workflows, automations and the
+/// learning reviewer. Sent after the session list has been saved, so a listener reads the new state.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Lifecycle {
+    /// An interactive session finished a turn; `ok` when it completed rather than failed, stopped or ran out of budget.
+    TurnEnded { id: String, ok: bool },
+    /// A session is waiting for the user to answer a permission prompt.
+    Waiting { id: String },
+    /// A session reached an end state.
+    Finished { id: String, status: Status },
+    /// The user's review decision about a session's edits changed.
+    Reviewed { id: String, state: ReviewState },
+}
+
+impl Lifecycle {
+    /// The session the report is about.
+    pub fn id(&self) -> &str {
+        match self {
+            Lifecycle::TurnEnded { id, .. } | Lifecycle::Waiting { id } | Lifecycle::Finished { id, .. } | Lifecycle::Reviewed { id, .. } => id,
+        }
+    }
 }
 
 /// Holds one session for a review action. While it lives, nothing else may start a turn in the session, end it or remove
@@ -599,6 +648,10 @@ fn session_info(id: &str, adapter: &str, task: AgentTask, scope: &Scope, options
         access: None,
         effort: None,
         engine_session: None,
+        role: options.role.filter(|_| interactive),
+        profile: options.profile.or(options.role.map(Role::profile)).filter(|_| interactive),
+        summary: None,
+        verdict: None,
     }
 }
 
@@ -868,6 +921,8 @@ impl Manager {
                     close(&mut session.info, at, &event);
                 }
                 let _ = inner.persist(&mut sessions);
+                drop(sessions);
+                (inner.sink)(Emit::Lifecycle(Lifecycle::Finished { id: id.to_string(), status: Status::Ended }));
             }
         }
         let tree = inner.sessions.lock().unwrap().get(id).and_then(|session| session.info.worktree.clone());
@@ -1026,11 +1081,16 @@ impl Manager {
         if let Some(refusal) = refusal.filter(|_| session.reserved) {
             return Err(refusal.to_string());
         }
+        let before = session.info.review.as_ref().map(|review| review.state);
         change(&mut session.info);
         let info = session.info.clone();
         let saved = inner.persist(&mut sessions);
         drop(sessions);
         (inner.sink)(Emit::SessionsChanged);
+        let after = info.review.as_ref().map(|review| review.state);
+        if let Some(state) = after.filter(|after| Some(*after) != before) {
+            (inner.sink)(Emit::Lifecycle(Lifecycle::Reviewed { id: id.to_string(), state }));
+        }
         saved.map_err(|e| format!("Could not save the session list: {e}"))?;
         Ok(info)
     }
@@ -1050,6 +1110,12 @@ impl Manager {
             return Ok(ToolOutput { text, ok, truncated: false });
         }
         Ok(ToolOutput { text: text.chars().skip(length - MAX_OUTPUT).collect(), ok, truncated: true })
+    }
+
+    /// The process id of every chat session that has a process now.
+    pub fn pids(&self) -> Vec<(String, u32)> {
+        let sessions = self.inner.sessions.lock().unwrap();
+        sessions.iter().filter_map(|(id, session)| session.live.as_ref().map(|live| (id.clone(), live.child.lock().unwrap().id()))).collect()
     }
 
     /// Whether a review action holds the session.
@@ -1337,7 +1403,7 @@ impl Inner {
             let at = now_ms();
             let mut sessions = self.sessions.lock().unwrap();
             let step = self.record(&mut sessions, id, at, Record::Raw { at, raw: line.to_string() });
-            let (mut changed, mut kill_it, mut answer) = (false, false, None);
+            let (mut changed, mut kill_it, mut answer, mut waiting) = (false, false, None, false);
             if let Some(session) = sessions.get_mut(id) {
                 for event in &step.events {
                     match event {
@@ -1357,7 +1423,7 @@ impl Inner {
                                 live.pending.insert(request_id.clone(), line.to_string());
                             }
                             session.info.status = Status::Waiting;
-                            changed = true;
+                            (changed, waiting) = (true, true);
                         }
                         RunEvent::ApprovalResolved { request_id, .. } if interactive => {
                             if let Some(live) = &mut session.live {
@@ -1389,6 +1455,9 @@ impl Inner {
             drop(sessions);
             if changed {
                 (self.sink)(Emit::SessionsChanged);
+            }
+            if waiting {
+                (self.sink)(Emit::Lifecycle(Lifecycle::Waiting { id: id.to_string() }));
             }
             if kill_it {
                 kill(child);
@@ -1430,7 +1499,7 @@ impl Inner {
             _ => None,
         });
         let head = passport.as_ref().and_then(|(_, repo, _)| repo.as_ref()).and_then(|repo| crate::git::head_sha(Path::new(repo)).ok());
-        let mut succeeded = false;
+        let (mut succeeded, mut lifecycle) = (false, None);
 
         let mut sessions = self.sessions.lock().unwrap();
         let at = now_ms();
@@ -1449,6 +1518,7 @@ impl Inner {
             self.record(&mut sessions, id, at, Record::Event { at, event: event.clone() });
             if let Some(session) = sessions.get_mut(id) {
                 close(&mut session.info, at, &event);
+                lifecycle = Some(Lifecycle::Finished { id: id.to_string(), status: session.info.status });
                 succeeded = session.info.status == Status::Succeeded;
                 if succeeded {
                     session.info.source_sha = head.clone();
@@ -1469,6 +1539,7 @@ impl Inner {
             if let Some(session) = sessions.get_mut(id) {
                 session.info.status = Status::Idle;
             }
+            lifecycle = Some(Lifecycle::TurnEnded { id: id.to_string(), ok: false });
         }
         let _ = self.persist(&mut sessions);
         drop(sessions);
@@ -1477,6 +1548,9 @@ impl Inner {
             let _ = crate::architecture::save_snapshot(&crate::architecture::snapshots_root(&self.dir), slug, id, at, head.as_deref(), Path::new(folder));
         }
         (self.sink)(Emit::SessionsChanged);
+        if let Some(lifecycle) = lifecycle {
+            (self.sink)(Emit::Lifecycle(lifecycle));
+        }
     }
 
     /// Close a session's process input: the process leaves, and a message waits for a new one.
@@ -1507,6 +1581,9 @@ impl Inner {
             TurnEnd::Error
         };
         let reason = if matches!(how, TurnEnd::Completed | TurnEnd::Stopped) { None } else { outcome.reason };
+        let ok = how == TurnEnd::Completed;
+        let summary = outcome.result.as_deref().filter(|text| !text.trim().is_empty()).map(|text| roles::summary(text, SUMMARY));
+        let verdict = outcome.result.as_deref().and_then(roles::verdict);
         let event = RunEvent::TurnFinished {
             ok: outcome.ok,
             reason,
@@ -1522,6 +1599,12 @@ impl Inner {
             info.cost_usd = outcome.cost_usd.or(info.cost_usd);
             info.turns += 1;
             info.status = Status::Idle;
+            if summary.is_some() {
+                info.summary = summary;
+            }
+            if info.role.is_some_and(Role::gives_verdict) {
+                info.verdict = verdict;
+            }
             if let Some(live) = &mut session.live {
                 live.pending.clear();
                 live.interrupted = false;
@@ -1531,12 +1614,22 @@ impl Inner {
         let _ = self.persist(&mut sessions);
         drop(sessions);
         (self.sink)(Emit::SessionsChanged);
+        (self.sink)(Emit::Lifecycle(Lifecycle::TurnEnded { id: id.to_string(), ok }));
     }
 }
 
 /// Refuse a model, effort or permission setting the engine does not have; a terminal session gets its access resolved.
 /// A chat session takes none of the terminal's settings, and a system passport keeps the model check it always had.
 fn check_launch_options(saved: &Settings, mut options: StartOptions) -> Result<StartOptions, String> {
+    if options.role.is_some() || options.profile.is_some() || options.unattended {
+        if options.interface == Interface::Terminal {
+            return Err("Roles and permission profiles are for chat sessions.".into());
+        }
+        let profile = options.profile.or(options.role.map(Role::profile)).ok_or("An unattended session needs a role or a permission profile.")?;
+        if options.engine == Engine::Codex && options.unattended && profile == Profile::EditWorktree {
+            return Err("Codex cannot edit files without asking in an unattended session; run it attended or use Claude Code.".into());
+        }
+    }
     if options.interface == Interface::Terminal {
         // Codex's list comes from running Codex, so it is only asked for when there is something to check.
         if options.model.is_some() || options.effort.is_some() {
@@ -1554,6 +1647,16 @@ fn check_launch_options(saved: &Settings, mut options: StartOptions) -> Result<S
         }
     }
     Ok(options)
+}
+
+/// Put the role's preamble before the briefing, so the first message reads: preamble, briefing, task.
+fn with_preamble(options: StartOptions) -> StartOptions {
+    let Some(role) = options.role else { return options };
+    let briefing = match options.briefing.as_deref().filter(|text| !text.trim().is_empty()) {
+        Some(briefing) => format!("{}\n\n{briefing}", role.preamble()),
+        None => role.preamble(),
+    };
+    StartOptions { briefing: Some(briefing), ..options }
 }
 
 /// The program a chat session of `engine` runs: Claude Code's executable, or Codex's with the arguments that go before `app-server`.
@@ -1672,7 +1775,13 @@ pub fn start_task(
         return start_direct(manager, terminals, &id, task.clone(), &repo, prompt, &options);
     }
     let tree = worktree::create(worktrees, &repo, branch.as_deref(), &id)?;
-    let started = scope::work(tree.clone(), policy, prompt).and_then(|mut scope| {
+    let profile = options.profile.or(options.role.map(Role::profile));
+    let scope = match profile {
+        Some(profile) => scope::work_as(tree.clone(), profile, !options.unattended, &saved.allowed_commands(project), prompt),
+        None => scope::work(tree.clone(), policy, prompt),
+    };
+    let options = with_preamble(options);
+    let started = scope.and_then(|mut scope| {
         if !terminal {
             return manager.start(id.clone(), task.clone(), launch(scope), prompt, &options);
         }
@@ -1742,7 +1851,7 @@ pub fn send_task(
         |info| {
             let cli = chat_program(Engine::of(&info.adapter), saved)?;
             Ok(Launch {
-                scope: scope::for_session(bridge, info)?,
+                scope: scope::for_session(bridge, saved, info)?,
                 program: cli.program,
                 program_args: cli.args,
                 budget_usd: saved.agent_budget_usd(),
@@ -2537,6 +2646,86 @@ mod tests {
         assert!(text(&lines[0]).contains("Project briefing") && text(&lines[0]).ends_with("Fix the bug"), "{}", text(&lines[0]));
         assert_eq!(text(&lines[1]), "again");
     }
+
+    fn lifecycle(seen: &Seen, id: &str) -> Vec<Lifecycle> {
+        seen.lock().unwrap().iter().filter_map(|emit| if let Emit::Lifecycle(report) = emit { Some(report.clone()) } else { None }).filter(|r| r.id() == id).collect()
+    }
+
+    #[test]
+    fn a_role_session_keeps_its_summary_and_verdict_and_reports_its_turn() {
+        const VERDICT_RESULT: &str = r#"{"type":"result","subtype":"success","is_error":false,"num_turns":2,"total_cost_usd":0.01,"result":"Read the diff.\n## Summary\nNo bugs found.\nVerdict: pass"}"#;
+        let rig = Rig::scripted("role-turn", &[&["<", INIT, VERDICT_RESULT, "<"]]);
+        let options = StartOptions { role: Some(Role::Reviewer), briefing: Some("Project briefing".into()), ..Default::default() };
+        let options = with_preamble(options);
+        let mut scope = rig.scope(None);
+        scope.policy = Policy::PreApproved { allow: vec!["Read".into()] };
+        let started = rig.manager.start(new_id(), work_task(), rig.launch(scope), "Review the retry", &options).unwrap();
+        assert_eq!((started.role, started.profile, started.policy), (Some(Role::Reviewer), Some(Profile::ReadOnly), PolicyMode::PreApproved));
+        rig.turns(&started.id, 1);
+        let info = rig.info(&started.id);
+        assert_eq!((info.summary.as_deref(), info.verdict), (Some("No bugs found.\nVerdict: pass"), Some(Verdict::Pass)));
+        let text = rig.stdin_lines(&started.id)[0]["message"]["content"][0]["text"].as_str().unwrap().to_string();
+        assert!(text.starts_with("Role: Reviewer") && text.contains("Project briefing") && text.ends_with("Review the retry"), "{text}");
+        let start = Instant::now();
+        while lifecycle(&rig.seen, &started.id).is_empty() {
+            assert!(start.elapsed() < Duration::from_secs(20));
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(lifecycle(&rig.seen, &started.id), vec![Lifecycle::TurnEnded { id: started.id.clone(), ok: true }]);
+
+        rig.manager.amend(&started.id, |info| info.review = Some(Review { state: ReviewState::Approved, commit: None, at: 1 })).unwrap();
+        rig.manager.amend(&started.id, |info| info.name = Some("again".into())).unwrap();
+        let reviewed = lifecycle(&rig.seen, &started.id);
+        assert_eq!(reviewed.last(), Some(&Lifecycle::Reviewed { id: started.id.clone(), state: ReviewState::Approved }));
+        assert_eq!(reviewed.len(), 2, "a change that leaves the review alone reports nothing");
+    }
+
+    #[test]
+    fn a_plain_session_has_no_role_and_no_verdict() {
+        let rig = Rig::scripted("plain-turn", &[&["<", INIT, TEXT, RESULT, "<"]]);
+        let started = rig.begin();
+        rig.turns(&started.id, 1);
+        let info = rig.info(&started.id);
+        assert_eq!((info.role, info.profile, info.verdict, info.summary.as_deref()), (None, None, None, Some("Done.")));
+        assert_eq!(rig.manager.pids().len(), 1, "the idle process still runs");
+    }
+
+    #[test]
+    fn roles_are_checked_with_the_engine_and_interface() {
+        let saved = Settings::default();
+        let options = |engine, interface, unattended| StartOptions {
+            engine,
+            interface,
+            role: Some(Role::Developer),
+            unattended,
+            model: None,
+            ..Default::default()
+        };
+        let terminal = check_launch_options(&saved, options(Engine::Claude, Interface::Terminal, false)).unwrap_err();
+        assert_eq!(terminal, "Roles and permission profiles are for chat sessions.");
+        let codex = check_launch_options(&saved, options(Engine::Codex, Interface::Chat, true)).unwrap_err();
+        assert!(codex.starts_with("Codex cannot edit files without asking"), "{codex}");
+        let bare = StartOptions { unattended: true, ..Default::default() };
+        assert_eq!(check_launch_options(&saved, bare).unwrap_err(), "An unattended session needs a role or a permission profile.");
+    }
+
+    #[test]
+    fn a_role_puts_its_preamble_first() {
+        let options = with_preamble(StartOptions { role: Some(Role::Architect), ..Default::default() });
+        assert_eq!(options.briefing, Some(Role::Architect.preamble()));
+        let options = with_preamble(StartOptions { role: Some(Role::Tester), briefing: Some("Brief".into()), ..Default::default() });
+        assert_eq!(options.briefing, Some(format!("{}\n\nBrief", Role::Tester.preamble())));
+        assert_eq!(with_preamble(StartOptions::default()).briefing, None);
+    }
+
+    #[test]
+    fn an_index_from_before_roles_still_loads() {
+        let old = json!({"id": "x", "adapter": "claude-code", "cliVersion": null, "task": {"kind": "work", "project": "p", "repo": "r"},
+            "title": "t", "workspace": [], "status": "idle", "startedAt": 1, "endedAt": null, "costUsd": null, "error": null, "structured": null});
+        let info: SessionInfo = serde_json::from_value(old).unwrap();
+        assert_eq!((info.role, info.profile, info.summary, info.verdict), (None, None, None, None));
+    }
+
     #[test]
     fn send_is_refused_while_a_turn_runs() {
         let rig = Rig::scripted("busy", &[&["<", INIT, "<"]]);
@@ -3124,6 +3313,10 @@ mod tests {
             access: None,
             effort: None,
             engine_session: None,
+            role: None,
+            profile: None,
+            summary: None,
+            verdict: None,
         }
     }
 
@@ -3267,7 +3460,7 @@ mod tests {
         assert_eq!(status(&repo), before, "the user's folder is unchanged");
         assert_eq!(std::fs::read_dir(rig.dir.join("worktrees")).unwrap().count(), worktrees_before, "no worktree was made");
         let scope = scope::direct(&repo, PolicyMode::Ask, String::new()).unwrap();
-        assert_eq!((scope.cwd, scope.worktree, scope.deny), (repo.clone(), None, scope::governed_rules()));
+        assert_eq!((scope.cwd, scope.worktree, scope.deny), (repo.clone(), None, scope::deny_rules()));
     }
 
     #[test]

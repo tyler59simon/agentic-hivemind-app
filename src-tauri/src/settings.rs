@@ -1,6 +1,7 @@
 //! Where to find Python and Living Memory. Environment variables override the saved settings,
 //! which override the platform defaults that Living Memory's install.py uses.
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq)]
@@ -27,6 +28,18 @@ pub struct Settings {
     /// `folder_forget`.
     #[serde(default)]
     pub other_folders: Option<Vec<String>>,
+    /// Commands agent sessions may run without asking, per project slug (for example `npm test`). Checked in Rust before use.
+    #[serde(default)]
+    pub allowed_commands: Option<BTreeMap<String, Vec<String>>>,
+    /// Whether finished sessions are reviewed for knowledge and skills worth keeping (default on).
+    #[serde(default)]
+    pub learning_reviewer: Option<bool>,
+    /// The most the reviewer and automations may spend in one day, in US dollars; None means the default.
+    #[serde(default)]
+    pub learning_daily_usd: Option<f64>,
+    /// Whether reviewed patches to a well-used skill are published without asking (default off).
+    #[serde(default)]
+    pub skills_auto_patch: Option<bool>,
 }
 
 pub const DEFAULT_CAPTURE_SHORTCUT: &str = "CommandOrControl+Alt+M";
@@ -36,6 +49,11 @@ impl Settings {
     /// The spending limit to give an agent session.
     pub fn agent_budget_usd(&self) -> f64 {
         self.agent_budget_usd.filter(|usd| usd.is_finite() && *usd > 0.0).unwrap_or(DEFAULT_AGENT_BUDGET_USD)
+    }
+
+    /// The commands a project allows, as saved (each is checked again where it becomes a rule).
+    pub fn allowed_commands(&self, project: &str) -> Vec<String> {
+        self.allowed_commands.as_ref().and_then(|all| all.get(project)).cloned().unwrap_or_default()
     }
 
     /// The hotkey to register, or None when the user turned it off.
@@ -135,6 +153,17 @@ mod tests {
         assert_eq!(old.close_to_tray, None);
         assert_eq!((old.claude_path, old.agent_budget_usd, old.architecture_suite_plugin), (None, None, None));
         assert_eq!(old.codex_path, None);
+        assert_eq!((old.allowed_commands, old.learning_reviewer, old.learning_daily_usd, old.skills_auto_patch), (None, None, None, None));
+    }
+
+    #[test]
+    fn allowed_commands_are_per_project() {
+        assert!(Settings::default().allowed_commands("pay").is_empty());
+        let mut commands = BTreeMap::new();
+        commands.insert("pay".to_string(), vec!["npm test".to_string()]);
+        let saved = Settings { allowed_commands: Some(commands), ..Default::default() };
+        assert_eq!(saved.allowed_commands("pay"), vec!["npm test".to_string()]);
+        assert!(saved.allowed_commands("other").is_empty());
     }
 
     #[test]

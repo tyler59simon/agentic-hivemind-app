@@ -55,6 +55,15 @@ describe("buildStart", () => {
     expect(r.options).toEqual({ policy: "ask", context: ["a:1"], briefing: "BRIEF", model: "sonnet", system: "ingestion", engine: "claude", interface: "chat" });
     expect(() => buildStart(form({ face: "chat", project: null }))).toThrow();
   });
+
+  it("sends a chat session's role, and unattended only with a role", () => {
+    const reviewer = buildStart(form({ face: "chat", task: "Review", role: "reviewer" })).options;
+    expect([reviewer.role, reviewer.unattended]).toEqual(["reviewer", undefined]);
+    expect(buildStart(form({ face: "chat", task: "Do", role: "developer", unattended: true })).options.unattended).toBe(true);
+    const plain = buildStart(form({ face: "chat", task: "Do", role: null, unattended: true })).options;
+    expect([plain.role, plain.unattended]).toEqual([undefined, undefined]);
+    expect(buildStart(form({ role: "developer" })).options.role).toBeUndefined();
+  });
 });
 
 describe("access helpers", () => {

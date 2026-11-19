@@ -3,6 +3,7 @@
 use super::SessionInfo;
 use super::TITLE;
 use super::events::{Mode, clip};
+use super::roles::Profile;
 use crate::bridge::Bridge;
 use crate::settings::Settings;
 use crate::worktree::Worktree;
@@ -123,7 +124,7 @@ pub struct Scope {
     pub required_plugin: Option<String>,
     pub mode: Mode,
     pub worktree: Option<Worktree>,
-    /// Rules denied in every session: `governed_rules()`. Set for passport and work scopes alike.
+    /// Rules denied in every session: `deny_rules()`. Set for passport and work scopes alike.
     pub deny: Vec<String>,
 }
 
@@ -188,7 +189,7 @@ fn system_passport(entry: &Value, saved: &Settings, home: &Path) -> Result<Scope
         required_plugin: Some(SUITE_PLUGIN.into()),
         mode: Mode::Unattended,
         worktree: None,
-        deny: governed_rules(),
+        deny: deny_rules(),
     })
 }
 
@@ -250,6 +251,88 @@ pub fn work(tree: Worktree, policy: PolicyMode, prompt: &str) -> Result<Scope, S
     place(cwd, Some(tree), policy, title)
 }
 
+/// Tools every profile may use without asking: reading, searching, the agent's own to-do list and installed skills.
+const READ_TOOLS: [&str; 5] = ["Read", "Glob", "Grep", "TodoWrite", "Skill"];
+
+/// The longest command the user may allow for a project.
+const COMMAND_MAX: usize = 120;
+
+/// A command the user allows for a project, checked: one plain command line with no way to chain another after it.
+pub fn check_command(command: &str) -> Result<String, String> {
+    let command = command.trim();
+    if command.is_empty() || command.chars().count() > COMMAND_MAX {
+        return Err(format!("An allowed command must be 1 to {COMMAND_MAX} characters"));
+    }
+    if command.contains(['\n', '\r', ';', '|', '&', '`', '>', '<', '(', ')', '*']) || command.contains("$(") {
+        return Err(format!("An allowed command must be one plain command, without ; | & ` > < ( ) or *: {command}"));
+    }
+    Ok(command.to_string())
+}
+
+/// The allow rules for a project's commands: the command alone or followed by arguments, in either shell.
+fn command_rules(commands: &[String]) -> Result<Vec<String>, String> {
+    let mut rules = vec![];
+    for command in commands {
+        let command = check_command(command)?;
+        for tool in ["Bash", "PowerShell"] {
+            rules.push(format!("{tool}({command})"));
+            rules.push(format!("{tool}({command} *)"));
+        }
+    }
+    Ok(rules)
+}
+
+/// The rules a profile stands for in the folder `cwd`. Read-only profiles never ask, attended or not. An unattended
+/// editing session is pre-approved to edit inside `cwd` and run the allowed commands; everything else is refused. An attended
+/// one accepts edits and asks about the rest.
+pub fn profile_policy(profile: Profile, cwd: &Path, attended: bool, commands: &[String]) -> Result<Policy, String> {
+    let mut allow: Vec<String> = READ_TOOLS.iter().map(|tool| tool.to_string()).collect();
+    Ok(match profile {
+        Profile::ReadOnly => Policy::PreApproved { allow },
+        Profile::Research => {
+            allow.extend(["WebFetch".to_string(), "WebSearch".to_string()]);
+            Policy::PreApproved { allow }
+        }
+        Profile::EditWorktree if attended => Policy::AcceptEdits { allow: command_rules(commands)? },
+        Profile::EditWorktree => {
+            allow.push(format!("Edit({}/**)", rule_path(&cwd.display().to_string())));
+            allow.extend(command_rules(commands)?);
+            Policy::PreApproved { allow }
+        }
+    })
+}
+
+/// Git commands no agent session may run, whatever it is allowed otherwise: they publish, or destroy work Hivemind cannot
+/// get back. A rule matches the words anywhere in the command line, so a quoted mention is refused too (the safe side).
+const DESTRUCTIVE_GIT: [&str; 5] = ["git push", "git reset --hard", "git clean", "git branch -D", "git branch --delete"];
+
+/// Every rule a session is denied: Living Memory's governed commands and the destructive git commands.
+pub fn deny_rules() -> Vec<String> {
+    let mut rules = governed_rules();
+    for tool in ["Bash", "PowerShell"] {
+        rules.extend(DESTRUCTIVE_GIT.iter().map(|command| format!("{tool}(*{command}*)")));
+    }
+    rules
+}
+
+/// What a session in a role may touch: its worktree, with the rules of `profile`.
+pub fn work_as(tree: Worktree, profile: Profile, attended: bool, commands: &[String], prompt: &str) -> Result<Scope, String> {
+    let cwd = PathBuf::from(&tree.path);
+    let policy = profile_policy(profile, &cwd, attended, commands)?;
+    Ok(Scope {
+        title: task_title(prompt),
+        cwd,
+        add_dirs: vec![],
+        policy,
+        schema: None,
+        plugin_dirs: vec![],
+        required_plugin: None,
+        mode: Mode::Interactive,
+        worktree: Some(tree),
+        deny: deny_rules(),
+    })
+}
+
 /// What a session in a folder of the user's own may touch: that folder, with the same rules as a worktree session and no
 /// worktree. `title` is what the tab shows.
 pub fn direct(folder: &Path, policy: PolicyMode, title: String) -> Result<Scope, String> {
@@ -277,7 +360,7 @@ fn place(cwd: PathBuf, worktree: Option<Worktree>, policy: PolicyMode, title: St
         required_plugin: None,
         mode: Mode::Interactive,
         worktree,
-        deny: governed_rules(),
+        deny: deny_rules(),
     })
 }
 
@@ -289,14 +372,25 @@ pub fn other_folder(saved: &Settings, path: &str) -> Result<PathBuf, String> {
 }
 
 /// The scope of a stored work session, checked against the registry again before a process is started for it.
-pub fn for_session(bridge: &Bridge, info: &SessionInfo) -> Result<Scope, String> {
+pub fn for_session(bridge: &Bridge, saved: &Settings, info: &SessionInfo) -> Result<Scope, String> {
     let AgentTask::Work { project, repo, .. } = &info.task else { return Err("This session does not take messages".into()) };
     if info.direct.is_some() {
         return Err("A session in your own folder runs in the terminal and does not take messages".into());
     }
     project_repo(&crate::git::project_entry(bridge, project)?, repo)?;
     let tree = info.worktree.clone().filter(|tree| Path::new(&tree.path).is_dir());
-    work(tree.ok_or("This session's worktree no longer exists; end the session")?, info.policy, &info.title)
+    let tree = tree.ok_or("This session's worktree no longer exists; end the session")?;
+    match info.profile {
+        // A session in a role keeps its profile; the allowed commands are the project's as they are now.
+        Some(profile) => {
+            let attended = info.policy != PolicyMode::PreApproved;
+            let commands = saved.allowed_commands(project);
+            let mut scope = work_as(tree, profile, attended, &commands, &info.title)?;
+            scope.title = info.title.clone();
+            Ok(scope)
+        }
+        None => work(tree, info.policy, &info.title),
+    }
 }
 
 /// The Living Memory commands only the user may run, through Hivemind's own dialogs: every plan command Living
@@ -388,7 +482,7 @@ mod tests {
         let direct = direct(folder, PolicyMode::AcceptEdits, "Codex".into()).unwrap();
         assert_eq!((direct.cwd.as_path(), direct.worktree.as_ref(), direct.mode), (folder, None, Mode::Interactive));
         assert_eq!(direct.policy.mode(), PolicyMode::AcceptEdits);
-        assert_eq!(direct.deny, governed_rules());
+        assert_eq!(direct.deny, deny_rules());
         assert!(direct.add_dirs.is_empty());
         assert_eq!(super::direct(folder, PolicyMode::PreApproved, String::new()).unwrap_err(), "A work session needs the ask or accept_edits policy");
         assert_eq!(task_title("\n  Fix the bug  \nmore"), "Fix the bug");
@@ -506,7 +600,7 @@ mod tests {
         assert_eq!(scope.policy, Policy::Ask { allow: vec![] });
         assert_eq!((scope.mode, scope.title.as_str()), (Mode::Interactive, "Fix the retry"));
         assert_eq!((scope.schema, scope.required_plugin, scope.worktree), (None, None, Some(tree.clone())));
-        assert_eq!(scope.deny, governed_rules());
+        assert_eq!(scope.deny, deny_rules());
         assert_eq!(work(tree.clone(), PolicyMode::AcceptEdits, "x").unwrap().policy, Policy::AcceptEdits { allow: vec![] });
         assert_eq!(work(tree.clone(), PolicyMode::PreApproved, "x").unwrap_err(), "A work session needs the ask or accept_edits policy");
         assert_eq!(work(tree, PolicyMode::Ask, &"é".repeat(100)).unwrap().title.chars().count(), TITLE);
@@ -528,7 +622,7 @@ mod tests {
         let allow = scope.policy.allow();
         assert_eq!(scope.policy.mode(), PolicyMode::PreApproved);
         assert_eq!((scope.mode, scope.worktree), (Mode::Unattended, None));
-        assert_eq!(scope.deny, governed_rules());
+        assert_eq!(scope.deny, deny_rules());
         let folder = rule_path(&architecture.display().to_string());
         assert!(folder.starts_with("//") && !folder.contains('\\'), "{folder}");
         assert_eq!(
@@ -574,5 +668,57 @@ mod tests {
         assert_eq!(python.file_name().unwrap(), if cfg!(windows) { "python.exe" } else { "python" });
         assert!(suite_runtime(&base).unwrap_err().contains(&base.join(".architecture-suite").display().to_string()));
         std::fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn allowed_commands_are_one_plain_command() {
+        assert_eq!(check_command("  npm test ").unwrap(), "npm test");
+        assert_eq!(check_command("cargo test --manifest-path src-tauri/Cargo.toml").unwrap(), "cargo test --manifest-path src-tauri/Cargo.toml");
+        for bad in ["", "npm test; rm -rf /", "a && b", "a | b", "echo `x`", "echo $(x)", "a > b", "npm\ntest", "git *", &"x".repeat(121)] {
+            assert!(check_command(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn profiles_become_rules() {
+        let cwd = Path::new("C:/wt/pay/0f9e8d7c");
+        let commands = vec!["npm test".to_string()];
+        let reads = ["Read", "Glob", "Grep", "TodoWrite", "Skill"].map(String::from).to_vec();
+        assert_eq!(profile_policy(Profile::ReadOnly, cwd, true, &commands).unwrap(), Policy::PreApproved { allow: reads.clone() });
+        assert_eq!(profile_policy(Profile::ReadOnly, cwd, false, &commands).unwrap(), Policy::PreApproved { allow: reads.clone() });
+        let research = profile_policy(Profile::Research, cwd, true, &[]).unwrap();
+        assert!(research.allow().iter().any(|rule| rule == "WebFetch") && research.allow().iter().any(|rule| rule == "WebSearch"));
+        let command_rules = ["Bash(npm test)", "Bash(npm test *)", "PowerShell(npm test)", "PowerShell(npm test *)"].map(String::from).to_vec();
+        assert_eq!(profile_policy(Profile::EditWorktree, cwd, true, &commands).unwrap(), Policy::AcceptEdits { allow: command_rules.clone() });
+        let mut unattended = reads;
+        unattended.push("Edit(//c/wt/pay/0f9e8d7c/**)".into());
+        unattended.extend(command_rules);
+        assert_eq!(profile_policy(Profile::EditWorktree, cwd, false, &commands).unwrap(), Policy::PreApproved { allow: unattended });
+        assert!(profile_policy(Profile::EditWorktree, cwd, false, &["a; b".to_string()]).is_err());
+    }
+
+    #[test]
+    fn every_session_is_denied_destructive_git() {
+        let rules = deny_rules();
+        assert_eq!(&rules[..148], governed_rules().as_slice());
+        for rule in ["Bash(*git push*)", "PowerShell(*git reset --hard*)", "Bash(*git clean*)", "PowerShell(*git branch -D*)"] {
+            assert!(rules.iter().any(|r| r == rule), "{rule}");
+        }
+    }
+
+    #[test]
+    fn a_role_scope_is_the_worktree_with_its_profile() {
+        let tree = Worktree {
+            repo: "C:/demo/pay".into(),
+            path: "C:/wt/pay/0f9e8d7c".into(),
+            branch: "hivemind/0f9e8d7c".into(),
+            base_branch: "main".into(),
+            base_sha: "a053c800edb319fae41bc4873e4412b763b9d93b".into(),
+            reviewed_sha: None,
+        };
+        let scope = work_as(tree.clone(), Profile::ReadOnly, true, &[], "Review the retry\nmore").unwrap();
+        assert_eq!((scope.cwd.as_path(), scope.mode, scope.title.as_str()), (Path::new("C:/wt/pay/0f9e8d7c"), Mode::Interactive, "Review the retry"));
+        assert_eq!(scope.policy.mode(), PolicyMode::PreApproved);
+        assert_eq!((scope.worktree, scope.deny), (Some(tree), deny_rules()));
     }
 }

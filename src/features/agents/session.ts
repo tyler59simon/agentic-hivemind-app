@@ -1,5 +1,5 @@
 // Pure helpers for agent sessions: status groups, the words the Start screen and chat use, and the briefing text.
-import type { Place, Policy, SessionInfo, SessionStatus } from "../../lib/agent";
+import type { Place, Policy, ResourceUsage, SessionInfo, SessionStatus, Verdict } from "../../lib/agent";
 import type { Project } from "../../lib/lm";
 import { sections } from "../../lib/note";
 import { isoDay } from "../projects/briefing";
@@ -36,6 +36,17 @@ export function sessionForNote(sessions: SessionInfo[], project: string, ref: st
   return sessions
     .filter((s) => s.mode === "interactive" && s.project === project && !isEnded(s) && s.context.includes(ref))
     .reduce<SessionInfo | undefined>((newest, s) => (!newest || s.startedAt > newest.startedAt ? s : newest), undefined);
+}
+
+export const VERDICT_LABELS: Record<Verdict, string> = { pass: "Verdict: pass", changes_needed: "Verdict: changes needed" };
+
+/** A role session that never asks: its profile is pre-approved. Read-only profiles never ask, attended or not. */
+export const isUnattended = (s: Pick<SessionInfo, "profile" | "policy">) => s.profile === "edit_worktree" && s.policy === "pre_approved";
+
+/** "12% CPU · 340 MB · 3 processes" */
+export function usageText(u: ResourceUsage): string {
+  const memory = u.memoryMb >= 1024 ? `${(u.memoryMb / 1024).toFixed(1)} GB` : `${Math.round(u.memoryMb)} MB`;
+  return `${Math.round(u.cpu)}% CPU · ${memory} · ${u.processes} process${u.processes === 1 ? "" : "es"}`;
 }
 
 /** README 7.3: files changed, no turn in progress, and the user has not decided. */

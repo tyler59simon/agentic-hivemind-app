@@ -568,6 +568,10 @@ mod tests {
             access: None,
             effort: None,
             engine_session: None,
+            role: None,
+            profile: None,
+            summary: None,
+            verdict: None,
         }
     }
 

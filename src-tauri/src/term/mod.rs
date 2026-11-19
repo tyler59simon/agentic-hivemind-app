@@ -581,6 +581,12 @@ impl Manager {
         entry.pty.close();
     }
 
+    /// The process id of every session terminal whose program runs now (sign-in and PowerShell tabs have no session).
+    pub fn pids(&self) -> Vec<(String, u32)> {
+        let terms = self.inner.terms.lock().unwrap();
+        terms.values().filter_map(|entry| Some((entry.shared.session_id.clone()?, entry.pty.pid()?))).collect()
+    }
+
     pub fn list(&self) -> Vec<TermInfo> {
         let mut all: Vec<TermInfo> = self.inner.terms.lock().unwrap().values().map(|entry| info_of(&entry.shared)).collect();
         all.sort_by(|a, b| a.id.cmp(&b.id));
@@ -1135,6 +1141,10 @@ mod tests {
                 access: None,
                 effort: None,
                 engine_session: None,
+                role: None,
+                profile: None,
+                summary: None,
+                verdict: None,
             }
         }
 

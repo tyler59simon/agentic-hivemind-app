@@ -1,8 +1,12 @@
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { useProjectsEnabled } from "../../lib/connection";
 import { captureStatus, getSettings, saveSettings, type CaptureStatus, type Settings } from "../../lib/lm";
 import { prefs } from "../../lib/prefs";
 import { applyTheme, THEMES, useTheme, type Theme } from "../../lib/theme";
 import type { Mode } from "../../workspace/store";
+import { projectsQuery } from "../projects/useProject";
+import { withCommands } from "./commands";
 
 const DEFAULT_SHORTCUT = "CommandOrControl+Alt+M";
 type PathKey = "python" | "script" | "root" | "claude_path" | "codex_path" | "architecture_suite_plugin";
@@ -14,6 +18,9 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
   const [mode, setMode] = useState<Mode>(prefs.defaultMode());
   const [error, setError] = useState<string | null>(null);
   const theme = useTheme();
+  const projectsOn = useProjectsEnabled();
+  const projects = useQuery({ ...projectsQuery(), enabled: projectsOn, retry: false });
+  const live = (projects.data?.projects ?? []).filter((p) => p.status !== "archived");
   useEffect(() => {
     getSettings().then(setValue).catch((e) => setError(String(e)));
     captureStatus().then(setStatus).catch(() => {});
@@ -61,6 +68,19 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
         <input type="number" min="0.5" step="0.5" value={value.agent_budget_usd ?? ""} placeholder="5"
           onChange={(e) => setValue({ ...value, agent_budget_usd: e.target.value ? Number(e.target.value) : null })} />
       </label>
+      {!!live.length && (
+        <>
+          <h3>Allowed commands</h3>
+          <p className="muted small">Commands a session in the Developer or Tester role may run without asking, one per line, such as <code>npm test</code>. Arguments after a command are allowed too. A command may not chain another with <code>;</code>, <code>|</code>, <code>&amp;</code> or redirect output. Unattended sessions refuse every other command.</p>
+          {live.map((p) => (
+            <label key={p.slug} className="field">
+              <span>{p.name}</span>
+              <textarea rows={2} defaultValue={(value.allowed_commands?.[p.slug] ?? []).join("\n")} key={JSON.stringify(value.allowed_commands?.[p.slug] ?? [])}
+                onBlur={(e) => setValue((v) => ({ ...v, allowed_commands: withCommands(v.allowed_commands, p.slug, e.target.value) }))} />
+            </label>
+          ))}
+        </>
+      )}
       <p className="muted small">Hivemind starts Claude Code or Codex for you; each uses its own saved sign-in. A background task, such as generating a system's architecture, may only read the system's repositories, run Architecture Suite and write to the system's architecture folder. An interactive session works in its own git worktree. It asks before it edits files or runs commands, except where you chose “Accept edits” or your own Claude Code settings already allow the action. The cap applies to each run of the agent; continuing a session after the cap starts a new run. The cap does not apply in the terminal or to Codex.</p>
 
       <h3>Editor</h3>

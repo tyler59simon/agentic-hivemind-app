@@ -57,6 +57,12 @@ export interface Settings {
   claude_path?: string | null; codex_path?: string | null; agent_budget_usd?: number | null; architecture_suite_plugin?: string | null;
   /** Folders chosen with the native picker; read-only here, Rust ignores it on save. */
   other_folders?: string[] | null;
+  /** Commands agent sessions may run without asking, per project slug. Rust checks each one. */
+  allowed_commands?: Record<string, string[]> | null;
+  /** Whether finished sessions are reviewed for knowledge and skills (default on), and the daily cap shared with automations. */
+  learning_reviewer?: boolean | null; learning_daily_usd?: number | null;
+  /** Whether reviewed patches to a well-used skill are published without asking (default off). */
+  skills_auto_patch?: boolean | null;
 }
 export interface CaptureStatus { shortcut: string | null; error: string | null; close_to_tray: boolean }
 
