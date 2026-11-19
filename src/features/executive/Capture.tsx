@@ -2,13 +2,13 @@
 // Living Memory or an existing record until the user accepts an item; replacing an existing note asks once more.
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, LoaderCircle, Sparkles, X } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { classify } from "../../lib/errors";
 import { extract, ITEM_KINDS, listRecords, putRecord, type CaptureBatch, type CaptureItem, type ItemKind, type Milestone } from "../../lib/executive";
 import { addAction, capture, read, type Project } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
-import { openExecutive } from "../../store";
+import { openExecutive, setLeaveGuard } from "../../store";
 import { Confirm, Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 import { NoteLink } from "../preview/NoteLink";
@@ -196,9 +196,23 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
   const [closing, setClosing] = useState(false);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   // Closing loses what only this dialog knows: which items memory has but the batch does not.
-  const close = () => (Object.keys(unsaved).length ? setClosing(true) : onClose());
+  const close = () => { leave.current = null; if (Object.keys(unsaved).length) setClosing(true); else onClose(); };
   const [replacing, setReplacing] = useState<{ item: CaptureItem; ref: string } | null>(null);
   const [showText, setShowText] = useState(false);
+  // Back (Alt+Left), the palette and the page shortcuts leave through the same check as Close: not while an item is being
+  // written, and not past unrecorded accepts without the confirm, which then finishes the move that was stopped.
+  const now = useRef({ busy: false, unsaved: 0 });
+  now.current = { busy: !!busy, unsaved: Object.keys(unsaved).length };
+  const leave = useRef<(() => void) | null>(null);
+  const leaving = useRef(false);
+  useEffect(() => setLeaveGuard((proceed) => {
+    if (leaving.current) return true;
+    if (now.current.busy) return false;
+    if (!now.current.unsaved) return true;
+    leave.current = proceed;
+    setClosing(true);
+    return false;
+  }), []);
   if (batches.isLoading) return <Modal title="Review capture" onClose={onClose}><p className="muted">Loading…</p></Modal>;
   if (!stored) return <Modal title="Review capture" onClose={onClose}><p className="muted">This capture is no longer here.</p></Modal>;
   const items = stored.items.map((i) => edits[i.id] ?? i);
@@ -286,7 +300,12 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
       {closing && (
         <Confirm title="Close without recording?" action="Close"
           message="Some accepted items are in memory, but this capture has not recorded them. Retry save first, or they show as waiting next time."
-          onAnswer={(yes) => { setClosing(false); if (yes) onClose(); }} />
+          onAnswer={(yes) => {
+            setClosing(false);
+            const proceed = leave.current ?? onClose;
+            leave.current = null;
+            if (yes) { leaving.current = true; proceed(); }
+          }} />
       )}
       {replacing && (
         <Confirm title="Replace the existing note?" action="Replace"

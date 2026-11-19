@@ -45,10 +45,22 @@ interface AppState {
   setDomain: (domain: string) => void;
   setShelf: (shelf: Shelf) => void;
   setPalette: (palette: AppState["palette"]) => void;
-  /** Show a page. `replace` swaps the current route without adding to Back (filters, typed queries). */
-  go: (route: Route, opts?: { replace?: boolean }) => void;
-  goBack: () => void;
+  /** Show a page. `replace` swaps the current route without adding to Back (filters, typed queries). `force` skips the leave
+   *  guard. */
+  go: (route: Route, opts?: { replace?: boolean; force?: boolean }) => void;
+  goBack: (force?: boolean) => void;
 }
+
+/** Asked before every move; false stops it, and the guard may call `proceed` later to finish the same move. */
+export type LeaveGuard = (proceed: () => void) => boolean;
+let leaveGuard: LeaveGuard | null = null;
+/** Guard every way of leaving the current route (Back, Alt+Left, the palette, shortcuts) while something would be lost, such
+ *  as a capture review with unrecorded accepts. Returns the function that removes it. */
+export function setLeaveGuard(guard: LeaveGuard): () => void {
+  leaveGuard = guard;
+  return () => { if (leaveGuard === guard) leaveGuard = null; };
+}
+const stopped = (proceed: () => void) => !!leaveGuard && !leaveGuard(proceed);
 
 export const useApp = create<AppState>()(persist((set) => ({
   project: undefined,
@@ -61,9 +73,14 @@ export const useApp = create<AppState>()(persist((set) => ({
   setDomain: (domain) => set({ domain }),
   setShelf: (shelf) => set({ shelf }),
   setPalette: (palette) => set({ palette }),
-  go: (route, opts = {}) => set((s) => (same(s.route, route) ? s
-    : { route, back: opts.replace ? s.back : [...s.back, s.route].slice(-BACK_LIMIT) })),
-  goBack: () => set((s) => (s.back.length ? { route: s.back[s.back.length - 1], back: s.back.slice(0, -1) } : s)),
+  go: (route, opts = {}) => {
+    if (!opts.force && stopped(() => useApp.getState().go(route, { ...opts, force: true }))) return;
+    set((s) => (same(s.route, route) ? s : { route, back: opts.replace ? s.back : [...s.back, s.route].slice(-BACK_LIMIT) }));
+  },
+  goBack: (force) => {
+    if (!force && stopped(() => useApp.getState().goBack(true))) return;
+    set((s) => (s.back.length ? { route: s.back[s.back.length - 1], back: s.back.slice(0, -1) } : s));
+  },
 }), {
   name: "hivemind.nav",
   version: 1,

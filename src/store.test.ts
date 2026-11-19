@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { wikiRoute } from "./features/wiki/wiki";
-import { openProject, openReview, openSession, openSystem, startSession, useApp } from "./store";
+import { openProject, openReview, openSession, openSystem, setLeaveGuard, startSession, useApp } from "./store";
 
 const app = () => useApp.getState();
 
@@ -78,5 +78,29 @@ describe("navigation", () => {
     expect(app().route).toEqual({ page: "wiki", domain: "demo", at: "p-core" });
     app().goBack();
     expect(app().route).toEqual({ page: "wiki", domain: "demo", at: "n-pg0a1b2c", edition: "agent", project: "core" });
+  });
+
+  // EXEC-R3a: Alt+Left and the palette Back left a capture review without its close check.
+  it("a leave guard can stop a move and finish it later", () => {
+    app().go({ page: "memory" });
+    app().go({ page: "executive", capture: "b1" });
+    let later: (() => void) | null = null;
+    const clear = setLeaveGuard((proceed) => { later = proceed; return false; });
+    app().goBack();
+    app().go({ page: "review" });
+    expect(app().route).toEqual({ page: "executive", capture: "b1" });
+    app().go({ page: "executive" }, { force: true });
+    expect(app().route).toEqual({ page: "executive" });
+    app().go({ page: "executive", capture: "b1" }, { force: true });
+    app().goBack();
+    later!();
+    expect(app().route).toEqual({ page: "executive" }); // the stopped Back, finished
+    clear();
+    app().goBack();
+    expect(app().route).toEqual({ page: "executive", capture: "b1" });
+    const allow = setLeaveGuard(() => true);
+    app().go({ page: "review" });
+    expect(app().route).toEqual({ page: "review" });
+    allow();
   });
 });
