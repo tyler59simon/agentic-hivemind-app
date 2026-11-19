@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -256,17 +255,14 @@ pub fn schema() -> Value {
     })
 }
 
+fn reviewer() -> crate::oneshot::Call<'static> {
+    crate::oneshot::Call { who: "The reviewer", model: MODEL, policy: POLICY, schema: schema(), budget_usd: REVIEW_USD }
+}
+
 /// The reviewer's command line: print mode, no tools, no plugins, settings, MCP servers or saved session, a cost cap.
-/// The same shape Living Memory's maintenance agent uses.
+#[cfg(test)]
 pub fn argv() -> Vec<String> {
-    [
-        "-p", "--output-format", "json", "--model", MODEL, "--tools", "", "--safe-mode", "--strict-mcp-config", "--no-session-persistence",
-        "--disable-slash-commands", "--system-prompt", POLICY,
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .chain(["--json-schema".to_string(), schema().to_string(), "--max-budget-usd".to_string(), format!("{REVIEW_USD:.2}")])
-    .collect()
+    crate::oneshot::argv(&reviewer())
 }
 
 #[derive(Deserialize, Debug, Default, PartialEq)]
@@ -306,22 +302,15 @@ pub struct Answer {
     pub skill: SkillItem,
 }
 
+fn answer_of(value: Result<Value, String>) -> Result<Answer, String> {
+    value.and_then(|v| serde_json::from_value::<Answer>(v).map_err(|e| format!("The reviewer's answer did not match the schema: {e}")))
+}
+
 /// The CLI's JSON envelope: (answer, cost). A failed call still reports what it cost.
+#[cfg(test)]
 pub fn parse_envelope(stdout: &str) -> (Result<Answer, String>, Option<f64>) {
-    let Ok(envelope) = serde_json::from_str::<Value>(stdout.trim()) else {
-        return (Err("The reviewer printed no JSON".into()), None);
-    };
-    let cost = envelope.get("total_cost_usd").and_then(Value::as_f64);
-    if envelope.get("is_error") != Some(&Value::Bool(false)) || envelope.get("subtype").and_then(Value::as_str) != Some("success") {
-        let why = match envelope.get("subtype").and_then(Value::as_str) {
-            Some("error_max_budget_usd") => "The reviewer reached its spending cap".to_string(),
-            _ => format!("The reviewer failed: {}", clip(envelope.get("result").and_then(Value::as_str).unwrap_or("no reason given"), 300)),
-        };
-        return (Err(why), cost);
-    }
-    let answer = envelope.get("structured_output").cloned().ok_or("The reviewer gave no structured answer".to_string())
-        .and_then(|v| serde_json::from_value::<Answer>(v).map_err(|e| format!("The reviewer's answer did not match the schema: {e}")));
-    (answer, cost)
+    let (value, cost) = crate::oneshot::parse_envelope("The reviewer", stdout);
+    (answer_of(value), cost)
 }
 
 /// The tags a staged draft needs to be saved later: a `concern/` tag this store's taxonomy has (Living Memory refuses a
@@ -406,6 +395,11 @@ impl Learning {
         self.ledger.used(now_ms()) < cap
     }
 
+    /// The daily cap's account, shared with the executive workspace's calls.
+    pub fn ledger(&self) -> &Ledger {
+        &self.ledger
+    }
+
     /// Count what an automation's sessions cost against today's budget.
     pub fn charge(&self, usd: f64) {
         let _ = self.ledger.settle(&format!("charge-{}", uuid::Uuid::new_v4().simple()), Some(usd), now_ms());
@@ -478,19 +472,8 @@ Review these commits for knowledge worth keeping.
             memory: vec![], skill: None, skill_name: None, skill_applied: false, cost_usd: None, error: None,
         };
         let reservation = format!("review-{}-{}", subject.key, run.at);
-        if let Err(e) = self.ledger.reserve(&reservation, REVIEW_USD, deps.daily_usd, run.at) {
-            run.error = Some(e);
-            return run;
-        }
-        let mut command = Command::new(&deps.claude);
-        command.args(argv()).current_dir(&self.dir).env("LIVING_MEMORY_OFF", "1").env_remove("HIVEMIND_SESSION").env_remove("CLAUDECODE");
-        let _ = std::fs::create_dir_all(&self.dir);
-        let input = redact(input);
-        let (answer, cost) = match crate::git::run_with_input(command, Some(&input), TIMEOUT) {
-            Ok(ran) => parse_envelope(&ran.stdout),
-            Err(e) => (Err(e), None),
-        };
-        let _ = self.ledger.settle(&reservation, cost, now_ms());
+        let (value, cost) = crate::oneshot::run(&deps.claude, &self.dir, &self.ledger, deps.daily_usd, &reservation, &reviewer(), input, TIMEOUT);
+        let answer = answer_of(value);
         run.cost_usd = cost;
         let answer = match answer {
             Ok(a) => a,

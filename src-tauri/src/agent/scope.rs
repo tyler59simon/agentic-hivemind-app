@@ -49,6 +49,11 @@ pub enum AgentTask {
     },
     /// Work in a folder the user picked with the native dialog, in place. Terminal only.
     Folder { path: String },
+    /// The executive workspace's chat: no repository, Living Memory read only, about one project or all of them.
+    Executive {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
+    },
 }
 
 /// How gated actions are decided, as stored on a session.
@@ -198,6 +203,7 @@ pub fn for_task(bridge: &Bridge, task: &AgentTask, saved: &Settings, home: &Path
     match task {
         AgentTask::SystemPassport { slug } => system_passport(&crate::architecture::system_entry(bridge, slug)?, saved, home),
         AgentTask::Work { .. } | AgentTask::Folder { .. } => Err("A work session is started with start_task".into()),
+        AgentTask::Executive { .. } => Err("An executive session is started with start_executive".into()),
     }
 }
 
@@ -376,8 +382,51 @@ pub fn other_folder(saved: &Settings, path: &str) -> Result<PathBuf, String> {
     if folder.is_dir() { Ok(folder) } else { Err(format!("The folder no longer exists: {}", folder.display())) }
 }
 
+/// Living Memory's read commands, which the executive chat may run without asking.
+const MEMORY_READS: [&str; 10] = ["search", "ask", "read", "open", "list", "recap", "log", "timeline", "projects", "history"];
+/// Living Memory's writes the executive chat may not run: what it learns reaches memory only through the user's review.
+const MEMORY_WRITES: [&str; 12] = ["capture", "update", "propose", "check", "confirm", "resolve", "reopen", "supersede", "restore", "batch", "distinct", "proposals"];
+
+fn memory_rules(verbs: &[&str]) -> Vec<String> {
+    ["Bash", "PowerShell"]
+        .into_iter()
+        .flat_map(|tool| {
+            verbs.iter().flat_map(move |verb| {
+                ["*alm*", "*living_memory.py*"].into_iter().flat_map(move |cli| [format!("{tool}({cli} {verb} *)"), format!("{tool}({cli} {verb})")])
+            })
+        })
+        .collect()
+}
+
+/// The executive chat's scope: an empty working folder of Hivemind's, reading only (files and Living Memory), never asking,
+/// and denied every Living Memory write besides the governed ones.
+pub fn executive(dir: &Path, title: String) -> Result<Scope, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("Could not create the executive folder {}: {e}", dir.display()))?;
+    let mut allow: Vec<String> = READ_TOOLS.iter().map(|tool| tool.to_string()).collect();
+    allow.extend(memory_rules(&MEMORY_READS));
+    let mut deny = deny_rules();
+    deny.extend(memory_rules(&MEMORY_WRITES));
+    Ok(Scope {
+        title,
+        cwd: dir.to_path_buf(),
+        add_dirs: vec![],
+        policy: Policy::PreApproved { allow },
+        schema: None,
+        plugin_dirs: vec![],
+        required_plugin: None,
+        mode: Mode::Interactive,
+        worktree: None,
+        deny,
+    })
+}
+
 /// The scope of a stored work session, checked against the registry again before a process is started for it.
 pub fn for_session(bridge: &Bridge, saved: &Settings, info: &SessionInfo) -> Result<Scope, String> {
+    if let AgentTask::Executive { .. } = &info.task {
+        // The folder was chosen by Rust when the session started; only an executive folder is accepted back.
+        let dir = info.workspace.first().map(PathBuf::from).filter(|d| d.ends_with(Path::new("executive").join("agent")));
+        return executive(&dir.ok_or("This session's folder is not an executive folder")?, info.title.clone());
+    }
     let AgentTask::Work { project, repo, .. } = &info.task else { return Err("This session does not take messages".into()) };
     if info.direct.is_some() {
         return Err("A session in your own folder runs in the terminal and does not take messages".into());
@@ -464,6 +513,23 @@ mod tests {
         std::fs::create_dir_all(&repo).unwrap();
         std::fs::write(runtime.join(if cfg!(windows) { "python.exe" } else { "python" }), "").unwrap();
         (base, home)
+    }
+
+    #[test]
+    fn an_executive_session_resumes_only_in_an_executive_folder() {
+        let base = std::env::temp_dir().join(format!("hivemind-agent-scope-exec-{}", std::process::id()));
+        let dir = base.join("executive").join("agent");
+        let saved = Settings::default();
+        let bridge = Bridge::new(crate::settings::resolve(&saved, |_| None));
+        let made = executive(&dir, "Executive: Hi".into()).unwrap();
+        let info = super::super::session_info("id", "claude-code", AgentTask::Executive { project: Some("pay".into()) }, &made, &Default::default());
+        assert_eq!(info.project.as_deref(), Some("pay"));
+        let scope = for_session(&bridge, &saved, &info).unwrap();
+        assert_eq!((scope.cwd, scope.title.as_str(), scope.mode, scope.worktree), (dir.clone(), "Executive: Hi", Mode::Interactive, None));
+        assert!(matches!(scope.policy, Policy::PreApproved { .. }));
+        let elsewhere = SessionInfo { workspace: vec![base.join("repo").display().to_string()], ..info.clone() };
+        assert_eq!(for_session(&bridge, &saved, &elsewhere).unwrap_err(), "This session's folder is not an executive folder");
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]

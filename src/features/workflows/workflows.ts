@@ -107,6 +107,7 @@ export function triggerOf(kind: TriggerKind, from: Trigger): Trigger {
 export const ACTION_LABELS: Record<ActionKind, string> = {
   role: "Start a session in a role", workflow: "Start a workflow", memory_maintenance: "Living Memory maintenance",
   skill_upkeep: "Skill upkeep", commit_capture: "Knowledge from new commits", architecture_check: "Architecture drift check",
+  executive_briefing: "Executive briefing",
 };
 export const ACTION_HELP: Record<ActionKind, string> = {
   role: "An unattended chat session with the role's own permissions. {event} and {commits} in the instructions are filled in.",
@@ -115,6 +116,7 @@ export const ACTION_HELP: Record<ActionKind, string> = {
   skill_upkeep: "Proposes archiving skills unused for 30 days or mostly rejected. Nothing is archived until you approve.",
   commit_capture: "The reviewer reads the new commits and drafts notes for Review. Counts against the learning budget.",
   architecture_check: "Runs the Architecture Suite's diff, check and verify on a system and notifies you when its output has drifted. Regenerating stays your decision.",
+  executive_briefing: "Writes a briefing from Living Memory and your executive records, about the project picked below or all active projects, and keeps it on the Executive page. Counts against the learning budget.",
 };
 
 /** An action of another kind with sensible defaults. */
@@ -124,6 +126,7 @@ export function actionOf(kind: ActionKind, from: Action, engine: Engine = "claud
     case "role": return { kind, role: "reviewer", engine, prompt: "" };
     case "workflow": return { kind, template: "review", goal: "" };
     case "architecture_check": return { kind, system: "" };
+    case "executive_briefing": return { kind, briefing: "weekly", days: 7 };
     default: return { kind };
   }
 }

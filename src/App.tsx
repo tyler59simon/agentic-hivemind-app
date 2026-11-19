@@ -120,6 +120,7 @@ function useLiveRefresh(enabled: boolean) {
       listen("architecture-drift", () => client.invalidateQueries({ queryKey: ["architecture", "drift"] })),
       listen("workflows-changed", () => client.invalidateQueries({ queryKey: ["workflows"] })),
       listen("automations-changed", () => client.invalidateQueries({ queryKey: ["automations"] })),
+      listen<string>("executive-changed", (e) => client.invalidateQueries({ queryKey: ["executive", e.payload] })),
       listen<{ ref: string }>("open-note", (e) => useWorkspace.getState().openNote(e.payload.ref)),
     ];
     return () => { stops.forEach((stop) => stop.then((unlisten) => unlisten())); };

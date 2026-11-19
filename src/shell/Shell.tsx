@@ -4,6 +4,7 @@ import { ChangeWizardHost } from "../features/changes/ChangeWizard";
 import { ChangesPage } from "../features/changes/ChangesPage";
 import { DashboardsPage } from "../features/dashboards/DashboardsPage";
 import { MemoryPage } from "../features/library/MemoryPage";
+import { ExecutivePage } from "../features/executive/ExecutivePage";
 import { OverviewPage } from "../features/projects/OverviewPage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
 import { RecapPage } from "../features/recap/RecapPage";
@@ -20,6 +21,7 @@ import { Topbar } from "./Topbar";
 /** What each sidebar section shows. A section's sub-views are its own business (see the page components). */
 const PAGES: Record<Page, () => ReactNode> = {
   overview: () => <OverviewPage />,
+  executive: () => <ExecutivePage />,
   agents: () => <AgentWorkspace />,
   changes: () => <ChangesPage />,
   architecture: () => <ArchitecturePage />,

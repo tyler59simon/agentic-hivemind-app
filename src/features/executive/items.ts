@@ -1,0 +1,84 @@
+// What accepting an extracted item writes. Notes go to Living Memory with `capture`; a commitment becomes an action item on
+// the project's commitments note (made on first use); a milestone becomes a Hivemind record. Nothing here writes: the review
+// dialog runs the plan when the user accepts the item.
+import type { CaptureItem, Milestone } from "../../lib/executive";
+import type { CapturePayload, NoteRow, NoteType, Project } from "../../lib/lm";
+import { HEADINGS } from "../../lib/note";
+import { commitmentsTitle, formatCommitment } from "./commitments";
+
+export type Write =
+  | { kind: "note"; domain: string; payload: CapturePayload }
+  | { kind: "action"; ref: string; text: string }
+  | { kind: "milestone"; record: Partial<Milestone> };
+
+export interface Context {
+  projects: Project[];
+  /** Every tag the store's taxonomy has. */
+  known: string[];
+  /** Active notes (with tags), to find a project's commitments note. */
+  rows: NoteRow[];
+  /** Where notes with no project go, and where writing preferences go when the store has a global domain. */
+  defaultDomain: string;
+  globalDomain?: string;
+  sourceLabel: string;
+  today: string;
+}
+
+const NOTE_TYPE: Partial<Record<CaptureItem["kind"], NoteType>> = {
+  decision: "decision", risk: "risk", status: "status", knowledge: "knowledge", preference: "preference",
+};
+
+/** The concern tags a type prefers, in order; the first one the taxonomy has is used, else concern/knowledge. */
+const CONCERNS: Record<string, string[]> = {
+  decision: ["decision"], risk: ["risk", "constraint"], status: ["status"], plan: ["planning", "workflow", "plan"],
+  preference: ["preference", "correction"], knowledge: ["knowledge"],
+};
+
+export function tagsFor(type: NoteType, project: Project | undefined, known: string[]): string[] {
+  const concern = [...(CONCERNS[type] ?? [type]), "knowledge"].map((c) => `concern/${c}`).find((t) => known.includes(t));
+  const tags = [concern, project && known.includes(project.tag) ? project.tag : undefined, type === "preference" && known.includes("subject/user") ? "subject/user" : undefined];
+  return tags.filter((t): t is string => !!t);
+}
+
+export const domainOf = (project: Project | undefined, fallback: string) => project?.charter?.split(":")[0] || fallback;
+
+/** The note body: the summary, the details, and where the item came from. */
+export function itemBody(item: CaptureItem, sourceLabel: string, today: string): string {
+  const details = [...item.details.map((d) => d.trim()).filter(Boolean), item.owner && `**Owner:** ${item.owner}`, item.due && `**Due:** ${item.due}`]
+    .filter(Boolean).map((d) => `- ${d}`);
+  const source = `Captured in Hivemind from "${sourceLabel}" on ${today}${item.quote.trim() ? `: "${item.quote.trim()}"` : "."}`;
+  return [item.summary.trim(), details.length ? `## ${HEADINGS.details}\n${details.join("\n")}` : "", `## Source\n${source}`].filter(Boolean).join("\n\n");
+}
+
+/** The open commitments note of a project (or the cross-project one), if it exists. */
+export function commitmentsNote(rows: NoteRow[], project: Project | undefined): NoteRow | undefined {
+  const title = commitmentsTitle(project?.name ?? "Cross-project");
+  return rows.find((r) => r.type === "plan" && r.status === "active" && r.title === title && (project ? r.tags.includes(project.tag) : !r.tags.some((t) => t.startsWith("project/"))));
+}
+
+/** What accepting `item` writes. `supersedes` is set when the user chose to replace an existing note. */
+export function planWrite(item: CaptureItem, ctx: Context, supersedes?: string): Write {
+  const project = ctx.projects.find((p) => p.slug === item.project);
+  if (item.kind === "milestone") {
+    return { kind: "milestone", record: { project: item.project ?? "", title: item.title.trim(), due: item.due, status: "planned", note: item.summary.trim() } };
+  }
+  if (item.kind === "commitment") {
+    const text = formatCommitment({ task: item.title, owner: item.owner, due: item.due });
+    const existing = commitmentsNote(ctx.rows, project);
+    if (existing) return { kind: "action", ref: existing.ref, text };
+    const name = project?.name ?? "Cross-project";
+    const body = `Commitments made in meetings and conversations${project ? ` for ${name}` : " that belong to no single project"}. Hivemind adds to this list when you accept a captured commitment.\n\n## ${HEADINGS.actions}\n- [ ] ${text}`;
+    return { kind: "note", domain: domainOf(project, ctx.defaultDomain), payload: { title: commitmentsTitle(name), body, type: "plan", tags: tagsFor("plan", project, ctx.known) } };
+  }
+  const type = NOTE_TYPE[item.kind] ?? "knowledge";
+  const domain = type === "preference" && !project && ctx.globalDomain ? ctx.globalDomain : domainOf(project, ctx.defaultDomain);
+  const payload: CapturePayload = { title: item.title.trim(), body: itemBody(item, ctx.sourceLabel, ctx.today), type, tags: tagsFor(type, project, ctx.known) };
+  return { kind: "note", domain, payload: supersedes ? { ...payload, supersedes: [supersedes] } : payload };
+}
+
+/** A capture batch's items still waiting for the user. */
+export const pendingItems = (items: CaptureItem[]) => items.filter((i) => i.state === "pending");
+
+export const KIND_LABEL: Record<CaptureItem["kind"], string> = {
+  decision: "Decision", risk: "Risk", commitment: "Commitment", status: "Status", milestone: "Milestone", knowledge: "Knowledge", preference: "Preference",
+};

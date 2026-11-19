@@ -6,9 +6,11 @@ mod bridge;
 mod capture;
 mod conductor;
 mod drafts;
+mod executive;
 mod folders;
 mod git;
 mod learning;
+mod oneshot;
 mod notify;
 mod resources;
 mod review;
@@ -42,6 +44,7 @@ struct AppState {
     skills: skills::Skills,
     workflows: Arc<workflow::Workflows>,
     automations: Arc<automations::Automations>,
+    executive: executive::Store,
     watcher: Mutex<Option<notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>>,
     /// Why the quick-capture hotkey could not be registered, for the settings screen.
     shortcut_error: Mutex<Option<String>>,
@@ -477,6 +480,17 @@ impl automations::Doer for AppDoer {
                 }
                 Ok(Started::Done { detail, cost: None })
             }
+            Action::ExecutiveBriefing { briefing, days } => {
+                if let Some(why) = automations::Doer::paused(self, a) {
+                    return Err(why);
+                }
+                let deps = exec_deps(&state, &saved)?;
+                let scope = Some(project.as_str()).filter(|p| !p.is_empty());
+                let record = executive::brief(&executive::viewer(&state.bridge), &state.executive, &deps, briefing, scope, *days, &origin, today())?;
+                let _ = self.0.emit("executive-changed", "briefing");
+                let title = record.get("title").and_then(Value::as_str).unwrap_or("Your briefing").to_string();
+                Ok(Started::Done { detail: format!("{title} is ready on the Executive page"), cost: record.get("costUsd").and_then(Value::as_f64) })
+            }
             Action::SkillUpkeep => {
                 let made = state.skills.upkeep(agent::now_ms());
                 Ok(Started::Done { detail: format!("{} archive proposal{} added to Review", made.len(), if made.len() == 1 { "" } else { "s" }), cost: None })
@@ -521,8 +535,13 @@ impl automations::Doer for AppDoer {
     }
     fn paused(&self, a: &automations::Automation) -> Option<String> {
         let saved = settings::load(&self.0.state::<AppState>().settings_path);
-        (matches!(a.action, automations::Action::CommitCapture) && !saved.shows(agent::Engine::Claude))
-            .then(|| "Paused: Claude Code is hidden in Settings. Show it again to review these commits.".into())
+        match a.action {
+            automations::Action::CommitCapture => (!saved.shows(agent::Engine::Claude))
+                .then(|| "Paused: Claude Code is hidden in Settings. Show it again to review these commits.".into()),
+            automations::Action::ExecutiveBriefing { .. } => (!saved.shows(agent::Engine::Claude))
+                .then(|| "Paused: Claude Code is hidden in Settings. Show it again to write briefings.".into()),
+            _ => None,
+        }
     }
     fn budget_left(&self) -> bool {
         let state = self.0.state::<AppState>();
@@ -1295,6 +1314,182 @@ fn draft_list(state: State<'_, AppState>) -> Vec<Value> {
     drafts::list(&state.drafts_dir)
 }
 
+// ---- Executive workspace: operational records, grounded drafting, briefings, capture and the executive chat. ----
+
+fn today() -> chrono::NaiveDate {
+    chrono::Local::now().date_naive()
+}
+
+/// What an executive call needs: Claude Code (the calls run on it) and the daily cap the reviewer shares.
+fn exec_deps<'a>(state: &'a AppState, saved: &Settings) -> Result<executive::Deps<'a>, String> {
+    if !saved.shows(agent::Engine::Claude) {
+        return Err("Drafting, briefings and capture run on Claude Code, which is hidden in Settings. Show it again to use them.".into());
+    }
+    Ok(executive::Deps { claude: agent::claude::available(saved)?, ledger: state.learning.ledger(), cap: saved.learning_daily_usd() })
+}
+
+#[tauri::command]
+fn exec_list(state: State<'_, AppState>, kind: String) -> Result<Vec<Value>, String> {
+    state.executive.list(&kind)
+}
+
+#[tauri::command]
+fn exec_put(app: AppHandle, state: State<'_, AppState>, kind: String, record: Value) -> Result<Value, String> {
+    let saved = state.executive.put(&kind, record, agent::now_ms())?;
+    let _ = app.emit("executive-changed", &kind);
+    Ok(saved)
+}
+
+#[tauri::command]
+fn exec_delete(app: AppHandle, state: State<'_, AppState>, kind: String, id: String) -> Result<(), String> {
+    state.executive.delete(&kind, &id)?;
+    let _ = app.emit("executive-changed", &kind);
+    Ok(())
+}
+
+/// The evidence a generated text about `project` (or all active projects) would rest on.
+#[tauri::command]
+async fn exec_pack(app: AppHandle, project: Option<String>, days: Option<u32>) -> Result<executive::Pack, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        executive::pack(&executive::viewer(&state.bridge), &state.executive, project.as_deref(), days.unwrap_or(14), today())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn exec_brief(app: AppHandle, kind: String, project: Option<String>, days: Option<u32>) -> Result<Value, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let saved = settings::load(&state.settings_path);
+        let deps = exec_deps(&state, &saved)?;
+        let record = executive::brief(&executive::viewer(&state.bridge), &state.executive, &deps, &kind, project.as_deref(), days.unwrap_or(7), "manual", today())?;
+        let _ = app.emit("executive-changed", "briefing");
+        Ok(record)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn exec_draft(app: AppHandle, request: executive::DraftRequest) -> Result<Value, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let saved = settings::load(&state.settings_path);
+        executive::draft(&executive::viewer(&state.bridge), &state.executive, &exec_deps(&state, &saved)?, &request, today())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn exec_refine(app: AppHandle, subject: String, body: String, evidence: Vec<executive::Evidence>, instruction: String) -> Result<Value, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let saved = settings::load(&state.settings_path);
+        executive::refine(&state.executive, &exec_deps(&state, &saved)?, &subject, &body, &evidence, &instruction)
+    })
+    .await
+}
+
+/// Extract decisions, commitments, risks and the rest from pasted text into a capture batch. None: nothing worth keeping.
+#[tauri::command]
+async fn exec_extract(app: AppHandle, text: String, project: Option<String>, label: Option<String>) -> Result<Option<Value>, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let saved = settings::load(&state.settings_path);
+        let label = label.filter(|l| !l.trim().is_empty()).unwrap_or_else(|| format!("Quick capture, {}", today()));
+        let source = executive::Source { kind: "paste".into(), label, session: None };
+        let staged = executive::extract(&executive::viewer(&state.bridge), &state.executive, &exec_deps(&state, &saved)?, &text, project.as_deref(), source, today())?;
+        let _ = app.emit("executive-changed", "capture");
+        Ok(staged)
+    })
+    .await
+}
+
+/// Learn writing preferences from the user's edits to a generated draft, in the background; the suggestions wait in the
+/// capture inbox. Errors are dropped: the user did not ask for this run, and it changes nothing until they accept.
+#[tauri::command]
+fn exec_learn_style(app: AppHandle, generated: String, kept: String, label: String) {
+    std::thread::spawn(move || {
+        let state = app.state::<AppState>();
+        let saved = settings::load(&state.settings_path);
+        let Ok(deps) = exec_deps(&state, &saved) else { return };
+        if let Ok(Some(_)) = executive::learn_style(&executive::viewer(&state.bridge), &state.executive, &deps, &generated, &kept, &label) {
+            let _ = app.emit("executive-changed", "capture");
+        }
+    });
+}
+
+/// Start the executive chat about `project` (or all projects).
+#[tauri::command]
+async fn exec_agent_start(app: AppHandle, project: Option<String>, prompt: String, options: agent::StartOptions) -> Result<agent::SessionInfo, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let saved = settings::load(&state.settings_path);
+        let briefing = executive::agent_briefing(&executive::viewer(&state.bridge), &state.executive, project.as_deref(), today())?;
+        agent::start_executive(&state.agents, &state.bridge, &saved, &state.executive.agent_dir(), project, briefing, &prompt, options)
+    })
+    .await
+}
+
+/// Extract what an executive conversation decided, committed to or learned into a capture batch. Each conversation is captured
+/// once on its own (when it ends); the user may ask again.
+fn capture_session(app: &AppHandle, id: &str, again: bool) -> Result<Option<Value>, String> {
+    let state = app.state::<AppState>();
+    let log = state.agents.session(id, 0)?;
+    let agent::scope::AgentTask::Executive { project } = &log.info.task else { return Err("Only executive conversations are captured here".into()) };
+    let done = state.executive.list("capture")?.iter().any(|c| c.pointer("/source/session").and_then(Value::as_str) == Some(id));
+    if (done && !again) || log.info.turns == 0 {
+        return Ok(None);
+    }
+    let saved = settings::load(&state.settings_path);
+    let source = executive::Source { kind: "agent-session".into(), label: log.info.title.clone(), session: Some(id.to_string()) };
+    let text = executive::transcript(&log.info.title, &log.events);
+    let staged = executive::extract(&executive::viewer(&state.bridge), &state.executive, &exec_deps(&state, &saved)?, &text, project.as_deref(), source, today())?;
+    let _ = app.emit("executive-changed", "capture");
+    Ok(staged)
+}
+
+#[tauri::command]
+async fn exec_session_capture(app: AppHandle, id: String) -> Result<Option<Value>, String> {
+    blocking(move || capture_session(&app, &id, true)).await
+}
+
+/// When an executive conversation ends, what it decided and committed to goes to the capture inbox for review.
+fn executive_reports(app: AppHandle) -> conductor::Handler {
+    Box::new(move |report| {
+        let agent::Lifecycle::Finished { id, .. } = report else { return };
+        let Some(state) = app.try_state::<AppState>() else { return };
+        if !state.agents.session(id, u64::MAX).is_ok_and(|log| matches!(log.info.task, agent::scope::AgentTask::Executive { .. })) {
+            return;
+        }
+        let (app, id) = (app.clone(), id.clone());
+        std::thread::spawn(move || {
+            if let Ok(Some(_)) = capture_session(&app, &id, false) {
+                notify::session(&app, &id, "Executive assistant", "What this conversation decided is ready to review in Executive");
+            }
+        });
+    })
+}
+
+const EXPORT_KINDS: [(&str, &str); 3] = [("md", "Markdown"), ("txt", "Plain text"), ("eml", "Email message")];
+
+/// Save a draft or a briefing where the user picks. `format` is md, txt or eml; the content is written as given.
+#[tauri::command]
+async fn exec_export(app: AppHandle, name: String, format: String, content: String) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (ext, label) = EXPORT_KINDS.into_iter().find(|(e, _)| *e == format).ok_or_else(|| format!("Unknown export format: {format}"))?;
+    blocking(move || {
+        let stem: String = name.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '-' }).collect();
+        let stem: String = stem.trim().chars().take(80).collect();
+        let file = format!("{}.{ext}", if stem.is_empty() { "draft" } else { &stem });
+        let Some(picked) = app.dialog().file().add_filter(label, &[ext]).set_file_name(file).blocking_save_file() else { return Ok(None) };
+        let path = picked.into_path().map_err(|e| e.to_string())?;
+        std::fs::write(&path, content).map_err(|e| e.to_string())?;
+        Ok(Some(path.display().to_string()))
+    })
+    .await
+}
+
 /// Toasts for chat sessions: waiting for an approval, a finished turn, a finished background session. A terminal session
 /// has its own, from the terminal's signals.
 fn session_notices(app: AppHandle) -> conductor::Handler {
@@ -1390,10 +1585,11 @@ pub fn run() {
                 workflows: Arc::new(workflow::Workflows::new(app.path().app_data_dir()?.join("workflows"))),
                 automations: Arc::new(automations::Automations::new(app.path().app_data_dir()?)),
                 skills: skills::Skills::new(app.path().app_data_dir()?.join("skills"), skills::default_targets()),
+                executive: executive::Store::new(app.path().app_data_dir()?.join("executive")),
                 watcher: Mutex::new(None),
                 shortcut_error: Mutex::new(shortcut_error),
             });
-            conductor::run(report_queue, vec![session_notices(app.handle().clone()), learning_reports(app.handle().clone()), orchestration_reports(app.handle().clone())]);
+            conductor::run(report_queue, vec![session_notices(app.handle().clone()), learning_reports(app.handle().clone()), orchestration_reports(app.handle().clone()), executive_reports(app.handle().clone())]);
             {
                 let state = app.state::<AppState>();
                 state.automations.clone().run_scheduler(Arc::new(AppDoer(app.handle().clone())));
@@ -1417,6 +1613,18 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            exec_list,
+            exec_put,
+            exec_delete,
+            exec_pack,
+            exec_brief,
+            exec_draft,
+            exec_refine,
+            exec_extract,
+            exec_learn_style,
+            exec_agent_start,
+            exec_session_capture,
+            exec_export,
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_roles, learning_status, learning_review, skills_list, skill_proposals, skill_decide, skill_action, skill_version, skill_history,
             skills_upkeep, skill_from_note, workflow_templates, workflow_list, workflow_create, workflow_edit, workflow_act, workflow_delete, workflow_report,

@@ -186,7 +186,7 @@ fn checked_direct(info: &SessionInfo, env: &DirectEnv) -> Result<(PathBuf, Direc
             .map_err(|_| "This folder is no longer one of the project's repositories, so Hivemind will not read it".to_string())?,
         AgentTask::Folder { path } => scope::other_folder(env.saved, path)
             .map_err(|_| "This folder is no longer one of your other folders, so Hivemind will not read it".to_string())?,
-        AgentTask::SystemPassport { .. } => return Err("This session does not run in your own folder".into()),
+        AgentTask::SystemPassport { .. } | AgentTask::Executive { .. } => return Err("This session does not run in your own folder".into()),
     };
     if !scope::same_path(&allowed.to_string_lossy(), &direct.path) {
         return Err("The session's folder is not the one its project or folder entry names".into());

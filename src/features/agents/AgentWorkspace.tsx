@@ -308,18 +308,13 @@ function useResources(id: string): ResourceUsage | undefined {
   return usage;
 }
 
-/** One session: its log from disk, kept current by live events; and the rail that says what it may touch. */
-function Session({ id }: { id: string }) {
+/** A session's log from disk, kept current by live events. Callers key their view by the session id. */
+export function useTranscript(id: string) {
   const client = useQueryClient();
   // Read again whenever the view opens: events that arrived while it was closed are only in the log, and a session
   // waiting on a prompt sends nothing that would reveal the gap.
   const log = useQuery({ queryKey: ["agent", "session", id], queryFn: () => agentSession(id, 0), staleTime: Infinity, refetchOnMount: "always", retry: false });
-  const sessions = useQuery(sessionsQuery());
-  const systems = useQuery(systemsQuery());
   const [state, setState] = useState<State>(EMPTY);
-  const usage = useResources(id);
-  const info = sessions.data?.find((s) => s.id === id) ?? log.data?.info;
-
   useEffect(() => { if (log.data) setState((live) => merge(live, build(log.data.events))); }, [log.data]);
   useEffect(() => {
     const stop = listen<SeqEvent>("agent-event", (e) => { if (e.payload.sessionId === id) setState((s) => apply(s, e.payload)); });
@@ -327,6 +322,16 @@ function Session({ id }: { id: string }) {
   }, [id]);
   // Events were missed (the view opened mid-run, or the window reloaded): read the log again.
   useEffect(() => { if (state.gap) client.invalidateQueries({ queryKey: ["agent", "session", id] }); }, [state.gap, client, id]);
+  return { log, state };
+}
+
+/** One session: its log from disk, kept current by live events; and the rail that says what it may touch. */
+function Session({ id }: { id: string }) {
+  const { log, state } = useTranscript(id);
+  const sessions = useQuery(sessionsQuery());
+  const systems = useQuery(systemsQuery());
+  const usage = useResources(id);
+  const info = sessions.data?.find((s) => s.id === id) ?? log.data?.info;
 
   if (log.isLoading) return <p className="muted pad">Loading…</p>;
   if (log.error || !info) return <p className="error pad">{String(log.error ?? "This session is no longer in the history.")}</p>;

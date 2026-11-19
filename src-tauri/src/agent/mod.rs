@@ -629,6 +629,7 @@ fn session_info(id: &str, adapter: &str, task: AgentTask, scope: &Scope, options
         cli_version: None,
         project: match &task {
             AgentTask::Work { project, .. } => Some(project.clone()),
+            AgentTask::Executive { project } => project.clone(),
             AgentTask::SystemPassport { .. } | AgentTask::Folder { .. } => None,
         },
         task,
@@ -680,6 +681,9 @@ pub fn clean_name(name: &str) -> Option<String> {
 fn check_combination(task: &AgentTask, engine: Engine, interface: Interface) -> Result<(), String> {
     let work = matches!(task, AgentTask::Work { .. });
     let folder = matches!(task, AgentTask::Folder { .. });
+    if matches!(task, AgentTask::Executive { .. }) {
+        return if interface == Interface::Chat { Ok(()) } else { Err("The executive assistant runs as a chat.".into()) };
+    }
     if folder && interface != Interface::Terminal {
         return Err("A session in another folder runs in the terminal.".into());
     }
@@ -1791,6 +1795,7 @@ pub fn start_task(
             let folder = scope::other_folder(saved, path)?;
             return start_direct(manager, terminals, &id, task.clone(), &folder, prompt, &options);
         }
+        AgentTask::Executive { .. } => return Err("An executive session is started with start_executive".into()),
         AgentTask::SystemPassport { .. } => {
             let home = dirs::home_dir().ok_or("Could not find your home folder")?;
             let scope = scope::for_task(bridge, &task, saved, &home)?;
@@ -1833,6 +1838,36 @@ pub fn start_task(
         let _ = worktree::remove(&tree);
     }
     started
+}
+
+/// Start an executive chat in `dir` (Hivemind's own empty folder), about `project` or all projects. `briefing` is the
+/// preamble and the evidence, built by the caller from Living Memory. The session never asks: it may read and run Living
+/// Memory's read commands, and is refused everything else.
+#[allow(clippy::too_many_arguments)] // each argument is one independent part of the new session
+pub fn start_executive(
+    manager: &Manager,
+    bridge: &Bridge,
+    saved: &Settings,
+    dir: &Path,
+    project: Option<String>,
+    briefing: String,
+    prompt: &str,
+    options: StartOptions,
+) -> Result<SessionInfo, String> {
+    if prompt.trim().is_empty() {
+        return Err("Ask the executive assistant something first".into());
+    }
+    if let Some(slug) = &project {
+        crate::git::project_entry(bridge, slug)?;
+    }
+    let task = AgentTask::Executive { project };
+    let options = StartOptions { interface: Interface::Chat, briefing: Some(briefing), profile: Some(Profile::ReadOnly), role: None, unattended: false, ..options };
+    check_combination(&task, options.engine, options.interface)?;
+    let options = check_launch_options(saved, options)?;
+    let cli = chat_program(options.engine, saved)?;
+    let scope = scope::executive(dir, format!("Executive: {}", scope::task_title(prompt)))?;
+    let launch = Launch { scope, program: cli.program, program_args: cli.args, budget_usd: saved.agent_budget_usd(), memory_root: bridge.launch().root };
+    manager.start(uuid::Uuid::new_v4().to_string(), task, launch, prompt, &options)
 }
 
 /// The task an imported CLI conversation runs under: the project checkout or a folder from the picker. A session target
@@ -3757,6 +3792,39 @@ mod tests {
         assert!(check_combination(&work_task(), Engine::Codex, Interface::Chat).is_ok());
         assert!(check_combination(&work_task(), Engine::Codex, Interface::Terminal).is_ok());
         assert!(check_combination(&passport, Engine::Claude, Interface::Chat).is_ok());
+        let executive = AgentTask::Executive { project: None };
+        assert!(check_combination(&executive, Engine::Claude, Interface::Chat).is_ok());
+        assert!(check_combination(&executive, Engine::Codex, Interface::Chat).is_ok());
+        assert_eq!(check_combination(&executive, Engine::Claude, Interface::Terminal).unwrap_err(), "The executive assistant runs as a chat.");
+    }
+
+    #[test]
+    fn an_executive_chat_reads_only_and_carries_its_briefing() {
+        let rig = Rig::scripted("executive", &[&["<", INIT, RESULT, "<"]]);
+        let harmless = if cfg!(windows) { std::env::var("ComSpec").unwrap_or_else(|_| "C:\\Windows\\System32\\cmd.exe".into()) } else { "/bin/sh".into() };
+        let saved = Settings { claude_path: Some(harmless), ..Default::default() };
+        let bridge = Bridge::new(crate::settings::resolve(&saved, |_| None));
+        let dir = rig.dir.join("executive").join("agent");
+        let started = start_executive(&rig.manager, &bridge, &saved, &dir, None, "You are the executive assistant.".into(), "What is overdue?", StartOptions::default());
+        let info = started.unwrap();
+        assert_eq!(info.task, AgentTask::Executive { project: None });
+        assert_eq!((info.title.as_str(), info.mode, info.policy, info.profile), ("Executive: What is overdue?", Mode::Interactive, PolicyMode::PreApproved, Some(Profile::ReadOnly)));
+        assert_eq!(info.workspace, vec![dir.display().to_string()]);
+        assert!(dir.is_dir(), "the working folder is made");
+        rig.turns(&info.id, 1);
+        let first = rig.stdin_lines(&info.id).into_iter().next().unwrap().to_string();
+        assert!(first.contains("You are the executive assistant.") && first.contains("What is overdue?"), "{first}");
+        let specs = rig.specs.lock().unwrap();
+        let spec = specs.last().unwrap();
+        assert_eq!(spec.cwd, dir);
+        assert!(matches!(&spec.policy, Policy::PreApproved { allow } if allow.iter().any(|r| r == "Bash(*alm* search *)")));
+        assert!(spec.deny.iter().any(|r| r == "Bash(*alm* capture *)") && spec.deny.iter().any(|r| r == "PowerShell(*living_memory.py* update *)"));
+        assert!(scope::governed_rules().iter().all(|r| spec.deny.contains(r)));
+        drop(specs);
+        assert!(start_executive(&rig.manager, &bridge, &saved, &dir, None, String::new(), " ", StartOptions::default()).is_err(), "an empty question is refused");
+        let terminal = StartOptions { interface: Interface::Terminal, ..Default::default() };
+        let as_chat = start_executive(&rig.manager, &bridge, &saved, &dir, None, String::new(), "Hi", terminal).unwrap();
+        assert_eq!(as_chat.interface, Interface::Chat, "the executive assistant is always a chat");
     }
 
     #[test]

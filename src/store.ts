@@ -8,6 +8,7 @@ export type Shelf = "active" | "archived" | "any";
 /** One page per sidebar section. Memory also holds the open notes (`view: "notes"`) and its sub-views. */
 export type Route =
   | { page: "overview"; view?: "work" }
+  | { page: "executive"; tab?: ExecutiveTab; capture?: string; briefing?: string; draft?: string; session?: string }
   | { page: "agents"; session?: string; view?: "new" }
   | { page: "changes"; id?: number; view?: "detail"; ref?: string }
   | { page: "architecture"; system?: string }
@@ -20,6 +21,7 @@ export type Route =
   | { page: "skills"; skill?: string }
   | { page: "workflows"; tab?: "runs" | "automations"; run?: string; automation?: string };
 export type Page = Route["page"];
+export type ExecutiveTab = "today" | "portfolio" | "agent" | "comms" | "briefings";
 
 export const safeStorage: StateStorage = {
   getItem: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
@@ -81,3 +83,4 @@ export const openWorkflows = (to: { tab?: "runs" | "automations"; run?: string; 
   app().go({ page: "workflows", ...to, tab: to.automation ? "automations" : to.run ? "runs" : to.tab }, { replace: app().route.page === "workflows" });
 export const startSession = () => app().go({ page: "agents", view: "new" });
 export const openChange = (id: number) => app().go({ page: "changes", id, view: "detail" });
+export const openExecutive = (to: { tab?: ExecutiveTab; capture?: string; briefing?: string; draft?: string; session?: string } = {}) => app().go({ page: "executive", ...to });

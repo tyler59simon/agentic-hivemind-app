@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Clock, GitFork, Plus, Workflow } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ENGINE_LABELS, repoBranches, rolesQuery, type Engine, type Role } from "../../lib/agent";
+import { BRIEFING_KINDS, type BriefingKind } from "../../lib/executive";
 import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import {
@@ -17,6 +18,7 @@ import { Confirm } from "../../ui/Modal";
 import { ArrowLink, PageHeader, Row, Section, Tabs } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useShownEngines } from "../agents/engines";
+import { BRIEFING_LABEL } from "../executive/BriefingsTab";
 import { repoName } from "../agents/session";
 import { projectsQuery } from "../projects/useProject";
 import { systemsForProject } from "../projects/scope";
@@ -304,6 +306,8 @@ function AutomationForm({ initial, onDone }: { initial: Automation; onDone: (sav
   const systems = useQuery({ ...systemsQuery(), enabled: useSystemsEnabled() });
   const label = useRoleLabels();
   const engines = useShownEngines();
+  // A briefing may be about any project, with or without repositories.
+  const projectList = useQuery({ ...projectsQuery(), enabled: useProjectsEnabled() }).data?.projects.filter((p) => p.status !== "archived") ?? [];
   const [a, setA] = useState<Automation>(initial);
   // A new automation made before the settings arrived may name a hidden engine; the form has no engine to pick.
   useEffect(() => {
@@ -350,8 +354,8 @@ function AutomationForm({ initial, onDone }: { initial: Automation; onDone: (sav
       <label className="field">
         <span>What it does</span>
         <select value={a.action.kind} onChange={(e) => setA({ ...a, action: actionOf(e.target.value as Automation["action"]["kind"], a.action, engines.first) })}>
-          {/* Knowledge from new commits runs the Claude Code reviewer. */}
-          {Object.entries(ACTION_LABELS).filter(([k]) => k !== "commit_capture" || engines.shows("claude") || initial.action.kind === k)
+          {/* Knowledge from new commits and briefings run on Claude Code. */}
+          {Object.entries(ACTION_LABELS).filter(([k]) => (k !== "commit_capture" && k !== "executive_briefing") || engines.shows("claude") || initial.action.kind === k)
             .map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
       </label>
@@ -394,6 +398,32 @@ function AutomationForm({ initial, onDone }: { initial: Automation; onDone: (sav
               {(systems.data?.systems ?? []).filter((s) => s.status !== "retired" && s.architecture).map((s) => <option key={s.slug} value={s.slug}>{s.name}</option>)}
             </select>
           </label>
+        );
+      })()}
+      {a.action.kind === "executive_briefing" && (() => {
+        const act = a.action;
+        return (
+          <>
+            <label className="field">
+              <span>Briefing</span>
+              <select value={act.briefing} onChange={(e) => setA({ ...a, action: { ...act, briefing: e.target.value as BriefingKind } })}>
+                {BRIEFING_KINDS.map((k) => <option key={k} value={k}>{BRIEFING_LABEL[k]}</option>)}
+              </select>
+            </label>
+            <label className="field">
+              <span>Period</span>
+              <select value={act.days} onChange={(e) => setA({ ...a, action: { ...act, days: Number(e.target.value) } })}>
+                {[7, 14, 30].map((d) => <option key={d} value={d}>Last {d} days</option>)}
+              </select>
+            </label>
+            <label className="field">
+              <span>About</span>
+              <select value={a.project ?? ""} onChange={(e) => setA({ ...a, project: e.target.value || null, repo: null })}>
+                <option value="">All active projects</option>
+                {projectList.map((p) => <option key={p.slug} value={p.slug}>{p.name}</option>)}
+              </select>
+            </label>
+          </>
         );
       })()}
       {needsProject(a) && <ProjectRepo project={a.project ?? ""} repo={a.repo ?? ""} onChange={(project, repo) => setA({ ...a, project, repo })} />}
@@ -478,7 +508,7 @@ function AutomationsTab({ picked }: { picked?: string }) {
         ))}
         <h2 className="review-group">Built in</h2>
         <p className="muted small pad">Add one to change and turn it on. All start off.</p>
-        {data.data?.templates.filter((t) => t.action.kind !== "commit_capture" || engines.shows("claude")).map((t) => (
+        {data.data?.templates.filter((t) => (t.action.kind !== "commit_capture" && t.action.kind !== "executive_briefing") || engines.shows("claude")).map((t) => (
           <button key={t.id} className="review-item" title={ACTION_HELP[t.action.kind]} onClick={() => fromTemplate(t)}>
             <Plus size="1.3em" aria-hidden /><span className="grow">{t.name}<br /><span className="small muted">{t.triggerText}</span></span>
           </button>

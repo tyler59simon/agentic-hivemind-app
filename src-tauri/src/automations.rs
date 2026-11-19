@@ -52,6 +52,9 @@ pub enum Action {
     CommitCapture,
     /// Work out a system's architecture drift (commits since its output, hand edits, structural changes, rule findings).
     ArchitectureCheck { system: String },
+    /// Write an executive briefing (`briefing` is weekly, project, priorities, commitments or risks) over the last `days`
+    /// days, about the automation's project or all active projects, and keep it on the Executive page.
+    ExecutiveBriefing { briefing: String, days: u32 },
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -254,6 +257,8 @@ pub fn templates() -> Vec<Automation> {
         make("weekly-skill-upkeep", "Weekly skill upkeep", Trigger::Weekly { days: vec![6], at: 18 * 60 }, Action::SkillUpkeep, false),
         make("architecture-check", "Weekly architecture drift check", Trigger::Weekly { days: vec![0], at: 8 * 60 }, Action::ArchitectureCheck { system: String::new() }, false),
         make("commit-capture", "Knowledge from new commits", Trigger::Commit, Action::CommitCapture, true),
+        make("weekly-briefing", "Weekly leadership briefing", Trigger::Weekly { days: vec![0], at: 7 * 60 },
+            Action::ExecutiveBriefing { briefing: "weekly".into(), days: 7 }, false),
         make("health-check", "Daily project health check", Trigger::Daily { at: 8 * 60 },
             Action::Role { role: Role::Tester, engine: Engine::Claude, prompt: "Run the project's allowed test and build commands and report what fails. Do not edit files.".into() }, true),
         make("failure-investigation", "Investigate failed sessions", Trigger::SessionFailed,
@@ -283,6 +288,8 @@ pub fn check(a: &Automation) -> Result<(), String> {
         Action::Role { prompt, .. } if prompt.trim().is_empty() => Err("Write the session's instructions".into()),
         Action::Workflow { goal, template } if goal.trim().is_empty() || template.trim().is_empty() => Err("Pick a workflow template and write its goal".into()),
         Action::ArchitectureCheck { system } if system.trim().is_empty() => Err("Pick the system to check".into()),
+        Action::ExecutiveBriefing { briefing, .. } if !crate::executive::BRIEF_KINDS.contains(&briefing.as_str()) => Err("Pick the kind of briefing".into()),
+        Action::ExecutiveBriefing { days, .. } if !(1..=90).contains(days) => Err("A briefing covers 1 to 90 days".into()),
         Action::Role { role: Role::Developer, .. } => Err("An automation may not start a developer: it would edit code with nobody watching. Use a workflow you start yourself.".into()),
         // Turning such an automation off is always allowed.
         Action::Role { role, engine: Engine::Codex, .. } if a.enabled && role.profile() == Profile::EditWorktree =>
@@ -319,7 +326,7 @@ fn valid_id(id: &str) -> bool {
 
 /// Runs that start a session or a workflow, and so spend against the daily budget.
 fn paid(a: &Automation) -> bool {
-    matches!(a.action, Action::Role { .. } | Action::Workflow { .. } | Action::CommitCapture)
+    matches!(a.action, Action::Role { .. } | Action::Workflow { .. } | Action::CommitCapture | Action::ExecutiveBriefing { .. })
 }
 
 impl Automations {
@@ -844,6 +851,14 @@ mod tests {
         a.action = Action::Role { role: Role::Developer, engine: Engine::Claude, prompt: "x".into() };
         a.trigger = Trigger::Weekly { days: vec![9], at: 0 };
         assert!(check(&a).is_err());
+
+        // A briefing needs no project (none means all active projects) and counts against the budget.
+        let mut brief = templates().into_iter().find(|t| t.id == "weekly-briefing").unwrap();
+        assert!(check(&brief).is_ok() && paid(&brief));
+        brief.action = Action::ExecutiveBriefing { briefing: "gossip".into(), days: 7 };
+        assert!(check(&brief).unwrap_err().contains("kind of briefing"));
+        brief.action = Action::ExecutiveBriefing { briefing: "risks".into(), days: 0 };
+        assert!(check(&brief).unwrap_err().contains("1 to 90"));
     }
 
     #[derive(Default)]

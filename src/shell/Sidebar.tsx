@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, ChevronDown, Database, GitBranch, House, LayoutDashboard, Network, Wrench, ScrollText, Sparkles, SquareCheck, Terminal, Workflow, type LucideIcon } from "lucide-react";
+import { BookOpen, BriefcaseBusiness, ChevronDown, Database, GitBranch, House, LayoutDashboard, Network, Wrench, ScrollText, Sparkles, SquareCheck, Terminal, Workflow, type LucideIcon } from "lucide-react";
 import logo from "../assets/logo.png";
 import { ProjectSwitcher } from "../features/projects/ProjectSwitcher";
 import { dotOf, useAttention } from "../features/terminal/attention";
@@ -14,6 +14,7 @@ import { useWorkspace } from "../workspace/store";
 /** The sections, in the order the sidebar lists them. */
 export const SECTIONS: { page: Page; label: string; icon: LucideIcon }[] = [
   { page: "overview", label: "Overview", icon: House },
+  { page: "executive", label: "Executive", icon: BriefcaseBusiness },
   { page: "agents", label: "Agent Workspace", icon: Terminal },
   { page: "changes", label: "Changes", icon: GitBranch },
   { page: "architecture", label: "Architecture", icon: Network },

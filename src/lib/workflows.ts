@@ -2,6 +2,7 @@
 // runs both and owns their files; these are its commands and the shapes it returns.
 import { invoke } from "@tauri-apps/api/core";
 import type { Engine, Role, Verdict } from "./agent";
+import type { BriefingKind } from "./executive";
 
 export type TaskState = "waiting" | "running" | "succeeded" | "failed" | "blocked" | "skipped" | "cancelled";
 export type RunState = "planned" | "running" | "succeeded" | "failed" | "cancelled";
@@ -38,7 +39,8 @@ export type Action =
   | { kind: "role"; role: Role; engine: Engine; prompt: string }
   | { kind: "workflow"; template: string; goal: string }
   | { kind: "memory_maintenance" } | { kind: "skill_upkeep" } | { kind: "commit_capture" }
-  | { kind: "architecture_check"; system: string };
+  | { kind: "architecture_check"; system: string }
+  | { kind: "executive_briefing"; briefing: BriefingKind; days: number };
 export type ActionKind = Action["kind"];
 export type Notify = "all" | "failures" | "none";
 

@@ -8,7 +8,9 @@ export type AgentTask =
   | { kind: "system_passport"; slug: string }
   | { kind: "work"; project: string; repo: string; branch?: string; change?: number }
   /** A folder chosen with `folderPick`; terminal only. It always runs in place. */
-  | { kind: "folder"; path: string };
+  | { kind: "folder"; path: string }
+  /** The executive assistant's chat: no repository, Living Memory read only. Started with `exec_agent_start`. */
+  | { kind: "executive"; project?: string };
 export type SessionStatus = "running" | "waiting" | "idle" | "succeeded" | "failed" | "cancelled" | "ended";
 export type SessionMode = "unattended" | "interactive";
 export type Policy = "pre_approved" | "ask" | "accept_edits";
