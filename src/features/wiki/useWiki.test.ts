@@ -22,6 +22,15 @@ describe("wiki queries", () => {
     expect(client.getQueryState(agentWikiQuery("demo", "").queryKey)!.isInvalidated).toBe(true);
   });
 
+  it("a domain named agent does not collide with the agent edition's prefix", async () => {
+    const client = new QueryClient();
+    client.setQueryData(wikiQuery("agent", false).queryKey, 1);
+    client.setQueryData(agentWikiQuery("agent", "").queryKey, 1);
+    await client.invalidateQueries({ queryKey: ["wiki", "agent"] });
+    expect(client.getQueryState(wikiQuery("agent", false).queryKey)!.isInvalidated).toBe(false);
+    expect(client.getQueryState(agentWikiQuery("agent", "").queryKey)!.isInvalidated).toBe(true);
+  });
+
   it("a preview is keyed by Restructure, so a superseded one never stands in for the current one", () => {
     const plain = agentPlanQuery("demo", "core", false).queryKey, restructured = agentPlanQuery("demo", "core", true).queryKey;
     expect(plain).not.toEqual(restructured);

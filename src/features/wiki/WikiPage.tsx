@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Clock, Download, House, List, ListTree, Package, RefreshCw, Search } from "lucide-react";
-import { Fragment, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useAgentWikiEnabled, useWikiEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { domains } from "../../lib/lm";
@@ -122,9 +122,13 @@ export function WikiPage() {
   // A new page starts at the top.
   useEffect(() => { document.querySelector("main.page-host")?.scrollTo({ top: 0 }); }, [at, asked]);
 
+  // The agent edition's scope per domain, so Structured and back returns to the project that was open.
+  const agentProjects = useRef(new Map<string, string>());
+  if (agentMode && domain) agentProjects.current.set(domain, project);
   const pickEdition = (next: "structured" | "agent") => {
     if ((next === "agent") === agentMode) return;
-    open({ agent: next === "agent" }); // an address of one edition names nothing in the other
+    // An address of one edition names nothing in the other; only the scope comes back.
+    open({ agent: next === "agent", project: next === "agent" && domain ? agentProjects.current.get(domain) : undefined });
   };
 
   const exportHtml = async () => {

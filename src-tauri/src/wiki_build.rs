@@ -182,11 +182,12 @@ fn send_signal(args: &[String]) {
     let _ = Command::new("kill").args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
 }
 
-/// Stop a process and what it started, the Unix way: SIGTERM goes to the builder first, so it can stop the `claude` calls it
-/// started; if it is still running after `grace`, SIGKILL goes to its whole process group.
+/// Stop a process and what it started, the Unix way: SIGTERM goes to the build's process group (the launcher and the Python
+/// interpreter behind it), so the builder can stop the `claude` calls it started; if it is still running after `grace`, SIGKILL
+/// goes to the same group.
 #[cfg_attr(windows, allow(dead_code))]
 fn terminate_with(pid: u32, gone: &dyn Fn() -> bool, grace: Duration, step: Duration, send: &dyn Fn(&[String])) {
-    send(&["-TERM".to_string(), pid.to_string()]);
+    send(&["-TERM".to_string(), format!("-{pid}")]);
     let started = std::time::Instant::now();
     while started.elapsed() < grace {
         if gone() {
@@ -267,8 +268,9 @@ fn report(emit: &dyn Fn(&str, Value), domain: &str, scope: &str, outcome: &Resul
 /// Run one build, or a dry run, and return the parsed stdout object. A real build also reports through `emit`
 /// (`wiki-build-progress` per line, `wiki-build-done` at the end); a dry run spends nothing and emits nothing.
 /// A second real build while one runs fails at once, without events. A dry run does not use that slot, so previews can overlap
-/// each other and a build. `claude` is the path for `LIVING_MEMORY_CLAUDE` (see `claude_override`).
-pub fn run(emit: &dyn Fn(&str, Value), launch: &Launch, domain: &str, project: Option<&str>, restructure: bool, dry_run: bool, claude: Option<&str>) -> Result<Value, String> {
+/// each other and a build. `claude` finds the path for `LIVING_MEMORY_CLAUDE` (see `claude_override`); it can be slow (it runs
+/// `claude --version`), so it is called only after the real build holds the slot, where a cancel is kept, and never for a dry run.
+pub fn run(emit: &dyn Fn(&str, Value), launch: &Launch, domain: &str, project: Option<&str>, restructure: bool, dry_run: bool, claude: &dyn Fn() -> Option<String>) -> Result<Value, String> {
     check_name("domain", domain)?;
     if let Some(project) = project {
         check_name("project", project)?;
@@ -284,7 +286,8 @@ pub fn run(emit: &dyn Fn(&str, Value), launch: &Launch, domain: &str, project: O
         *slot = Some(Running { pid: None, cancelled: false });
         Some(Clear)
     };
-    let mut child = match spawn(launch, &build_argv(domain, project, restructure, dry_run), claude, !dry_run) {
+    let claude = if dry_run { None } else { claude() };
+    let mut child = match spawn(launch, &build_argv(domain, project, restructure, dry_run), claude.as_deref(), !dry_run) {
         Ok(child) => child,
         Err(e) => {
             if e == CANCELLED {
@@ -416,18 +419,18 @@ mod tests {
     }
 
     #[test]
-    fn a_stop_sends_sigterm_first_and_kills_the_group_only_when_the_builder_stays() {
+    fn a_stop_sends_sigterm_to_the_group_first_and_kills_it_only_when_the_builder_stays() {
         use std::cell::{Cell, RefCell};
         let sent = RefCell::new(Vec::<Vec<String>>::new());
         let send = |args: &[String]| sent.borrow_mut().push(args.to_vec());
         let polls = Cell::new(0);
-        // The builder ends on the third look: SIGTERM only.
+        // The builder ends on the third look: SIGTERM to the group only.
         terminate_with(77, &|| { polls.set(polls.get() + 1); polls.get() >= 3 }, Duration::from_secs(5), Duration::from_millis(1), &send);
-        assert_eq!(*sent.borrow(), [["-TERM", "77"]]);
+        assert_eq!(*sent.borrow(), [["-TERM", "-77"]]);
         sent.borrow_mut().clear();
         // It never ends: SIGTERM, then SIGKILL to the group once the grace is over.
         terminate_with(77, &|| false, Duration::from_millis(30), Duration::from_millis(1), &send);
-        assert_eq!(*sent.borrow(), [vec!["-TERM", "77"], vec!["-KILL", "-77"]]);
+        assert_eq!(*sent.borrow(), [vec!["-TERM", "-77"], vec!["-KILL", "-77"]]);
     }
 
     #[test]
@@ -465,7 +468,7 @@ mod tests {
         let seen = Mutex::new(Vec::<(String, Value)>::new());
         let emit = |name: &str, payload: Value| seen.lock().unwrap().push((name.to_string(), payload));
 
-        let result = run(&emit, &launch, "demo", Some("core"), false, false, Some("C:/x/claude.exe")).unwrap();
+        let result = run(&emit, &launch, "demo", Some("core"), false, false, &|| Some("C:/x/claude.exe".to_string())).unwrap();
         assert_eq!(result["written"][0], "pg000001");
         assert_eq!(result["claude"], "C:/x/claude.exe");
         assert!(result["argv"].as_array().unwrap().iter().any(|a| a == "--progress"));
@@ -477,10 +480,20 @@ mod tests {
         assert_eq!(events[2].1["result"]["written"][0], "pg000001");
 
         seen.lock().unwrap().clear();
-        let dry = run(&emit, &launch, "demo", None, false, true, None).unwrap();
+        let dry = run(&emit, &launch, "demo", None, false, true, &|| panic!("a dry run does not look for Claude")).unwrap();
         assert_eq!(dry["dry_run"], true);
-        assert_eq!(dry["claude"], Value::Null);
+        assert_eq!(dry["claude"], std::env::var(CLAUDE_ENV).map_or(Value::Null, Value::from)); // inherited, not set by the run
         assert!(seen.lock().unwrap().is_empty());
+
+        // A cancel that comes while Claude is being looked for (the slot is already taken) is kept: the child never starts.
+        let probing = run(&emit, &launch, "demo", None, false, false, &|| {
+            cancel();
+            Some("C:/x/claude.exe".to_string())
+        });
+        assert_eq!(probing, Err(CANCELLED.into()));
+        assert_eq!(seen.lock().unwrap().iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(), [DONE_EVENT]);
+        assert!(running().is_none());
+        seen.lock().unwrap().clear();
 
         // A cancel that came before the child existed (the slot is taken, no pid yet) keeps the child from starting.
         *running() = Some(Running { pid: None, cancelled: true });
@@ -502,15 +515,15 @@ mod tests {
         let cancelling = |name: &str, payload: Value| {
             if name == PROGRESS_EVENT {
                 // The child is running; a second real build is refused, a dry run is not, then cancel.
-                assert_eq!(run(&|_: &str, _: Value| {}, &launch, "demo", None, false, false, None), Err("A wiki build is already running.".into()));
-                assert_eq!(run(&|_: &str, _: Value| {}, &preview, "demo", None, true, true, None).unwrap()["dry_run"], true);
+                assert_eq!(run(&|_: &str, _: Value| {}, &launch, "demo", None, false, false, &|| None), Err("A wiki build is already running.".into()));
+                assert_eq!(run(&|_: &str, _: Value| {}, &preview, "demo", None, true, true, &|| None).unwrap()["dry_run"], true);
                 assert!(running().is_some(), "the preview left the build's slot alone");
                 cancel();
             }
             seen.lock().unwrap().push((name.to_string(), payload));
         };
         let started = std::time::Instant::now();
-        assert_eq!(run(&cancelling, &launch, "demo", None, false, false, None), Err(CANCELLED.into()));
+        assert_eq!(run(&cancelling, &launch, "demo", None, false, false, &|| None), Err(CANCELLED.into()));
         assert!(started.elapsed() < std::time::Duration::from_secs(60));
         let events = seen.lock().unwrap().clone();
         assert_eq!(events.last().unwrap().0, DONE_EVENT);

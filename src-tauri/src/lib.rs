@@ -1225,11 +1225,12 @@ async fn wiki_agent_build(app: AppHandle, state: State<'_, AppState>, domain: St
     blocking(move || {
         let saved = settings::load(&settings_path);
         wiki_build::check_shown(&saved)?;
-        let claude = agent::claude::available(&saved);
         let emit = |name: &str, payload: Value| {
             let _ = app.emit(name, payload);
         };
-        wiki_build::run(&emit, &launch, &domain, project.as_deref(), restructure, dry_run, wiki_build::claude_override(&claude))
+        // Looked up inside `run`, once the build holds its slot (`claude --version` can take seconds), and not at all for a dry run.
+        let claude = || wiki_build::claude_override(&agent::claude::available(&saved)).map(String::from);
+        wiki_build::run(&emit, &launch, &domain, project.as_deref(), restructure, dry_run, &claude)
     })
     .await
 }

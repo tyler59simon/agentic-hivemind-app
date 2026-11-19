@@ -1,5 +1,6 @@
-// The wiki model of one domain. Every key of the wiki, both editions, starts with "wiki", so refreshStore (note changes) refetches
-// them and `invalidateWiki` reaches them all.
+// The wiki model of one domain. Every key of the wiki starts with "wiki" and then names its edition ("structured" or "agent"), so a
+// domain called "agent" cannot collide with an edition prefix; refreshStore (note changes) refetches them and `invalidateWiki`
+// reaches them all.
 import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useAgentWikiEnabled, useWikiEnabled } from "../../lib/connection";
@@ -10,13 +11,13 @@ import { indexModel } from "./wiki";
 /** Refetch the structured and the agent-written edition (a registry change moves the projects and folders of both). */
 export const invalidateWiki = (client: QueryClient) => client.invalidateQueries({ queryKey: ["wiki"] });
 
-export const wikiQuery = (domain: string, archived: boolean) => ({ queryKey: ["wiki", domain, archived], queryFn: () => wikiModel(domain, { archived }) });
+export const wikiQuery = (domain: string, archived: boolean) => ({ queryKey: ["wiki", "structured", domain, archived], queryFn: () => wikiModel(domain, { archived }) });
 
 /** The domain's wiki, indexed; `ix` is null while loading, with no domain, or when this Living Memory has no `wiki` command.
  *  Switching `archived` (not the domain) keeps the previous model on screen until the new one arrives. */
 export function useWiki(domain: string | null, archived: boolean) {
   const enabled = useWikiEnabled();
-  const query = useQuery({ ...wikiQuery(domain ?? "", archived), enabled: enabled && !!domain, placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[1] === domain ? prev : undefined) });
+  const query = useQuery({ ...wikiQuery(domain ?? "", archived), enabled: enabled && !!domain, placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[2] === domain ? prev : undefined) });
   const ix = useMemo(() => (query.data ? indexModel(query.data) : null), [query.data]);
   return { enabled, query, ix };
 }
