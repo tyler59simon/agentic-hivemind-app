@@ -2,8 +2,8 @@ import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, FileText, Layers, Link as LinkIcon, Play, Plus } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  agentStart, APPROVALS, asksNobody, CLAUDE_MODES, enginesQuery, modelsQuery, repoBranches, SANDBOXES, sessionsQuery,
-  type Access, type Approval, type ClaudeMode, type Engine, type Interface, type Policy, type Sandbox,
+  agentStart, APPROVALS, asksNobody, CLAUDE_MODES, enginesQuery, modelsQuery, repoBranches, rolesQuery, SANDBOXES, sessionsQuery,
+  type Access, type Approval, type ClaudeMode, type Engine, type Interface, type Policy, type Role, type Sandbox,
 } from "../../lib/agent";
 import { useChangesEnabled, useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
@@ -27,7 +27,7 @@ import { ConnectionDialog } from "./ConnectionDialog";
 import { ResumeCli } from "./ResumeCli";
 import { useSessionDraft } from "./draft";
 import { ALLOWED_NOTE, CODEX_ALLOWED_NOTE, codexPermissionLines, draftCounts, permissionLines, POLICIES, policyHelp, repoName, sessionBriefing } from "./session";
-import { accessLines, buildStart, defaultAccess, effortOptions, historyTarget, terminalsIn, WHERE_HELP, withApproval, type Where } from "./start";
+import { accessLines, buildStart, defaultAccess, effortOptions, historyTarget, PROFILE_HELP, PROFILE_LABELS, terminalsIn, WHERE_HELP, withApproval, type Where } from "./start";
 
 const MODELS = [
   { id: "", label: "Default (your Claude Code setting)" },
@@ -114,6 +114,8 @@ function StartForm({ project }: { project: Project | null }) {
   const [repo, setRepo] = useState(project?.repos[0] ?? "");
   const [pickedBranch, setPickedBranch] = useState<string | null>(null);
   const [policy, setPolicy] = useState<Policy>("ask");
+  const [role, setRole] = useState<Role | "">("");
+  const [unattended, setUnattended] = useState(false);
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
   const [picked, setPicked] = useState<Access>(defaultAccess(draft.engine));
@@ -171,6 +173,10 @@ function StartForm({ project }: { project: Project | null }) {
   // A draft can arrive with Codex and Chat (another page preselected the engine); Chat is then not allowed.
   useEffect(() => { if (selected && !selected.chat && draft.interface === "chat") draft.setInterface("terminal"); }, [selected, draft]);
   const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
+  const roles = useQuery({ ...rolesQuery(), retry: false });
+  // A role applies to chat sessions only; the terminal runs the CLI with its own modes.
+  const roleInfo = !terminal ? roles.data?.find((r) => r.role === role) : undefined;
+  const noUnattended = roleInfo?.profile === "edit_worktree" && draft.engine === "codex";
 
   // The engine's own permission modes: what was picked, or the engine's default when the engine has changed since.
   const access = picked.engine === draft.engine ? picked : defaultAccess(draft.engine);
@@ -251,6 +257,7 @@ function StartForm({ project }: { project: Project | null }) {
       const req = buildStart({
         engine: draft.engine, face, where: w, project: project?.slug ?? null, repo, branch, change, folder, task, policy, access, model, effort,
         context: draft.context, briefing: makeBriefing(w), system: system?.slug,
+        role: roleInfo?.role ?? null, unattended: unattended && !noUnattended,
       });
       const info = await agentStart(req.task, req.prompt, req.options);
       useSessionDraft.getState().reset();
@@ -315,7 +322,9 @@ function StartForm({ project }: { project: Project | null }) {
                 <li>Limit edits to {repoName(repo)}</li>
                 {openSteps.slice(0, 3).map((step) => <li key={step}>{step}</li>)}
                 <li>{needsBranch ? `Work on a new branch from ${branch}; nothing is pushed or merged` : "Work in your real checkout; nothing is pushed or merged for you"}</li>
-                {terminal ? accessLines(access).slice(0, 2).map((line) => <li key={line}>{line}</li>) : <li>{(draft.engine === "codex" ? codexPermissionLines : permissionLines)(policy)[0]}</li>}
+                {terminal ? accessLines(access).slice(0, 2).map((line) => <li key={line}>{line}</li>)
+                  : roleInfo ? <li>{PROFILE_HELP[roleInfo.profile]}</li>
+                  : <li>{(draft.engine === "codex" ? codexPermissionLines : permissionLines)(policy)[0]}</li>}
               </ul>
             </Section>
             <div>
@@ -371,6 +380,18 @@ function StartForm({ project }: { project: Project | null }) {
               {selected?.chat === false && selected.chatReason && <p className="muted small">{selected.chatReason}</p>}
               {terminal && <p className="muted small">The terminal runs the real command-line program. It asks for approvals itself, inside the terminal.</p>}
             </section>
+            {!terminal && (
+              <section className="start-section">
+                <h2>Role</h2>
+                <select aria-label="Role" value={role} onChange={(e) => { setRole(e.target.value as Role | ""); setUnattended(false); }}>
+                  <option value="">None (a plain session)</option>
+                  {(roles.data ?? []).map((r) => <option key={r.role} value={r.role}>{r.label}</option>)}
+                </select>
+                <p className="muted small">{roleInfo
+                  ? `The ${roleInfo.label.toLowerCase()} instructions go before your task${roleInfo.givesVerdict ? ", and its last line is a verdict" : ""}.`
+                  : "A role adds instructions for the job and picks the permissions to match."}</p>
+              </section>
+            )}
             <section className="start-section">
               <h2>{!project ? "Folder" : terminal ? "Where" : "Workspace"}</h2>
               {project && terminal && (
@@ -452,6 +473,15 @@ function StartForm({ project }: { project: Project | null }) {
                       <label><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> I understand; start without asking</label>
                     </div>
                   )}
+                </>
+              ) : roleInfo ? (
+                <>
+                  <p><strong>{PROFILE_LABELS[roleInfo.profile]}</strong></p>
+                  <p className="muted small">{PROFILE_HELP[roleInfo.profile]}</p>
+                  {roleInfo.profile === "edit_worktree" && <p className="muted small">Allowed commands come from the project's list in Settings.</p>}
+                  <label title={noUnattended ? "Codex cannot edit files without asking; run it attended or use Claude Code." : undefined}>
+                    <input type="checkbox" checked={unattended && !noUnattended} disabled={noUnattended} onChange={(e) => setUnattended(e.target.checked)} /> Unattended: never ask me; refuse what the profile does not allow
+                  </label>
                 </>
               ) : (
                 <>

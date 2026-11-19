@@ -171,6 +171,11 @@ impl Session {
         }
     }
 
+    /// The program's process id, while the system reports one.
+    pub fn pid(&self) -> Option<u32> {
+        self.pid
+    }
+
     /// Close the terminal: ask first (console close), kill the tree if that is not enough.
     /// The `Exit` event follows either way.
     pub fn close(&self) {

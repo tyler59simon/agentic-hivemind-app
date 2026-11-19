@@ -2,10 +2,12 @@ mod agent;
 mod architecture;
 mod bridge;
 mod capture;
+mod conductor;
 mod drafts;
 mod folders;
 mod git;
 mod notify;
+mod resources;
 mod review;
 mod settings;
 mod term;
@@ -207,6 +209,12 @@ async fn agent_engines(state: State<'_, AppState>) -> Result<Vec<EngineInfo>, St
 async fn agent_models(state: State<'_, AppState>, engine: agent::Engine) -> Result<agent::models::AgentModels, String> {
     let path = state.settings_path.clone();
     blocking(move || Ok(agent::models::list(engine, &settings::load(&path)))).await
+}
+
+/// The roles a chat session can be started in, with their default permission profiles.
+#[tauri::command]
+fn agent_roles() -> Vec<agent::roles::RoleInfo> {
+    agent::roles::list()
 }
 
 /// Start an agent session for a task; what it may touch is worked out here, not by the webview.
@@ -545,6 +553,11 @@ fn save_settings(app: AppHandle, state: State<'_, AppState>, value: Settings) ->
     let previous = settings::load(&state.settings_path);
     // The folder list changes only through the native picker.
     let value = folders::keep(&previous, value);
+    for (project, commands) in value.allowed_commands.iter().flatten() {
+        for command in commands {
+            agent::scope::check_command(command).map_err(|e| format!("{project}: {e}"))?;
+        }
+    }
     settings::save(&state.settings_path, &value)?;
     *state.shortcut_error.lock().unwrap() = capture::apply_shortcut(&app, value.capture_shortcut().as_deref()).err();
     // Only a change of interpreter, script or store needs a new Living Memory process.
@@ -660,6 +673,19 @@ fn draft_list(state: State<'_, AppState>) -> Vec<Value> {
     drafts::list(&state.drafts_dir)
 }
 
+/// Toasts for chat sessions: waiting for an approval, a finished turn, a finished background session. A terminal session
+/// has its own, from the terminal's signals.
+fn session_notices(app: AppHandle) -> conductor::Handler {
+    Box::new(move |report| {
+        let Some(text) = notify::session_text(report) else { return };
+        let Some(state) = app.try_state::<AppState>() else { return };
+        let Ok(info) = state.agents.info(report.id()) else { return };
+        if info.interface == agent::Interface::Chat {
+            notify::session(&app, &info.id, info.name.as_deref().unwrap_or(&info.title), text);
+        }
+    })
+}
+
 /// Hook mode (`--hivemind-signal <event>`): Some(exit code) when this run is a hook, which opens no window.
 pub fn hook_main(args: &[String]) -> Option<i32> {
     term::signal::hook_main(args)
@@ -695,6 +721,7 @@ pub fn run() {
             }
             let events = app.handle().clone();
             let exits = app.handle().clone();
+            let (reports, report_queue) = conductor::queue();
             let agents = agent::Manager::new(
                 sessions_dir,
                 Arc::new(agent::claude::ClaudeCode),
@@ -703,6 +730,10 @@ pub fn run() {
                     let _ = match emit {
                         agent::Emit::Event(event) => events.emit("agent-event", event),
                         agent::Emit::SessionsChanged => events.emit("agent-sessions-changed", ()),
+                        agent::Emit::Lifecycle(report) => {
+                            let _ = reports.send(report);
+                            Ok(())
+                        }
                     };
                 }),
             );
@@ -736,6 +767,14 @@ pub fn run() {
                 watcher: Mutex::new(None),
                 shortcut_error: Mutex::new(shortcut_error),
             });
+            conductor::run(report_queue, vec![session_notices(app.handle().clone())]);
+            let (state, sampled) = (app.handle().clone(), app.handle().clone());
+            resources::watch(
+                move || state.try_state::<AppState>().map(|s| [s.agents.pids(), s.terminals.pids()].concat()).unwrap_or_default(),
+                move |usage| {
+                    let _ = sampled.emit("agent-resources", usage);
+                },
+            );
             Ok(())
         })
         // The hidden capture window must not keep the app alive once the main window is really closed.
@@ -749,7 +788,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
-            agent_available, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, repo_branches,
+            agent_available, agent_roles, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, repo_branches,
             agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_stop_and_approve, review_request_changes, review_request_terminal_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
             system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export
         ])

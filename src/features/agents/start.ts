@@ -1,6 +1,6 @@
 // Pure helpers behind the Start screen: the options the form builds, the modes' words, and the same-folder check.
 import {
-  accessLabel, asksNobody, type Access, type AgentModels, type AgentTask, type ClaudeMode, type Engine, type Interface, type Policy,
+  accessLabel, asksNobody, type Access, type AgentModels, type AgentTask, type ClaudeMode, type Engine, type Interface, type Policy, type Profile, type Role,
   type SessionInfo, type StartOptions, type Approval, type Sandbox, type CliConversation, type HistoryTarget,
 } from "../../lib/agent";
 import { samePath } from "../../lib/folders";
@@ -66,7 +66,18 @@ export interface StartForm {
   project: string | null; repo: string; branch: string; change: number | null; folder: string | null;
   task: string; policy: Policy; access: Access; model: string; effort: string;
   context: string[]; briefing?: string; system?: string;
+  /** Chat only: the role to start in (none when null), and whether the session runs without anyone answering prompts. */
+  role?: Role | null; unattended?: boolean;
 }
+
+/** What each permission profile lets a session do; Rust turns the profile into the actual rules. */
+export const PROFILE_HELP: Record<Profile, string> = {
+  read_only: "Reads the worktree and Living Memory, and runs shell commands Claude Code itself treats as read-only (such as git log). Never edits and never asks.",
+  edit_worktree: "Edits files in its worktree and runs the project's allowed commands. Anything else asks you, or is refused when unattended.",
+  research: "Reads the worktree and Living Memory, runs read-only shell commands and searches the web. Never edits and never asks.",
+};
+
+export const PROFILE_LABELS: Record<Profile, string> = { read_only: "Read only", edit_worktree: "Edit worktree", research: "Research" };
 
 /** What `agentStart` is called with. The task text is trimmed; a terminal may have none. */
 export function buildStart(f: StartForm): { task: AgentTask; prompt: string; options: StartOptions } {
@@ -76,7 +87,10 @@ export function buildStart(f: StartForm): { task: AgentTask; prompt: string; opt
     if (!f.project) throw new Error("Chat needs a project");
     return {
       task: { kind: "work", project: f.project, repo: f.repo, branch: f.branch, ...change }, prompt,
-      options: { policy: f.policy, context: f.context, briefing: f.briefing, model: f.engine === "claude" ? f.model || undefined : undefined, system: f.system, engine: f.engine, interface: "chat" },
+      options: {
+        policy: f.policy, context: f.context, briefing: f.briefing, model: f.engine === "claude" ? f.model || undefined : undefined, system: f.system, engine: f.engine, interface: "chat",
+        ...(f.role ? { role: f.role, ...(f.unattended ? { unattended: true } : {}) } : {}),
+      },
     };
   }
   const folder = f.where === "folder" || !f.project;

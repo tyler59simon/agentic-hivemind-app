@@ -16,6 +16,13 @@ export type Decision = "allow" | "allow_always" | "deny" | "withdrawn";
 export type TurnOutcome = "completed" | "stopped" | "budget" | "error";
 export type Engine = "claude" | "codex";
 export type Interface = "chat" | "terminal";
+/** The role a chat session is started in; its preamble goes before the briefing. */
+export type Role = "architect" | "developer" | "reviewer" | "researcher" | "tester";
+/** What a session in a role may do without a person answering. */
+export type Profile = "read_only" | "edit_worktree" | "research";
+/** What a reviewer or tester concluded on the last line of its final reply. */
+export type Verdict = "pass" | "changes_needed";
+export interface RoleInfo { role: Role; label: string; profile: Profile; givesVerdict: boolean }
 /** Where a work session runs: a new worktree, or the project's own checkout. Chat sessions are worktree only. */
 export type Place = "worktree" | "checkout";
 
@@ -80,6 +87,13 @@ export interface SessionInfo {
   effort: string | null;
   /** The CLI's own id for the conversation (Codex's thread id), once Hivemind has found it. */
   engineSession: string | null;
+  /** The role the session was started in, and the permission profile it runs with. */
+  role: Role | null;
+  profile: Profile | null;
+  /** The summary section of the last turn's final reply, or the reply itself, clipped. */
+  summary: string | null;
+  /** A reviewer's or tester's conclusion from its last turn. */
+  verdict: Verdict | null;
 }
 
 /** The engine of a session, whatever adapter name older code stored. */
@@ -106,7 +120,13 @@ export type RunEvent =
     durationMs: number | null; turns: number | null; result: string | null; structured: unknown; denials: number;
   };
 
-export interface StartOptions { policy: Policy; context: string[]; briefing?: string; model?: string; system?: string; engine?: Engine; interface?: Interface; place?: Place; access?: Access; effort?: string; confirmedRisky?: boolean }
+export interface StartOptions {
+  policy: Policy; context: string[]; briefing?: string; model?: string; system?: string; engine?: Engine; interface?: Interface; place?: Place; access?: Access; effort?: string; confirmedRisky?: boolean;
+  /** Chat only: the role, its permission profile when not the role's own, and whether nobody will answer prompts. */
+  role?: Role; profile?: Profile; unattended?: boolean;
+}
+/** CPU (percent of the whole machine) and memory of a session's program and the processes it started. */
+export interface ResourceUsage { cpu: number; memoryMb: number; processes: number }
 export interface ModelInfo { id: string; label: string; efforts: string[]; defaultEffort: string | null }
 /** The models an engine offers; the defaults are what its own configuration names. `note` says why the list is empty. */
 export interface AgentModels { models: ModelInfo[]; defaultModel: string | null; defaultEffort: string | null; note: string | null }
@@ -120,6 +140,7 @@ export const agentAvailable = () => invoke<string>("agent_available");
 /** Which engines can be started, Claude Code first, and with which interface. */
 export const agentEngines = () => invoke<EngineInfo[]>("agent_engines");
 export const agentModels = (engine: Engine) => invoke<AgentModels>("agent_models", { engine });
+export const agentRoles = () => invoke<RoleInfo[]>("agent_roles");
 export const agentStart = (task: AgentTask, prompt: string, options?: StartOptions) => invoke<SessionInfo>("agent_start", { task, prompt, options: options ?? null });
 export const agentSend = (sessionId: string, text: string, options?: SendOptions) => invoke<void>("agent_send", { sessionId, text, options: options ?? null });
 export const agentAnswer = (sessionId: string, requestId: string, decision: Exclude<Decision, "withdrawn">) => invoke<void>("agent_answer", { sessionId, requestId, decision });
@@ -168,4 +189,5 @@ export const reviewBase = (w: Worktree) => w.reviewedSha ?? w.baseSha;
 
 export const sessionsQuery = () => ({ queryKey: ["agent", "sessions"], queryFn: agentSessions });
 export const enginesQuery = () => ({ queryKey: ["agent", "engines"], queryFn: agentEngines, staleTime: 60_000 });
+export const rolesQuery = () => ({ queryKey: ["agent", "roles"], queryFn: agentRoles, staleTime: Infinity });
 export const modelsQuery = (engine: Engine) => ({ queryKey: ["agent", "models", engine], queryFn: () => agentModels(engine), staleTime: 600_000 });

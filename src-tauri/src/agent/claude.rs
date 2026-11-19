@@ -169,6 +169,9 @@ impl Adapter for ClaudeCode {
         if let Some(root) = &spec.memory_root {
             command.env("LIVING_MEMORY_ROOT", root);
         }
+        // Living Memory's hook and CLI refuse their plan, apply and direct-write commands while this is set: the second guard
+        // beside the deny rules.
+        command.env("HIVEMIND_SESSION", &spec.session_id);
         command
     }
 

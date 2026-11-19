@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { SessionInfo } from "../../lib/agent";
 import type { Project } from "../../lib/lm";
-import { changeRows, codexPermissionLines, draftCounts, engineLabel, isCodex, permissionLines, POLICIES, policyHelp, resumeCommand, relativeTo, sessionBriefing, sessionForNote, waitingForReview } from "./session";
+import { changeRows, codexPermissionLines, draftCounts, engineLabel, isCodex, isUnattended, permissionLines, POLICIES, policyHelp, resumeCommand, relativeTo, sessionBriefing, sessionForNote, usageText, waitingForReview } from "./session";
 
 let n = 0;
 const session = (o: Partial<SessionInfo>): SessionInfo => ({
   id: `s${++n}`, adapter: "claude-code", cliVersion: null, task: { kind: "work", project: "paystream", repo: "C:/code/ingestion" }, title: "t",
   workspace: [], status: "idle", startedAt: n, endedAt: null, costUsd: null, error: null, structured: null,
-  mode: "interactive", policy: "ask", project: "paystream", worktree: null, turns: 0, filesChanged: null, context: [], model: null, system: null, review: null, sourceSha: null, interface: "chat", name: null, cliTitle: null, direct: null, noTask: false, access: null, effort: null, engineSession: null, ...o,
+  mode: "interactive", policy: "ask", project: "paystream", worktree: null, turns: 0, filesChanged: null, context: [], model: null, system: null, review: null, sourceSha: null, interface: "chat", name: null, cliTitle: null, direct: null, noTask: false, access: null, effort: null, engineSession: null, role: null, profile: null, summary: null, verdict: null, ...o,
 });
 const project: Project = {
   slug: "paystream", name: "PayStream", status: "active", repos: ["C:/code/ingestion"], aliases: [], description: "",
@@ -54,6 +54,20 @@ describe("session helpers", () => {
       "File edits apply without asking", "Simple file commands in the worktree may run without asking", "Other commands ask unless already allowed",
     ]);
     expect(permissionLines("pre_approved")).toEqual(["Unattended: pre-approved actions only"]);
+  });
+});
+
+describe("role and resource helpers", () => {
+  it("calls only a pre-approved editing session unattended", () => {
+    expect(isUnattended({ profile: "edit_worktree", policy: "pre_approved" })).toBe(true);
+    expect(isUnattended({ profile: "edit_worktree", policy: "accept_edits" })).toBe(false);
+    expect(isUnattended({ profile: "read_only", policy: "pre_approved" })).toBe(false);
+    expect(isUnattended({ profile: null, policy: "pre_approved" })).toBe(false);
+  });
+
+  it("writes CPU, memory and process count", () => {
+    expect(usageText({ cpu: 12.4, memoryMb: 340.6, processes: 3 })).toBe("12% CPU · 341 MB · 3 processes");
+    expect(usageText({ cpu: 0, memoryMb: 2048, processes: 1 })).toBe("0% CPU · 2.0 GB · 1 process");
   });
 });
 

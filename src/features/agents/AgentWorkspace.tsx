@@ -3,7 +3,8 @@ import { listen } from "@tauri-apps/api/event";
 import { Check, ChevronDown, CircleCheck, CircleX, CodeXml, FileText, GitBranch, Layers, Link as LinkIcon, LoaderCircle, MessageSquare, Network, Plus, Shield, ShieldCheck, Sparkle, SquareTerminal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import logo from "../../assets/logo.png";
-import { agentCancel, agentEnd, agentSession, agentSetPolicy, engineOf, enginesQuery, sessionsQuery, type Engine, type Interface, type Policy, type SeqEvent, type SessionInfo } from "../../lib/agent";
+import { agentCancel, agentEnd, agentSession, agentSetPolicy, engineOf, enginesQuery, sessionsQuery, type Engine, type Interface, type Policy, type ResourceUsage, type SeqEvent, type SessionInfo } from "../../lib/agent";
+import { PROFILE_HELP, PROFILE_LABELS } from "./start";
 import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { connect } from "../../lib/lm";
 import { openChange, openProject, openReview, openSession, openSystem, startSession, useApp } from "../../store";
@@ -21,7 +22,7 @@ import { noteQuery } from "../viewer/NoteView";
 import { ApprovalCard, Composer, FilesCard, RemoveWorktree } from "./Chat";
 import { apply, build, cost, duration, EMPTY, merge, type Finished, type Item, type Transcript as State } from "./events";
 import { filesWord, reviewLabel } from "../review/review";
-import { ALLOWED_NOTE, CODEX_ALLOWED_NOTE, CODEX_COST_NOTE, CODEX_MODE_NOTE, codexPermissionLines, engineLabel, isCodex, resumeCommand, isEnded, permissionLines, POLICIES, repoName, waitingForReview } from "./session";
+import { ALLOWED_NOTE, CODEX_ALLOWED_NOTE, CODEX_COST_NOTE, CODEX_MODE_NOTE, codexPermissionLines, engineLabel, isCodex, isUnattended, resumeCommand, isEnded, permissionLines, POLICIES, repoName, usageText, VERDICT_LABELS, waitingForReview } from "./session";
 import { useSessionDraft } from "./draft";
 import { StartSession } from "./StartSession";
 import { accessLabel, latestOf, whereLabel } from "../terminal/tabs";
@@ -189,7 +190,11 @@ function Toolbar({ info, face, sessions, onAsk }: { info?: SessionInfo; face: In
           <span className="toolbar-sep" />
           {info.interface === "terminal"
             ? <span className="toolbar-fact" title={permissionFlags(info)}><Shield size="1.2em" aria-hidden />{accessLabel(info)}</span>
-            : (
+            : info.profile ? (
+              <span className="toolbar-fact" title={PROFILE_HELP[info.profile]}>
+                <Shield size="1.2em" aria-hidden />{PROFILE_LABELS[info.profile]}{isUnattended(info) ? " · unattended" : ""}
+              </span>
+            ) : (
               <select aria-label="Permissions" value={info.policy} disabled={isEnded(info) || isCodex(info)} title={isCodex(info) ? CODEX_MODE_NOTE : undefined} onChange={(e) => setPolicy(e.target.value as Policy)}>
                 {POLICIES.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
               </select>
@@ -243,7 +248,9 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
         {isCodex(info) && <p className="muted small">{CODEX_COST_NOTE}</p>}
       </Section>
       <Section title="Permissions">
-        {(isCodex(info) ? codexPermissionLines : permissionLines)(info.policy).map((line) => <Row key={line} icon={<ShieldCheck size="1.3em" aria-hidden />}>{line}</Row>)}
+        {info.profile
+          ? <Row icon={<ShieldCheck size="1.3em" aria-hidden />} meta={isUnattended(info) ? "unattended" : undefined}>{PROFILE_LABELS[info.profile]}: {PROFILE_HELP[info.profile]}</Row>
+          : (isCodex(info) ? codexPermissionLines : permissionLines)(info.policy).map((line) => <Row key={line} icon={<ShieldCheck size="1.3em" aria-hidden />}>{line}</Row>)}
         <Row>Living Memory plans are never applied</Row>
         <p className="muted small">{isCodex(info) ? CODEX_ALLOWED_NOTE : ALLOWED_NOTE}</p>
       </Section>
@@ -267,6 +274,17 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
   );
 }
 
+/** The CPU and memory of a session's processes, from the samples Rust sends every few seconds while it runs. */
+function useResources(id: string): ResourceUsage | undefined {
+  const [usage, setUsage] = useState<ResourceUsage>();
+  useEffect(() => {
+    setUsage(undefined);
+    const stop = listen<Record<string, ResourceUsage>>("agent-resources", (e) => setUsage(e.payload[id]));
+    return () => { stop.then((unlisten) => unlisten()); };
+  }, [id]);
+  return usage;
+}
+
 /** One session: its log from disk, kept current by live events; and the rail that says what it may touch. */
 function Session({ id }: { id: string }) {
   const client = useQueryClient();
@@ -276,6 +294,7 @@ function Session({ id }: { id: string }) {
   const sessions = useQuery(sessionsQuery());
   const systems = useQuery(systemsQuery());
   const [state, setState] = useState<State>(EMPTY);
+  const usage = useResources(id);
   const info = sessions.data?.find((s) => s.id === id) ?? log.data?.info;
 
   useEffect(() => { if (log.data) setState((live) => merge(live, build(log.data.events))); }, [log.data]);
@@ -303,6 +322,9 @@ function Session({ id }: { id: string }) {
         <header className="chat-head">
           <h2>{info.title}</h2>
           <span className={`status-chip cap ${status === "idle" ? "active" : status === "ended" ? "" : status}`}>{status === "idle" ? "ready" : status}</span>
+          {info.role && <span className="status-chip cap">{info.role}</span>}
+          {info.verdict && <span className={`status-chip ${info.verdict === "pass" ? "active" : "waiting"}`}>{VERDICT_LABELS[info.verdict]}</span>}
+          {usage && <span className="muted small" title="The agent program and every process it started">{usageText(usage)}</span>}
           {work?.change != null && (
             <button className="linked-chip" style={{ flexBasis: "100%" }} title="Open the change" onClick={() => openChange(work.change!)}>
               <LinkIcon size="1.1em" aria-hidden />{displayId(work.change)}

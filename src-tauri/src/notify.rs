@@ -31,11 +31,31 @@ pub fn main_active(app: &AppHandle) -> bool {
 
 /// A terminal needs attention: notify unless the user is looking at the window.
 pub fn terminal(app: &AppHandle, id: &str, title: &str, kind: Kind) {
+    session(app, id, title, body(kind));
+}
+
+/// A session needs the user or has something to show: notify unless the user is looking at the window. A click opens it.
+pub fn session(app: &AppHandle, id: &str, title: &str, text: &str) {
     if main_active(app) {
         return;
     }
     *PENDING.lock().unwrap() = Some((id.to_string(), Instant::now()));
-    show(app, title, body(kind), Some(id.to_string()));
+    show(app, title, text, Some(id.to_string()));
+}
+
+/// What a chat session's notification says, or None when the report is not worth one. A turn that was stopped by the user
+/// is not reported, and a session that ended normally after its last turn already had its turn reported.
+pub fn session_text(report: &crate::agent::Lifecycle) -> Option<&'static str> {
+    use crate::agent::Lifecycle;
+    use crate::agent::events::Status;
+    match report {
+        Lifecycle::Waiting { .. } => Some("Waiting for your approval"),
+        Lifecycle::TurnEnded { ok: true, .. } => Some("Finished its turn"),
+        Lifecycle::TurnEnded { ok: false, .. } => Some("Stopped with an error"),
+        Lifecycle::Finished { status: Status::Succeeded, .. } => Some("Finished"),
+        Lifecycle::Finished { status: Status::Failed, .. } => Some("Failed"),
+        Lifecycle::Finished { .. } | Lifecycle::Reviewed { .. } => None,
+    }
 }
 
 /// The user looked at a terminal: a click fallback for it is no longer wanted.
@@ -93,6 +113,16 @@ mod tests {
     fn the_body_says_what_the_terminal_wants() {
         assert_eq!(body(Kind::Waiting), "Waiting for you");
         assert_eq!(body(Kind::Done), "Finished");
+    }
+
+    #[test]
+    fn chat_reports_say_what_happened() {
+        use crate::agent::Lifecycle;
+        use crate::agent::events::Status;
+        assert_eq!(session_text(&Lifecycle::Waiting { id: "1".into() }), Some("Waiting for your approval"));
+        assert_eq!(session_text(&Lifecycle::TurnEnded { id: "1".into(), ok: false }), Some("Stopped with an error"));
+        assert_eq!(session_text(&Lifecycle::Finished { id: "1".into(), status: Status::Failed }), Some("Failed"));
+        assert_eq!(session_text(&Lifecycle::Finished { id: "1".into(), status: Status::Ended }), None);
     }
 
     #[test]
