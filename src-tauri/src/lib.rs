@@ -9,6 +9,7 @@ mod drafts;
 mod executive;
 mod folders;
 mod git;
+mod instance;
 mod learning;
 mod oneshot;
 mod notify;
@@ -1558,28 +1559,26 @@ pub fn hook_main(args: &[String]) -> Option<i32> {
     term::signal::hook_main(args)
 }
 
-/// Hold `dir/instance.lock` for the life of the process: the one claim on Hivemind's data that every launch must win before
-/// it starts a writer. The single-instance plugin covers a second launch in the same desktop session; this lock also covers
-/// two launches at the same moment and other sessions of the same user. None when another process holds it.
-fn claim_instance(dir: &std::path::Path) -> Result<Option<std::fs::File>, String> {
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join("instance.lock")).map_err(|e| e.to_string())?;
-    match file.try_lock() {
-        Ok(()) => Ok(Some(file)),
-        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
-        Err(std::fs::TryLockError::Error(e)) => Err(e.to_string()),
-    }
-}
-
-/// The claim, kept until the process exits.
-static INSTANCE: std::sync::OnceLock<std::fs::File> = std::sync::OnceLock::new();
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let context = tauri::generate_context!();
+    // Before any window or writer: a second copy would overwrite this one's records (EXEC-7, EXEC-12). A launch that finds
+    // the data folder taken brings the running copy to the front and exits.
+    let data_dir = dirs::data_dir().unwrap_or_default().join(&context.config().identifier);
+    let owner = match instance::claim(&data_dir) {
+        Ok(instance::Claim::Owner(owner)) => owner,
+        Ok(instance::Claim::Taken) => {
+            if !instance::knock(&data_dir, std::time::Duration::from_secs(5)) {
+                eprintln!("Hivemind is already running but did not answer; this copy exits.");
+            }
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("Hivemind could not claim its data folder {}: {e}", data_dir.display());
+            std::process::exit(1);
+        }
+    };
     tauri::Builder::default()
-        // First, as the plugin requires: a second copy would overwrite this one's records (EXEC-7, EXEC-12), so a second
-        // launch brings this window to the front and exits before its setup runs.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| capture::show_main(app)))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(
@@ -1591,18 +1590,13 @@ pub fn run() {
                 })
                 .build(),
         )
-        .setup(|app| {
-            // Before any writer starts: another Hivemind already owns this data.
-            match claim_instance(&app.path().app_data_dir()?) {
-                Ok(Some(lock)) => {
-                    let _ = INSTANCE.set(lock);
-                }
-                Ok(None) => {
-                    eprintln!("Hivemind is already running (it holds instance.lock in its data folder); this copy exits.");
-                    std::process::exit(0);
-                }
-                Err(e) => return Err(format!("Could not claim Hivemind's data folder: {e}").into()),
+        .setup(move |app| {
+            // The claim covers the folder this app writes, or nothing is guarded.
+            if app.path().app_data_dir()? != data_dir {
+                return Err(format!("Hivemind claimed {} but writes {}", data_dir.display(), app.path().app_data_dir()?.display()).into());
             }
+            let shown = app.handle().clone();
+            owner.serve(move || capture::show_main(&shown));
             let settings_path = app.path().app_config_dir()?.join("settings.json");
             let drafts_dir = app.path().app_data_dir()?.join("drafts");
             let sessions_dir = app.path().app_data_dir()?.join("agent-sessions");
@@ -1713,7 +1707,7 @@ pub fn run() {
             agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_stop_and_approve, review_request_changes, review_request_terminal_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
             system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export, wiki_agent_build, wiki_agent_cancel
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while running tauri application")
         .run(|app, event| {
             // An agent session, a terminal or a wiki build must not outlive the app that started it.
@@ -1731,17 +1725,6 @@ pub fn run() {
 mod tests {
     use super::*;
     use term::launch::{Cli, NO_CODEX};
-
-    #[test]
-    fn only_one_process_claims_the_data_folder() {   // Codex review of 99fb13d
-        let dir = std::env::temp_dir().join(format!("hivemind-instance-{}", uuid::Uuid::new_v4().simple()));
-        let first = claim_instance(&dir).unwrap();
-        assert!(first.is_some());
-        assert!(claim_instance(&dir).unwrap().is_none(), "a second claim is refused while the first is held");
-        drop(first);
-        assert!(claim_instance(&dir).unwrap().is_some(), "the claim ends with its holder");
-        std::fs::remove_dir_all(&dir).ok();
-    }
 
     #[test]
     fn engines_report_what_was_found() {
