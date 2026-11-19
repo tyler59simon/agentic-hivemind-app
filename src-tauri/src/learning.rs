@@ -625,12 +625,30 @@ fn redact_assignments(text: &str) -> String {
                     continue;
                 }
                 i += 1;
-                while i < bytes.len() && matches!(bytes[i], b' ' | b'"' | b'\'') {
+                while i < bytes.len() && bytes[i] == b' ' {
+                    i += 1;
+                }
+                // A quoted value runs to its closing quote (spaces and escaped quotes included); a bare one to the next space.
+                let quote = (i < bytes.len() && matches!(bytes[i], b'"' | b'\'')).then(|| bytes[i]);
+                if quote.is_some() {
                     i += 1;
                 }
                 let start = i;
-                while i < bytes.len() && !matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n' | b'"' | b'\'' | b',' | b';' | b'}') {
-                    i += 1;
+                match quote {
+                    Some(q) => {
+                        while i < bytes.len() && bytes[i] != q && bytes[i] != b'\n' {
+                            i += if bytes[i] == b'\\' { 2 } else { 1 };
+                        }
+                        i = i.min(bytes.len());
+                        while !line.is_char_boundary(i) {
+                            i += 1;
+                        }
+                    }
+                    None => {
+                        while i < bytes.len() && !matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n' | b'"' | b'\'' | b',' | b';' | b'}') {
+                            i += 1;
+                        }
+                    }
                 }
                 if i > start {
                     cut.push((start, i));
@@ -683,8 +701,12 @@ const TOKEN_PREFIXES: [&str; 21] = [
 
 fn redact_tokens(text: &str) -> String {
     fn flush(word: &mut String, out: &mut String) {
-        let secret = word.len() >= 20 && word.chars().any(|c| c.is_ascii_digit()) && TOKEN_PREFIXES.iter().any(|p| word.starts_with(p));
-        out.push_str(if secret { REMOVED } else { word.as_str() });
+        // A diff line's + or - (or other punctuation) before a token is not part of it.
+        let lead = word.len() - word.trim_start_matches(|c: char| !c.is_ascii_alphanumeric()).len();
+        let (head, token) = word.split_at(lead);
+        let secret = token.len() >= 20 && TOKEN_PREFIXES.iter().any(|p| token.starts_with(p));
+        out.push_str(head);
+        out.push_str(if secret { REMOVED } else { token });
         word.clear();
     }
     let mut out = String::with_capacity(text.len());
@@ -855,12 +877,14 @@ mod tests {
             remote: https://ann:s3cret@github.com/acme/app.git\n\
             -----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAA\n-----END OPENSSH PRIVATE KEY-----\n\
             Bearer ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4\n\
+            +github_pat_abcdefghijklmnopqrstuvwxyz\n\
+            db_password = \"correct horse \\\" battery\" # note\n\
             The retry token count stays at 3 and src/sk-learn/notes.md is a path.";
         let clean = redact(text);
-        for secret in ["sk-proj-abc123", "hunter2", "s3cret", "b3BlbnNz", "ghp_A1b2"] {
+        for secret in ["sk-proj-abc123", "hunter2", "s3cret", "b3BlbnNz", "ghp_A1b2", "github_pat_abc", "horse", "battery"] {
             assert!(!clean.contains(secret), "{secret} left in:\n{clean}");
         }
-        for kept in ["OPENAI_API_KEY=", "user: \"ann\"", "https://ann:", "@github.com/acme/app.git", "[private key removed]", "token count stays at 3", "src/sk-learn/notes.md"] {
+        for kept in ["OPENAI_API_KEY=", "user: \"ann\"", "# note", "+[removed]", "https://ann:", "@github.com/acme/app.git", "[private key removed]", "token count stays at 3", "src/sk-learn/notes.md"] {
             assert!(clean.contains(kept), "{kept} missing from:\n{clean}");
         }
     }

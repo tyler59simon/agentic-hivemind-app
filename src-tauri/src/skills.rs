@@ -93,6 +93,9 @@ pub struct Proposal {
     pub decided_at: Option<u64>,
     #[serde(default)]
     pub decision: Option<String>,
+    /// Returned by an approval whose version was stored but not published everywhere; never saved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 /// What a proposer hands in; the store fills in the id, state and times.
@@ -468,6 +471,7 @@ impl Skills {
             created_at: now_ms(),
             decided_at: None,
             decision: None,
+            warning: None,
         };
         self.save_proposal(&proposal)?;
         self.ledger(LedgerEntry {
@@ -511,6 +515,9 @@ impl Skills {
         if approve && p.kind != Kind::Create && now != p.base_version {
             return Err(format!("{} changed since this proposal (now v{}); reject it and propose again", p.name, now.unwrap_or(0)));
         }
+        if approve && p.kind == Kind::Patch && self.meta(&p.name).is_some_and(|m| m.archived) {
+            return Err(format!("{} was archived; restore it before approving a change to it", p.name));
+        }
         if approve && p.kind == Kind::Create && now.is_some() {
             return Err(format!("A skill named {} exists now; reject this proposal", p.name));
         }
@@ -540,8 +547,10 @@ impl Skills {
         p.decision = why;
         self.save_proposal(&p)?;
         // The version is approved and stored whatever happens next; a copy that could not be written is published again later.
-        if let Some(version) = written {
-            self.publish_copies(&p.name, actor).map_err(|e| format!("Approved as v{version}, but not published everywhere: {e}"))?;
+        if let Some(version) = written
+            && let Err(e) = self.publish_copies(&p.name, actor)
+        {
+            p.warning = Some(format!("Approved as v{version}, but not published everywhere: {e}"));
         }
         Ok(p)
     }
@@ -659,13 +668,17 @@ impl Skills {
         for target in &self.targets {
             let dir = target.join(name);
             if self.copy_state(&dir, &meta).is_some() {
-                for file in ["SKILL.md", MARKER] {
-                    match std::fs::remove_file(dir.join(file)) {
-                        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(format!("Could not remove {}: {e}", dir.join(file).display())),
-                        _ => {}
-                    }
+                let remove = |file: &str| match std::fs::remove_file(dir.join(file)) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("Could not remove {}: {e}", dir.join(file).display())),
+                    _ => Ok(()),
+                };
+                remove("SKILL.md")?;
+                // A folder that also holds the user's files keeps the marker, so a restore may write SKILL.md there again.
+                let others = std::fs::read_dir(&dir).map(|entries| entries.flatten().any(|e| e.file_name() != MARKER)).unwrap_or(false);
+                if !others {
+                    remove(MARKER)?;
+                    let _ = std::fs::remove_dir(&dir);
                 }
-                let _ = std::fs::remove_dir(&dir);
             }
         }
         meta.archived = true;
@@ -964,6 +977,36 @@ mod tests {
         assert_eq!(std::fs::read_to_string(targets[0].join("with-notes").join("notes.md")).unwrap(), "mine");
         assert!(!targets[0].join("with-notes").join("SKILL.md").exists());
         assert!(!targets[1].join("with-notes").exists(), "an emptied folder goes");
+        skills.restore("with-notes", 1, "user").unwrap();
+        assert!(targets[0].join("with-notes").join("SKILL.md").exists(), "the kept folder is still Hivemind's");
+        assert_eq!(std::fs::read_to_string(targets[0].join("with-notes").join("notes.md")).unwrap(), "mine");
+    }
+
+    #[test]
+    fn a_patch_waiting_when_its_skill_is_archived_is_refused() {
+        let (_g, skills, _targets) = store("archived-patch");
+        let p = create(&skills, "fading");
+        skills.decide(&p.id, true, None, "user", None).unwrap();
+        let patch = skills.propose(NewProposal { kind: Some(Kind::Patch), name: "fading".into(), description: "Use when it fades.".into(),
+            body: BODY.replace("Restart it.", "Restart it slowly."), ..Default::default() }, "reviewer").unwrap();
+        skills.archive("fading", "user", None).unwrap();
+        assert!(skills.decide(&patch.id, true, None, "user", None).unwrap_err().contains("archived"));
+        assert!(skills.meta("fading").unwrap().archived);
+    }
+
+    #[test]
+    fn an_approval_that_cannot_publish_everywhere_is_kept_with_a_warning() {
+        let (_g, skills, targets) = store("warned");
+        let p = create(&skills, "half");
+        skills.decide(&p.id, true, None, "user", None).unwrap();
+        std::fs::write(targets[0].join("half").join("SKILL.md"), "hand edit").unwrap();
+        let patch = skills.propose(NewProposal { kind: Some(Kind::Patch), name: "half".into(), description: "Use when half.".into(),
+            body: BODY.replace("Restart it.", "Restart half."), ..Default::default() }, "reviewer").unwrap();
+        let decided = skills.decide(&patch.id, true, None, "user", None).unwrap();
+        assert_eq!(decided.state, ProposalState::Approved);
+        assert!(decided.warning.unwrap().contains("Approved as v2"));
+        assert_eq!(skills.proposal(&patch.id).unwrap().warning, None, "the warning is not saved");
+        assert_eq!(std::fs::read_to_string(targets[0].join("half").join("SKILL.md")).unwrap(), "hand edit");
     }
 
     #[test]

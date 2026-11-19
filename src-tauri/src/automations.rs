@@ -129,6 +129,21 @@ pub struct RunRow {
     pub cost_usd: Option<f64>,
     #[serde(default)]
     pub ended_at: Option<u64>,
+    /// The project and repository an event came from; checked again when a waiting run is approved.
+    #[serde(default)]
+    pub source: Option<Source>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Source {
+    pub project: String,
+    pub repo: String,
+}
+
+/// Whether an automation set to a project (and repository) hears an event from `source`.
+fn hears(a: &Automation, source: &Source) -> bool {
+    a.project.as_deref().is_none_or(|p| p == source.project) && a.repo.as_deref().is_none_or(|r| crate::agent::scope::same_path(r, &source.repo))
 }
 
 /// What a finished action reports.
@@ -388,22 +403,30 @@ impl Automations {
     }
 
     pub fn runs(&self, id: &str) -> Vec<RunRow> {
-        self.read_runs(id).unwrap_or_default()
+        self.read_runs(id, false).unwrap_or_default()
     }
 
-    /// An automation's runs. A file that cannot be read as runs is set aside (renamed, never deleted) so the next run
-    /// starts a new history instead of failing forever.
-    fn read_runs(&self, id: &str) -> Result<Vec<RunRow>, String> {
+    /// An automation's runs; none when there is no file yet. A file that cannot be read as runs is an error for readers. A
+    /// writer (`set_aside`, always under `admit`) renames it, never deletes it, so the next run starts a new history.
+    fn read_runs(&self, id: &str, set_aside: bool) -> Result<Vec<RunRow>, String> {
         if !valid_id(id) {
             return Err("Unknown automation".into());
         }
         let path = self.runs_dir.join(format!("{id}.json"));
-        let Ok(text) = std::fs::read_to_string(&path) else { return Ok(vec![]) };
-        serde_json::from_str(&text).or_else(|e| {
-            let aside = self.runs_dir.join(format!("{id}.json.unreadable-{}", now_ms()));
-            std::fs::rename(&path, &aside).map_err(|_| format!("{} is unreadable ({e})", path.display()))?;
-            Ok(vec![])
-        })
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+            Err(e) => return Err(format!("Could not read {}: {e}", path.display())),
+        };
+        match serde_json::from_slice(&bytes) {
+            Ok(rows) => Ok(rows),
+            Err(e) if set_aside => {
+                let aside = self.runs_dir.join(format!("{id}.json.unreadable-{}", now_ms()));
+                std::fs::rename(&path, &aside).map_err(|_| format!("{} is unreadable ({e})", path.display()))?;
+                Ok(vec![])
+            }
+            Err(e) => Err(format!("{} is unreadable ({e})", path.display())),
+        }
     }
 
     fn write_runs(&self, id: &str, rows: &[RunRow]) -> Result<(), String> {
@@ -425,7 +448,7 @@ impl Automations {
     }
 
     fn put_run(&self, row: &RunRow) -> Result<(), String> {
-        let mut rows = self.read_runs(&row.automation)?;
+        let mut rows = self.read_runs(&row.automation, true)?;
         rows.retain(|r| r.id != row.id);
         rows.insert(0, row.clone());
         rows.sort_by_key(|r| std::cmp::Reverse(r.at));
@@ -440,15 +463,31 @@ impl Automations {
     /// Fire an automation. Returns the new run, or None when one is already waiting or running (coalesced), or when the
     /// automation is gone.
     pub fn fire(&self, id: &str, cause: &str, event: Option<String>, doer: &dyn Doer) -> Option<RunRow> {
+        self.fire_from(id, cause, event, None, doer)
+    }
+
+    fn fire_from(&self, id: &str, cause: &str, event: Option<String>, source: Option<Source>, doer: &dyn Doer) -> Option<RunRow> {
         let admit = self.admit.lock().unwrap();
         let a = self.list().into_iter().find(|a| a.id == id)?;
-        if self.runs(id).iter().any(|r| matches!(r.state, RunState::Waiting | RunState::Running)) {
+        let now = now_ms();
+        let scheduled = matches!(cause, "schedule" | "catch_up");
+        // The definition may have changed while this occurrence waited: turned off, moved, or pointed at another project.
+        if (cause != "manual" && !a.enabled)
+            || (scheduled && a.next_due.is_none_or(|due| due > now))
+            || source.as_ref().is_some_and(|s| !hears(&a, s))
+        {
             return None;
         }
-        let now = now_ms();
+        if self.runs(id).iter().any(|r| matches!(r.state, RunState::Waiting | RunState::Running)) {
+            // The occurrence is used up, so the scheduler does not come back for it before the next one.
+            if scheduled {
+                self.skip_due(id, now);
+            }
+            return None;
+        }
         let mut row = RunRow {
             id: uuid::Uuid::new_v4().simple().to_string(), automation: id.into(), at: now, cause: cause.into(), event,
-            state: RunState::Running, detail: None, session: None, workflow: None, cost_usd: None, ended_at: None,
+            state: RunState::Running, detail: None, session: None, workflow: None, cost_usd: None, ended_at: None, source,
         };
         // The schedule moves on whether or not this run goes ahead, so a refused run is not retried every minute.
         self.mark_ran(id, now, None);
@@ -485,6 +524,11 @@ impl Automations {
             return Err("This run is not waiting".into());
         }
         let a = self.list().into_iter().find(|a| a.id == row.automation).ok_or("The automation was removed")?;
+        if row.source.as_ref().is_some_and(|s| !hears(&a, s)) {
+            let row = RunRow { state: RunState::Cancelled, detail: Some("The automation now points at another project".into()), ended_at: Some(now_ms()), ..row };
+            self.put_run(&row)?;
+            return Err("The automation now points at another project, so this run was cancelled".into());
+        }
         if paid(&a) && !doer.budget_left() {
             return Err("Today's learning and automation budget is used".into());
         }
@@ -508,6 +552,15 @@ impl Automations {
         Ok(row)
     }
 
+    /// Move an automation's next time on without counting a run.
+    fn skip_due(&self, id: &str, now: u64) {
+        let mut list = self.state.lock().unwrap();
+        if let Some(a) = list.iter_mut().find(|a| a.id == id) {
+            a.next_due = next_due(&a.trigger, &ms_local(now), Some(&ms_local(now))).map(|d| d.timestamp_millis() as u64);
+        }
+        let _ = self.save(&list);
+    }
+
     fn mark_ran(&self, id: &str, now: u64, seen: Option<String>) {
         let mut list = self.state.lock().unwrap();
         if let Some(a) = list.iter_mut().find(|a| a.id == id) {
@@ -522,21 +575,26 @@ impl Automations {
         let _ = self.save(&list);
     }
 
-    /// Do a run's action. `admit` is held while a session or workflow starts, so its report (or a cancel) waits until the run
-    /// knows it. Other actions can take minutes and run without the lock; a cancel that came meanwhile wins.
+    /// Do a run's action. The git reads for its prompt run without the lock. `admit` is taken again while a session or
+    /// workflow starts, so its report (or a cancel) waits until the run knows it. Other actions can take minutes and run
+    /// without it. A cancel that came meanwhile wins.
     fn execute(&self, a: &Automation, mut row: RunRow, doer: &dyn Doer, admit: MutexGuard<'_, ()>) -> RunRow {
-        let held = if matches!(a.action, Action::Role { .. } | Action::Workflow { .. }) {
-            Some(admit)
-        } else {
-            drop(admit);
-            None
-        };
+        drop(admit);
         let repo = a.repo.clone().unwrap_or_default();
         let head = (!repo.is_empty()).then(|| doer.head(&repo)).flatten();
         let vars = Vars {
             event: row.event.clone().unwrap_or_default(),
             commits: if repo.is_empty() { String::new() } else { doer.log(&repo, a.last_seen.as_deref()) },
             head: head.clone(),
+        };
+        let held = if matches!(a.action, Action::Role { .. } | Action::Workflow { .. }) {
+            let guard = self.admit.lock().unwrap();
+            if let Some(cancelled) = self.find_run(&row.id).filter(|r| r.state == RunState::Cancelled) {
+                return cancelled;
+            }
+            Some(guard)
+        } else {
+            None
         };
         match doer.run(a, &vars) {
             Ok(Started::Done { detail, cost }) => {
@@ -613,14 +671,10 @@ impl Automations {
     /// Fire the automations an event trigger matches. An automation set to a project (and repository) hears only events from
     /// there, so one project's errors and titles never reach another project's session.
     pub fn on_event(&self, trigger: &Trigger, project: &str, repo: &str, event: String, doer: &dyn Doer) {
-        let ids: Vec<String> = self.list().into_iter()
-            .filter(|a| a.enabled && &a.trigger == trigger)
-            .filter(|a| a.project.as_deref().is_none_or(|p| p == project))
-            .filter(|a| a.repo.as_deref().is_none_or(|r| crate::agent::scope::same_path(r, repo)))
-            .map(|a| a.id)
-            .collect();
+        let source = Source { project: project.into(), repo: repo.into() };
+        let ids: Vec<String> = self.list().into_iter().filter(|a| a.enabled && &a.trigger == trigger && hears(a, &source)).map(|a| a.id).collect();
         for id in ids {
-            self.fire(&id, "event", Some(event.clone()), doer);
+            self.fire_from(&id, "event", Some(event.clone()), Some(source.clone()), doer);
         }
     }
 
@@ -836,11 +890,11 @@ mod tests {
         def.ask_first = true;
         let a = autos.put(def, now_ms()).unwrap();
         let doer = Fake { session: true, ..Default::default() };
-        let row = autos.fire(&a.id, "schedule", None, &doer).unwrap();
+        let row = autos.fire(&a.id, "event", None, &doer).unwrap();
         assert_eq!(row.state, RunState::Waiting);
         assert!(doer.ran.lock().unwrap().is_empty());
         assert!(doer.notes.lock().unwrap()[0].contains("Waiting for you"));
-        assert!(autos.fire(&a.id, "schedule", None, &doer).is_none(), "one run at a time");
+        assert!(autos.fire(&a.id, "event", None, &doer).is_none(), "one run at a time");
         let row = autos.approve(&row.id, &doer).unwrap();
         assert_eq!((row.state, row.session.as_deref()), (RunState::Running, Some("s1")));
         assert!(autos.finished(Some("s1"), None, false, "The session failed".into(), Some(0.2), &doer).is_some());
@@ -923,7 +977,9 @@ mod tests {
         assert_eq!((rows[0].state, rows[0].detail.as_deref()), (RunState::Failed, Some("Hivemind stopped while this ran")));
         assert!(again.fire(&a.id, "manual", None, &doer).is_some(), "the automation runs again");
 
-        std::fs::write(dir.join("automation-runs").join(format!("{}.json", a.id)), "{ torn").unwrap();
+        std::fs::write(dir.join("automation-runs").join(format!("{}.json", a.id)), b"{ torn \xff").unwrap();
+        assert!(again.runs(&a.id).is_empty());
+        assert!(dir.join("automation-runs").join(format!("{}.json", a.id)).exists(), "a reader never moves the file");
         assert!(again.fire(&a.id, "manual", None, &doer).is_some());
         let kept = std::fs::read_dir(dir.join("automation-runs")).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().contains("unreadable")).count();
         assert_eq!((kept, again.runs(&a.id).len()), (1, 1), "the torn file is kept aside, not overwritten");
@@ -931,9 +987,47 @@ mod tests {
     }
 
     #[test]
+    fn a_due_occurrence_with_a_run_still_open_is_used_up_and_a_queued_one_rechecks_the_definition() {
+        let (dir, autos) = store();
+        let a = autos.put(Automation { id: String::new(), ask_first: true, ..daily("Nightly") }, now_ms()).unwrap();
+        let doer = Fake { session: true, ..Default::default() };
+        let open = autos.fire(&a.id, "manual", None, &doer).unwrap();
+        assert_eq!(open.state, RunState::Running);
+        autos.state.lock().unwrap()[0].next_due = Some(now_ms() - 1000);
+        assert_eq!(autos.due(now_ms(), false, &doer).len(), 1);
+        assert!(autos.fire(&a.id, "schedule", None, &doer).is_none(), "a run is still waiting");
+        assert!(autos.due(now_ms(), false, &doer).is_empty(), "the scheduler does not come straight back");
+
+        autos.cancel(&open.id).unwrap();
+        autos.state.lock().unwrap()[0].next_due = Some(now_ms() - 1000);
+        let off = Automation { enabled: false, ..autos.list()[0].clone() };
+        autos.put(off, now_ms()).unwrap();
+        assert!(autos.fire(&a.id, "schedule", None, &doer).is_none(), "turned off while queued");
+        assert!(autos.fire(&a.id, "manual", None, &doer).is_some(), "Run now still runs it");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_waiting_event_run_is_cancelled_when_its_automation_moves_to_another_project() {
+        let (dir, autos) = store();
+        let def = Automation { id: String::new(), enabled: true, ask_first: true, project: Some("p".into()), repo: Some("r".into()),
+            ..templates().into_iter().find(|t| t.id == "failure-investigation").unwrap() };
+        let a = autos.put(def, now_ms()).unwrap();
+        let doer = Fake { session: true, ..Default::default() };
+        autos.on_event(&Trigger::SessionFailed, "p", "r", "secret error text from p".into(), &doer);
+        let waiting = autos.runs(&a.id)[0].clone();
+        assert_eq!(waiting.state, RunState::Waiting);
+        autos.put(Automation { project: Some("q".into()), repo: Some("s".into()), ..autos.list()[0].clone() }, now_ms()).unwrap();
+        assert!(autos.approve(&waiting.id, &doer).unwrap_err().contains("another project"));
+        assert!(doer.ran.lock().unwrap().is_empty(), "p's event never reaches q");
+        assert_eq!(autos.runs(&a.id)[0].state, RunState::Cancelled);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn approval_checks_the_budget_and_a_cancelled_run_still_counts_its_cost() {
         let (dir, autos) = store();
-        let def = Automation { id: String::new(), ask_first: true, project: Some("p".into()), repo: Some("r".into()),
+        let def = Automation { id: String::new(), enabled: true, ask_first: true, project: Some("p".into()), repo: Some("r".into()),
             ..templates().into_iter().find(|t| t.id == "failure-investigation").unwrap() };
         let a = autos.put(def, now_ms()).unwrap();
         let rich = Fake { session: true, ..Default::default() };

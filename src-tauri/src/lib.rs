@@ -422,6 +422,12 @@ impl automations::Doer for AppDoer {
         let state = self.0.state::<AppState>();
         let saved = settings::load(&state.settings_path);
         let (project, repo) = (a.project.clone().unwrap_or_default(), a.repo.clone().unwrap_or_default());
+        // The repository must still be one of the project's: it may have left Living Memory since the automation was saved.
+        let repo = if project.is_empty() || repo.is_empty() {
+            repo
+        } else {
+            agent::scope::project_repo(&git::project_entry(&state.bridge, &project)?, &repo)?.display().to_string()
+        };
         let origin = format!("automation:{}", a.id);
         match &a.action {
             Action::Role { role, engine, prompt } => {
@@ -712,7 +718,8 @@ async fn automation_put(app: AppHandle, automation: automations::Automation) -> 
         let state = app.state::<AppState>();
         let mut automation = automation;
         // Commit capture and role sessions read this repository, so it must be registered for the project (its spelling).
-        if let (Some(project), Some(repo)) = (automation.project.as_deref(), automation.repo.as_deref()) {
+        // Turning one off is always allowed, even when its repository has left Living Memory.
+        if let (true, Some(project), Some(repo)) = (automation.enabled, automation.project.as_deref(), automation.repo.as_deref()) {
             let entry = git::project_entry(&state.bridge, project)?;
             automation.repo = Some(agent::scope::project_repo(&entry, repo)?.display().to_string());
         }

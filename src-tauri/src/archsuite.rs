@@ -401,9 +401,16 @@ mod tests {
         let dir = scratch("edits");
         std::fs::write(dir.join("a.svg"), "<svg/>").unwrap();
         std::fs::write(dir.join("b.md"), "changed").unwrap();
-        let manifest = json!({"owners": {"c4": {"files": {
+        let mut manifest = json!({"owners": {"c4": {"files": {
             "a.svg": hex(&Sha256::digest(b"<svg/>")), "b.md": hex(&Sha256::digest(b"original")), "gone.png": "00", "../x": "00",
-        "\\outside.txt": "00", "C:outside.txt": "00", "C:/Windows/win.ini": "00", "./b.md": "00", "": "00"}}}});
+            "/etc/hosts": "00", "./b.md": "00", "": "00"}}}});
+        if cfg!(windows) {
+            // Rooted and drive-relative paths are plain names elsewhere, so they are only out of bounds on Windows.
+            let files = manifest["owners"]["c4"]["files"].as_object_mut().unwrap();
+            for path in ["\\outside.txt", "C:outside.txt", "C:/Windows/win.ini"] {
+                files.insert(path.into(), json!("00"));
+            }
+        }
         std::fs::write(dir.join(MANIFEST), manifest.to_string()).unwrap();
         let found = edited_outputs(&dir);
         assert_eq!(found, vec![OutputFile { path: "b.md".into(), state: "edited".into() }, OutputFile { path: "gone.png".into(), state: "missing".into() }]);

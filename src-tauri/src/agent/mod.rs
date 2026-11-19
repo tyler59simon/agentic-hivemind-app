@@ -1514,7 +1514,7 @@ impl Inner {
 
         let mut sessions = self.sessions.lock().unwrap();
         let at = now_ms();
-        let stop = sessions.get_mut(id).and_then(|session| session.live.take()).and_then(|live| live.stop);
+        let (stop, interrupted) = sessions.get_mut(id).and_then(|session| session.live.take()).map_or((None, false), |live| (live.stop, live.interrupted));
         let Some((info, started)) = sessions.get(id).map(|session| (session.info.clone(), session.tape.as_ref().is_some_and(|tape| tape.started)))
         else {
             return;
@@ -1536,21 +1536,21 @@ impl Inner {
                 }
             }
         } else if matches!(info.status, Status::Running | Status::Waiting) {
-            // Started, never reported the end of this turn, and nobody asked it to stop: it crashed.
+            // Started and never reported the end of this turn: it crashed, unless the user had just stopped the turn.
             let event = RunEvent::TurnFinished {
                 ok: false,
-                reason: Some(no_result(code, &stderr)),
+                reason: (!interrupted).then(|| no_result(code, &stderr)),
                 cost_usd: info.cost_usd,
                 duration_ms: None,
                 result: None,
                 denials: 0,
-                outcome: TurnEnd::Error,
+                outcome: if interrupted { TurnEnd::Stopped } else { TurnEnd::Error },
             };
             self.record(&mut sessions, id, at, Record::Event { at, event });
             if let Some(session) = sessions.get_mut(id) {
                 session.info.status = Status::Idle;
             }
-            lifecycle = Some(Lifecycle::TurnEnded { id: id.to_string(), ok: false, stopped: false });
+            lifecycle = Some(Lifecycle::TurnEnded { id: id.to_string(), ok: false, stopped: interrupted });
         }
         let _ = self.persist(&mut sessions);
         drop(sessions);
