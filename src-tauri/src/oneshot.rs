@@ -69,14 +69,16 @@ impl Cancel {
         self.flag.load(Ordering::Relaxed)
     }
 
-    /// Cancel the run; false when it has committed already.
-    pub fn cancel(&self) -> bool {
+    /// Cancel the run: `record` (saving the cancel) runs first and the run is told only once it succeeds. False when the run
+    /// has committed already.
+    pub fn cancel(&self, record: impl FnOnce() -> Result<(), String>) -> Result<bool, String> {
         let committed = self.committed.lock().unwrap();
         if *committed {
-            return false;
+            return Ok(false);
         }
+        record()?;
         self.flag.store(true, Ordering::Relaxed);
-        true
+        Ok(true)
     }
 
     /// Do `write` unless the run was cancelled; once it succeeds, cancels are refused.
@@ -198,15 +200,19 @@ mod tests {
     fn a_cancel_and_a_commit_exclude_each_other() {   // Codex review of 74bba49
         let first = Cancel::default();
         assert_eq!(first.commit(|| Ok(1)), Ok(1));
-        assert!(!first.cancel(), "a committed run cannot be cancelled");
+        assert_eq!(first.cancel(|| Ok(())), Ok(false), "a committed run cannot be cancelled");
+        // A cancel that could not be saved does not stop the run (Codex re-review of 61a3474).
+        let unsaved = Cancel::default();
+        assert!(unsaved.cancel(|| Err("rename denied".into())).is_err());
+        assert!(!unsaved.is_set());
         let second = Cancel::default();
-        assert!(second.cancel());
+        assert_eq!(second.cancel(|| Ok(())), Ok(true));
         let mut wrote = false;
         assert_eq!(second.commit(|| { wrote = true; Ok(()) }).unwrap_err(), CANCELLED);
         assert!(!wrote, "a cancelled run writes nothing");
         let third = Cancel::default();
         assert!(third.commit(|| Err::<(), _>("disk full".into())).is_err());
-        assert!(third.cancel(), "a failed commit can still be cancelled");
+        assert_eq!(third.cancel(|| Ok(())), Ok(true), "a failed commit can still be cancelled");
     }
 
     #[test]

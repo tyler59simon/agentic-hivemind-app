@@ -584,14 +584,16 @@ impl Automations {
         if !matches!(row.state, RunState::Waiting | RunState::Running) {
             return Err("This run has ended".into());
         }
-        // An action that has already kept its result (a saved briefing) is not cancelled after the fact.
-        if self.cancels.lock().unwrap().get(run).cloned().is_some_and(|cancel| !cancel.cancel()) {
-            return Err("This run has ended".into());
-        }
         row.state = RunState::Cancelled;
         row.ended_at = Some(now_ms());
-        self.put_run(&row)?;
-        Ok(row)
+        // An action under way is told to stop only once the cancel is saved, and one that has already kept its result (a
+        // saved briefing) is not cancelled after the fact.
+        let switch = self.cancels.lock().unwrap().get(run).cloned();
+        match switch {
+            Some(switch) if !switch.cancel(|| self.put_run(&row))? => Err("This run has ended".into()),
+            Some(_) => Ok(row),
+            None => self.put_run(&row).map(|()| row),
+        }
     }
 
     /// Move an automation's next time on without counting a run.
@@ -649,9 +651,7 @@ impl Automations {
         } else {
             None
         };
-        let ran = doer.run(a, &vars, &cancel);
-        self.cancels.lock().unwrap().remove(&row.id);
-        match ran {
+        match doer.run(a, &vars, &cancel) {
             Ok(Started::Done { detail, cost }) => {
                 row.state = RunState::Succeeded;
                 row.detail = Some(detail);
@@ -673,6 +673,9 @@ impl Automations {
             }
         }
         let admit = held.unwrap_or_else(|| self.admit.lock().unwrap());
+        // Dropped only now, under `admit`: until the run's end is saved, a cancel still finds the switch and so learns whether
+        // the action kept its result.
+        self.cancels.lock().unwrap().remove(&row.id);
         if let Some(cancelled) = self.find_run(&row.id).filter(|r| r.state == RunState::Cancelled) {
             return cancelled;
         }

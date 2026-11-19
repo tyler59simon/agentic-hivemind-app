@@ -74,10 +74,12 @@ impl Store {
                     match read_record(&path) {
                         Ok(row) => row,
                         Err(Unreadable::Io(e)) => return Err(format!("Could not read the {kind} record {}: {e}", path.display())),
-                        Err(Unreadable::Invalid) => {
-                            let _ = std::fs::rename(&path, path.with_extension(format!("unreadable-{}", crate::agent::now_ms())));
-                            None
-                        }
+                        Err(Unreadable::Invalid) => match std::fs::rename(&path, path.with_extension(format!("unreadable-{}", crate::agent::now_ms()))) {
+                            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                                return Err(format!("The {kind} record {} is damaged and could not be set aside: {e}", path.display()));
+                            }
+                            _ => None,
+                        },
                     }
                 }
             };
@@ -126,8 +128,12 @@ impl Store {
         if !record.as_object_mut().is_some_and(change) {
             return Ok(false);
         }
+        let text = serde_json::to_string(&record).map_err(|e| e.to_string())?;
+        if text.len() > MAX_RECORD {
+            return Err("The record is too large to save".into());
+        }
         let temp = path.with_extension("tmp");
-        std::fs::write(&temp, serde_json::to_string(&record).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        std::fs::write(&temp, text).map_err(|e| e.to_string())?;
         std::fs::rename(&temp, &path).map_err(|e| e.to_string())?;
         Ok(true)
     }
@@ -872,6 +878,10 @@ mod tests {
         assert_eq!((text(now, "learnedFrom"), text(now, "body"), now["updated"].as_u64()), ("v1".into(), "Edited later".into(), Some(5)));
         store.put("draft", json!({"id": id, "generated": "v2", "created": 5}), 9).unwrap();
         assert!(!mark_learned(&store, &id, "v1").unwrap(), "a refined draft is not marked by the older call");
+        // The size limit holds here too (Codex re-review of 61a3474).
+        let big = "x".repeat(MAX_RECORD / 2 + 10);
+        store.put("draft", json!({"id": id, "generated": big, "created": 5}), 10).unwrap();
+        assert!(mark_learned(&store, &id, &big).unwrap_err().contains("too large"));
         store.delete("draft", &id).unwrap();
         assert!(!mark_learned(&store, &id, "v2").unwrap());
         assert!(store.list("draft").unwrap().is_empty(), "a deleted draft is not recreated");

@@ -33,9 +33,15 @@ export function usePortfolio() {
   return {
     project, today, rows: scoped, all, attention: attention(scoped, today), crossProject: project ? [] : loose,
     projects: (registry.data?.projects ?? []).filter((p: Project) => p.status !== "archived"),
-    loading: registry.isLoading || rows.isLoading || open.isLoading || milestones.isLoading || health.isLoading,
-    error: registry.error ?? rows.error ?? open.error ?? milestones.error ?? health.error,
+    loading: registry.isLoading || rows.isLoading || open.isLoading, error: registry.error ?? rows.error ?? open.error,
   };
+}
+
+/** Why milestones or project health did not load, if they did not; the portfolio is shown without them. */
+export function useRecordsError(): unknown {
+  const milestones = useRecords<Milestone>("milestone");
+  const health = useRecords<Health>("health");
+  return milestones.error ?? health.error;
 }
 
 /** Capture batches with items still waiting, newest first. */

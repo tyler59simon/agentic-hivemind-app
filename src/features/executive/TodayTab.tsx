@@ -15,7 +15,7 @@ import { CommitmentList } from "./PortfolioTab";
 import { HealthChip } from "./parts";
 import type { Attention } from "./portfolio";
 import type { CommitmentRow } from "./commitments";
-import { useInbox, useRecords } from "./useExecutive";
+import { useInbox, useRecords, useRecordsError } from "./useExecutive";
 
 function AskBox({ project }: { project?: Project }) {
   const engines = useShownEngines();
@@ -50,6 +50,7 @@ export function TodayTab({ project, projects, attention, crossProject, loading, 
   const crossOverdue = crossProject.filter((c) => c.timing === "overdue");
   const overdue = [...attention.overdue, ...crossOverdue];
   const soon = [...attention.dueSoon, ...crossProject.filter((c) => c.timing === "soon")];
+  const failed = useRecordsError();
   const quiet = !overdue.length && !soon.length && !attention.milestones.length && !attention.atRisk.length;
   return (
     <Split rail={
@@ -79,7 +80,8 @@ export function TodayTab({ project, projects, attention, crossProject, loading, 
     }>
       <AskBox project={project} />
       <Section title="Needs attention" loading={loading} error={error}>
-        {quiet && <p className="muted">Nothing is overdue, due this week or off track{projects.length ? "" : ". Add a project from Overview to start"}.</p>}
+        {failed ? <p className="error small">Milestones or project health did not load, so they are missing here: {classify(failed).message}</p> : null}
+        {quiet && !failed && <p className="muted">Nothing is overdue, due this week or off track{projects.length ? "" : ". Add a project from Overview to start"}.</p>}
         {overdue.length > 0 && <><h3 className="exec-sub">Overdue commitments</h3><CommitmentList items={overdue} /></>}
         {soon.length > 0 && <><h3 className="exec-sub">Due in the next 7 days</h3><CommitmentList items={soon} /></>}
         {attention.milestones.length > 0 && (

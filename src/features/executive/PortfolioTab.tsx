@@ -3,6 +3,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { classify } from "../../lib/errors";
 import { deleteRecord, putRecord, type Health, type HealthStatus, type Milestone, type MilestoneStatus } from "../../lib/executive";
 import { check, type Project } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
@@ -18,6 +19,7 @@ import type { CommitmentRow } from "./commitments";
 import { HEALTH_LABEL } from "./health";
 import { HealthChip } from "./parts";
 import type { ProjectRow } from "./portfolio";
+import { useRecordsError } from "./useExecutive";
 
 const MILESTONE_STATUS: Record<MilestoneStatus, string> = { planned: "Planned", at_risk: "At risk", done: "Done", missed: "Missed" };
 const TIMING_CHIP = { overdue: "bad", soon: "warn", later: "", undated: "" } as const;
@@ -168,9 +170,12 @@ function ProjectDetail({ row, projects }: { row: ProjectRow; projects: Project[]
 
 export function PortfolioTab({ rows, projects, project, loading, error }: { rows: ProjectRow[]; projects: Project[]; project?: Project; loading: boolean; error: unknown }) {
   const setProject = useApp((s) => s.setProject);
-  if (project && rows[0]) return <ProjectDetail row={rows[0]} projects={projects} />;
+  const failed = useRecordsError();
+  const notice = failed ? <p className="error small">Milestones or project health did not load, so they are missing here: {classify(failed).message}</p> : null;
+  if (project && rows[0]) return <>{notice}<ProjectDetail row={rows[0]} projects={projects} /></>;
   return (
     <Section loading={loading} error={error} empty={rows.length ? undefined : "No projects yet. Create one from Overview."}>
+      {notice}
       <table className="exec-table">
         <thead><tr><th>Project</th><th>Health</th><th>Next milestone</th><th>Commitments</th><th>Risks</th><th>Latest status</th></tr></thead>
         <tbody>

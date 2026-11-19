@@ -214,7 +214,7 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
     return false;
   }), []);
   if (batches.isLoading) return <Modal title="Review capture" onClose={onClose}><p className="muted">Loading…</p></Modal>;
-  if (batches.error) return <Modal title="Review capture" onClose={onClose}><p className="error">{classify(batches.error).message}</p></Modal>;
+  if (batches.error && !stored) return <Modal title="Review capture" onClose={onClose}><p className="error">{classify(batches.error).message}</p></Modal>;
   if (!stored) return <Modal title="Review capture" onClose={onClose}><p className="muted">This capture is no longer here.</p></Modal>;
   const items = stored.items.map((i) => edits[i.id] ?? i);
 
@@ -281,6 +281,7 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
           {items.length ? `${items.length} item${items.length === 1 ? "" : "s"} found, ${pending.length} waiting. ` : "No items were found. "}
           Accepted notes and commitments go to Living Memory; milestones stay in Hivemind.
         </p>
+        {batches.error ? <p className="error small">Could not reload this capture: {classify(batches.error).message}</p> : null}
         {stored.questions.length > 0 && (
           <div className="banner"><strong>Questions to settle</strong><ul>{stored.questions.map((q) => <li key={q}>{q}</li>)}</ul></div>
         )}
