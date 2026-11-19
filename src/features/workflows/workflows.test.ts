@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TaskSpec } from "../../lib/workflows";
-import { actionOf, blankAutomation, clock, columns, minutesOf, needsProject, nextText, progressText, taskActions, taskId, toggleDependency, triggerOf, withoutTask } from "./workflows";
+import { actionOf, blankAutomation, clock, columns, minutesOf, needsProject, nextText, scoped, progressText, taskActions, taskId, toggleDependency, triggerOf, withoutTask } from "./workflows";
 
 const spec = (id: string, dependsOn: string[] = [], from: string | null = null): TaskSpec =>
   ({ id, role: "developer", engine: "claude", title: id, prompt: "p", dependsOn, from });
@@ -68,6 +68,9 @@ describe("actions", () => {
   it("knows which automations need a project", () => {
     expect(needsProject({ action: { kind: "memory_maintenance" }, trigger: { kind: "daily", at: 0 } })).toBe(false);
     expect(needsProject({ action: { kind: "skill_upkeep" }, trigger: { kind: "commit" } })).toBe(true);
+    const brief = { ...blankAutomation(null, null), action: { kind: "executive_briefing" as const, briefing: "weekly" as const, days: 7 }, project: "pay", repo: "C:/r" };
+    expect([scoped(brief).project, scoped(brief).repo]).toEqual(["pay", null]);
+    expect(scoped({ ...brief, action: { kind: "memory_maintenance" } }).project).toBeNull();
     expect(needsProject({ action: { kind: "commit_capture" }, trigger: { kind: "manual" } })).toBe(true);
   });
   it("keeps an action of the same kind", () => {

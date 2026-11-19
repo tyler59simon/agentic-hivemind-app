@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Briefing, CaptureItem, Health, Milestone } from "../../lib/executive";
 import type { NoteRow, OpenItem, Project } from "../../lib/lm";
-import { commitmentsNote, itemBody, planWrite, tagsFor, type Context } from "./items";
+import { blocked, commitmentsNote, itemBody, planWrite, replaceable, tagsFor, type Context } from "./items";
 import { addDays, commitmentRows, formatCommitment, parseCommitment, timing } from "./commitments";
 import { healthView, signals, suggestHealth } from "./health";
 import { attention, crossProject, portfolio } from "./portfolio";
@@ -75,6 +75,15 @@ describe("capture", () => {
     expect(tagsFor("risk", PAY, known)).toEqual(["concern/knowledge", "project/pay"]);
     expect(tagsFor("preference", undefined, known)).toEqual(["concern/knowledge", "subject/user"]);
     expect(tagsFor("status", project("x", "X"), [])).toEqual([]);
+  });
+
+  it("offers to replace only a note in the domain the item is written to, and needs a project for a milestone", () => {
+    expect(replaceable(extracted({}), "pay:old", ctx)).toBe(true);
+    expect(replaceable(extracted({}), "led:old", ctx)).toBe(false);
+    expect(replaceable(extracted({ kind: "commitment" }), "pay:old", ctx)).toBe(false);
+    expect(replaceable(extracted({ kind: "preference", project: null }), "_global:p1", ctx)).toBe(true);
+    expect(blocked(extracted({ kind: "milestone", project: null }))).toBe("A milestone needs a project.");
+    expect(blocked(extracted({ kind: "milestone" }))).toBeUndefined();
   });
 
   it("writes a note with its source, and supersedes when asked", () => {

@@ -125,7 +125,7 @@ function AddCommitment({ project, projects }: { project: Project; projects: Proj
       <input className="grow" aria-label="New commitment" placeholder="New commitment" value={task} onChange={(e) => setTask(e.target.value)} disabled={busy} />
       <input aria-label="Owner" placeholder="Owner" value={owner} onChange={(e) => setOwner(e.target.value)} disabled={busy} />
       <input type="date" aria-label="Due date" value={due} onChange={(e) => setDue(e.target.value)} disabled={busy} />
-      <button onClick={add} disabled={busy || !task.trim()}><Plus size="1em" aria-hidden /> Add</button>
+      <button onClick={add} disabled={busy || !task.trim() || !ctx.ready}><Plus size="1em" aria-hidden /> Add</button>
     </div>
   );
 }

@@ -601,14 +601,14 @@ fn redact_assignments(text: &str) -> String {
                 while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'-') {
                     i += 1;
                 }
-                while i < bytes.len() && matches!(bytes[i], b' ' | b'"' | b'\'') {
+                while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'"' | b'\'') {
                     i += 1;
                 }
                 if i >= bytes.len() || !matches!(bytes[i], b'=' | b':') {
                     continue;
                 }
                 i += 1;
-                while i < bytes.len() && bytes[i] == b' ' {
+                while i < bytes.len() && matches!(bytes[i], b' ' | b'\t') {
                     i += 1;
                 }
                 // A quoted value runs to its closing quote (spaces and escaped quotes included); a bare one to the next space.
@@ -862,9 +862,10 @@ mod tests {
             Bearer ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4\n\
             +github_pat_abcdefghijklmnopqrstuvwxyz\n\
             db_password = \"correct horse \\\" battery\" # note\n\
+            api_token:\ttab-separated-value\n\
             The retry token count stays at 3 and src/sk-learn/notes.md is a path.";
         let clean = redact(text);
-        for secret in ["sk-proj-abc123", "hunter2", "s3cret", "b3BlbnNz", "ghp_A1b2", "github_pat_abc", "horse", "battery"] {
+        for secret in ["sk-proj-abc123", "tab-separated-value", "hunter2", "s3cret", "b3BlbnNz", "ghp_A1b2", "github_pat_abc", "horse", "battery"] {
             assert!(!clean.contains(secret), "{secret} left in:\n{clean}");
         }
         for kept in ["OPENAI_API_KEY=", "user: \"ann\"", "# note", "+[removed]", "https://ann:", "@github.com/acme/app.git", "[private key removed]", "token count stays at 3", "src/sk-learn/notes.md"] {

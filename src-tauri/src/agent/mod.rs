@@ -969,6 +969,9 @@ impl Manager {
         if mode == PolicyMode::PreApproved {
             return Err("Unknown policy".into());
         }
+        if matches!(session.info.task, AgentTask::Executive { .. }) {
+            return Err("The executive assistant stays read-only.".into());
+        }
         if is_over(session.info.status) {
             return Err("This session has ended".into());
         }
@@ -3814,6 +3817,8 @@ mod tests {
         rig.turns(&info.id, 1);
         let first = rig.stdin_lines(&info.id).into_iter().next().unwrap().to_string();
         assert!(first.contains("You are the executive assistant.") && first.contains("What is overdue?"), "{first}");
+        assert!(rig.manager.set_policy(&info.id, PolicyMode::AcceptEdits).is_err(), "the webview cannot lift read-only");
+        assert_eq!(rig.manager.sessions().iter().find(|s| s.id == info.id).unwrap().policy, PolicyMode::PreApproved);
         let specs = rig.specs.lock().unwrap();
         let spec = specs.last().unwrap();
         assert_eq!(spec.cwd, dir);

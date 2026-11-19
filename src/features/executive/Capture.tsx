@@ -2,7 +2,7 @@
 // Living Memory or an existing record until the user accepts an item; replacing an existing note asks once more.
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, LoaderCircle, Sparkles, X } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { classify } from "../../lib/errors";
 import { extract, ITEM_KINDS, putRecord, type CaptureBatch, type CaptureItem, type ItemKind, type Milestone } from "../../lib/executive";
 import { addAction, capture, type Project } from "../../lib/lm";
@@ -12,7 +12,7 @@ import { openExecutive } from "../../store";
 import { Confirm, Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 import { NoteLink } from "../preview/NoteLink";
-import { KIND_LABEL, pendingItems, planWrite, type Context, type Write } from "./items";
+import { blocked, KIND_LABEL, pendingItems, planWrite, replaceable, type Context, type Write } from "./items";
 import { isoToday } from "./commitments";
 import { useNotes, useRecords, useStoreFacts } from "./useExecutive";
 
@@ -67,12 +67,14 @@ export function CaptureDialog({ projects, project, onClose }: { projects: Projec
 }
 
 /** What planning a write needs from the store. Items with no project go to the first project's domain. */
-export function useWriteContext(projects: Project[], sourceLabel: string): Context {
+export function useWriteContext(projects: Project[], sourceLabel: string): Context & { ready: boolean } {
   const { rows } = useNotes();
   const facts = useStoreFacts();
   return {
     projects, known: facts.known, rows: rows.data?.notes ?? [], defaultDomain: projects[0]?.charter?.split(":")[0] || facts.defaultDomain,
     globalDomain: facts.globalDomain, sourceLabel, today: isoToday(),
+    // Planning before the notes arrive would miss an existing commitments note and start a second one.
+    ready: rows.isSuccess && facts.ready,
   };
 }
 
@@ -86,12 +88,15 @@ export async function perform(write: Write, anyway?: boolean): Promise<{ ref: st
 
 type Choice = "new" | string;
 
-function ItemCard({ item, projects, onChange, onAccept, onReject, busy, problem }: {
-  item: CaptureItem; projects: Project[]; busy: boolean; problem?: string;
+function ItemCard({ item, projects, ctx, onChange, onAccept, onReject, busy, problem }: {
+  item: CaptureItem; projects: Project[]; ctx: Context & { ready: boolean }; busy: boolean; problem?: string;
   onChange: (next: CaptureItem) => void; onAccept: (replace?: string, anyway?: boolean) => void; onReject: () => void;
 }) {
-  const [choice, setChoice] = useState<Choice>("new");
-  const noteMatches = item.similar.filter((s) => !s.ref.startsWith("milestone:"));
+  const [picked, setChoice] = useState<Choice>("new");
+  // Only a note the item would really replace: same domain, a note kind. A changed kind or project drops a stale choice.
+  const noteMatches = item.similar.filter((s) => !s.ref.startsWith("milestone:") && replaceable(item, s.ref, ctx));
+  const choice = noteMatches.some((s) => s.ref === picked) ? picked : "new";
+  const why = blocked(item);
   const set = (patch: Partial<CaptureItem>) => onChange({ ...item, ...patch });
   const dated = item.kind === "commitment" || item.kind === "milestone";
   const done = item.state !== "pending";
@@ -129,12 +134,13 @@ function ItemCard({ item, projects, onChange, onAccept, onReject, busy, problem 
       )}
       {!done && item.similar.some((s) => s.ref.startsWith("milestone:")) && <p className="muted small">A milestone with a similar name exists: {item.similar[0].title}.</p>}
       {problem && <p className="error small">{problem}</p>}
+      {!done && why && item.title.trim() && <p className="muted small">{why}</p>}
       {item.result?.ref && !item.result.ref.startsWith("milestone:") && <p className="small">Saved as <NoteLink row={{ ref: item.result.ref, title: item.title }} /></p>}
       {!done && (
         <div className="actions">
           <button onClick={onReject} disabled={busy}><X size="1em" aria-hidden /> Skip</button>
           {problem?.startsWith("A similar note") && <button onClick={() => onAccept(undefined, true)} disabled={busy}>Save anyway</button>}
-          <button className="primary" onClick={() => onAccept(choice === "new" ? undefined : choice)} disabled={busy || !item.title.trim()}>
+          <button className="primary" onClick={() => onAccept(choice === "new" ? undefined : choice)} disabled={busy || !!why || !ctx.ready} title={ctx.ready ? undefined : "Loading your notes"}>
             <Check size="1em" aria-hidden /> {choice === "new" ? "Accept" : "Accept and replace"}
           </button>
         </div>
@@ -149,7 +155,10 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
   const batches = useRecords<CaptureBatch>("capture");
   const stored = batches.data?.find((b) => b.id === id);
   const ctx = useWriteContext(projects, stored?.source.label ?? "");
-  const [edits, setEdits] = useState<Record<string, CaptureItem>>({});
+  const [edits, setEditState] = useState<Record<string, CaptureItem>>({});
+  // Saves read the latest edits, not the ones of the render that started them.
+  const latest = useRef(edits);
+  const setEdits = (f: (e: Record<string, CaptureItem>) => Record<string, CaptureItem>) => { latest.current = f(latest.current); setEditState(latest.current); };
   const [busy, setBusy] = useState<string | null>(null);
   const [problems, setProblems] = useState<Record<string, string>>({});
   const [replacing, setReplacing] = useState<{ item: CaptureItem; ref: string } | null>(null);
@@ -158,16 +167,19 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
   if (!stored) return <Modal title="Review capture" onClose={onClose}><p className="muted">This capture is no longer here.</p></Modal>;
   const items = stored.items.map((i) => edits[i.id] ?? i);
 
-  const save = (next: CaptureItem) => putRecord<CaptureBatch>("capture", { ...stored, items: stored.items.map((i) => (i.id === next.id ? next : edits[i.id] ?? i)) });
+  const save = (...next: CaptureItem[]) => {
+    setEdits((e) => ({ ...e, ...Object.fromEntries(next.map((n) => [n.id, n])) }));
+    return putRecord<CaptureBatch>("capture", { ...stored, items: stored.items.map((i) => latest.current[i.id] ?? i) });
+  };
 
   const accept = async (item: CaptureItem, replace?: string, anyway?: boolean) => {
     setBusy(item.id);
     setProblems((p) => ({ ...p, [item.id]: "" }));
     try {
-      const result = { ...(await perform(planWrite(item, ctx, replace), anyway)), superseded: replace };
-      const next = { ...item, state: "accepted" as const, result };
-      await save(next);
-      setEdits((e) => ({ ...e, [item.id]: next }));
+      const write = planWrite(item, ctx, replace);
+      const replaced = write.kind === "note" && write.payload.supersedes ? replace : undefined;
+      const result = { ...(await perform(write, anyway)), superseded: replaced };
+      await save({ ...item, state: "accepted" as const, result });
       await refreshStore(client);
     } catch (e) {
       const p = classify(e);
@@ -175,11 +187,7 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
     } finally { setBusy(null); }
   };
 
-  const reject = async (item: CaptureItem) => {
-    const next = { ...item, state: "rejected" as const };
-    setEdits((e) => ({ ...e, [item.id]: next }));
-    await save(next).catch((e) => toast(String(e), "error"));
-  };
+  const reject = (...items: CaptureItem[]) => save(...items.map((i) => ({ ...i, state: "rejected" as const }))).catch((e) => toast(String(e), "error"));
 
   const pending = pendingItems(items);
   return (
@@ -193,7 +201,7 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
           <div className="banner"><strong>Questions to settle</strong><ul>{stored.questions.map((q) => <li key={q}>{q}</li>)}</ul></div>
         )}
         {items.map((item) => (
-          <ItemCard key={item.id} item={item} projects={projects} busy={busy === item.id} problem={problems[item.id] || undefined}
+          <ItemCard key={item.id} item={item} projects={projects} ctx={ctx} busy={!!busy} problem={problems[item.id] || undefined}
             onChange={(next) => setEdits((e) => ({ ...e, [item.id]: next }))}
             onAccept={(replace, anyway) => (replace ? setReplacing({ item, ref: replace }) : accept(item, undefined, anyway))}
             onReject={() => reject(item)} />
@@ -201,7 +209,7 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
         <button className="link small" onClick={() => setShowText(!showText)}>{showText ? "Hide" : "Show"} the captured text</button>
         {showText && <pre className="briefing-text">{stored.text}</pre>}
         <div className="actions">
-          {pending.length > 1 && <button onClick={() => pending.forEach(reject)} disabled={!!busy}>Skip the rest</button>}
+          {pending.length > 1 && <button onClick={() => reject(...pending)} disabled={!!busy}>Skip the rest</button>}
           <button className="primary" onClick={onClose} disabled={!!busy}>{pending.length ? "Later" : "Done"}</button>
         </div>
       </div>

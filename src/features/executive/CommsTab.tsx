@@ -80,25 +80,34 @@ function Editor({ d, stakeholders }: { d: Draft; stakeholders: Stakeholder[] }) 
   const [confirm, setConfirm] = useState(false);
   const current = useRef(d);
   current.current = d;
-  // Edits are kept a moment after typing stops.
+  // Edits are kept a moment after typing stops, and at once when the editor closes (another draft, another tab).
+  const unsaved = useRef<{ subject: string; body: string } | null>(null);
+  const keep = () => {
+    const edit = unsaved.current;
+    unsaved.current = null;
+    if (edit) putRecord<Draft>("draft", { ...current.current, ...edit }).catch((e) => toast(String(e), "error"));
+  };
   useEffect(() => {
     if (subject === current.current.subject && body === current.current.body) return;
-    const t = setTimeout(() => putRecord<Draft>("draft", { ...current.current, subject, body }).catch((e) => toast(String(e), "error")), 700);
+    unsaved.current = { subject, body };
+    const t = setTimeout(keep, 700);
     return () => clearTimeout(t);
   }, [subject, body]);
+  useEffect(() => keep, []);
 
-  const sent = async (how: () => Promise<unknown>) => {
-    await how();
+  // Only a draft that really left (copied, or saved to a file) teaches a preference; a cancelled export does not.
+  const sent = async (how: () => Promise<boolean>) => {
+    if (!(await how())) return;
     if (edited(d.generated, body) && d.learnedFrom !== d.generated) {
-      await putRecord<Draft>("draft", { ...d, subject, body, learnedFrom: d.generated });
       await learnStyle(d.generated, body, subject).catch(() => undefined);
+      await putRecord<Draft>("draft", { ...d, subject, body, learnedFrom: d.generated });
       toast("Your edits will be read for writing preferences; suggestions arrive in the capture inbox");
     }
   };
   const email = stakeholders.find((s) => d.audience.startsWith(s.name))?.email ?? "";
   const exportAs = (format: ExportFormat) => sent(() => exportText(subject || "draft", format,
     format === "eml" ? emlText(email, subject, body) : format === "txt" ? `${subject}\n\n${plainText(body)}` : `# ${subject}\n\n${body}`)
-    .then((p) => p && toast(`Saved ${p}`)));
+    .then((p) => { if (p) toast(`Saved ${p}`); return !!p; }, (e) => { toast(String(e), "error"); return false; }));
 
   const redo = async (how: string) => {
     setBusy(true);

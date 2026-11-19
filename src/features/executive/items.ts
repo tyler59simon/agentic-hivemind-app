@@ -56,6 +56,19 @@ export function commitmentsNote(rows: NoteRow[], project: Project | undefined): 
   return rows.find((r) => r.type === "plan" && r.status === "active" && r.title === title && (project ? r.tags.includes(project.tag) : !r.tags.some((t) => t.startsWith("project/"))));
 }
 
+/** The domain a note for `item` goes to: its project's, the global one for a preference without a project, else the default. */
+export function destination(item: CaptureItem, ctx: Context): string {
+  const project = ctx.projects.find((p) => p.slug === item.project);
+  return item.kind === "preference" && !project && ctx.globalDomain ? ctx.globalDomain : domainOf(project, ctx.defaultDomain);
+}
+
+/** Whether accepting `item` may replace the note `ref`: only a note kind, and only a note in the domain it is written to. */
+export const replaceable = (item: CaptureItem, ref: string, ctx: Context) =>
+  item.kind !== "commitment" && item.kind !== "milestone" && ref.split(":")[0] === destination(item, ctx);
+
+/** Why `item` cannot be accepted as it is, if it cannot. */
+export const blocked = (item: CaptureItem) => (!item.title.trim() ? "It needs a title." : item.kind === "milestone" && !item.project ? "A milestone needs a project." : undefined);
+
 /** What accepting `item` writes. `supersedes` is set when the user chose to replace an existing note. */
 export function planWrite(item: CaptureItem, ctx: Context, supersedes?: string): Write {
   const project = ctx.projects.find((p) => p.slug === item.project);
@@ -71,7 +84,7 @@ export function planWrite(item: CaptureItem, ctx: Context, supersedes?: string):
     return { kind: "note", domain: domainOf(project, ctx.defaultDomain), payload: { title: commitmentsTitle(name), body, type: "plan", tags: tagsFor("plan", project, ctx.known) } };
   }
   const type = NOTE_TYPE[item.kind] ?? "knowledge";
-  const domain = type === "preference" && !project && ctx.globalDomain ? ctx.globalDomain : domainOf(project, ctx.defaultDomain);
+  const domain = destination(item, ctx);
   const payload: CapturePayload = { title: item.title.trim(), body: itemBody(item, ctx.sourceLabel, ctx.today), type, tags: tagsFor(type, project, ctx.known) };
   return { kind: "note", domain, payload: supersedes ? { ...payload, supersedes: [supersedes] } : payload };
 }

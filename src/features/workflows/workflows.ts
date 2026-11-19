@@ -135,6 +135,10 @@ export function actionOf(kind: ActionKind, from: Action, engine: Engine = "claud
 export const needsProject = (a: Pick<Automation, "action" | "trigger">) =>
   a.action.kind === "role" || a.action.kind === "workflow" || a.action.kind === "commit_capture" || a.trigger.kind === "commit";
 
+/** The automation as saved: a project and repository only where the action uses them; a briefing keeps its project alone. */
+export const scoped = (a: Automation): Automation =>
+  needsProject(a) ? a : a.action.kind === "executive_briefing" ? { ...a, project: a.project || null, repo: null } : { ...a, project: null, repo: null };
+
 /** Roles an automation may start: never a developer (edits with nobody watching). */
 export const AUTOMATION_ROLES: Role[] = ["reviewer", "tester", "researcher", "architect"];
 

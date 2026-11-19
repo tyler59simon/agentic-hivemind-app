@@ -25,7 +25,7 @@ import { systemsForProject } from "../projects/scope";
 import { MiniDiagram } from "../systems/MiniDiagram";
 import { systemsQuery, useSystem } from "../systems/useSystem";
 import {
-  ACTION_HELP, ACTION_LABELS, actionOf, AUTOMATION_ROLES, AUTOMATION_RUN_WORDS, blankAutomation, CAUSE_WORDS, clock, columns, minutesOf, needsProject,
+  ACTION_HELP, ACTION_LABELS, actionOf, AUTOMATION_ROLES, AUTOMATION_RUN_WORDS, blankAutomation, CAUSE_WORDS, clock, columns, minutesOf, needsProject, scoped,
   nextText, progressText, RUN_WORDS, TASK_WORDS, taskActions, taskId, toggleDependency, tone, TRIGGER_LABELS, triggerOf, WEEKDAYS, withoutTask,
 } from "./workflows";
 
@@ -323,8 +323,7 @@ function AutomationForm({ initial, onDone }: { initial: Automation; onDone: (sav
   };
   const save = () => {
     setBusy(true);
-    const clean = needsProject(a) ? a : { ...a, project: null, repo: null };
-    automationPut(clean).then((saved) => { toast(`Saved ${saved.name}`); client.invalidateQueries({ queryKey: ["automations"] }); onDone(saved); }, fail).finally(() => setBusy(false));
+    automationPut(scoped(a)).then((saved) => { toast(`Saved ${saved.name}`); client.invalidateQueries({ queryKey: ["automations"] }); onDone(saved); }, fail).finally(() => setBusy(false));
   };
   const timeOk = !("at" in t) || minutesOf(time) != null;
   return (

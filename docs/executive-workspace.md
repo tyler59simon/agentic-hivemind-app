@@ -19,7 +19,7 @@ A capture batch is model output that waits for review. It is not memory: it hold
 
 ## What each part does
 
-**Capture** (the header button, or Ctrl+Shift+C on the page). The user pastes meeting notes, a conversation or a document. One Claude call extracts decisions, risks, commitments, status, milestones, knowledge and preferences, each with the line it came from and a confidence. The review dialog shows each item for editing; nothing is written until the user accepts it. An item whose title matches an existing note offers to replace that note (it supersedes it, after a confirm) or to save anyway. Accepted notes carry a `## Source` section with the quote and the capture date.
+**Capture** (the header button, or Ctrl+Shift+C on the page). The user pastes meeting notes, a conversation or a document. One Claude call extracts decisions, risks, commitments, status, milestones, knowledge and preferences, each with the line it came from and a confidence. The review dialog shows each item for editing; nothing is written until the user accepts it. An item whose title matches an existing note offers to replace that note (it supersedes it, after a confirm) or to save anyway. Accepted notes carry a `## Source` section with the quote and the capture date. A milestone needs a project, and a replacement is offered only for a note in the domain the item is written to. Accept waits until the note list has loaded, so a second commitments note is not started by mistake.
 
 **Today.** Overdue and due-soon commitments (tick with an undo toast), milestones in the next 14 days, projects at risk with the reason, the capture inbox, the latest briefing, and an ask box that starts an assistant conversation. A paused project counts as at risk only when the user set its health.
 
@@ -33,7 +33,7 @@ A capture batch is model output that waits for review. It is not memory: it hold
 
 ## How grounding works
 
-`executive::pack` in `src-tauri/src/executive.rs` builds one evidence pack for briefings, drafts and the assistant: project health (or a gap saying none is set), milestones (overdue flagged), open action items (overdue flagged), the latest status note (a gap when none is newer than 14 days), risks and bugs, decisions in the period, active plans, other recent notes, and writing preferences. Each piece gets an id (E1, E2, ...); the pack is capped at 40,000 characters (20,000 for the assistant). Gaps found while building the pack go to the model and to the reader. The model returns evidence ids in fields of a JSON schema; the frontend keeps only ids the pack really has (`texts.ts knownCitations`, `numbered`) and strips stray ids from draft bodies.
+`executive::pack` in `src-tauri/src/executive.rs` builds one evidence pack for briefings, drafts and the assistant: project health (or a gap saying none is set), milestones (overdue flagged), open action items (overdue flagged; for all projects, also the cross-project commitments), the latest status note (a gap when none is newer than 14 days), risks and bugs, decisions in the period, active plans, other recent notes, and writing preferences. Each piece gets an id (E1, E2, ...); the pack is capped at 40,000 characters (20,000 for the assistant). Gaps found while building the pack go to the model and to the reader. The model returns evidence ids in fields of a JSON schema; the frontend keeps only ids the pack really has (`texts.ts knownCitations`, `numbered`) and strips stray ids from draft bodies.
 
 ## Model calls
 
@@ -48,7 +48,7 @@ Extraction, drafting, refining, briefings and style learning are tool-free one-s
 
 ## Limits
 
-- One-shot calls run on Claude Code only. Codex works in the assistant chat, but there it has no rule that blocks a memory write; its read-only sandbox is the only guard.
+- One-shot calls run on Claude Code only. Codex works in the assistant chat, but there it has no rule that blocks a memory write; its read-only sandbox is the only guard. The assistant's permission mode cannot be changed after it starts.
 - Hivemind's governed-command rules (`scope::governed_rules`) match `living_memory.py`, not the `alm` launcher. The executive deny rules cover both spellings; other session kinds still need the fix.
 - Health is a suggestion from simple signals (overdue milestones and commitments, open risks, status age). It does not read code or CI.
 - Duplicate detection is title overlap within the project domains, not semantic.

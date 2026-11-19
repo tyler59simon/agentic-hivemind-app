@@ -40,7 +40,9 @@ export function usePortfolio() {
 /** Capture batches with items still waiting, newest first. */
 export function useInbox() {
   const batches = useRecords<CaptureBatch>("capture");
-  const waiting = (batches.data ?? []).filter((b) => b.items.some((i) => i.state === "pending") || (b.items.length === 0 && b.questions.length));
+  // A batch missing its lists (written by hand, or by an older build) is skipped rather than breaking the page.
+  const waiting = (batches.data ?? []).filter((b) => Array.isArray(b.items) && Array.isArray(b.questions))
+    .filter((b) => b.items.some((i) => i.state === "pending") || (b.items.length === 0 && b.questions.length));
   return { batches, waiting, count: waiting.reduce((n, b) => n + b.items.filter((i) => i.state === "pending").length, 0) };
 }
 

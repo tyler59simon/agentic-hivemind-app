@@ -167,6 +167,9 @@ fn day(stamp: &str) -> &str {
     stamp.get(..10).unwrap_or(stamp)
 }
 
+/// The plan note of commitments that belong to no single project (`commitmentsTitle` in the frontend).
+const CROSS_PROJECT: &str = "Commitments: Cross-project";
+
 const STYLE_WORDS: [&str; 7] = ["writ", "tone", "email", "style", "communicat", "wording", "draft"];
 
 /// What Living Memory and Hivemind's records know about one project (or all active ones) over the last `days` days,
@@ -241,7 +244,17 @@ fn pack_within(lm: &Lm, store: &Store, project: Option<&str>, days: u32, today: 
             }
         }
     }
-    let prefs = lm(&["list", "--all-domains", "--type", "preference", "--status", "active", "--with-summary", "--limit", "200"])?;
+    // Commitments that belong to no project live on one plan note with no project tag; Today shows them, so does the pack.
+    if project.is_none() {
+        let open = lm(&["open", "--all-domains", "--limit", "500"])?;
+        for item in array(&open, "items").filter(|i| text(i, "title") == CROSS_PROJECT) {
+            let line = text(item, "item");
+            let late = due_of(&line).filter(|d| *d < today).map(|d| format!(" Overdue since {d}.")).unwrap_or_default();
+            found.push(Evidence { kind: "action item".into(), title: line.clone(), reference: Some(text(item, "ref")), date: due_of(&line).map(|d| d.to_string()),
+                text: format!("Cross-project commitment: {line}.{late}"), ..Default::default() });
+        }
+    }
+    let prefs =lm(&["list", "--all-domains", "--type", "preference", "--status", "active", "--with-summary", "--limit", "200"])?;
     for r in array(&prefs, "notes") {
         let words = format!("{} {}", text(r, "title"), text(r, "summary")).to_lowercase();
         if STYLE_WORDS.iter().any(|w| words.contains(w)) {
@@ -658,7 +671,10 @@ mod tests {
             "projects" => json!({"projects": [
                 {"slug": "pay", "name": "PayStream", "status": "active", "charter": "paystream:c1", "description": "Payments"},
                 {"slug": "old", "name": "Old", "status": "archived", "charter": "paystream:c2"}]}),
-            "open" => json!({"items": [{"ref": "paystream:p1", "title": "Commitments: PayStream", "item": "Send the Q3 plan (owner: Dana, due: 2026-11-10)"}]}),
+            "open" if argv.contains(&"--tag") => json!({"items": [{"ref": "paystream:p1", "title": "Commitments: PayStream", "item": "Send the Q3 plan (owner: Dana, due: 2026-11-10)"}]}),
+            "open" => json!({"items": [
+                {"ref": "paystream:p1", "title": "Commitments: PayStream", "item": "Send the Q3 plan (owner: Dana, due: 2026-11-10)"},
+                {"ref": "paystream:x1", "title": "Commitments: Cross-project", "item": "Hire a staff engineer (owner: Lee, due: 2026-12-15)"}]}),
             "list" if argv.contains(&"preference") => json!({"notes": [
                 {"ref": "_global:w1", "title": "Writing preference: no greeting", "type": "preference", "summary": "Skip greetings in email.", "updated": "2026-11-01"},
                 {"ref": "_global:w2", "title": "Use tabs", "type": "preference", "summary": "Indent code with tabs.", "updated": "2026-11-01"}]}),
@@ -691,6 +707,10 @@ mod tests {
         assert_eq!(pack.evidence.iter().map(|e| e.id.clone()).collect::<Vec<_>>()[..2], ["E1", "E2"]);
         assert!(pack.gaps.iter().any(|g| g.contains("no project health")) && pack.gaps.iter().any(|g| g.contains("no status update")));
         assert!(!pack.evidence.iter().any(|e| e.project.as_deref() == Some("Old")), "archived projects are left out");
+        let loose: Vec<&str> = pack.evidence.iter().filter(|e| e.text.starts_with("Cross-project")).map(|e| e.title.as_str()).collect();
+        assert_eq!(loose, ["Hire a staff engineer (owner: Lee, due: 2026-12-15)"], "cross-project commitments, once");
+        let one = super::pack(&fake, &store, Some("pay"), 7, today()).unwrap();
+        assert!(!one.evidence.iter().any(|e| e.text.starts_with("Cross-project")), "a project's pack leaves them out");
         let text = pack_text(&pack);
         assert!(text.contains("[E1] (") && text.contains("## Known gaps\n- "));
         assert!(super::pack(&fake, &store, Some("nope"), 7, today()).is_err());

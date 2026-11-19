@@ -199,7 +199,7 @@ function Toolbar({ info, face, sessions, onAsk }: { info?: SessionInfo; face: In
                 <Shield size="1.2em" aria-hidden />{PROFILE_LABELS[info.profile]}{isUnattended(info) ? " · unattended" : ""}
               </span>
             ) : (
-              <select aria-label="Permissions" value={info.policy} disabled={isEnded(info) || isCodex(info)} title={isCodex(info) ? CODEX_MODE_NOTE : undefined} onChange={(e) => setPolicy(e.target.value as Policy)}>
+              <select aria-label="Permissions" value={info.policy} disabled={isEnded(info) || isCodex(info) || info.task.kind === "executive"} title={isCodex(info) ? CODEX_MODE_NOTE : info.task.kind === "executive" ? "The executive assistant stays read-only." : undefined} onChange={(e) => setPolicy(e.target.value as Policy)}>
                 {POLICIES.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
               </select>
             )}
