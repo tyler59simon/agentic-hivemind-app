@@ -194,7 +194,7 @@ pub fn head_sha(repo: &Path) -> Result<String, String> {
 /// When none of the reviewed tips is left (history was rewritten), nothing is reviewed and HEAD becomes the only tip, as on a
 /// first look.
 pub fn next_batch(repo: &Path, reviewed: &[&str], limit: usize) -> Result<(Vec<String>, Vec<String>), String> {
-    let reviewed = live_tips(repo, reviewed);
+    let reviewed = live_tips(repo, reviewed)?;
     if reviewed.is_empty() {
         return Ok((vec![], vec![head_sha(repo)?]));
     }
@@ -213,13 +213,25 @@ pub fn next_batch(repo: &Path, reviewed: &[&str], limit: usize) -> Result<(Vec<S
 }
 
 /// The reviewed tips that are full commit ids and still name a commit in `repo`. Anything else is never passed to git (so a
-/// stored value cannot become an option), and a tip git has pruned (a deleted branch) is dropped so the others keep working.
-pub fn live_tips(repo: &Path, tips: &[&str]) -> Vec<String> {
-    tips.iter().filter(|sha| is_sha(sha)).filter(|sha| {
-        let mut command = Command::new("git");
-        command.args(["--no-optional-locks", "-C"]).arg(repo).args(["rev-parse", "--verify", "--quiet", "--end-of-options"]).arg(format!("{sha}^{{commit}}"));
-        run_with_timeout(command, TIMEOUT).is_ok()
-    }).map(|sha| sha.to_string()).collect()
+/// stored value cannot become an option), and a tip git reports missing (a pruned branch) is dropped so the others keep
+/// working. Git failing (a timeout, a broken repository) is an error, not a missing tip.
+pub fn live_tips(repo: &Path, tips: &[&str]) -> Result<Vec<String>, String> {
+    let ids: Vec<&str> = tips.iter().copied().filter(|sha| is_sha(sha)).collect();
+    if ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut command = Command::new("git");
+    command.args(["--no-optional-locks", "-C"]).arg(repo).args(["cat-file", "--batch-check"]);
+    let ran = run_with_input(command, Some(&format!("{}\n", ids.join("\n"))), TIMEOUT)?;
+    if !ran.status.success() {
+        return Err(format!("git cat-file failed: {}", ran.stderr.trim()));
+    }
+    // One line per id, in order: "<id> commit <size>", or "<id> missing".
+    Ok(ran.stdout.lines().filter_map(|line| {
+        let mut words = line.split_whitespace();
+        let sha = words.next()?;
+        (words.next() == Some("commit") && ids.contains(&sha)).then(|| sha.to_string())
+    }).collect())
 }
 
 /// `git rev-list --count <selector...>` in `repo`, e.g. `["abc..HEAD"]` or `["--since=@1794322874", "HEAD"]`.
@@ -441,7 +453,7 @@ mod tests {
         let mut expected = [side.clone(), main.clone(), vec![merge.clone()]].concat();
         expected.sort();
         assert_eq!(all, expected, "each new commit exactly once");
-        assert_eq!(tips, [merge.clone()]);
+        assert_eq!(tips, std::slice::from_ref(&merge));
 
         // Reviewed up to a side-branch commit (the branch was checked out then): those are not reviewed again.
         let (batches, _) = drain(&dir, vec![side[2].clone()], 30);
@@ -459,14 +471,17 @@ mod tests {
         let dir = batch_repo("tips");
         let first = commit(&dir, "c1");
         let gone = "0123456789abcdef0123456789abcdef01234567";
-        let kept = live_tips(&dir, &["--output=x", "HEAD", &first[..7], gone, &first]);
-        assert_eq!(kept, [first.clone()], "options, names, short ids and pruned commits are dropped");
+        let kept = live_tips(&dir, &["--output=x", "HEAD", &first[..7], gone, &first]).unwrap();
+        assert_eq!(kept, std::slice::from_ref(&first), "options, names, short ids and pruned commits are dropped");
         let second = commit(&dir, "c2");
         // A pruned tip beside a live one: the live one still bounds the batch.
         assert_eq!(next_batch(&dir, &[gone, &first], 30).unwrap(), (vec![second.clone()], vec![second.clone()]));
         // Every tip gone: start again from HEAD, reviewing nothing.
         assert_eq!(next_batch(&dir, &[gone], 30).unwrap(), (vec![], vec![second]));
         assert!(!dir.join("x").exists());
+        // Git failing is an error, not a missing tip, so the cursor stays (Codex re-review of b3f5b40).
+        assert!(live_tips(&dir.join("no-such-folder"), &[&first]).is_err());
+        assert!(next_batch(&dir.join("no-such-folder"), &[&first], 30).is_err());
         std::fs::remove_dir_all(&dir).ok();
     }
 

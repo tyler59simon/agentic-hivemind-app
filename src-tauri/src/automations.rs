@@ -751,8 +751,12 @@ impl Automations {
                     Some(seen) if !seen.split_whitespace().any(|tip| tip == head) => match doer.log(repo, Some(seen)) {
                         Ok(log) if log.trim().is_empty() => {}
                         Ok(log) => out.push(Due { id: a.id.clone(), cause: "commit", event: Some(format!("New commits:\n{log}")) }),
-                        // Git failing is not "nothing new": the run says what went wrong.
-                        Err(e) => out.push(Due { id: a.id.clone(), cause: "commit", event: Some(format!("New commits (git could not list them: {e})")) }),
+                        // Git failing is not "nothing new". A commit capture runs, fails visibly and keeps its reviewed
+                        // commits; any other action (a paid role or workflow) waits for a check that works.
+                        Err(e) if matches!(a.action, Action::CommitCapture) => {
+                            out.push(Due { id: a.id.clone(), cause: "commit", event: Some(format!("New commits (git could not list them: {e})")) })
+                        }
+                        Err(_) => {}
                     },
                     _ => {}
                 }
@@ -883,13 +887,18 @@ mod tests {
         assert!(check(&brief).unwrap_err().contains("1 to 90"));
     }
 
+    /// A batch next_batch answers: the commits and the tips after them.
+    type Batch = (Vec<String>, String);
+
     #[derive(Default)]
     struct Fake {
         ran: Mutex<Vec<(String, Vars)>>,
         /// What next_batch answers: unset reviews HEAD alone, Some(None) stands for a git failure.
-        batch: Mutex<Option<Option<(Vec<String>, String)>>>,
+        batch: Mutex<Option<Option<Batch>>>,
         notes: Mutex<Vec<String>>,
         head: Mutex<Option<String>>,
+        /// git log fails.
+        log_broken: Mutex<bool>,
         broke: bool,
         session: bool,
         paused: Mutex<bool>,
@@ -906,6 +915,9 @@ mod tests {
             self.head.lock().unwrap().clone()
         }
         fn log(&self, _repo: &str, since: Option<&str>) -> Result<String, String> {
+            if *self.log_broken.lock().unwrap() {
+                return Err("bad config".into());
+            }
             Ok(format!("log since {}", since.unwrap_or("start")))
         }
         fn next_batch(&self, _repo: &str, _reviewed: &str, limit: usize) -> Option<(Vec<String>, String)> {
@@ -1016,6 +1028,18 @@ mod tests {
         autos.tick(now_ms(), true, &doer);
         assert_eq!(doer.ran.lock().unwrap().last().unwrap().1.batch, None);
         assert_eq!(autos.list()[0].last_seen.as_deref(), Some("x9 c47"));
+        // A failed commit check starts a commit capture (it fails visibly) but never a role (Codex re-review of b3f5b40).
+        let capture = autos.list()[0].id.clone();
+        let role = Automation { id: String::new(), enabled: true, project: Some("p".into()), repo: Some("r".into()),
+            action: Action::Role { role: Role::Reviewer, engine: Engine::Claude, prompt: "Review {commits}".into() },
+            ..templates().into_iter().find(|t| t.id == "commit-capture").unwrap() };
+        let role = autos.put(role, now_ms()).unwrap();
+        autos.tick(now_ms(), true, &doer); // the role's first look remembers HEAD
+        *doer.head.lock().unwrap() = Some("e01".into());
+        *doer.log_broken.lock().unwrap() = true;
+        let due: Vec<String> = autos.due(now_ms(), true, &doer).into_iter().map(|d| d.id).collect();
+        assert!(due.contains(&capture) && !due.contains(&role.id), "{due:?}");
+        *doer.log_broken.lock().unwrap() = false;
         // A new automation never takes the caller's reviewed commits.
         let def = Automation { id: String::new(), enabled: true, project: Some("p".into()), repo: Some("r".into()), last_seen: Some("--output=x".into()), ..templates().into_iter().find(|t| t.id == "commit-capture").unwrap() };
         assert_eq!(autos.put(def, now_ms()).unwrap().last_seen, None);

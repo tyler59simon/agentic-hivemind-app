@@ -544,7 +544,7 @@ impl automations::Doer for AppDoer {
         match since {
             // `since` holds the reviewed tips, space-separated; only live commit ids reach git.
             Some(s) => {
-                let tips = git::live_tips(std::path::Path::new(repo), &s.split_whitespace().collect::<Vec<_>>());
+                let tips = git::live_tips(std::path::Path::new(repo), &s.split_whitespace().collect::<Vec<_>>())?;
                 command.args(["--max-count=50", "HEAD", "--not"]).args(tips)
             }
             None => command.arg("--max-count=10"),
