@@ -72,9 +72,9 @@ export interface StartForm {
 
 /** What each permission profile lets a session do; Rust turns the profile into the actual rules. */
 export const PROFILE_HELP: Record<Profile, string> = {
-  read_only: "Reads the worktree and Living Memory, and runs shell commands Claude Code itself treats as read-only (such as git log). Never edits and never asks.",
-  edit_worktree: "Edits files in its worktree and runs the project's allowed commands. Anything else asks you, or is refused when unattended.",
-  research: "Reads the worktree and Living Memory, runs read-only shell commands and searches the web. Never edits and never asks.",
+  read_only: "Reads the worktree and Living Memory and runs git log, show, diff, status and blame. Never edits and never asks.",
+  edit_worktree: "Edits files in its worktree and runs the read-only git commands and the project's allowed commands. Anything else asks you, or is refused when unattended.",
+  research: "Reads the worktree and Living Memory, runs the read-only git commands and searches the web. Never edits and never asks.",
 };
 
 export const PROFILE_LABELS: Record<Profile, string> = { read_only: "Read only", edit_worktree: "Edit worktree", research: "Research" };

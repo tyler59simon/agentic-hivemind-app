@@ -1,4 +1,5 @@
 mod agent;
+mod automations;
 mod architecture;
 mod bridge;
 mod capture;
@@ -14,6 +15,7 @@ mod settings;
 mod skills;
 mod term;
 mod watcher;
+mod workflow;
 mod worktree;
 
 use bridge::{Bridge, Reply};
@@ -36,6 +38,8 @@ struct AppState {
     terminals: term::Manager,
     learning: learning::Learning,
     skills: skills::Skills,
+    workflows: Arc<workflow::Workflows>,
+    automations: Arc<automations::Automations>,
     watcher: Mutex<Option<notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>>,
     /// Why the quick-capture hotkey could not be registered, for the settings screen.
     shortcut_error: Mutex<Option<String>>,
@@ -383,6 +387,298 @@ async fn skill_from_note(state: State<'_, AppState>, note: String) -> Result<ski
         },
         "user",
     )
+}
+
+/// Workflows start real sessions through the same path as the Start screen.
+struct AppHost(AppHandle);
+
+impl workflow::Host for AppHost {
+    fn start(&self, task: agent::scope::AgentTask, prompt: &str, options: agent::StartOptions) -> Result<agent::SessionInfo, String> {
+        let state = self.0.state::<AppState>();
+        agent::start_task(&state.agents, &state.bridge, &settings::load(&state.settings_path), &state.worktrees_dir, &state.terminals_dir, task, prompt, options)
+    }
+    fn info(&self, session: &str) -> Option<agent::SessionInfo> {
+        self.0.state::<AppState>().agents.info(session).ok()
+    }
+    fn checkpoint(&self, session: &str, message: &str) -> Result<Option<String>, String> {
+        let state = self.0.state::<AppState>();
+        review::checkpoint(&state.agents, &state.worktrees_dir, session, message)
+    }
+    fn stop(&self, session: &str) {
+        let _ = self.0.state::<AppState>().agents.end(session);
+    }
+}
+
+/// What automations do, with the app's state.
+struct AppDoer(AppHandle);
+
+impl automations::Doer for AppDoer {
+    fn run(&self, a: &automations::Automation, vars: &automations::Vars) -> Result<automations::Started, String> {
+        use automations::{Action, Started};
+        let state = self.0.state::<AppState>();
+        let saved = settings::load(&state.settings_path);
+        let (project, repo) = (a.project.clone().unwrap_or_default(), a.repo.clone().unwrap_or_default());
+        let origin = format!("automation:{}", a.id);
+        match &a.action {
+            Action::Role { role, engine, prompt } => {
+                let options = agent::StartOptions {
+                    briefing: Some(format!("## Automation\nThe automation \"{}\" started this session; nobody is watching it. Finish in one turn.", a.name)),
+                    engine: *engine, interface: agent::Interface::Chat, role: Some(*role), unattended: true, origin: Some(origin), budget_usd: a.budget_usd, ..Default::default()
+                };
+                let task = agent::scope::AgentTask::Work { project, repo, branch: None, change: None };
+                let info = agent::start_task(&state.agents, &state.bridge, &saved, &state.worktrees_dir, &state.terminals_dir, task, &automations::fill(prompt, vars), options)?;
+                Ok(Started::Session(info.id))
+            }
+            Action::Workflow { template, goal } => {
+                let tasks = workflow::templates().into_iter().find(|t| t.id == template).ok_or_else(|| format!("Unknown workflow template: {template}"))?.tasks;
+                let new = workflow::NewRun { goal: automations::fill(goal, vars), project, repo, template: Some(template.clone()), unattended: true, budget_usd: a.budget_usd, tasks, ..Default::default() };
+                let run = state.workflows.create(new, Some(origin))?;
+                state.workflows.start(&run.id, &AppHost(self.0.clone()))?;
+                Ok(Started::Workflow(run.id))
+            }
+            Action::MemoryMaintenance => {
+                let reply = state.bridge.call(&["maintenance".into(), "run".into()], None)?;
+                if reply.exit_code != 0 {
+                    return Err(format!("Living Memory maintenance failed: {}", reply.error));
+                }
+                let r = &reply.result;
+                let word = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
+                match word("status").as_str() {
+                    "failed" => Err(format!("Living Memory maintenance failed ({})", word("reason_code"))),
+                    "skipped" => Ok(Started::Done { detail: format!("Living Memory skipped maintenance ({})", word("skip_reason").replace('_', " ")), cost: None }),
+                    other => Ok(Started::Done { detail: format!("Living Memory maintenance {other}"), cost: None }),
+                }
+            }
+            Action::SkillUpkeep => {
+                let made = state.skills.upkeep(agent::now_ms());
+                Ok(Started::Done { detail: format!("{} archive proposal{} added to Review", made.len(), if made.len() == 1 { "" } else { "s" }), cost: None })
+            }
+            Action::CommitCapture => {
+                let mut command = std::process::Command::new("git");
+                let range = a.last_seen.as_deref().map(|s| format!("{s}..HEAD")).unwrap_or_else(|| "-5".into());
+                command.args(["--no-optional-locks", "-C", &repo, "log", "--stat", "-p", "--no-color", "--max-count=30", &range]);
+                let log = git::run_with_timeout(command, std::time::Duration::from_secs(30))?;
+                if log.trim().is_empty() {
+                    return Ok(Started::Done { detail: "No new commits".into(), cost: None });
+                }
+                let claude = agent::claude::available(&saved)?;
+                let deps = learning::Deps { bridge: &state.bridge, skills: &state.skills, claude, daily_usd: saved.learning_daily_usd(), auto_patch: false };
+                let head = vars.head.clone().unwrap_or_default();
+                let key = format!("{}-{}", &a.id[..8.min(a.id.len())], &head[..8.min(head.len())]);
+                let run = state.learning.review_commits(&deps, &key, &format!("{} commits", a.name), &project, &repo, &log);
+                let _ = self.0.emit("learning-changed", &run);
+                match run.state.as_str() {
+                    "failed" => Err(run.error.unwrap_or_else(|| "The review failed".into())),
+                    "nothing" => Ok(Started::Done { detail: "Nothing worth keeping in the new commits".into(), cost: run.cost_usd }),
+                    _ => Ok(Started::Done { detail: format!("{} note draft{} in Review", run.memory.len(), if run.memory.len() == 1 { "" } else { "s" }), cost: run.cost_usd }),
+                }
+            }
+        }
+    }
+    fn head(&self, repo: &str) -> Option<String> {
+        git::head_sha(std::path::Path::new(repo)).ok()
+    }
+    fn log(&self, repo: &str, since: Option<&str>) -> String {
+        let mut command = std::process::Command::new("git");
+        command.args(["--no-optional-locks", "-C", repo, "log", "--oneline", "--no-color"]);
+        match since {
+            Some(s) => command.args(["--max-count=50", &format!("{s}..HEAD")]),
+            None => command.arg("--max-count=10"),
+        };
+        git::run_with_timeout(command, std::time::Duration::from_secs(15)).unwrap_or_default()
+    }
+    fn budget_left(&self) -> bool {
+        let state = self.0.state::<AppState>();
+        state.learning.has_budget(settings::load(&state.settings_path).learning_daily_usd())
+    }
+    fn notify(&self, title: &str, text: &str) {
+        notify::notice(&self.0, title, text);
+    }
+    fn changed(&self) {
+        let _ = self.0.emit("automations-changed", ());
+    }
+}
+
+/// Workflows advance and automations finish on session reports; failed and approved sessions the user started fire
+/// event automations. Work that starts sessions runs on its own thread so the conductor never waits on a worktree.
+fn orchestration_reports(app: AppHandle) -> conductor::Handler {
+    Box::new(move |report| {
+        let Some(state) = app.try_state::<AppState>() else { return };
+        let report = report.clone();
+        let app = app.clone();
+        let info = state.agents.info(report.id()).ok();
+        std::thread::spawn(move || {
+            let state = app.state::<AppState>();
+            let host = AppHost(app.clone());
+            let doer = AppDoer(app.clone());
+            state.workflows.on_report(&report, &host);
+            let _ = app.emit("workflows-changed", ());
+            let Some(info) = info else { return };
+            let origin = info.origin.clone().unwrap_or_default();
+            let ended = match &report {
+                agent::Lifecycle::TurnEnded { ok, .. } => Some(*ok),
+                agent::Lifecycle::Finished { status, .. } => Some(*status == agent::events::Status::Succeeded),
+                _ => None,
+            };
+            if let (Some(ok), true) = (ended, origin.starts_with("automation:")) {
+                let detail = info.summary.clone().or(info.error.clone()).map(|t| agent::events::clip(&t, 300)).unwrap_or_else(|| "Session finished".into());
+                if state.automations.finished(Some(&info.id), None, ok, detail, info.cost_usd, &doer).is_some() {
+                    state.learning.charge(info.cost_usd.unwrap_or(0.0));
+                }
+            }
+            // A workflow an automation started has ended.
+            for run in state.workflows.list().into_iter().filter(|r| r.origin.as_deref().is_some_and(|o| o.starts_with("automation:"))) {
+                if matches!(run.state, workflow::RunState::Succeeded | workflow::RunState::Failed | workflow::RunState::Cancelled) {
+                    let cost: f64 = run.tasks.iter().filter_map(|t| t.session.as_deref()).filter_map(|s| state.agents.info(s).ok()).filter_map(|i| i.cost_usd).sum();
+                    let detail = format!("The workflow {}", match run.state { workflow::RunState::Succeeded => "succeeded", workflow::RunState::Failed => "failed", _ => "was cancelled" });
+                    if state.automations.finished(None, Some(&run.id), run.state == workflow::RunState::Succeeded, detail, Some(cost), &doer).is_some() {
+                        state.learning.charge(cost);
+                    }
+                }
+            }
+            // Work an automation started never fires event automations (no loops); a workflow the user started does.
+            let by_automation = origin.starts_with("automation:")
+                || origin.strip_prefix("workflow:").and_then(|rest| rest.split(':').next()).and_then(|run| state.workflows.get(run).ok())
+                    .is_some_and(|run| run.origin.as_deref().is_some_and(|o| o.starts_with("automation:")));
+            if by_automation {
+                return;
+            }
+            let repo = match &info.task {
+                agent::scope::AgentTask::Work { repo, .. } => repo.clone(),
+                _ => String::new(),
+            };
+            match &report {
+                agent::Lifecycle::Finished { status: agent::events::Status::Failed, .. } => {
+                    let event = format!("A session failed: \"{}\" in {}. Error: {}. Session {}.", info.title, repo, info.error.clone().unwrap_or_default(), &info.id[..8]);
+                    state.automations.on_event(&automations::Trigger::SessionFailed, event, &doer);
+                }
+                agent::Lifecycle::Reviewed { state: agent::ReviewState::Approved, .. } => {
+                    let branch = info.worktree.as_ref().map(|w| w.branch.clone()).unwrap_or_default();
+                    let commit = info.review.as_ref().and_then(|r| r.commit.clone()).unwrap_or_default();
+                    let event = format!("You approved the session \"{}\" on branch {branch} (commit {}) in {repo}.", info.title, &commit[..7.min(commit.len())]);
+                    state.automations.on_event(&automations::Trigger::ReviewApproved, event, &doer);
+                }
+                _ => {}
+            }
+        });
+    })
+}
+
+#[tauri::command]
+fn workflow_templates() -> Vec<workflow::Template> {
+    workflow::templates()
+}
+
+#[tauri::command]
+fn workflow_list(state: State<'_, AppState>) -> Vec<workflow::Run> {
+    state.workflows.list()
+}
+
+#[tauri::command]
+fn workflow_create(state: State<'_, AppState>, run: workflow::NewRun) -> Result<workflow::Run, String> {
+    state.workflows.create(run, Some("user".into()))
+}
+
+#[tauri::command]
+fn workflow_edit(state: State<'_, AppState>, id: String, tasks: Vec<workflow::TaskSpec>) -> Result<workflow::Run, String> {
+    state.workflows.edit(&id, tasks)
+}
+
+/// Start, cancel, retry or skip; each may start sessions, so it runs off the UI thread.
+#[tauri::command]
+async fn workflow_act(app: AppHandle, id: String, action: String, task: Option<String>) -> Result<workflow::Run, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let host = AppHost(app.clone());
+        let run = match action.as_str() {
+            "start" => state.workflows.start(&id, &host),
+            "cancel" => state.workflows.cancel(&id, &host),
+            "retry" | "skip" => state.workflows.retry_or_skip(&id, task.as_deref().ok_or("Which task?")?, action == "skip", &host),
+            _ => Err(format!("Unknown workflow action: {action}")),
+        };
+        let _ = app.emit("workflows-changed", ());
+        run
+    })
+    .await
+}
+
+#[tauri::command]
+fn workflow_delete(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.workflows.delete(&id)
+}
+
+#[tauri::command]
+fn workflow_report(state: State<'_, AppState>, id: String) -> Result<String, String> {
+    state.workflows.get(&id).map(|r| r.report())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationView {
+    #[serde(flatten)]
+    automation: automations::Automation,
+    trigger_text: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationList {
+    automations: Vec<AutomationView>,
+    templates: Vec<AutomationView>,
+    runs: Vec<automations::RunRow>,
+}
+
+#[tauri::command]
+fn automation_list(state: State<'_, AppState>) -> AutomationList {
+    let view = |automation: automations::Automation| AutomationView { trigger_text: automations::trigger_text(&automation.trigger), automation };
+    let mut runs = state.automations.all_runs();
+    runs.truncate(100);
+    AutomationList {
+        automations: state.automations.list().into_iter().map(view).collect(),
+        templates: automations::templates().into_iter().map(view).collect(),
+        runs,
+    }
+}
+
+#[tauri::command]
+fn automation_put(app: AppHandle, state: State<'_, AppState>, automation: automations::Automation) -> Result<automations::Automation, String> {
+    let saved = state.automations.put(automation, agent::now_ms());
+    let _ = app.emit("automations-changed", ());
+    saved
+}
+
+#[tauri::command]
+fn automation_delete(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let done = state.automations.delete(&id);
+    let _ = app.emit("automations-changed", ());
+    done
+}
+
+/// Run now, start a waiting run, or cancel a run (stopping its session or workflow).
+#[tauri::command]
+async fn automation_act(app: AppHandle, action: String, id: String) -> Result<Option<automations::RunRow>, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let doer = AppDoer(app.clone());
+        let row = match action.as_str() {
+            "run" => Ok(state.automations.fire(&id, "manual", None, &doer)),
+            "approve" => state.automations.approve(&id, &doer).map(Some),
+            "cancel" => {
+                let row = state.automations.cancel(&id)?;
+                if let Some(s) = &row.session {
+                    let _ = state.agents.end(s);
+                }
+                if let Some(w) = &row.workflow {
+                    let _ = state.workflows.cancel(w, &AppHost(app.clone()));
+                }
+                Ok(Some(row))
+            }
+            _ => Err(format!("Unknown automation action: {action}")),
+        };
+        let _ = app.emit("automations-changed", ());
+        row
+    })
+    .await
 }
 
 /// The roles a chat session can be started in, with their default permission profiles.
@@ -939,11 +1235,17 @@ pub fn run() {
                 agents,
                 terminals,
                 learning: learning::Learning::new(app.path().app_data_dir()?.join("learning")),
+                workflows: Arc::new(workflow::Workflows::new(app.path().app_data_dir()?.join("workflows"))),
+                automations: Arc::new(automations::Automations::new(app.path().app_data_dir()?)),
                 skills: skills::Skills::new(app.path().app_data_dir()?.join("skills"), skills::default_targets()),
                 watcher: Mutex::new(None),
                 shortcut_error: Mutex::new(shortcut_error),
             });
-            conductor::run(report_queue, vec![session_notices(app.handle().clone()), learning_reports(app.handle().clone())]);
+            conductor::run(report_queue, vec![session_notices(app.handle().clone()), learning_reports(app.handle().clone()), orchestration_reports(app.handle().clone())]);
+            {
+                let state = app.state::<AppState>();
+                state.automations.clone().run_scheduler(Arc::new(AppDoer(app.handle().clone())));
+            }
             let (state, sampled) = (app.handle().clone(), app.handle().clone());
             resources::watch(
                 move || state.try_state::<AppState>().map(|s| [s.agents.pids(), s.terminals.pids()].concat()).unwrap_or_default(),
@@ -965,7 +1267,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_roles, learning_status, learning_review, skills_list, skill_proposals, skill_decide, skill_action, skill_version, skill_history,
-            skills_upkeep, skill_from_note, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, repo_branches,
+            skills_upkeep, skill_from_note, workflow_templates, workflow_list, workflow_create, workflow_edit, workflow_act, workflow_delete, workflow_report,
+            automation_list, automation_put, automation_delete, automation_act, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, repo_branches,
             agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_stop_and_approve, review_request_changes, review_request_terminal_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
             system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export
         ])

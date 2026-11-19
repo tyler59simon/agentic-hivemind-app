@@ -1145,6 +1145,7 @@ mod tests {
                 profile: None,
                 summary: None,
                 verdict: None,
+                origin: None,
             }
         }
 

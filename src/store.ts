@@ -17,7 +17,8 @@ export type Route =
   | { page: "recap" }
   | { page: "maintenance" }
   | { page: "review"; session?: string; file?: string }
-  | { page: "skills"; skill?: string };
+  | { page: "skills"; skill?: string }
+  | { page: "workflows"; tab?: "runs" | "automations"; run?: string; automation?: string };
 export type Page = Route["page"];
 
 export const safeStorage: StateStorage = {
@@ -76,5 +77,7 @@ export const openSession = (session: string) => app().go({ page: "agents", sessi
 /** Show the Review page, on one session's edits (and one file) when given. */
 export const openReview = (session?: string, file?: string) => app().go({ page: "review", session, file });
 export const openSkills = (skill?: string) => app().go({ page: "skills", skill });
+export const openWorkflows = (to: { tab?: "runs" | "automations"; run?: string; automation?: string } = {}) =>
+  app().go({ page: "workflows", ...to, tab: to.automation ? "automations" : to.run ? "runs" : to.tab }, { replace: app().route.page === "workflows" });
 export const startSession = () => app().go({ page: "agents", view: "new" });
 export const openChange = (id: number) => app().go({ page: "changes", id, view: "detail" });

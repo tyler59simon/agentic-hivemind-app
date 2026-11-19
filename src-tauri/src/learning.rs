@@ -38,6 +38,8 @@ pub enum Trigger {
     Finished,
     /// The user asked from the session view.
     Manual,
+    /// An automation read new commits (no session).
+    Commits,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -148,6 +150,7 @@ pub fn wanted(info: &SessionInfo, trigger: Trigger, tool_calls: usize) -> Option
         // A session with edits waits for the user's decision.
         Trigger::Finished => (!files && tool_calls >= MIN_TOOL_CALLS).then_some(false),
         Trigger::Manual => Some(approved),
+        Trigger::Commits => None,
     }
 }
 
@@ -363,6 +366,16 @@ pub fn propose_argv(item: &MemoryItem, proposer: &str, domain: Option<&str>, cwd
     argv
 }
 
+/// What a review is about: a session, or an automation's commits.
+struct Subject {
+    key: String,
+    title: String,
+    project: String,
+    repo: String,
+    session: Option<String>,
+    what: &'static str,
+}
+
 /// What the reviewer needs from the rest of the app.
 pub struct Deps<'a> {
     pub bridge: &'a crate::bridge::Bridge,
@@ -386,6 +399,16 @@ impl Learning {
 
     pub fn spent_today(&self) -> f64 {
         self.ledger.used(now_ms())
+    }
+
+    /// Whether today's budget has room for more paid work.
+    pub fn has_budget(&self, cap: f64) -> bool {
+        self.ledger.used(now_ms()) < cap
+    }
+
+    /// Count what an automation's sessions cost against today's budget.
+    pub fn charge(&self, usd: f64) {
+        let _ = self.ledger.settle(&format!("charge-{}", uuid::Uuid::new_v4().simple()), Some(usd), now_ms());
     }
 
     /// Newest first.
@@ -425,21 +448,44 @@ impl Learning {
     }
 
     fn review_now(&self, deps: &Deps, info: &SessionInfo, events: &[SeqEvent], trigger: Trigger, allow_skill: bool) -> Run {
+        let AgentTask::Work { project, repo, .. } = &info.task else { unreachable!("wanted() admits work sessions only") };
+        let subject = Subject {
+            key: info.id.clone(), title: info.name.clone().unwrap_or_else(|| info.title.clone()), project: project.clone(), repo: repo.clone(),
+            session: Some(info.id.clone()), what: "session",
+        };
+        let index: Vec<(String, String)> = deps.skills.list(now_ms()).into_iter().filter(|s| !s.meta.archived).map(|s| (s.meta.name, s.meta.description)).collect();
+        self.call(deps, &subject, &digest(info, events, &index, allow_skill), trigger, allow_skill)
+    }
+
+    /// Review new commits of a project (the post-commit automation): memory drafts only. `key` names the source in
+    /// runs.jsonl and in the drafts' proposer session.
+    pub fn review_commits(&self, deps: &Deps, key: &str, title: &str, project: &str, repo: &str, log: &str) -> Run {
+        let subject = Subject { key: key.into(), title: title.into(), project: project.into(), repo: repo.into(), session: None, what: "commits" };
+        let input = format!("# New commits: {title}
+Skills allowed: no (use action none).
+Review these commits for knowledge worth keeping.
+
+{}", clip(log, DIGEST_CHARS));
+        let run = self.call(deps, &subject, &input, Trigger::Commits, false);
+        let _ = self.record(&run);
+        run
+    }
+
+    /// One reviewer call within the daily cap, then staging of what it proposes.
+    fn call(&self, deps: &Deps, subject: &Subject, input: &str, trigger: Trigger, allow_skill: bool) -> Run {
         let mut run = Run {
-            session: info.id.clone(), title: info.name.clone().unwrap_or_else(|| info.title.clone()), at: now_ms(), trigger, state: "failed".into(),
+            session: subject.key.clone(), title: subject.title.clone(), at: now_ms(), trigger, state: "failed".into(),
             memory: vec![], skill: None, skill_name: None, skill_applied: false, cost_usd: None, error: None,
         };
-        let reservation = format!("review-{}-{}", info.id, run.at);
+        let reservation = format!("review-{}-{}", subject.key, run.at);
         if let Err(e) = self.ledger.reserve(&reservation, REVIEW_USD, deps.daily_usd, run.at) {
             run.error = Some(e);
             return run;
         }
-        let index: Vec<(String, String)> = deps.skills.list(run.at).into_iter().filter(|s| !s.meta.archived).map(|s| (s.meta.name, s.meta.description)).collect();
-        let input = digest(info, events, &index, allow_skill);
         let mut command = Command::new(&deps.claude);
         command.args(argv()).current_dir(&self.dir).env("LIVING_MEMORY_OFF", "1").env_remove("HIVEMIND_SESSION").env_remove("CLAUDECODE");
         let _ = std::fs::create_dir_all(&self.dir);
-        let (answer, cost) = match crate::git::run_with_input(command, Some(&input), TIMEOUT) {
+        let (answer, cost) = match crate::git::run_with_input(command, Some(input), TIMEOUT) {
             Ok(ran) => parse_envelope(&ran.stdout),
             Err(e) => (Err(e), None),
         };
@@ -453,26 +499,26 @@ impl Learning {
             }
         };
         let mut problems = vec![];
-        self.stage_memory(deps, info, &answer.memory, &mut run, &mut problems);
+        self.stage_memory(deps, subject, &answer.memory, &mut run, &mut problems);
         if allow_skill && answer.skill.action != "none" {
-            self.stage_skill(deps, info, answer.skill, &mut run, &mut problems);
+            self.stage_skill(deps, subject, answer.skill, &mut run, &mut problems);
         }
         run.state = if run.memory.is_empty() && run.skill.is_none() { if problems.is_empty() { "nothing" } else { "failed" } } else { "staged" }.into();
         run.error = (!problems.is_empty()).then(|| problems.join("; "));
         run
     }
 
-    fn stage_memory(&self, deps: &Deps, info: &SessionInfo, items: &[MemoryItem], run: &mut Run, problems: &mut Vec<String>) {
-        let AgentTask::Work { project, repo, .. } = &info.task else { return };
+    fn stage_memory(&self, deps: &Deps, subject: &Subject, items: &[MemoryItem], run: &mut Run, problems: &mut Vec<String>) {
+        let (project, repo) = (&subject.project, &subject.repo);
         let domain = crate::git::project_entry(deps.bridge, project).ok()
             .and_then(|p| p.get("charter").and_then(Value::as_str).and_then(|c| c.split_once(':')).map(|(d, _)| d.to_string()));
-        let context = format!("Hivemind's review of the session \"{}\" ({}).", run.title, &info.id[..8.min(info.id.len())]);
+        let context = format!("Hivemind's review of the {} \"{}\" ({}).", subject.what, run.title, &subject.key[..8.min(subject.key.len())]);
         let known: Vec<String> = deps.bridge.call(&["taxonomy".into(), "--actor".into(), "viewer".into()], None).ok()
             .and_then(|r| r.result.get("tags").and_then(Value::as_array).map(|a| a.iter().filter_map(|t| t.as_str().map(str::to_string)).collect()))
             .unwrap_or_default();
         for item in items.iter().filter(|i| !i.title.trim().is_empty() && !i.summary.trim().is_empty()) {
             let reason = format!("{context} {}", item.reason.trim());
-            let argv = propose_argv(item, &format!("hivemind-review-{}", info.id), domain.as_deref(), repo, &reason, &known, project);
+            let argv = propose_argv(item, &format!("hivemind-review-{}", subject.key), domain.as_deref(), repo, &reason, &known, project);
             match deps.bridge.call(&argv, None) {
                 Ok(reply) if reply.exit_code == 0 => {
                     let id = reply.result.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
@@ -484,12 +530,12 @@ impl Learning {
         }
     }
 
-    fn stage_skill(&self, deps: &Deps, info: &SessionInfo, skill: SkillItem, run: &mut Run, problems: &mut Vec<String>) {
+    fn stage_skill(&self, deps: &Deps, subject: &Subject, skill: SkillItem, run: &mut Run, problems: &mut Vec<String>) {
         let name = if skill.action == "patch" { skill.name.trim().to_string() } else { skills::slug(&skill.name) };
         let kind = if skill.action == "patch" { Kind::Patch } else { Kind::Create };
         let new = NewProposal {
             kind: Some(kind), name: name.clone(), description: skill.description, body: skill.body, reason: skill.reason,
-            session: Some(info.id.clone()), session_title: Some(run.title.clone()), note: None,
+            session: subject.session.clone(), session_title: Some(run.title.clone()), note: None,
         };
         match deps.skills.propose(new, "reviewer") {
             Ok(p) => {

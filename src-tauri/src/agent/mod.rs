@@ -39,7 +39,7 @@ const DRAIN_WAIT: Duration = Duration::from_secs(10); // how long a resume waits
 const STOP_ALL_WAIT: Duration = Duration::from_secs(2); // how long closing the app waits for idle processes to leave
 const POLL: Duration = Duration::from_millis(50);
 const NO_PLUGIN: &str = "The Architecture Suite plugin is not loaded in Claude Code; install it or set its folder in Settings.";
-const LIMIT: &str = "3 agent sessions are already working; wait for one to finish or stop one";
+pub const LIMIT: &str = "3 agent sessions are already working; wait for one to finish or stop one";
 const STOPPED: &str = "The agent process has stopped";
 const STDERR_LINES: usize = 5;
 const TITLE: usize = 60;
@@ -237,6 +237,9 @@ pub struct SessionInfo {
     /// A reviewer's or tester's conclusion from its last turn.
     #[serde(default)]
     pub verdict: Option<Verdict>,
+    /// What started the session when it was not the user: `workflow:<run>:<task>` or `automation:<id>`.
+    #[serde(default)]
+    pub origin: Option<String>,
 }
 
 /// What the user decided about a work session's edits.
@@ -323,6 +326,12 @@ pub struct StartOptions {
     /// Chat only, with a role: nobody answers prompts, so whatever the profile does not allow is refused.
     #[serde(default)]
     pub unattended: bool,
+    /// Set by workflows and automations; never read from the webview.
+    #[serde(skip)]
+    pub origin: Option<String>,
+    /// A lower Claude budget than the settings' one, for workflows and automations; never read from the webview.
+    #[serde(skip)]
+    pub budget_usd: Option<f64>,
 }
 
 /// Where a work session runs.
@@ -652,6 +661,7 @@ fn session_info(id: &str, adapter: &str, task: AgentTask, scope: &Scope, options
         profile: options.profile.or(options.role.map(Role::profile)).filter(|_| interactive),
         summary: None,
         verdict: None,
+        origin: options.origin.clone(),
     }
 }
 
@@ -1741,11 +1751,12 @@ pub fn start_task(
         chat_program(options.engine, saved)?
     };
     let id = uuid::Uuid::new_v4().to_string();
+    let budget_usd = options.budget_usd.filter(|b| b.is_finite() && *b > 0.0).map_or(saved.agent_budget_usd(), |b| b.min(saved.agent_budget_usd()));
     let launch = |scope| Launch {
         scope,
         program: cli.program.clone(),
         program_args: cli.args.clone(),
-        budget_usd: saved.agent_budget_usd(),
+        budget_usd,
         memory_root: bridge.launch().root,
     };
     let (project, repo, branch, change) = match &task {
@@ -3317,6 +3328,7 @@ mod tests {
             profile: None,
             summary: None,
             verdict: None,
+            origin: None,
         }
     }
 

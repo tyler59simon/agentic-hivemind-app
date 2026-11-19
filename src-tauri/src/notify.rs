@@ -43,6 +43,13 @@ pub fn session(app: &AppHandle, id: &str, title: &str, text: &str) {
     show(app, title, text, Some(id.to_string()));
 }
 
+/// A notice that opens nothing when clicked (automations), shown only while the window is not in front.
+pub fn notice(app: &AppHandle, title: &str, text: &str) {
+    if !main_active(app) {
+        show(app, title, text, None);
+    }
+}
+
 /// What a chat session's notification says, or None when the report is not worth one. A turn that was stopped by the user
 /// is not reported, and a session that ended normally after its last turn already had its turn reported.
 pub fn session_text(report: &crate::agent::Lifecycle) -> Option<&'static str> {

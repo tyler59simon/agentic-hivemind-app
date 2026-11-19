@@ -31,6 +31,7 @@ portable-pty = "0.9"
 tauri-plugin-dialog = "=2.8.4"
 sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 sha2 = "0.10"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [target.'cfg(windows)'.dependencies]
 tauri-winrt-notification = "=0.8.1"
