@@ -178,6 +178,24 @@ pub fn templates() -> Vec<Template> {
 }
 
 /// Ids are unique and plain, dependencies exist, `from` is a dependency, and there is no cycle.
+/// An unattended run refuses, before any task starts, a Codex task that edits files: Codex would stop at its first edit.
+pub fn check_unattended(tasks: &[TaskSpec], unattended: bool) -> Result<(), String> {
+    match tasks.iter().find(|t| unattended && t.engine == Engine::Codex && t.role.profile() == Profile::EditWorktree) {
+        Some(t) => Err(format!("Task {} runs Codex, which cannot edit files without asking in an unattended run. Run the workflow attended or give the task Claude Code.", t.id)),
+        None => Ok(()),
+    }
+}
+
+/// The tasks with each one on an engine the user shows: a task on a hidden engine moves to the other one.
+pub fn on_shown(tasks: Vec<TaskSpec>, saved: &crate::settings::Settings) -> Vec<TaskSpec> {
+    tasks.into_iter().map(|mut t| {
+        if !saved.shows(t.engine) {
+            t.engine = if t.engine == Engine::Claude { Engine::Codex } else { Engine::Claude };
+        }
+        t
+    }).collect()
+}
+
 pub fn check(tasks: &[TaskSpec]) -> Result<(), String> {
     if tasks.is_empty() {
         return Err("A workflow needs at least one task".into());
@@ -439,6 +457,7 @@ impl Workflows {
             return Err("Write the workflow's goal first".into());
         }
         check(&new.tasks)?;
+        check_unattended(&new.tasks, new.unattended)?;
         let goal = new.goal.trim().to_string();
         let run = Run {
             id: uuid::Uuid::new_v4().simple().to_string(),
@@ -462,6 +481,7 @@ impl Workflows {
         if run.state != RunState::Planned {
             return Err("Only a workflow that has not started can be edited".into());
         }
+        check_unattended(&tasks, run.unattended)?;
         run.tasks = tasks.into_iter().map(|spec| Task { spec, state: TaskState::Waiting, session: None, branch: None, checkpoint: None, files: 0, summary: None, verdict: None, error: None }).collect();
         self.save(run)?;
         Ok(run.clone())
@@ -683,6 +703,32 @@ impl Workflows {
         }
         self.advance(id, host);
         self.get(id)
+    }
+}
+
+#[cfg(test)]
+mod hidden_engine_tests {
+    use super::*;
+    use crate::settings::Settings;
+
+    #[test]
+    fn tasks_move_off_a_hidden_engine() {
+        let feature = templates().into_iter().find(|t| t.id == "feature").unwrap().tasks;
+        let codex_only = Settings { hidden_engines: Some(vec!["claude".into()]), ..Default::default() };
+        assert!(on_shown(feature.clone(), &codex_only).iter().all(|t| t.engine == Engine::Codex));
+        assert_eq!(on_shown(feature.clone(), &Settings::default()), feature);
+    }
+
+    #[test]
+    fn unattended_runs_refuse_codex_editing_tasks_up_front() {
+        let mut tasks = vec![spec("plan", Role::Architect, "Plan", "p", &[], None), spec("build", Role::Developer, "Build", "b", &["plan"], None)];
+        assert!(check_unattended(&tasks, true).is_ok());
+        tasks[1].engine = Engine::Codex;
+        assert!(check_unattended(&tasks, true).unwrap_err().contains("build"));
+        assert!(check_unattended(&tasks, false).is_ok());
+        tasks[1].engine = Engine::Claude;
+        tasks[0].engine = Engine::Codex;
+        assert!(check_unattended(&tasks, true).is_ok());
     }
 }
 

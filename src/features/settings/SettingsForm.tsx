@@ -100,17 +100,18 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
         <>
           <label className="check"><input type="checkbox" checked={value.learning_reviewer ?? true}
             onChange={(e) => setValue({ ...value, learning_reviewer: e.target.checked })} /> Review finished sessions for notes and skills worth keeping</label>
-          <label className="field">
-            <span>Daily learning budget (USD)</span>
-            <input type="number" min="0" step="0.25" value={value.learning_daily_usd ?? ""} placeholder="1"
-              onChange={(e) => setValue({ ...value, learning_daily_usd: e.target.value ? Number(e.target.value) : null })} />
-          </label>
           <p className="muted small">When you approve or discard a chat session's edits, or a long session ends, Hivemind sends a summary of the session to Claude (Sonnet, no tools, at most $0.25 a review). Notes it proposes wait in Review and are saved only when you accept them; skills are proposed only from sessions you approved. The budget applies per day (UTC); 0 stops reviews.</p>
           <label className="check"><input type="checkbox" checked={value.skills_auto_patch ?? false}
             onChange={(e) => setValue({ ...value, skills_auto_patch: e.target.checked })} /> Apply reviewer changes to a skill without asking when sessions using it were approved at least 3 times</label>
           <p className="muted small">New skills always wait for you. Every change is in the skill's history and can be undone with Restore.</p>
         </>
       ) : <p className="muted small">Learning reviews use Claude Code, which is hidden.</p>}
+      <label className="field">
+        <span>Daily learning budget (USD)</span>
+        <input type="number" min="0" step="0.25" value={value.learning_daily_usd ?? ""} placeholder="1"
+          onChange={(e) => setValue({ ...value, learning_daily_usd: e.target.value ? Number(e.target.value) : null })} />
+      </label>
+      {!claudeOn && <p className="muted small">The budget also caps automations, per day (UTC); 0 stops them.</p>}
 
       <h3>Editor</h3>
       <label className="field">

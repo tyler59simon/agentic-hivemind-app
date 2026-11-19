@@ -271,7 +271,7 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
         {files ? <Row icon={<FileText size="1.3em" aria-hidden />} onClick={onReview}>{filesWord(files)} {waitingForReview(info) ? "awaiting review" : "changed"}</Row>
           : <p className="muted small">No file changes yet.</p>}
       </Section>
-      {info.interface === "chat" && task && (
+      {info.interface === "chat" && task && (claudeShown || run) && (
         <Section title="Learning">
           {run ? <Row icon={<Lightbulb size="1.3em" aria-hidden />} meta={when(run.at)}>{runText(run)}</Row>
             : <p className="muted small">Hivemind reviews a session for notes and skills when you approve or discard its edits, or when a long session ends.</p>}

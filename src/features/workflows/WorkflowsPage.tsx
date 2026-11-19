@@ -2,7 +2,7 @@
 // Hivemind starts on its own on a schedule or after an event. Rust runs both; this page plans, starts and inspects them.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Clock, GitFork, Plus, Workflow } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ENGINE_LABELS, repoBranches, rolesQuery, type Engine, type Role } from "../../lib/agent";
 import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
@@ -305,6 +305,10 @@ function AutomationForm({ initial, onDone }: { initial: Automation; onDone: (sav
   const label = useRoleLabels();
   const engines = useShownEngines();
   const [a, setA] = useState<Automation>(initial);
+  // A new automation made before the settings arrived may name a hidden engine; the form has no engine to pick.
+  useEffect(() => {
+    if (engines.ready && !initial.id && a.action.kind === "role" && !engines.shows(a.action.engine)) setA({ ...a, action: { ...a.action, engine: engines.first } });
+  }, [engines, initial.id, a]);
   const [time, setTime] = useState("at" in initial.trigger ? clock(initial.trigger.at) : "09:00");
   const [busy, setBusy] = useState(false);
   const t = a.trigger;

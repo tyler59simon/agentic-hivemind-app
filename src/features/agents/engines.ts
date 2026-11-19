@@ -6,5 +6,6 @@ import { getSettings } from "../../lib/lm";
 export function useShownEngines() {
   const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
   const shown = shownEngines(settings.data?.hidden_engines);
-  return { shown, shows: (e: Engine) => shown.includes(e), first: shown[0] };
+  // Until the settings arrive both engines count as shown; a default chosen then is corrected by whoever reads `ready`.
+  return { shown, shows: (e: Engine) => shown.includes(e), first: shown[0], ready: settings.isSuccess || settings.isError };
 }

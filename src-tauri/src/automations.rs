@@ -4,7 +4,7 @@
 //! One run per automation at a time; a trigger that fires while it runs is dropped (coalesced).
 //!
 //! Files under `app_data_dir`: `automations.json` (definitions) and `automation-runs/<id>.json` (the last RUNS_KEPT runs).
-use crate::agent::roles::Role;
+use crate::agent::roles::{Profile, Role};
 use crate::agent::{now_ms, Engine};
 use chrono::{DateTime, Datelike, Duration as Days, Local, NaiveTime, TimeZone};
 use serde::{Deserialize, Serialize};
@@ -279,6 +279,8 @@ pub fn check(a: &Automation) -> Result<(), String> {
         Action::Workflow { goal, template } if goal.trim().is_empty() || template.trim().is_empty() => Err("Pick a workflow template and write its goal".into()),
         Action::ArchitectureCheck { system } if system.trim().is_empty() => Err("Pick the system to check".into()),
         Action::Role { role: Role::Developer, .. } => Err("An automation may not start a developer: it would edit code with nobody watching. Use a workflow you start yourself.".into()),
+        Action::Role { role, engine: Engine::Codex, .. } if role.profile() == Profile::EditWorktree =>
+            Err(format!("Codex cannot edit files without asking in an unattended session, so it cannot run the {} role here. Pick another role or show Claude Code in Settings.", role.label())),
         _ => Ok(()),
     }
 }
@@ -818,6 +820,12 @@ mod tests {
         a.repo = Some("r".into());
         a.action = Action::Role { role: Role::Developer, engine: Engine::Claude, prompt: "x".into() };
         assert!(check(&a).unwrap_err().contains("developer"));
+        // Codex stops at its first edit with nobody to ask, so an editing role on Codex is refused when saved.
+        a.action = Action::Role { role: Role::Tester, engine: Engine::Codex, prompt: "x".into() };
+        assert!(check(&a).unwrap_err().contains("Codex"));
+        a.action = Action::Role { role: Role::Reviewer, engine: Engine::Codex, prompt: "x".into() };
+        assert!(check(&a).is_ok());
+        a.action = Action::Role { role: Role::Developer, engine: Engine::Claude, prompt: "x".into() };
         a.trigger = Trigger::Weekly { days: vec![9], at: 0 };
         assert!(check(&a).is_err());
     }

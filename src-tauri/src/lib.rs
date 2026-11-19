@@ -238,7 +238,7 @@ fn learning_status(state: State<'_, AppState>) -> LearningStatus {
     let mut runs = state.learning.runs();
     runs.truncate(50);
     LearningStatus {
-        enabled: saved.learning_reviewer(),
+        enabled: saved.learning_reviewer() && saved.shows(agent::Engine::Claude),
         daily_usd: saved.learning_daily_usd(),
         spent_today: state.learning.spent_today(),
         review_usd: learning::REVIEW_USD,
@@ -442,6 +442,7 @@ impl automations::Doer for AppDoer {
             }
             Action::Workflow { template, goal } => {
                 let tasks = workflow::templates().into_iter().find(|t| t.id == template).ok_or_else(|| format!("Unknown workflow template: {template}"))?.tasks;
+                let tasks = workflow::on_shown(tasks, &saved);
                 let new = workflow::NewRun { goal: automations::fill(goal, vars), project, repo, template: Some(template.clone()), unattended: true, budget_usd: a.budget_usd, tasks, ..Default::default() };
                 let run = state.workflows.create(new, Some(origin))?;
                 let run = state.workflows.start(&run.id, &AppHost(self.0.clone()))?;
@@ -480,6 +481,10 @@ impl automations::Doer for AppDoer {
                 Ok(Started::Done { detail: format!("{} archive proposal{} added to Review", made.len(), if made.len() == 1 { "" } else { "s" }), cost: None })
             }
             Action::CommitCapture => {
+                // The reviewer is Claude Code; a user who hid it does not expect it to run.
+                if !saved.shows(agent::Engine::Claude) {
+                    return Ok(Started::Done { detail: "Skipped: Claude Code is hidden in Settings".into(), cost: None });
+                }
                 let mut command = std::process::Command::new("git");
                 let range = a.last_seen.as_deref().map(|s| format!("{s}..HEAD")).unwrap_or_else(|| "-5".into());
                 command.args(["--no-optional-locks", "-C", &repo, "log", "--stat", "-p", "--no-color", "--no-ext-diff", "--no-textconv", "--max-count=30", &range]);

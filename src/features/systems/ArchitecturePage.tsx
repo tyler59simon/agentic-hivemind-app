@@ -252,6 +252,7 @@ function Inspector({ slug, node, model, decisions, stale, onClose }: { slug: str
 
 function SystemView({ system, all }: { system: System; all: System[] }) {
   const { rows, passport, architecture } = useSystem(system.slug);
+  const claudeShown = useShownEngines().shows("claude");
   const [editing, setEditing] = useState(false);
   const [retiring, setRetiring] = useState(false);
   const [picked, setPicked] = useState<CanvasNode | null>(null);
@@ -284,7 +285,7 @@ function SystemView({ system, all }: { system: System; all: System[] }) {
 
   // An architecture section with nothing in it says why: nothing generated yet, or the model simply has none.
   const archEmpty = (has: boolean, none: string) =>
-    (has ? undefined : !arch?.error ? none : `${arch.error} ${system.architecture ? "Use “Generate with agent” above." : "Edit the system to choose one."}`);
+    (has ? undefined : !arch?.error ? none : `${arch.error} ${!system.architecture ? "Edit the system to choose one." : claudeShown ? "Use “Generate with agent” above." : "Use “Copy agent brief” above and run it in your agent."}`);
   const archProps = { loading: architecture.isLoading, error: architecture.error };
   const generatedText = arch?.generatedAt ? `Generated ${new Date(arch.generatedAt).toISOString().slice(0, 10)}${arch.toolVersion ? ` · Architecture Suite ${arch.toolVersion}` : ""}` : undefined;
   const sha = (shownId ? snapshot.data?.sourceSha : stale?.sourceSha)?.slice(0, 7);
