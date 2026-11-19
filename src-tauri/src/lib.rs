@@ -503,8 +503,12 @@ impl automations::Doer for AppDoer {
                     return Err(why);
                 }
                 let mut command = std::process::Command::new("git");
-                let range = a.last_seen.as_deref().map(|s| format!("{s}..HEAD")).unwrap_or_else(|| "-5".into());
-                command.args(["--no-optional-locks", "-C", &repo, "log", "--stat", "-p", "--no-color", "--no-ext-diff", "--no-textconv", "--max-count=30", &range]);
+                // From the last reviewed commit to where this batch ends (automations::COMMIT_BATCH commits at most, oldest
+                // first); the cursor moves to that end, so the next run reviews the rest.
+                let end = vars.head.as_deref().unwrap_or("HEAD");
+                let range = a.last_seen.as_deref().map(|s| format!("{s}..{end}")).unwrap_or_else(|| "-5".into());
+                let most = format!("--max-count={}", automations::COMMIT_BATCH);
+                command.args(["--no-optional-locks", "-C", &repo, "log", "--stat", "-p", "--no-color", "--no-ext-diff", "--no-textconv", &most, &range]);
                 let log = git::run_with_timeout(command, std::time::Duration::from_secs(30))?;
                 if log.trim().is_empty() {
                     return Ok(Started::Done { detail: "No new commits".into(), cost: None });
@@ -525,6 +529,9 @@ impl automations::Doer for AppDoer {
     }
     fn head(&self, repo: &str) -> Option<String> {
         git::head_sha(std::path::Path::new(repo)).ok()
+    }
+    fn batch_end(&self, repo: &str, since: &str, limit: usize) -> Option<String> {
+        git::batch_end(std::path::Path::new(repo), since, limit).ok()
     }
     fn log(&self, repo: &str, since: Option<&str>) -> String {
         let mut command = std::process::Command::new("git");

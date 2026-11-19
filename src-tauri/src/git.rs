@@ -187,6 +187,16 @@ pub fn head_sha(repo: &Path) -> Result<String, String> {
     Some(text.trim()).filter(|sha| is_sha(sha)).map(String::from).ok_or_else(|| "git did not print a commit id".to_string())
 }
 
+/// The `limit`th commit after `since` on the way to HEAD, oldest first (parents before children), or HEAD when fewer follow:
+/// where the next commit review ends. Every commit `since..end` is among those first `limit`; any other is still after end.
+pub fn batch_end(repo: &Path, since: &str, limit: usize) -> Result<String, String> {
+    let mut command = Command::new("git");
+    command.args(["--no-optional-locks", "-C"]).arg(repo).args(["rev-list", "--reverse", "--topo-order"]).arg(format!("{since}..HEAD"));
+    let text = run_with_timeout(command, TIMEOUT)?;
+    let shas: Vec<&str> = text.lines().map(str::trim).filter(|sha| is_sha(sha)).collect();
+    shas.get(limit.saturating_sub(1)).or(shas.last()).map(|sha| sha.to_string()).ok_or_else(|| "No commits after the last reviewed one".to_string())
+}
+
 /// `git rev-list --count <selector...>` in `repo`, e.g. `["abc..HEAD"]` or `["--since=@1794322874", "HEAD"]`.
 pub fn rev_count(repo: &Path, selector: &[&str]) -> Result<u64, String> {
     let mut command = Command::new("git");
@@ -339,6 +349,29 @@ mod tests {
     fn git(dir: &Path, args: &[&str]) {
         let out = Command::new("git").arg("-C").arg(dir).args(args).output().unwrap();
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    #[test]
+    fn a_batch_ends_at_the_limit_th_commit_oldest_first() {   // HIDE-14
+        if !git_available() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("hivemind-git-batch-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        git(&dir, &["init", "-q"]);
+        git(&dir, &["config", "user.name", "Tester"]);
+        git(&dir, &["config", "user.email", "t@example.com"]);
+        git(&dir, &["config", "commit.gpgsign", "false"]);
+        let mut shas = vec![];
+        for n in 1..=6 {
+            git(&dir, &["commit", "-q", "--allow-empty", "-m", &format!("c{n}")]);
+            shas.push(head_sha(&dir).unwrap());
+        }
+        assert_eq!(batch_end(&dir, &shas[0], 2).unwrap(), shas[2], "two after c1, oldest first: c3");
+        assert_eq!(batch_end(&dir, &shas[0], 30).unwrap(), shas[5], "fewer than the limit: HEAD");
+        assert!(batch_end(&dir, &shas[5], 30).is_err(), "nothing after HEAD");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
