@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Briefing, CaptureItem, Health, Milestone } from "../../lib/executive";
 import type { NoteRow, OpenItem, Project } from "../../lib/lm";
-import { blocked, commitmentsNote, itemBody, planWrite, replaceable, tagsFor, type Context } from "./items";
+import { acceptKey, blocked, commitmentsNote, hasAction, itemBody, planWrite, replaceable, tagsFor, type Context } from "./items";
 import { addDays, commitmentRows, formatCommitment, parseCommitment, timing } from "./commitments";
 import { healthView, signals, suggestHealth } from "./health";
 import { attention, crossProject, portfolio } from "./portfolio";
@@ -116,6 +116,31 @@ describe("capture", () => {
   it("makes a milestone a Hivemind record", () => {
     expect(planWrite(extracted({ kind: "milestone", title: "Beta", due: "2026-12-05", summary: "First customers" }), ctx))
       .toEqual({ kind: "milestone", record: { project: "pay", title: "Beta", due: "2026-12-05", status: "planned", note: "First customers" } });
+  });
+
+  it("keys an accepted item so a retry finds the first write", () => {   // EXEC-3
+    const key = acceptKey("0f9e8d7c6b5a49382716051423324150", "i3");
+    expect(key).toBe("0f9e8d7c6b5a49382716051423324150-i3");
+    expect(acceptKey("a/b", "i1")).toBeUndefined();
+    expect(acceptKey("x".repeat(64), "i1")).toBeUndefined();
+    const milestone = planWrite(extracted({ kind: "milestone", title: "Beta" }), ctx, undefined, key);
+    expect(milestone.kind === "milestone" && milestone.record.id).toBe(key);
+    const note = planWrite(extracted({}), ctx, undefined, key);
+    expect(note.kind === "note" && note.payload.idempotency_key).toBe(`hivemind-capture-${key}`);
+    const started = planWrite(extracted({ kind: "commitment", title: "Send the Q3 plan" }), ctx, undefined, key);
+    expect(started.kind === "note" && started.payload.idempotency_key).toBe(`hivemind-capture-${key}`);
+    const plain = planWrite(extracted({}), ctx);
+    expect(plain.kind === "note" && plain.payload.idempotency_key).toBeUndefined();
+    // The same item planned again is the same write, so Living Memory's key check matches it.
+    expect(planWrite(extracted({}), ctx, undefined, key)).toEqual(note);
+  });
+
+  it("finds an action item a note already has, open or ticked", () => {   // EXEC-3
+    const body = ["Commitments.", "", "## Action items", "- [ ] Send the Q3 plan (owner: Dana)", "- [x] Book the room", "", "## Details", "- [ ] Not an action"].join("\n");
+    expect(hasAction(body, "Send the Q3 plan (owner: Dana)")).toBe(true);
+    expect(hasAction(body, " Book the room ")).toBe(true);
+    expect(hasAction(body, "Not an action")).toBe(false);
+    expect(hasAction(body, "Send the Q3 plan")).toBe(false);
   });
 });
 

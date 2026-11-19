@@ -3,7 +3,7 @@
 // dialog runs the plan when the user accepts the item.
 import type { CaptureItem, Milestone } from "../../lib/executive";
 import type { CapturePayload, NoteRow, NoteType, Project } from "../../lib/lm";
-import { HEADINGS } from "../../lib/note";
+import { actionItems, HEADINGS } from "../../lib/note";
 import { commitmentsTitle, formatCommitment } from "./commitments";
 
 export type Write =
@@ -69,11 +69,24 @@ export const replaceable = (item: CaptureItem, ref: string, ctx: Context) =>
 /** Why `item` cannot be accepted as it is, if it cannot. */
 export const blocked = (item: CaptureItem) => (!item.title.trim() ? "It needs a title." : item.kind === "milestone" && !item.project ? "A milestone needs a project." : undefined);
 
-/** What accepting `item` writes. `supersedes` is set when the user chose to replace an existing note. */
-export function planWrite(item: CaptureItem, ctx: Context, supersedes?: string): Write {
+/** The key that makes accepting item `item` of batch `batch` safe to repeat: a retry after a crash or a failed batch save
+ *  finds what the first try wrote instead of writing it again. None when the ids cannot make a record id. */
+export function acceptKey(batch: string, item: string): string | undefined {
+  const key = `${batch}-${item}`;
+  return /^[A-Za-z0-9-]{1,64}$/.test(key) ? key : undefined;
+}
+
+/** Whether a note body already holds the action item `text`, open or ticked: a retried accept must not add it twice. */
+export const hasAction = (body: string, text: string) => actionItems(body).some((a) => a.text === text.trim());
+
+/** What accepting `item` writes. `supersedes` is set when the user chose to replace an existing note. With `key`
+ *  (`acceptKey`), a milestone gets that id and a note that idempotency key, so repeating the write finds the first one. */
+export function planWrite(item: CaptureItem, ctx: Context, supersedes?: string, key?: string): Write {
   const project = ctx.projects.find((p) => p.slug === item.project);
+  const keyed = key ? { idempotency_key: `hivemind-capture-${key}` } : {};
   if (item.kind === "milestone") {
-    return { kind: "milestone", record: { project: item.project ?? "", title: item.title.trim(), due: item.due, status: "planned", note: item.summary.trim() } };
+    const record = { project: item.project ?? "", title: item.title.trim(), due: item.due, status: "planned" as const, note: item.summary.trim() };
+    return { kind: "milestone", record: key ? { id: key, ...record } : record };
   }
   if (item.kind === "commitment") {
     const text = formatCommitment({ task: item.title, owner: item.owner, due: item.due });
@@ -81,11 +94,11 @@ export function planWrite(item: CaptureItem, ctx: Context, supersedes?: string):
     if (existing) return { kind: "action", ref: existing.ref, text };
     const name = project?.name ?? "Cross-project";
     const body = `Commitments made in meetings and conversations${project ? ` for ${name}` : " that belong to no single project"}. Hivemind adds to this list when you accept a captured commitment.\n\n## ${HEADINGS.actions}\n- [ ] ${text}`;
-    return { kind: "note", domain: domainOf(project, ctx.defaultDomain), payload: { title: commitmentsTitle(name), body, type: "plan", tags: tagsFor("plan", project, ctx.known) } };
+    return { kind: "note", domain: domainOf(project, ctx.defaultDomain), payload: { title: commitmentsTitle(name), body, type: "plan", tags: tagsFor("plan", project, ctx.known), ...keyed } };
   }
   const type = NOTE_TYPE[item.kind] ?? "knowledge";
   const domain = destination(item, ctx);
-  const payload: CapturePayload = { title: item.title.trim(), body: itemBody(item, ctx.sourceLabel, ctx.today), type, tags: tagsFor(type, project, ctx.known) };
+  const payload: CapturePayload = { title: item.title.trim(), body: itemBody(item, ctx.sourceLabel, ctx.today), type, tags: tagsFor(type, project, ctx.known), ...keyed };
   return { kind: "note", domain, payload: supersedes ? { ...payload, supersedes: [supersedes] } : payload };
 }
 

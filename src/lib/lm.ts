@@ -173,6 +173,8 @@ export const update = (ref: string, payload: UpdatePayload, opts: { redact?: boo
 export interface CapturePayload {
   title: string; body: string; tags: string[]; type: NoteType; context?: string; review_by?: string;
   files?: string[]; supersedes?: string[]; allow_similar?: boolean; origin?: string;
+  /** The same key, title and body again returns the first note (`status: "existing"`) instead of a second one. */
+  idempotency_key?: string;
 }
 /** Hivemind's own captures carry this origin (LM sets `<harness>:<hash>` only for agent sessions). */
 export const ORIGIN = "hivemind:local";

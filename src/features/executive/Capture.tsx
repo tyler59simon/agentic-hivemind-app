@@ -4,15 +4,15 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Check, LoaderCircle, Sparkles, X } from "lucide-react";
 import { useRef, useState } from "react";
 import { classify } from "../../lib/errors";
-import { extract, ITEM_KINDS, putRecord, type CaptureBatch, type CaptureItem, type ItemKind, type Milestone } from "../../lib/executive";
-import { addAction, capture, type Project } from "../../lib/lm";
+import { extract, ITEM_KINDS, listRecords, putRecord, type CaptureBatch, type CaptureItem, type ItemKind, type Milestone } from "../../lib/executive";
+import { addAction, capture, read, type Project } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
 import { openExecutive } from "../../store";
 import { Confirm, Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 import { NoteLink } from "../preview/NoteLink";
-import { blocked, KIND_LABEL, pendingItems, planWrite, replaceable, type Context, type Write } from "./items";
+import { acceptKey, blocked, hasAction, KIND_LABEL, pendingItems, planWrite, replaceable, type Context, type Write } from "./items";
 import { isoToday } from "./commitments";
 import { useNotes, useRecords, useStoreFacts } from "./useExecutive";
 
@@ -78,9 +78,16 @@ export function useWriteContext(projects: Project[], sourceLabel: string): Conte
   };
 }
 
-/** Run one planned write. Returns what was written: a note ref or `milestone:<id>`, and the operation. */
+/** Run one planned write. Returns what was written: a note ref or `milestone:<id>`, and the operation. Safe to repeat for a
+ *  keyed write (`acceptKey`): a milestone with that id is kept as it is, Living Memory answers a keyed note with the first
+ *  one, and an action item the note already has is not added again. */
 export async function perform(write: Write, anyway?: boolean): Promise<{ ref: string; operation?: string }> {
-  if (write.kind === "milestone") return { ref: `milestone:${(await putRecord<Milestone>("milestone", write.record)).id}` };
+  if (write.kind === "milestone") {
+    const id = write.record.id;
+    if (id && (await listRecords<Milestone>("milestone")).some((m) => m.id === id)) return { ref: `milestone:${id}` };
+    return { ref: `milestone:${(await putRecord<Milestone>("milestone", write.record)).id}` };
+  }
+  if (write.kind === "action" && hasAction((await read(write.ref)).body, write.text)) return { ref: write.ref };
   const r = write.kind === "action" ? await addAction(write.ref, write.text) : await capture(write.domain, anyway ? { ...write.payload, allow_similar: true } : write.payload);
   recordOperation(r.operation_id);
   return { ref: write.kind === "action" ? write.ref : `${r.domain ?? write.domain}:${r.id}`, operation: r.operation_id };
@@ -88,9 +95,11 @@ export async function perform(write: Write, anyway?: boolean): Promise<{ ref: st
 
 type Choice = "new" | string;
 
-function ItemCard({ item, projects, ctx, onChange, onAccept, onReject, busy, problem }: {
+function ItemCard({ item, projects, ctx, onChange, onAccept, onReject, onRetrySave, busy, problem, unsaved }: {
   item: CaptureItem; projects: Project[]; ctx: Context & { ready: boolean }; busy: boolean; problem?: string;
-  onChange: (next: CaptureItem) => void; onAccept: (replace?: string, anyway?: boolean) => void; onReject: () => void;
+  /** Written to memory, but the batch did not record it: only saving the batch is left. */
+  unsaved: boolean;
+  onChange: (next: CaptureItem) => void; onAccept: (replace?: string, anyway?: boolean) => void; onReject: () => void; onRetrySave: () => void;
 }) {
   const [picked, setChoice] = useState<Choice>("new");
   // Only a note the item would really replace: same domain, a note kind. A changed kind or project drops a stale choice.
@@ -99,7 +108,7 @@ function ItemCard({ item, projects, ctx, onChange, onAccept, onReject, busy, pro
   const why = blocked(item);
   const set = (patch: Partial<CaptureItem>) => onChange({ ...item, ...patch });
   const dated = item.kind === "commitment" || item.kind === "milestone";
-  const done = item.state !== "pending";
+  const done = item.state !== "pending" || unsaved;
   return (
     <article className={`exec-item ${done ? `done ${item.state}` : ""}`}>
       <div className="exec-row">
@@ -136,6 +145,11 @@ function ItemCard({ item, projects, ctx, onChange, onAccept, onReject, busy, pro
       {problem && <p className="error small">{problem}</p>}
       {!done && why && item.title.trim() && <p className="muted small">{why}</p>}
       {item.result?.ref && !item.result.ref.startsWith("milestone:") && <p className="small">Saved as <NoteLink row={{ ref: item.result.ref, title: item.title }} /></p>}
+      {unsaved && (
+        <div className="actions">
+          <button className="primary" onClick={onRetrySave} disabled={busy}><Check size="1em" aria-hidden /> Retry save</button>
+        </div>
+      )}
       {!done && (
         <div className="actions">
           <button onClick={onReject} disabled={busy}><X size="1em" aria-hidden /> Skip</button>
@@ -154,32 +168,55 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
   const client = useQueryClient();
   const batches = useRecords<CaptureBatch>("capture");
   const stored = batches.data?.find((b) => b.id === id);
-  const ctx = useWriteContext(projects, stored?.source.label ?? "");
+  const live = useWriteContext(projects, stored?.source.label ?? "");
+  // The capture's own date, not today's: a retried accept on another day must write the same note body (its idempotency key
+  // only matches the same content).
+  const ctx = stored ? { ...live, today: isoToday(new Date(stored.created)) } : live;
   const [edits, setEditState] = useState<Record<string, CaptureItem>>({});
   // Saves read the latest edits, not the ones of the render that started them.
   const latest = useRef(edits);
   const setEdits = (f: (e: Record<string, CaptureItem>) => Record<string, CaptureItem>) => { latest.current = f(latest.current); setEditState(latest.current); };
   const [busy, setBusy] = useState<string | null>(null);
   const [problems, setProblems] = useState<Record<string, string>>({});
+  // Items written to memory whose batch save failed, with the state to save.
+  const [unsaved, setUnsaved] = useState<Record<string, CaptureItem>>({});
   const [replacing, setReplacing] = useState<{ item: CaptureItem; ref: string } | null>(null);
   const [showText, setShowText] = useState(false);
   if (batches.isLoading) return <Modal title="Review capture" onClose={onClose}><p className="muted">Loading…</p></Modal>;
   if (!stored) return <Modal title="Review capture" onClose={onClose}><p className="muted">This capture is no longer here.</p></Modal>;
   const items = stored.items.map((i) => edits[i.id] ?? i);
 
-  const save = (...next: CaptureItem[]) => {
-    setEdits((e) => ({ ...e, ...Object.fromEntries(next.map((n) => [n.id, n])) }));
-    return putRecord<CaptureBatch>("capture", { ...stored, items: stored.items.map((i) => latest.current[i.id] ?? i) });
+  // An item shows as accepted or skipped only once the batch has recorded it.
+  const save = async (...next: CaptureItem[]) => {
+    const changed = Object.fromEntries(next.map((n) => [n.id, n]));
+    await putRecord<CaptureBatch>("capture", { ...stored, items: stored.items.map((i) => changed[i.id] ?? latest.current[i.id] ?? i) });
+    setEdits((e) => ({ ...e, ...changed }));
+  };
+
+  const saveAccepted = async (done: CaptureItem) => {
+    try {
+      await save(done);
+      setUnsaved((u) => Object.fromEntries(Object.entries(u).filter(([id]) => id !== done.id)));
+    } catch (e) {
+      setUnsaved((u) => ({ ...u, [done.id]: done }));
+      setProblems((all) => ({ ...all, [done.id]: `Saved to memory, but this capture did not record it: ${classify(e).message} Retry save.` }));
+    }
+  };
+
+  const retrySave = async (id: string) => {
+    setBusy(id);
+    setProblems((p) => ({ ...p, [id]: "" }));
+    try { await saveAccepted(unsaved[id]); } finally { setBusy(null); }
   };
 
   const accept = async (item: CaptureItem, replace?: string, anyway?: boolean) => {
     setBusy(item.id);
     setProblems((p) => ({ ...p, [item.id]: "" }));
     try {
-      const write = planWrite(item, ctx, replace);
+      const write = planWrite(item, ctx, replace, acceptKey(stored.id, item.id));
       const replaced = write.kind === "note" && write.payload.supersedes ? replace : undefined;
       const result = { ...(await perform(write, anyway)), superseded: replaced };
-      await save({ ...item, state: "accepted" as const, result });
+      await saveAccepted({ ...item, state: "accepted" as const, result });
       await refreshStore(client);
     } catch (e) {
       const p = classify(e);
@@ -189,7 +226,8 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
 
   const reject = (...items: CaptureItem[]) => save(...items.map((i) => ({ ...i, state: "rejected" as const }))).catch((e) => toast(String(e), "error"));
 
-  const pending = pendingItems(items);
+  // An item already written to memory is not waiting, even before its batch save goes through.
+  const pending = pendingItems(items).filter((i) => !unsaved[i.id]);
   return (
     <Modal title={`Review: ${stored.source.label}`} onClose={onClose} wide locked={!!busy}>
       <div className="exec-review">
@@ -201,7 +239,8 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
           <div className="banner"><strong>Questions to settle</strong><ul>{stored.questions.map((q) => <li key={q}>{q}</li>)}</ul></div>
         )}
         {items.map((item) => (
-          <ItemCard key={item.id} item={item} projects={projects} ctx={ctx} busy={!!busy} problem={problems[item.id] || undefined}
+          <ItemCard key={item.id} item={item} projects={projects} ctx={ctx} busy={!!busy} problem={problems[item.id] || undefined} unsaved={!!unsaved[item.id]}
+            onRetrySave={() => retrySave(item.id)}
             onChange={(next) => setEdits((e) => ({ ...e, [item.id]: next }))}
             onAccept={(replace, anyway) => (replace ? setReplacing({ item, ref: replace }) : accept(item, undefined, anyway))}
             onReject={() => reject(item)} />
