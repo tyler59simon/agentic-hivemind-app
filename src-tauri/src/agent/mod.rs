@@ -773,8 +773,12 @@ impl Manager {
         if text.trim().is_empty() {
             return Err("Write a message first".into());
         }
-        let sent = first_text(options.briefing.as_deref(), text);
         let mut sessions = inner.sessions.lock().unwrap();
+        // The executive chat holds the user's own evidence and pasted text: secrets are cut before the model sees them, as
+        // in the executive one-shot calls. Tool output is not covered: the CLI runs its tools itself.
+        let executive = sessions.get(id).is_some_and(|session| matches!(session.info.task, AgentTask::Executive { .. }));
+        let sent = first_text(options.briefing.as_deref(), text);
+        let sent = if executive { crate::learning::redact(&sent) } else { sent };
         if sessions.get(id).is_some_and(|session| session.info.interface == Interface::Terminal) {
             return Err("This session runs in the terminal. Resume it there and type your request.".into());
         }
@@ -1866,6 +1870,8 @@ pub fn start_executive(
     if let Some(slug) = &project {
         crate::git::project_entry(bridge, slug)?;
     }
+    // Secrets are cut from what the model sees, as in the executive one-shot calls; later messages are cut in Manager::send.
+    let (prompt, briefing) = (&crate::learning::redact(prompt), crate::learning::redact(&briefing));
     let task = AgentTask::Executive { project };
     let options = StartOptions { interface: Interface::Chat, briefing: Some(briefing), profile: Some(Profile::ReadOnly), role: None, unattended: false, ..options };
     check_combination(&task, options.engine, options.interface)?;
@@ -3844,6 +3850,27 @@ mod tests {
         let terminal = StartOptions { interface: Interface::Terminal, ..Default::default() };
         let as_chat = start_executive(&rig.manager, &bridge, &saved, &dir, None, &domains, String::new(), "Hi", terminal).unwrap();
         assert_eq!(as_chat.interface, Interface::Chat, "the executive assistant is always a chat");
+    }
+
+    #[test]
+    fn the_executive_chat_sends_no_secrets() {
+        let rig = Rig::scripted("executive-redact", &[&["<", INIT, RESULT, "<", RESULT]]);
+        let harmless = if cfg!(windows) { std::env::var("ComSpec").unwrap_or_else(|_| "C:\\Windows\\System32\\cmd.exe".into()) } else { "/bin/sh".into() };
+        let saved = Settings { claude_path: Some(harmless), ..Default::default() };
+        let bridge = Bridge::new(crate::settings::resolve(&saved, |_| None));
+        let dir = rig.dir.join("executive").join("agent");
+        let briefing = "Evidence: db_password = \"hunter2\"".to_string();
+        let info = start_executive(&rig.manager, &bridge, &saved, &dir, None, &[], briefing, "Is ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4 live?", StartOptions::default()).unwrap();
+        rig.turns(&info.id, 1);
+        let later = SendOptions { briefing: Some("Note: api_token: s3cret-value".into()), ..Default::default() };
+        rig.manager.send(&info.id, "And password=letmein?", later, |_| Err("no restart in this test".into()), None).unwrap();
+        rig.turns(&info.id, 2);
+        let sent = rig.stdin_lines(&info.id).iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n");
+        for secret in ["hunter2", "ghp_A1b2", "s3cret-value", "letmein"] {
+            assert!(!sent.contains(secret), "{secret} reached the CLI: {sent}");
+        }
+        assert!(sent.contains("Evidence:") && sent.contains("And password="), "{sent}");
+        assert!(!rig.manager.info(&info.id).unwrap().title.contains("ghp_A1b2"), "the title is cut too");
     }
 
     #[test]
