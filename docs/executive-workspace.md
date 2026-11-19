@@ -49,7 +49,7 @@ Extraction, drafting, refining, briefings and style learning are tool-free one-s
 ## Limits
 
 - One-shot calls run on Claude Code only. Codex works in the assistant chat, but there it has no rule that blocks a memory write; its read-only sandbox is the only guard. The assistant's permission mode cannot be changed after it starts.
-- Hivemind's governed-command deny rules (`scope::governed_rules`) name `living_memory.py` only; `scope::governed_memory_command` also recognises the `alm` launcher when a session asks, and Living Memory refuses the launcher's plan, apply, undo and direct-write commands itself while `HIVEMIND_SESSION` is set.
+- Hivemind's governed-command deny rules (`scope::governed_rules`) name `living_memory.py` only; `scope::governed_memory_command` also recognises the `alm` launcher when a session asks, and Living Memory refuses the launcher's apply, undo, recover and direct-write commands itself while `HIVEMIND_SESSION` is set. Writing a plan is allowed: it is how an agent proposes a merge or delete for the user to apply.
 - Hivemind redacts secrets from the briefing and every message it sends to the assistant (`learning::redact`), but not from tool output: Claude Code runs its `alm` reads itself, so a secret stored in a note reaches the model as written.
 - Health is a suggestion from simple signals (overdue milestones and commitments, open risks, status age). It does not read code or CI.
 - Duplicate detection is title overlap within the project domains, not semantic.
