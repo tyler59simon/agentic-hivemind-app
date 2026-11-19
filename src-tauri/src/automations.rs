@@ -489,6 +489,7 @@ impl Automations {
         if cause != "manual" && doer.paused(&a).is_some() {
             if scheduled {
                 self.skip_due(id, now);
+                doer.changed();
             }
             return None;
         }
