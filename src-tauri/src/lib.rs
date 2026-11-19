@@ -16,6 +16,7 @@ mod settings;
 mod skills;
 mod term;
 mod watcher;
+mod wiki_build;
 mod workflow;
 mod worktree;
 
@@ -1155,34 +1156,50 @@ async fn folder_pick(app: AppHandle, state: State<'_, AppState>) -> Result<Optio
     .await
 }
 
-/// The `wiki` argv that writes the page to `path`. It runs as the main actor: a viewer may not write files.
-fn wiki_export_argv(domain: &str, path: &str, archived: bool) -> Vec<String> {
+/// The themes the exported page can start in (the app's own: `src/lib/theme.ts`).
+const WIKI_THEMES: [&str; 3] = ["purple", "emerald", "emerald-light"];
+
+/// The `wiki` argv that writes the page to `path`, starting in `theme`. It runs as the main actor: a viewer may not write files.
+/// `agent` exports the agent-written edition (of one project when `project` is set); `archived` only applies to the structured one.
+fn wiki_export_argv(domain: &str, path: &str, archived: bool, agent: bool, project: Option<&str>, theme: &str) -> Result<Vec<String>, String> {
+    if !WIKI_THEMES.contains(&theme) {
+        return Err(format!("Unknown theme {theme:?}"));
+    }
     let mut argv: Vec<String> = ["wiki", "--domain", domain, "--out", path].map(String::from).into();
-    if archived {
+    if agent {
+        argv.push("--agent".into());
+        if let Some(project) = project {
+            argv.extend(["--project".into(), project.into()]);
+        }
+    } else if archived {
         argv.push("--archived".into());
     }
-    argv
+    argv.extend(["--theme".into(), theme.into()]);
+    Ok(argv)
 }
 
-/// The save dialog's suggested name: the domain with anything but letters, digits, `-`, `_` and `.` replaced.
-fn wiki_file_name(domain: &str) -> String {
-    let safe: String = domain.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '_' }).collect();
-    format!("{safe}-wiki.html")
+/// The save dialog's suggested name: the domain (and project) with anything but letters, digits, `-`, `_` and `.` replaced.
+fn wiki_file_name(domain: &str, agent: bool, project: Option<&str>) -> String {
+    let safe = |s: &str| -> String { s.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '_' }).collect() };
+    let project = project.filter(|_| agent).map(|p| format!("-{}", safe(p))).unwrap_or_default();
+    format!("{}{project}-{}wiki.html", safe(domain), if agent { "agent-" } else { "" })
 }
 
 /// Export a domain's wiki as one HTML file. A native save dialog picks the path (so the webview never supplies one), Living Memory
 /// writes the file, and it opens in the default browser. None when the dialog was cancelled.
 #[tauri::command]
-async fn wiki_export(app: AppHandle, state: State<'_, AppState>, domain: String, archived: bool) -> Result<Option<String>, String> {
+async fn wiki_export(app: AppHandle, state: State<'_, AppState>, domain: String, archived: bool, agent: bool, project: Option<String>, theme: String) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
     use tauri_plugin_opener::OpenerExt;
     let bridge = state.bridge.clone();
     blocking(move || {
-        let Some(picked) = app.dialog().file().add_filter("HTML page", &["html"]).set_file_name(wiki_file_name(&domain)).blocking_save_file() else {
+        // Refuse an unknown theme before asking where to save.
+        wiki_export_argv(&domain, "", archived, agent, project.as_deref(), &theme)?;
+        let Some(picked) = app.dialog().file().add_filter("HTML page", &["html"]).set_file_name(wiki_file_name(&domain, agent, project.as_deref())).blocking_save_file() else {
             return Ok(None);
         };
         let path = picked.into_path().map_err(|e| e.to_string())?.to_string_lossy().into_owned();
-        let reply = bridge.call(&wiki_export_argv(&domain, &path, archived), None)?;
+        let reply = bridge.call(&wiki_export_argv(&domain, &path, archived, agent, project.as_deref(), &theme)?, None)?;
         if reply.exit_code != 0 {
             let message = reply.error.get("message").and_then(Value::as_str).map(String::from);
             return Err(message.unwrap_or_else(|| format!("Living Memory exited with code {}", reply.exit_code)));
@@ -1191,6 +1208,27 @@ async fn wiki_export(app: AppHandle, state: State<'_, AppState>, domain: String,
         Ok(Some(path))
     })
     .await
+}
+
+/// Build the agent-written wiki (or dry-run it: the calls and budget it would use, spending nothing). It runs as its own Living
+/// Memory process, not through the bridge, so a build of minutes blocks nothing. A real build reports `wiki-build-progress` events
+/// and `wiki-build-done`; one build runs at a time. Returns Living Memory's result object.
+#[tauri::command]
+async fn wiki_agent_build(app: AppHandle, state: State<'_, AppState>, domain: String, project: Option<String>, restructure: bool, dry_run: bool) -> Result<Value, String> {
+    let launch = state.bridge.launch();
+    blocking(move || {
+        let emit = |name: &str, payload: Value| {
+            let _ = app.emit(name, payload);
+        };
+        wiki_build::run(&emit, &launch, &domain, project.as_deref(), restructure, dry_run)
+    })
+    .await
+}
+
+/// Stop the running wiki build. The pages it already wrote are kept.
+#[tauri::command]
+fn wiki_agent_cancel() {
+    wiki_build::cancel();
 }
 
 /// Take a folder out of the remembered list.
@@ -1374,7 +1412,7 @@ pub fn run() {
             skills_upkeep, skill_from_note, workflow_templates, workflow_list, workflow_create, workflow_edit, workflow_act, workflow_delete, workflow_report,
             automation_list, automation_put, automation_delete, automation_act, architecture_drift, architecture_rules_set, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, repo_branches,
             agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_stop_and_approve, review_request_changes, review_request_terminal_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
-            system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export
+            system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export, wiki_agent_build, wiki_agent_cancel
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
@@ -1414,11 +1452,25 @@ mod tests {
 
     #[test]
     fn wiki_export_runs_as_main_and_writes_to_the_chosen_path() {
-        assert_eq!(wiki_export_argv("demo", "C:/x/demo-wiki.html", false), ["wiki", "--domain", "demo", "--out", "C:/x/demo-wiki.html"]);
-        let archived = wiki_export_argv("demo", "p.html", true);
-        assert_eq!(archived.last().map(String::as_str), Some("--archived"));
+        let argv = |archived, agent, project: Option<&str>, theme| wiki_export_argv("demo", "C:/x/demo-wiki.html", archived, agent, project, theme);
+        assert_eq!(argv(false, false, None, "purple").unwrap(), ["wiki", "--domain", "demo", "--out", "C:/x/demo-wiki.html", "--theme", "purple"]);
+        let archived = wiki_export_argv("demo", "p.html", true, false, None, "emerald").unwrap();
+        assert_eq!(archived, ["wiki", "--domain", "demo", "--out", "p.html", "--archived", "--theme", "emerald"]);
         assert!(!archived.iter().any(|a| a == "--actor"));
-        assert_eq!(wiki_file_name("sandbox"), "sandbox-wiki.html");
-        assert_eq!(wiki_file_name("a b/c"), "a_b_c-wiki.html");
+        // The agent edition passes --agent and the project, and has no retired notes to show.
+        assert_eq!(
+            argv(true, true, Some("core"), "emerald-light").unwrap(),
+            ["wiki", "--domain", "demo", "--out", "C:/x/demo-wiki.html", "--agent", "--project", "core", "--theme", "emerald-light"]
+        );
+        assert_eq!(argv(false, true, None, "purple").unwrap().iter().filter(|a| *a == "--agent").count(), 1);
+        // A project only narrows the agent edition.
+        assert!(!argv(false, false, Some("core"), "purple").unwrap().iter().any(|a| a == "--project"));
+        for theme in ["", "sepia", "Purple", "--out"] {
+            assert!(argv(false, false, None, theme).is_err(), "{theme}");
+        }
+        assert_eq!(wiki_file_name("sandbox", false, None), "sandbox-wiki.html");
+        assert_eq!(wiki_file_name("a b/c", false, None), "a_b_c-wiki.html");
+        assert_eq!(wiki_file_name("sandbox", true, None), "sandbox-agent-wiki.html");
+        assert_eq!(wiki_file_name("sandbox", true, Some("core x")), "sandbox-core_x-agent-wiki.html");
     }
 }

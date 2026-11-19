@@ -26,6 +26,9 @@ export const useViewsEnabled = () => useConnection((s) => s.commands.includes("v
 /** The domain wiki needs an LM that has the `wiki` command. */
 export const useWikiEnabled = () => useConnection((s) => s.commands.includes("wiki"));
 
+/** The agent-written wiki edition needs the `wiki_agent` capability and the `wiki` command. */
+export const useAgentWikiEnabled = () => useConnection((s) => (s.capabilities?.wiki_agent?.version ?? 0) >= 1 && s.commands.includes("wiki"));
+
 /** The `history` capability level: 2 adds `log` summaries, 3 adds summary and actor to `history` rows. */
 export const useHistoryLevel = () => useConnection((s) => s.capabilities?.history ?? 0);
 

@@ -41,7 +41,7 @@ export async function run<T>(argv: string[], stdin?: string): Promise<T> {
 const view = (argv: string[]) => [...argv, "--actor", "viewer"];
 
 /** What `version` reports under `capabilities`. */
-export interface Capabilities { direct_writes?: number; history?: number; restore?: number; pin?: number; rule?: number; maintenance?: { version: number; actions: string[] } }
+export interface Capabilities { direct_writes?: number; history?: number; restore?: number; pin?: number; rule?: number; maintenance?: { version: number; actions: string[] }; wiki_agent?: { version: number } }
 
 export interface ConnectInfo {
   version: { api: number; python: string; commands: string[]; capabilities?: Capabilities };
@@ -533,6 +533,19 @@ export interface WikiNote {
   id: string; ref: string; title: string; type: string; status: string; retired?: boolean; tags: string[]; files: string[];
   updated: string; created: string; lead: string; body: string; out: string[]; backlinks: string[];
   project: string; section: string; folder: string | null; filename: string | null;
+  /** Agent edition only: the page's build details and sources. Source notes (section `sources`) have none. */
+  page?: WikiPageInfo;
+}
+/** A note an agent-written page cites: `current` is false when its revision moved on since the page was written, `missing` when it was archived or deleted. */
+export interface WikiPageSource { id: string; ref: string; title: string; type: string; current: boolean; missing: boolean }
+export interface WikiPageInfo {
+  purpose: string; written: boolean; stale: boolean; built: string | null; model: string | null; cost_usd: number; warnings: string[];
+  /** `[^k]` in the body cites `sources[k - 1]`. */
+  sources: WikiPageSource[];
+}
+export interface WikiBuild {
+  built: string; model: string; cost_usd: number; pages: number; written: number; stale: number; pending: number; complete: boolean;
+  omitted: { id: string; title: string; reason: string }[];
 }
 export interface WikiProject {
   slug: string; name: string; description: string; aliases: string[]; repos: string[]; status: string; charter: string | null;
@@ -547,6 +560,15 @@ export interface WikiModel {
   notes: WikiNote[]; projects: WikiProject[]; folders: WikiFolder[]; sections: WikiSection[];
   /** Notes in other domains that this domain's links name, by casefolded title. */
   external: Record<string, { title: string; domain: string }>;
+  /** `"agent"` for the agent-written edition, which has the two keys below; the structured one has none. */
+  edition?: "agent"; scope?: string; build?: WikiBuild;
 }
 export const wikiModel = (domain: string, o: { archived?: boolean } = {}) =>
   run<{ ok: boolean; model: WikiModel }>(view(["wiki", "--format", "json", "--domain", domain, ...(o.archived ? ["--archived"] : [])])).then((r) => r.model);
+
+/** Living Memory's reply when no agent-written edition has been built for the scope yet. */
+export const isNoAgentWiki = (e: unknown) => e instanceof LmError && /no agent wiki/i.test(e.message);
+/** The saved agent-written edition of a domain (or of one project), in the same shape as the structured model. Null when none was built yet. */
+export const agentWikiModel = (domain: string, project?: string) =>
+  run<{ ok: boolean; model: WikiModel }>(view(["wiki", "--agent", "--format", "json", "--domain", domain, ...(project ? ["--project", project] : [])]))
+    .then((r) => r.model, (e: unknown) => { if (isNoAgentWiki(e)) return null; throw e; });

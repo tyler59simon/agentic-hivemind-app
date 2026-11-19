@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { LmError, addAction, archiveNote, isPlan, supersedeNote, taxonomyAdd, undo, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, ruleAllowed, setPin, setRule, writeChange, changesArgs, list, listArgs, logArgs, openArgs, writeProject, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setDetail, setTransport, writeSystem, systemsArgs, timelineArgs, wikiModel, type Invoke } from "./lm";
+import { LmError, addAction, archiveNote, isPlan, supersedeNote, taxonomyAdd, undo, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, ruleAllowed, setPin, setRule, writeChange, changesArgs, list, listArgs, logArgs, openArgs, writeProject, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setDetail, setTransport, writeSystem, systemsArgs, timelineArgs, wikiModel, agentWikiModel, type Invoke } from "./lm";
 
 afterEach(() => setTransport(invoke as Invoke));
 
@@ -167,5 +167,20 @@ describe("wiki", () => {
     await wikiModel("demo", { archived: true });
     expect(argvOf(calls, 0)).toEqual(["wiki", "--format", "json", "--domain", "demo", "--actor", "viewer"]);
     expect(argvOf(calls, 1)).toEqual(["wiki", "--format", "json", "--domain", "demo", "--archived", "--actor", "viewer"]);
+  });
+
+  it("reads the agent edition as viewer, for the domain or one project", async () => {
+    const calls = fake({ exit_code: 0, result: { ok: true, model: { domain: "demo", edition: "agent" } }, error: null });
+    await expect(agentWikiModel("demo")).resolves.toEqual({ domain: "demo", edition: "agent" });
+    await agentWikiModel("demo", "core");
+    expect(argvOf(calls, 0)).toEqual(["wiki", "--agent", "--format", "json", "--domain", "demo", "--actor", "viewer"]);
+    expect(argvOf(calls, 1)).toEqual(["wiki", "--agent", "--format", "json", "--domain", "demo", "--project", "core", "--actor", "viewer"]);
+  });
+
+  it("answers null when no edition was built yet, and still throws any other error", async () => {
+    fake({ exit_code: 1, result: null, error: { code: "invalid", message: "no agent wiki for domain yet; run wiki --agent --build" } });
+    await expect(agentWikiModel("demo")).resolves.toBeNull();
+    fake({ exit_code: 1, result: null, error: { code: "invalid", message: "Unknown domain demo" } });
+    await expect(agentWikiModel("demo")).rejects.toThrow("Unknown domain demo");
   });
 });

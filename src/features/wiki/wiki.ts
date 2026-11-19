@@ -1,7 +1,10 @@
 // The domain wiki, as pure functions over the model Living Memory returns (`wiki --format json`): which page an address
 // names, its breadcrumbs, previous and next pages, groupings, search and [[link]] resolution. The addresses are the
 // same as the exported file's hash names: "" (main page), p-<slug>, s-<slug>-<section>, c-<id>, n-<ref>, az, recent.
-import type { WikiFolder, WikiModel, WikiNote, WikiProject, WikiSection } from "../../lib/lm";
+// The agent-written edition has the same model shape (sections a1.., one article per page, its cited notes in the hidden
+// `sources` section), so the same addresses work; the helpers at the end are specific to it.
+import type { WikiFolder, WikiModel, WikiNote, WikiPageInfo, WikiPageSource, WikiProject, WikiSection } from "../../lib/lm";
+import type { WikiBuildDone, WikiBuildEvent, WikiBuildPlan } from "../../lib/wiki";
 
 export interface WikiIndex {
   model: WikiModel;
@@ -20,7 +23,8 @@ export function indexModel(model: WikiModel): WikiIndex {
   const titles = new Map<string, WikiNote>();
   for (const n of model.notes) {
     const key = n.title.trim().toLowerCase(), have = titles.get(key);
-    if (!have || (have.retired && !n.retired)) titles.set(key, n);
+    // A page of the agent edition wins over a cited note with the same title.
+    if (!have || (have.retired && !n.retired) || (have.section === SOURCES && n.section !== SOURCES)) titles.set(key, n);
   }
   return {
     model, titles,
@@ -91,7 +95,8 @@ export interface Crumb { label: string; at: string }
 /** Wiki > project > section > folders > page; the last crumb is the page itself. */
 export function crumbs(ix: WikiIndex, view: WikiView): Crumb[] {
   const root: Crumb = { label: "Wiki", at: "" };
-  const inProject = (p: WikiProject): Crumb[] => [root, { label: p.name, at: projectAt(p.slug) }];
+  // The agent edition has one project, which is the wiki itself.
+  const inProject = (p: WikiProject): Crumb[] => (isAgent(ix.model) ? [root] : [root, { label: p.name, at: projectAt(p.slug) }]);
   const inSection = (p: WikiProject, key: string): Crumb[] => [...inProject(p), { label: ix.sections.get(key)?.label ?? key, at: sectionAt(p.slug, key) }];
   const inFolders = (p: WikiProject, f: WikiFolder): Crumb[] => [...inSection(p, "code"), ...folderChain(ix, f).map((x) => ({ label: x.name, at: x.id }))];
   switch (view.kind) {
@@ -106,6 +111,7 @@ export function crumbs(ix: WikiIndex, view: WikiView): Crumb[] {
       const n = view.note, p = ix.projects.get(n.project);
       if (!p) return [root];
       const page = { label: isCode(ix, n) && n.filename ? n.filename : shortTitle(n), at: noteAt(n) };
+      if (isSource(n)) return [root, page];
       return [...(isCode(ix, n) ? inFolders(p, ix.folders.get(n.folder!)!) : inSection(p, n.section)), page];
     }
   }
@@ -201,6 +207,14 @@ export function resolveLink(ix: WikiIndex, target: string): LinkTarget {
 
 /** The tree rows to highlight for a page, best first: the page itself when the tree lists it, else its nearest listed ancestor. */
 export function treeKeys(ix: WikiIndex, view: WikiView): string[] {
+  if (isAgent(ix.model)) {
+    switch (view.kind) {
+      case "section": return [sectionAt(view.project.slug, view.section.key)];
+      case "note": return isSource(view.note) ? [] : [noteAt(view.note), sectionAt(view.note.project, view.note.section)];
+      case "main": case "project": return [""];
+      default: return [];
+    }
+  }
   const rootOf = (f: WikiFolder) => { while (f.parent && ix.folders.has(f.parent)) f = ix.folders.get(f.parent)!; return f; };
   switch (view.kind) {
     case "main": return [""];
@@ -231,11 +245,12 @@ export function treeOpen(ix: WikiIndex, view: WikiView): { project?: string; cod
 export type TreeIcon = "home" | "box" | "list" | "clock";
 export type TreeRow =
   | { kind: "label"; label: string }
-  | { kind: "row"; at: string; label: string; depth: 0 | 1 | 2; icon?: TreeIcon; count?: number; /** Key in the open-branches map; set when the row has children. */ branch?: string; expanded?: boolean };
+  | { kind: "row"; at: string; label: string; depth: 0 | 1 | 2; icon?: TreeIcon; count?: number; /** An agent page that is not written yet, or whose sources changed. */ flag?: "planned" | "stale"; /** Key in the open-branches map; set when the row has children. */ branch?: string; expanded?: boolean };
 
 /** The page tree, flattened: main page, each project with its sections (and root code folders), then the browse pages.
  *  `open` says which branches show their children: `p-<slug>` for a project, `code-<slug>` for its code reference. */
 export function treeRows(ix: WikiIndex, open: Record<string, boolean>): TreeRow[] {
+  if (isAgent(ix.model)) return agentTreeRows(ix);
   const rows: TreeRow[] = [{ kind: "row", at: "", label: "Main page", depth: 0, icon: "home" }];
   if (ix.model.projects.length) rows.push({ kind: "label", label: "Projects" });
   for (const p of ix.model.projects) {
@@ -253,4 +268,101 @@ export function treeRows(ix: WikiIndex, open: Record<string, boolean>): TreeRow[
   }
   rows.push({ kind: "label", label: "Browse" }, { kind: "row", at: "az", label: "A to Z index", depth: 0, icon: "list" }, { kind: "row", at: "recent", label: "Recent changes", depth: 0, icon: "clock" });
   return rows;
+}
+
+// ---- The agent-written edition ----
+
+/** The hidden section that holds the notes pages cite; it is never listed or browsed. */
+export const SOURCES = "sources";
+export const isAgent = (model: Pick<WikiModel, "edition">) => model.edition === "agent";
+/** A note cited as a source, not a page of the agent edition. */
+export const isSource = (n: Pick<WikiNote, "section">) => n.section === SOURCES;
+
+export type PageStatus = "planned" | "stale" | "current";
+export type SourceState = "current" | "changed" | "removed";
+
+/** A source gone from the store is removed; one whose revision moved on since the page was written is changed. */
+export const sourceState = (s: Pick<WikiPageSource, "current" | "missing">): SourceState => (s.missing ? "removed" : s.current ? "current" : "changed");
+/** Stale when the model says so or any source changed or is gone (the model's own rule, so an older flag cannot hide it). */
+export const isStale = (info: Pick<WikiPageInfo, "stale" | "sources">) => info.stale || info.sources.some((s) => sourceState(s) !== "current");
+export function pageStatus(n: Pick<WikiNote, "page">): PageStatus {
+  const info = n.page;
+  return !info || !info.written ? "planned" : isStale(info) ? "stale" : "current";
+}
+
+/** The agent's sections with their pages, in outline order. */
+export function agentSections(ix: WikiIndex): { section: WikiSection; pages: WikiNote[] }[] {
+  const p = ix.model.projects[0];
+  return p ? ix.model.sections.filter((s) => p.sections[s.key]).map((section) => ({ section, pages: sectionNotes(ix, p, section.key) })) : [];
+}
+
+/** The agent edition's page tree: the contents page, then each section with its pages. */
+export function agentTreeRows(ix: WikiIndex): TreeRow[] {
+  const rows: TreeRow[] = [{ kind: "row", at: "", label: "Contents", depth: 0, icon: "home" }];
+  const slug = ix.model.projects[0]?.slug ?? "wiki";
+  for (const { section, pages } of agentSections(ix)) {
+    rows.push({ kind: "row", at: sectionAt(slug, section.key), label: section.label, depth: 0, count: pages.length });
+    for (const n of pages) {
+      const status = pageStatus(n);
+      rows.push({ kind: "row", at: noteAt(n), label: n.title, depth: 1, ...(status === "current" ? {} : { flag: status }) });
+    }
+  }
+  return rows;
+}
+
+/** How many pages there are, written, still planned, and written but stale. */
+export function pageCounts(notes: WikiNote[]): { pages: number; written: number; planned: number; stale: number } {
+  const status = notes.filter((n) => n.page).map(pageStatus);
+  return { pages: status.length, written: status.filter((s) => s !== "planned").length, planned: status.filter((s) => s === "planned").length, stale: status.filter((s) => s === "stale").length };
+}
+
+/** The pages that cite a note, in the wiki's order. */
+export function citedOn(ix: WikiIndex, n: Pick<WikiNote, "id">): WikiNote[] {
+  return agentSections(ix).flatMap((s) => s.pages).filter((page) => page.page?.sources.some((s) => s.id === n.id));
+}
+
+export const CITE_PREFIX = "wikicite:";
+/** Which source a marker rewritten by `citeLinks` names (1-based), or null for any other address. */
+export function citeIndex(href: string | undefined): number | null {
+  const m = href?.startsWith(CITE_PREFIX) ? /^\d+$/.exec(href.slice(CITE_PREFIX.length)) : null;
+  return m ? +m[0] : null;
+}
+/** The body with each `[^k]` that names one of `count` sources rewritten as a link the renderer shows as a superscript.
+ *  Code spans and fenced code stay as written, and a marker with no such source stays plain text. */
+export function citeLinks(body: string, count: number): string {
+  return body.replace(/(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)|\[\^(\d+)\]/g, (all, code: string | undefined, k: string | undefined) =>
+    code || !k || +k < 1 || +k > count ? all : `[${k}](${CITE_PREFIX}${k})`);
+}
+
+/** Dollars as "$1.23". */
+export const usd = (n: number) => `$${n.toFixed(2)}`;
+
+/** The calls a dry run would make, in words. The page calls are null on a first build, whose outline call plans the pages. */
+export function callsText({ calls }: Pick<WikiBuildPlan, "calls">): string {
+  const parts = [calls.outline && "an outline call", calls.place && "a placement call"].filter((p): p is string => !!p);
+  if (calls.pages === null) parts.push("one call per page once the outline has planned them");
+  else if (calls.pages) parts.push(`${calls.pages} page call${calls.pages === 1 ? "" : "s"}`);
+  if (!parts.length) return "no model calls, since every page is up to date";
+  return parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
+export interface BuildProgress { done: number; total: number | null; cost: number; title: string | null }
+/** The progress after one more line of the build's progress; the total stays at the last one known. */
+export function applyProgress(p: BuildProgress | null, e: WikiBuildEvent): BuildProgress | null {
+  switch (e.event) {
+    case "start": return { done: 0, total: e.calls, cost: 0, title: null };
+    case "call": return { done: e.done, total: e.total ?? p?.total ?? null, cost: e.cost_usd, title: e.title };
+    case "end": return p && { ...p, cost: e.cost_usd };
+  }
+}
+
+/** What to tell the user when a build is over. `cancelled` is true when the user asked it to stop. */
+export function buildOutcome(done: Pick<WikiBuildDone, "ok" | "result" | "error">, cancelled: boolean): { text: string; kind: "info" | "warn" | "error" } {
+  if (cancelled) return { text: "Wiki build cancelled. The pages already written are kept.", kind: "info" };
+  const r = done.result;
+  if (!done.ok || !r) return { text: `Wiki build failed: ${done.error ?? "unknown error"}`, kind: "error" };
+  const pages = `${r.written.length} page${r.written.length === 1 ? "" : "s"} written for ${usd(r.cost_usd)}`;
+  if (r.stopped === "budget") return { text: `Wiki build stopped at its budget: ${pages}, ${r.pending.length} left. Refresh continues from there.`, kind: "warn" };
+  if (r.stopped === "error" || r.failed.length) return { text: `Wiki build had problems: ${pages}, ${r.failed.length} failed, ${r.pending.length} left.`, kind: "warn" };
+  return { text: `Wiki build finished: ${pages}.`, kind: "info" };
 }

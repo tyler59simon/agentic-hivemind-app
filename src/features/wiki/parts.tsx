@@ -4,11 +4,11 @@ import { BookOpen, FileText, Folder, Package } from "lucide-react";
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import Markdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { WikiNote } from "../../lib/lm";
+import type { WikiNote, WikiPageSource } from "../../lib/lm";
 import { ArrowLink, Row, Section } from "../../ui/Page";
 import { HoverPreview } from "../preview/HoverPreview";
 import { remarkWikilinks, WIKI_PREFIX } from "../viewer/remarkWikilinks";
-import { noteAt, resolveLink, shortTitle, type WikiIndex } from "./wiki";
+import { citeIndex, citeLinks, CITE_PREFIX, noteAt, pageStatus, resolveLink, shortTitle, sourceState, type WikiIndex } from "./wiki";
 
 interface Nav { ix: WikiIndex; goTo: (at: string) => void }
 const NavContext = createContext<Nav | null>(null);
@@ -22,6 +22,14 @@ export const useNav = () => {
 /** The note type's badge colour; a brief has no colour of its own and reads like context. */
 export const typeClass = (type: string) => `type-${type === "brief" ? "context" : type}`;
 export const TypeBadge = ({ type }: { type: string }) => <span className={`badge ${typeClass(type)}`}>{type}</span>;
+/** Where an agent-written page stands: planned (not written yet) or stale (a source changed). A current page has no mark. */
+export function PageFlag({ note }: { note: WikiNote }) {
+  const status = pageStatus(note);
+  if (!note.page || status === "current") return null;
+  return status === "stale"
+    ? <span className="status-chip warn" title="A source of this page changed since it was written">stale</span>
+    : <span className="badge" title="Planned by the outline, not written yet">planned</span>;
+}
 export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 export const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
@@ -38,8 +46,9 @@ export function NoteRow({ n, where, file, noLead }: { n: WikiNote; where?: boole
           <span className="lib-row-title">{file && n.filename ? <span className="mono">{n.filename}</span> : shortTitle(n)}</span>
           <span className="lib-row-meta">
             <TypeBadge type={n.type} />
+            {n.page && <PageFlag note={n} />}
             {n.retired && <span>{n.status}</span>}
-            {where && <span>{project?.name} › {section?.label}</span>}
+            {where && <span>{section ? `${project?.name} › ${section.label}` : "Source note"}</span>}
             {file && n.filename && <span>{shortTitle(n)}</span>}
             <span>{n.updated}</span>
           </span>
@@ -116,14 +125,28 @@ export function Toc({ items }: { items: TocItem[] }) {
 
 /** Markdown with [[links]] resolved against the wiki: a page here navigates inside the wiki, a note in another domain is marked
  *  as such, and a title nothing has is shown as unresolved. `inline` drops the paragraph wrapper (for a lead). Headings get
- *  an id from their line (`wiki-h-<line>`), which the contents list uses. */
-export function WikiMarkdown({ children, inline }: { children: string; inline?: boolean }) {
+ *  an id from their line (`wiki-h-<line>`), which the contents list uses. With `sources` (an agent-written page's), `[^k]`
+ *  is a superscript link to the k-th source note. */
+export function WikiMarkdown({ children, inline, sources }: { children: string; inline?: boolean; sources?: WikiPageSource[] }) {
   const { ix, goTo } = useNav();
+  const text = useMemo(() => (sources ? citeLinks(children, sources.length) : children), [children, sources]);
   const components = useMemo<Components>(() => {
     const heading = (Tag: "h1" | "h2" | "h3" | "h4" | "h5" | "h6"): Components["h1"] =>
       ({ node, children: c }) => <Tag id={`wiki-h-${(node?.position?.start.line ?? 1) - 1}`}>{c}</Tag>;
     return {
       a: ({ href, children: label }) => {
+        const k = citeIndex(href);
+        if (k !== null) {
+          const source = sources?.[k - 1], state = source && sourceState(source), target = source && ix.refs.get(source.ref);
+          const title = source ? `${source.title}${state === "changed" ? " (changed since this page was written)" : state === "removed" ? " (removed)" : ""}` : undefined;
+          return (
+            <sup className="wiki-cite">
+              {target
+                ? <HoverPreview refId={`${ix.model.domain}:${target.id}`}><a href={`#${noteAt(target)}`} className={state === "current" ? undefined : state} title={title} onClick={(e) => { e.preventDefault(); goTo(noteAt(target)); }}>{label}</a></HoverPreview>
+                : <span className={state === "current" ? undefined : state} title={title}>{label}</span>}
+            </sup>
+          );
+        }
         if (href?.startsWith(WIKI_PREFIX)) {
           const target = resolveLink(ix, decodeURIComponent(href.slice(WIKI_PREFIX.length)));
           if (target.kind === "note") {
@@ -145,10 +168,10 @@ export function WikiMarkdown({ children, inline }: { children: string; inline?: 
       ...(inline ? { p: ({ children: c }) => <>{c}</> } : {}),
       h1: heading("h1"), h2: heading("h2"), h3: heading("h3"), h4: heading("h4"), h5: heading("h5"), h6: heading("h6"),
     };
-  }, [ix, goTo, inline]);
+  }, [ix, goTo, inline, sources]);
   return (
-    <Markdown remarkPlugins={[remarkGfm, remarkWikilinks]} components={components} urlTransform={(url) => (url.startsWith(WIKI_PREFIX) ? url : defaultUrlTransform(url))}>
-      {children}
+    <Markdown remarkPlugins={[remarkGfm, remarkWikilinks]} components={components} urlTransform={(url) => (url.startsWith(WIKI_PREFIX) || url.startsWith(CITE_PREFIX) ? url : defaultUrlTransform(url))}>
+      {text}
     </Markdown>
   );
 }

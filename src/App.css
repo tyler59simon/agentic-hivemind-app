@@ -690,6 +690,7 @@ input[type="checkbox"] { accent-color: var(--success); }
 .type-knowledge { color: #94a3b8; } .type-decision { color: #7fb0ff; } .type-preference { color: #c58bff; } .type-context { color: #94a3b8; }
 .type-status { color: #14b8a6; } .type-bug { color: #ff7a7a; } .type-plan { color: #4ade80; } .type-risk { color: #f59e0b; }
 .type-research { color: #22d3ee; } .type-policy { color: #eab308; } .type-map { color: #fb923c; } .type-runbook { color: #f472b6; }
+.type-article { color: var(--accent); } /* a page of the agent-written wiki; a token, so each theme keeps its own contrast */
 /* Emerald Enterprise Light: the same hues, dark enough for 4.5:1 on its surfaces. */
 :root[data-theme="emerald-light"] .type-knowledge, :root[data-theme="emerald-light"] .type-context { color: #475569; }
 :root[data-theme="emerald-light"] .type-decision { color: #1d4ed8; } :root[data-theme="emerald-light"] .type-preference { color: #7e22ce; }
@@ -1205,6 +1206,31 @@ span.chip { display: inline-block; border: 1px solid var(--border-strong); }
 .wiki-letters button { min-width: 2.1rem; padding: .2rem .4rem; font-weight: 650; }
 .wiki-content .wikilink.external { color: var(--fg-soft); border-bottom-color: var(--muted); }
 .wiki-content .wikilink.external small { color: var(--muted); margin-left: .3rem; font-size: .75em; text-transform: uppercase; letter-spacing: .04em; }
+/* The agent-written edition: build progress, empty state, citations, Sources list and page marks. */
+.wiki-build { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem 1rem; padding: .55rem .9rem; border: 1px solid var(--chip-run-border); border-radius: .5rem; background: var(--chip-run-bg); color: var(--chip-run-fg); }
+.wiki-build .progress { flex: 0 1 14rem; }
+.wiki-build-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 24rem; }
+.wiki-empty { display: flex; flex-direction: column; align-items: flex-start; gap: .7rem; max-width: 40rem; padding: 1.4rem 1.6rem; border: 1px dashed var(--border-strong); border-radius: .6rem; color: var(--fg-soft); }
+.wiki-empty h2 { margin: 0; color: var(--fg); }
+.wiki-empty p { margin: 0; }
+.wiki-flag { font-size: .72rem; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); white-space: nowrap; }
+.wiki-flag.stale { color: var(--warn); }
+sup.wiki-cite { font-size: .72em; line-height: 0; margin-left: .05em; }
+sup.wiki-cite a, sup.wiki-cite > span { font-weight: 700; padding: 0 .1em; text-decoration: none; }
+sup.wiki-cite a { color: var(--accent); }
+sup.wiki-cite a:hover { text-decoration: underline; }
+sup.wiki-cite .changed { color: var(--warn); }
+sup.wiki-cite .removed { color: var(--muted); text-decoration: line-through; }
+.wiki-sources { margin: 0; padding-left: 1.5rem; display: flex; flex-direction: column; gap: .55rem; }
+.wiki-sources li { padding-left: .3rem; }
+.wiki-sources li::marker { color: var(--muted); font-variant-numeric: tabular-nums; }
+.wiki-sources a { color: var(--accent); text-decoration: none; }
+.wiki-sources a:hover { text-decoration: underline; }
+.wiki-source-meta { display: flex; flex-wrap: wrap; align-items: center; gap: .15rem .6rem; margin-top: .15rem; font-size: .88rem; color: var(--muted); }
+.wiki-omitted { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: .5rem; }
+.wiki-omitted .muted { display: block; font-size: .92rem; }
+.wiki-warnings { color: var(--muted); font-size: .92rem; }
+.wiki-warnings summary { cursor: pointer; }
 @media (max-width: 1100px) {
   .wiki-layout { grid-template-columns: minmax(0, 1fr); }
   .wiki-side { position: static; max-height: none; }

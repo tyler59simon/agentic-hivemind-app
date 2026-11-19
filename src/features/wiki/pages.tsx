@@ -8,7 +8,8 @@ import { useWorkspace } from "../../workspace/store";
 import { useApp } from "../../store";
 import { PageHeader, Split } from "../../ui/Page";
 import { Infobox, More, NoteRows, PageRow, Toc, TypeBadge, WikiMarkdown, WikiSection as Sec, cap, plural, useNav, type TocItem } from "./parts";
-import { azGroups, byUpdated, CHRONO, dayGroups, monthGroups, neighbours, noteAt, pathPrefix, projectAt, sectionAt, sectionNotes, shortTitle } from "./wiki";
+import { CitedOn } from "./agent";
+import { azGroups, byUpdated, CHRONO, citedOn, dayGroups, isAgent, isSource, monthGroups, neighbours, noteAt, pathPrefix, projectAt, sectionAt, sectionNotes, shortTitle } from "./wiki";
 
 const Lead = ({ note, children }: { note: WikiNote; children?: React.ReactNode }) => (
   <div className="wiki-lead-block">
@@ -157,10 +158,13 @@ export function NotePage({ note: n }: { note: WikiNote }) {
   const p = ix.projects.get(n.project), section = ix.sections.get(n.section);
   const { prev, next } = neighbours(ix, n);
   const path = pathPrefix(n) || (n.section === "code" ? n.files[0] ?? "" : "");
+  // In the agent edition a cited note lives in the hidden sources section; its page lists where it is cited.
+  const cited = useMemo(() => (isAgent(ix.model) && isSource(n) ? citedOn(ix, n) : []), [ix, n]);
   const toc = useMemo<TocItem[]>(() => [
     ...outline(n.body).map((h) => ({ text: h.text, id: `wiki-h-${h.line}`, sub: h.level >= 3 })),
+    ...(cited.length ? [{ text: "Cited on", id: "cited-on" }] : []),
     { text: "See also", id: "see-also" },
-  ], [n.body]);
+  ], [n.body, cited]);
   const openInMemory = () => {
     go({ page: "memory", view: "notes" });
     useWorkspace.getState().openNote(`${ix.model.domain}:${n.id}`, { title: n.title });
@@ -176,7 +180,7 @@ export function NotePage({ note: n }: { note: WikiNote }) {
   };
   return (
     <>
-      <PageHeader eyebrow={`${p?.name} · ${section?.label}`} title={shortTitle(n)} meta={path ? <PathLine text={path} /> : undefined}
+      <PageHeader eyebrow={isSource(n) ? "Source note" : `${p?.name} · ${section?.label}`} title={shortTitle(n)} meta={path ? <PathLine text={path} /> : undefined}
         actions={<button className="outline" onClick={openInMemory} title="Open this note in Memory, to edit it">Open in Memory</button>} />
       {n.retired && <div className="wiki-banner">This page is {n.status}. It is kept for history and may be out of date.</div>}
       <Split rail={<>
@@ -192,6 +196,7 @@ export function NotePage({ note: n }: { note: WikiNote }) {
       </>}>
         {n.lead && <Lead note={n} />}
         <div className="markdown wiki-body"><WikiMarkdown>{n.body}</WikiMarkdown></div>
+        {!!cited.length && <CitedOn pages={cited} />}
         <Sec id="see-also" title="See also">
           <div className="wiki-see-also">{related("Links to", n.out)}{related("Linked from", n.backlinks)}</div>
         </Sec>
