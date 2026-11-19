@@ -187,21 +187,23 @@ pub fn head_sha(repo: &Path) -> Result<String, String> {
     Some(text.trim()).filter(|sha| is_sha(sha)).map(String::from).ok_or_else(|| "git did not print a commit id".to_string())
 }
 
-/// Where the next commit review after `since` ends: the newest commit on HEAD's first-parent line whose `since..end` holds
-/// at most `limit` commits, or the first one after `since` when even that holds more (a large merge). Ends lie on one line,
-/// so each batch contains the ones before it and the cursor only moves forward, also across merged branches.
-pub fn batch_end(repo: &Path, since: &str, limit: usize) -> Result<String, String> {
+/// The next commit review after `reviewed` (the commit ids already reviewed up to, as tips): up to `limit` commits that HEAD
+/// has and the tips do not, oldest first (parents before children), and the tips that cover everything reviewed once
+/// those are too (`merge-base --independent`). Empty commits when HEAD has nothing new. Because parents come first, what
+/// is reviewed stays closed under ancestry, so no commit is skipped or reviewed twice, across merges and branch switches.
+pub fn next_batch(repo: &Path, reviewed: &[&str], limit: usize) -> Result<(Vec<String>, Vec<String>), String> {
+    let reviewed: Vec<&str> = reviewed.iter().copied().filter(|sha| is_sha(sha)).collect();
     let mut command = Command::new("git");
-    command.args(["--no-optional-locks", "-C"]).arg(repo).args(["rev-list", "--first-parent", "--reverse"]).arg(format!("{since}..HEAD"));
+    command.args(["--no-optional-locks", "-C"]).arg(repo).args(["rev-list", "--reverse", "--topo-order", "HEAD", "--not"]).args(&reviewed);
     let text = run_with_timeout(command, TIMEOUT)?;
-    let line: Vec<&str> = text.lines().map(str::trim).filter(|sha| is_sha(sha)).collect();
-    let fits = |sha: &str| rev_count(repo, &[&format!("{since}..{sha}")]).map(|n| n as usize <= limit);
-    let (mut low, mut high) = (0, line.len()); // line[..low] fit; line[high..] do not
-    while low < high {
-        let middle = (low + high) / 2;
-        if fits(line[middle])? { low = middle + 1 } else { high = middle }
+    let batch: Vec<String> = text.lines().map(str::trim).filter(|sha| is_sha(sha)).take(limit).map(String::from).collect();
+    if batch.is_empty() {
+        return Ok((batch, reviewed.iter().map(|sha| sha.to_string()).collect()));
     }
-    line.get(low.saturating_sub(1)).map(|sha| sha.to_string()).ok_or_else(|| "No commits after the last reviewed one".to_string())
+    let mut command = Command::new("git");
+    command.args(["--no-optional-locks", "-C"]).arg(repo).args(["merge-base", "--independent"]).args(&reviewed).args(&batch);
+    let tips = run_with_timeout(command, TIMEOUT)?.lines().map(str::trim).filter(|sha| is_sha(sha)).map(String::from).collect();
+    Ok((batch, tips))
 }
 
 /// `git rev-list --count <selector...>` in `repo`, e.g. `["abc..HEAD"]` or `["--since=@1794322874", "HEAD"]`.
@@ -358,63 +360,78 @@ mod tests {
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     }
 
-    #[test]
-    fn a_batch_ends_at_the_limit_th_commit_oldest_first() {   // HIDE-14
-        if !git_available() {
-            return;
-        }
-        let dir = std::env::temp_dir().join(format!("hivemind-git-batch-{}", std::process::id()));
-        std::fs::remove_dir_all(&dir).ok();
-        std::fs::create_dir_all(&dir).unwrap();
-        git(&dir, &["init", "-q"]);
-        git(&dir, &["config", "user.name", "Tester"]);
-        git(&dir, &["config", "user.email", "t@example.com"]);
-        git(&dir, &["config", "commit.gpgsign", "false"]);
-        let mut shas = vec![];
-        for n in 1..=6 {
-            git(&dir, &["commit", "-q", "--allow-empty", "-m", &format!("c{n}")]);
-            shas.push(head_sha(&dir).unwrap());
-        }
-        assert_eq!(batch_end(&dir, &shas[0], 2).unwrap(), shas[2], "two after c1, oldest first: c3");
-        assert_eq!(batch_end(&dir, &shas[0], 30).unwrap(), shas[5], "fewer than the limit: HEAD");
-        assert!(batch_end(&dir, &shas[5], 30).is_err(), "nothing after HEAD");
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn batches_move_forward_across_a_merge() {   // HIDE-14, Codex review of f07f22e
-        if !git_available() {
-            return;
-        }
-        let dir = std::env::temp_dir().join(format!("hivemind-git-merge-{}", std::process::id()));
+    fn batch_repo(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("hivemind-git-{name}-{}", std::process::id()));
         std::fs::remove_dir_all(&dir).ok();
         std::fs::create_dir_all(&dir).unwrap();
         for args in [&["init", "-q", "-b", "main"][..], &["config", "user.name", "Tester"], &["config", "user.email", "t@example.com"], &["config", "commit.gpgsign", "false"]] {
             git(&dir, args);
         }
-        git(&dir, &["commit", "-q", "--allow-empty", "-m", "base"]);
-        let base = head_sha(&dir).unwrap();
+        dir
+    }
+
+    fn commit(dir: &Path, message: &str) -> String {
+        git(dir, &["commit", "-q", "--allow-empty", "-m", message]);
+        head_sha(dir).unwrap()
+    }
+
+    /// Review `dir` from `reviewed` in batches of `limit` until caught up: the batches, and the tips at the end.
+    fn drain(dir: &Path, mut reviewed: Vec<String>, limit: usize) -> (Vec<Vec<String>>, Vec<String>) {
+        let mut batches = vec![];
+        loop {
+            let tips: Vec<&str> = reviewed.iter().map(String::as_str).collect();
+            let (batch, next) = next_batch(dir, &tips, limit).unwrap();
+            if batch.is_empty() {
+                return (batches, reviewed);
+            }
+            assert!(batches.len() < 10, "the review goes round in circles: {batches:?}");
+            batches.push(batch);
+            reviewed = next;
+        }
+    }
+
+    #[test]
+    fn a_backlog_is_reviewed_oldest_first_in_batches() {   // HIDE-14
+        if !git_available() {
+            return;
+        }
+        let dir = batch_repo("batch");
+        let shas: Vec<String> = (1..=6).map(|n| commit(&dir, &format!("c{n}"))).collect();
+        let (batches, tips) = drain(&dir, vec![shas[0].clone()], 2);
+        assert_eq!(batches, [shas[1..3].to_vec(), shas[3..5].to_vec(), shas[5..6].to_vec()], "oldest first, two at a time");
+        assert_eq!(tips, [shas[5].clone()], "caught up at HEAD");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn every_commit_of_a_merge_is_reviewed_once() {   // HIDE-14, Codex reviews of f07f22e and 9134b3c
+        if !git_available() {
+            return;
+        }
+        let dir = batch_repo("merge");
+        let base = commit(&dir, "base");
         git(&dir, &["checkout", "-q", "-b", "side"]);
-        for n in 1..=3 {
-            git(&dir, &["commit", "-q", "--allow-empty", "-m", &format!("b{n}")]);
-        }
+        let side: Vec<String> = (1..=5).map(|n| commit(&dir, &format!("b{n}"))).collect();
         git(&dir, &["checkout", "-q", "main"]);
-        let mut main = vec![];
-        for n in 1..=3 {
-            git(&dir, &["commit", "-q", "--allow-empty", "-m", &format!("a{n}")]);
-            main.push(head_sha(&dir).unwrap());
-        }
+        let main: Vec<String> = (1..=3).map(|n| commit(&dir, &format!("a{n}"))).collect();
         git(&dir, &["merge", "-q", "--no-ff", "-m", "merge", "side"]);
         let merge = head_sha(&dir).unwrap();
-        // The old ends alternated between the branch tips; these move along main and reach the merge.
-        let mut ends = vec![];
-        let mut since = base;
-        while let Ok(end) = batch_end(&dir, &since, 2) {
-            assert!(ends.len() < 5, "the cursor goes round in circles: {ends:?}");
-            ends.push(end.clone());
-            since = end;
-        }
-        assert_eq!(ends, [main[1].clone(), main[2].clone(), merge], "a2, a3, then the merge with the whole side branch");
+        // A merge larger than a batch is split across runs, and no run repeats a commit.
+        let (batches, tips) = drain(&dir, vec![base.clone()], 2);
+        let mut all: Vec<String> = batches.concat();
+        assert!(batches.iter().all(|b| b.len() <= 2), "{batches:?}");
+        assert_eq!(all.last(), Some(&merge), "the merge comes after everything it brings in");
+        all.sort();
+        let mut expected = [side.clone(), main.clone(), vec![merge.clone()]].concat();
+        expected.sort();
+        assert_eq!(all, expected, "each new commit exactly once");
+        assert_eq!(tips, [merge.clone()]);
+
+        // Reviewed up to a side-branch commit (the branch was checked out then): those are not reviewed again.
+        let (batches, _) = drain(&dir, vec![side[2].clone()], 30);
+        let again: Vec<String> = batches.concat();
+        assert!(!again.iter().any(|sha| side[..3].contains(sha) || sha == &base), "{again:?}");
+        assert_eq!(again.len(), side.len() - 3 + main.len() + 1);
         std::fs::remove_dir_all(&dir).ok();
     }
 

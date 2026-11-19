@@ -166,8 +166,9 @@ pub trait Doer: Send + Sync {
     fn head(&self, repo: &str) -> Option<String>;
     /// `git log --oneline` from `since` (exclusive) to HEAD, or the last few commits without `since`.
     fn log(&self, repo: &str, since: Option<&str>) -> String;
-    /// Where a commit capture that starts after `since` ends: the `limit`th commit on the way to HEAD (`git::batch_end`).
-    fn batch_end(&self, repo: &str, since: &str, limit: usize) -> Option<String>;
+    /// The next commit capture after `reviewed` (the reviewed tips, space-separated, as `last_seen` holds them): the commit
+    /// ids to review, oldest first, and the tips to keep once they are (`git::next_batch`). None when git cannot tell.
+    fn next_batch(&self, repo: &str, reviewed: &str, limit: usize) -> Option<(Vec<String>, String)>;
     /// Whether today's learning and automation budget has room.
     fn budget_left(&self) -> bool;
     /// Why the automation may not run on its own now (its engine is hidden), or None. A paused automation is not admitted
@@ -189,6 +190,9 @@ pub struct Vars {
     pub event: String,
     pub commits: String,
     pub head: Option<String>,
+    /// For a commit capture: the exact commits this run reviews, oldest first. None when git could not tell, and the run
+    /// reviews the range from `last_seen` instead.
+    pub batch: Option<Vec<String>>,
 }
 
 pub fn fill(prompt: &str, vars: &Vars) -> String {
@@ -609,16 +613,19 @@ impl Automations {
         drop(admit);
         let repo = a.repo.clone().unwrap_or_default();
         let head = (!repo.is_empty()).then(|| doer.head(&repo)).flatten();
-        // A commit capture reviews at most COMMIT_BATCH commits, oldest first, and the cursor moves only past those; the
-        // trigger sees HEAD still ahead and the next run takes the rest.
-        let head = match (&a.action, a.last_seen.as_deref()) {
-            (Action::CommitCapture, Some(since)) if head.is_some() && head.as_deref() != Some(since) => doer.batch_end(&repo, since, COMMIT_BATCH).or(head),
-            _ => head,
+        // A commit capture reviews at most COMMIT_BATCH commits, oldest first, and `last_seen` then covers exactly those (as
+        // tips); the trigger sees HEAD not yet covered and the next run takes the rest. Without an answer from git the run
+        // covers up to HEAD, as before.
+        let batch = match (&a.action, a.last_seen.as_deref()) {
+            (Action::CommitCapture, Some(seen)) if head.is_some() => doer.next_batch(&repo, seen, COMMIT_BATCH),
+            _ => None,
         };
+        let seen = batch.as_ref().map(|(_, tips)| tips.clone()).or(head.clone());
         let vars = Vars {
             event: row.event.clone().unwrap_or_default(),
             commits: if repo.is_empty() { String::new() } else { doer.log(&repo, a.last_seen.as_deref()) },
             head: head.clone(),
+            batch: batch.map(|(commits, _)| commits),
         };
         let held = if matches!(a.action, Action::Role { .. } | Action::Workflow { .. }) {
             let guard = self.admit.lock().unwrap();
@@ -654,8 +661,8 @@ impl Automations {
         if let Some(cancelled) = self.find_run(&row.id).filter(|r| r.state == RunState::Cancelled) {
             return cancelled;
         }
-        if head.is_some() && row.state != RunState::Failed {
-            self.mark_ran(&a.id, row.at, head);
+        if seen.is_some() && row.state != RunState::Failed {
+            self.mark_ran(&a.id, row.at, seen);
         }
         let _ = self.put_run(&row);
         drop(admit);
@@ -739,9 +746,12 @@ impl Automations {
                 match a.last_seen.as_deref() {
                     // The first look only remembers where the branch is.
                     None => self.mark_seen(&a.id, head),
-                    Some(seen) if seen != head => {
+                    // `last_seen` holds the reviewed tips; HEAD among them, or nothing HEAD has beyond them, is caught up.
+                    Some(seen) if !seen.split_whitespace().any(|tip| tip == head) => {
                         let log = doer.log(repo, Some(seen));
-                        out.push(Due { id: a.id.clone(), cause: "commit", event: Some(format!("New commits:\n{log}")) });
+                        if !log.trim().is_empty() {
+                            out.push(Due { id: a.id.clone(), cause: "commit", event: Some(format!("New commits:\n{log}")) });
+                        }
                     }
                     _ => {}
                 }
@@ -828,7 +838,7 @@ mod tests {
     fn words_for_triggers() {
         assert_eq!(trigger_text(&Trigger::Weekly { days: vec![0, 3], at: 18 * 60 + 30 }), "Mon, Thu at 18:30");
         assert_eq!(trigger_text(&Trigger::Every { hours: 1 }), "Every 1 hour");
-        assert_eq!(fill("A {event} B {commits}", &Vars { event: " x ".into(), commits: "".into(), head: None }), "A x B (no new commits)");
+        assert_eq!(fill("A {event} B {commits}", &Vars { event: " x ".into(), commits: "".into(), head: None, batch: None }), "A x B (no new commits)");
     }
 
     #[test]
@@ -875,8 +885,8 @@ mod tests {
     #[derive(Default)]
     struct Fake {
         ran: Mutex<Vec<(String, Vars)>>,
-        /// What batch_end answers; None stands for a git failure.
-        batch: Mutex<Option<String>>,
+        /// What next_batch answers (commits, tips); None stands for a git failure.
+        batch: Mutex<Option<(Vec<String>, String)>>,
         notes: Mutex<Vec<String>>,
         head: Mutex<Option<String>>,
         broke: bool,
@@ -897,7 +907,7 @@ mod tests {
         fn log(&self, _repo: &str, since: Option<&str>) -> String {
             format!("log since {}", since.unwrap_or("start"))
         }
-        fn batch_end(&self, _repo: &str, _since: &str, limit: usize) -> Option<String> {
+        fn next_batch(&self, _repo: &str, _reviewed: &str, limit: usize) -> Option<(Vec<String>, String)> {
             assert_eq!(limit, COMMIT_BATCH);
             self.batch.lock().unwrap().clone()
         }
@@ -974,26 +984,35 @@ mod tests {
         let def = Automation { id: String::new(), enabled: true, project: Some("p".into()), repo: Some("r".into()), ..templates().into_iter().find(|t| t.id == "commit-capture").unwrap() };
         autos.put(def, now_ms()).unwrap();
         let doer = Fake::default();
+        let ids = |r: std::ops::RangeInclusive<u32>| r.map(|n| format!("c{n}")).collect::<Vec<_>>();
         *doer.head.lock().unwrap() = Some("aaa".into());
         autos.tick(now_ms(), true, &doer);
-        // 45 commits land; the first run reviews up to the 30th and the cursor stops there, not at HEAD (the old code).
+        // 45 commits land; the first run reviews the oldest 30 and the cursor covers those, not HEAD (the old code).
         *doer.head.lock().unwrap() = Some("c45".into());
-        *doer.batch.lock().unwrap() = Some("c30".into());
+        *doer.batch.lock().unwrap() = Some((ids(1..=30), "c30".into()));
         autos.tick(now_ms(), true, &doer);
-        assert_eq!(doer.ran.lock().unwrap().last().unwrap().1.head.as_deref(), Some("c30"));
+        assert_eq!(doer.ran.lock().unwrap().last().unwrap().1.batch, Some(ids(1..=30)));
         assert_eq!(autos.list()[0].last_seen.as_deref(), Some("c30"));
-        // HEAD is still ahead, so the next tick runs again from c30 to the end.
-        *doer.batch.lock().unwrap() = Some("c45".into());
+        // HEAD is not covered yet, so the next tick reviews the rest.
+        *doer.batch.lock().unwrap() = Some((ids(31..=45), "c45".into()));
         autos.tick(now_ms(), true, &doer);
         let ran = doer.ran.lock().unwrap().clone();
-        assert_eq!((ran.len(), ran[1].1.commits.as_str(), ran[1].1.head.as_deref()), (2, "log since c30", Some("c45")));
+        assert_eq!((ran.len(), ran[1].1.batch.clone()), (2, Some(ids(31..=45))));
         assert_eq!(autos.list()[0].last_seen.as_deref(), Some("c45"));
         autos.tick(now_ms(), true, &doer);
         assert_eq!(doer.ran.lock().unwrap().len(), 2, "caught up");
-        // When git cannot say where a batch ends, the run covers up to HEAD as before.
+        // Several reviewed tips (a merge in progress): HEAD among them is caught up.
+        *doer.batch.lock().unwrap() = Some((ids(46..=47), "x9 c47".into()));
+        *doer.head.lock().unwrap() = Some("c47".into());
+        autos.tick(now_ms(), true, &doer);
+        assert_eq!(autos.list()[0].last_seen.as_deref(), Some("x9 c47"));
+        autos.tick(now_ms(), true, &doer);
+        assert_eq!(doer.ran.lock().unwrap().len(), 3, "c47 is one of the tips");
+        // When git cannot say what to review, the run covers up to HEAD as before.
         *doer.head.lock().unwrap() = Some("d01".into());
         *doer.batch.lock().unwrap() = None;
         autos.tick(now_ms(), true, &doer);
+        assert_eq!(doer.ran.lock().unwrap().last().unwrap().1.batch, None);
         assert_eq!(autos.list()[0].last_seen.as_deref(), Some("d01"));
         let _ = std::fs::remove_dir_all(dir);
     }

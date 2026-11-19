@@ -503,20 +503,24 @@ impl automations::Doer for AppDoer {
                     return Err(why);
                 }
                 let mut command = std::process::Command::new("git");
-                // From the last reviewed commit to where this batch ends (automations::COMMIT_BATCH commits at most, oldest
-                // first); the cursor moves to that end, so the next run reviews the rest.
-                let end = vars.head.as_deref().unwrap_or("HEAD");
-                let range = a.last_seen.as_deref().map(|s| format!("{s}..{end}")).unwrap_or_else(|| "-5".into());
-                let most = format!("--max-count={}", automations::COMMIT_BATCH);
-                command.args(["--no-optional-locks", "-C", &repo, "log", "--stat", "-p", "--no-color", "--no-ext-diff", "--no-textconv", &most, &range]);
+                command.args(["--no-optional-locks", "-C", &repo, "log", "--stat", "-p", "--no-color", "--no-ext-diff", "--no-textconv"]);
+                // The exact commits of this batch (automations::COMMIT_BATCH at most, oldest first); without them, the range
+                // after the reviewed tips, or the last few commits the first time.
+                match (&vars.batch, a.last_seen.as_deref()) {
+                    (Some(batch), _) if batch.is_empty() => return Ok(Started::Done { detail: "No new commits".into(), cost: None }),
+                    (Some(batch), _) => command.arg("--no-walk=sorted").args(batch),
+                    (None, Some(seen)) => command.arg(format!("--max-count={}", automations::COMMIT_BATCH)).args(["HEAD", "--not"]).args(seen.split_whitespace()),
+                    (None, None) => command.arg("-5"),
+                };
                 let log = git::run_with_timeout(command, std::time::Duration::from_secs(30))?;
                 if log.trim().is_empty() {
                     return Ok(Started::Done { detail: "No new commits".into(), cost: None });
                 }
                 let claude = agent::claude::available(&saved)?;
                 let deps = learning::Deps { bridge: &state.bridge, skills: &state.skills, claude, daily_usd: saved.learning_daily_usd(), auto_patch: false };
-                let head = vars.head.clone().unwrap_or_default();
-                let key = format!("{}-{}", &a.id[..8.min(a.id.len())], &head[..8.min(head.len())]);
+                // One key per batch: two batches of one backlog share HEAD, not their last commit.
+                let last = vars.batch.as_ref().and_then(|b| b.last()).or(vars.head.as_ref()).cloned().unwrap_or_default();
+                let key = format!("{}-{}", &a.id[..8.min(a.id.len())], &last[..8.min(last.len())]);
                 let run = state.learning.review_commits(&deps, &key, &format!("{} commits", a.name), &project, &repo, &log);
                 let _ = self.0.emit("learning-changed", &run);
                 match run.state.as_str() {
@@ -530,14 +534,16 @@ impl automations::Doer for AppDoer {
     fn head(&self, repo: &str) -> Option<String> {
         git::head_sha(std::path::Path::new(repo)).ok()
     }
-    fn batch_end(&self, repo: &str, since: &str, limit: usize) -> Option<String> {
-        git::batch_end(std::path::Path::new(repo), since, limit).ok()
+    fn next_batch(&self, repo: &str, reviewed: &str, limit: usize) -> Option<(Vec<String>, String)> {
+        let tips: Vec<&str> = reviewed.split_whitespace().collect();
+        git::next_batch(std::path::Path::new(repo), &tips, limit).ok().map(|(batch, tips)| (batch, tips.join(" ")))
     }
     fn log(&self, repo: &str, since: Option<&str>) -> String {
         let mut command = std::process::Command::new("git");
         command.args(["--no-optional-locks", "-C", repo, "log", "--oneline", "--no-color"]);
         match since {
-            Some(s) => command.args(["--max-count=50", &format!("{s}..HEAD")]),
+            // `since` holds the reviewed tips, space-separated.
+            Some(s) => command.args(["--max-count=50", "HEAD", "--not"]).args(s.split_whitespace()),
             None => command.arg("--max-count=10"),
         };
         git::run_with_timeout(command, std::time::Duration::from_secs(15)).unwrap_or_default()
