@@ -50,6 +50,20 @@ pub struct OutputFile {
     pub state: String,
 }
 
+/// A manifest path that stays inside `folder`: plain names only (no root, drive, `..` or `.`), and, when the file
+/// exists, no link or junction leading out. None for anything else.
+fn inside(folder: &Path, path: &str) -> Option<PathBuf> {
+    let relative = Path::new(path);
+    if path.is_empty() || !relative.components().all(|c| matches!(c, std::path::Component::Normal(_))) {
+        return None;
+    }
+    let full = folder.join(relative);
+    match (full.canonicalize(), folder.canonicalize()) {
+        (Ok(real), Ok(root)) if !real.starts_with(&root) => None,
+        _ => Some(full),
+    }
+}
+
 /// Output files whose content no longer matches the Suite's manifest: someone edited them by hand, or removed them.
 pub fn edited_outputs(folder: &Path) -> Vec<OutputFile> {
     let Some(manifest) = std::fs::read(folder.join(MANIFEST)).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else { return vec![] };
@@ -60,10 +74,10 @@ pub fn edited_outputs(folder: &Path) -> Vec<OutputFile> {
         .flat_map(|owners| owners.values())
         .filter_map(|owner| owner.get("files").and_then(Value::as_object))
         .flat_map(|files| files.iter())
-        .filter(|(path, _)| !path.contains("..") && !Path::new(path.as_str()).is_absolute())
         .filter_map(|(path, hash)| {
             let hash = hash.as_str()?;
-            let state = match std::fs::read(folder.join(path)) {
+            let full = inside(folder, path)?;
+            let state = match std::fs::read(full) {
                 Err(_) => "missing",
                 Ok(bytes) if hex(&Sha256::digest(&bytes)) != hash => "edited",
                 Ok(_) => return None,
@@ -288,11 +302,14 @@ pub struct Inputs<'a> {
 pub fn drift(app_data: &Path, cli: Result<Cli, String>, inputs: Inputs) -> Result<Drift, String> {
     let at = now_ms();
     let mut d = Drift { system: inputs.slug.to_string(), at, behind: inputs.behind, rules: inputs.rules.as_ref().map(|r| r.display().to_string()), ..Default::default() };
+    // Hand edits and missing outputs are checked first: a deleted model is itself drift, listed as a missing output.
+    if let Some(folder) = &inputs.folder {
+        d.edited = edited_outputs(folder);
+    }
     let Some(folder) = inputs.folder.filter(|f| f.join(MODEL).is_file()) else {
         d.problems.push("The system has no architecture-model.json yet: run a system passport first".into());
         return save(app_data, d);
     };
-    d.edited = edited_outputs(&folder);
     let cli = match cli {
         Ok(cli) => cli,
         Err(e) => {
@@ -385,7 +402,8 @@ mod tests {
         std::fs::write(dir.join("a.svg"), "<svg/>").unwrap();
         std::fs::write(dir.join("b.md"), "changed").unwrap();
         let manifest = json!({"owners": {"c4": {"files": {
-            "a.svg": hex(&Sha256::digest(b"<svg/>")), "b.md": hex(&Sha256::digest(b"original")), "gone.png": "00", "../x": "00"}}}});
+            "a.svg": hex(&Sha256::digest(b"<svg/>")), "b.md": hex(&Sha256::digest(b"original")), "gone.png": "00", "../x": "00",
+        "\\outside.txt": "00", "C:outside.txt": "00", "C:/Windows/win.ini": "00", "./b.md": "00", "": "00"}}}});
         std::fs::write(dir.join(MANIFEST), manifest.to_string()).unwrap();
         let found = edited_outputs(&dir);
         assert_eq!(found, vec![OutputFile { path: "b.md".into(), state: "edited".into() }, OutputFile { path: "gone.png".into(), state: "missing".into() }]);
@@ -434,6 +452,12 @@ mod tests {
         assert_eq!(d.problems, ["no cli"]);
         assert!(!d.needs_attention());
         assert_eq!(d.text(), "No drift found");
+        // The model was deleted: drift, not only a problem.
+        std::fs::write(folder.join(MANIFEST), json!({"owners": {"c4": {"files": {MODEL: hex(&Sha256::digest(b"{}"))}}}}).to_string()).unwrap();
+        std::fs::remove_file(folder.join(MODEL)).unwrap();
+        let d = drift(&app, Err("no cli".into()), Inputs { slug: "pay", folder: Some(folder.clone()), behind: Some(0), snapshots: vec![], rules: None }).unwrap();
+        assert_eq!(d.edited, vec![OutputFile { path: MODEL.into(), state: "missing".into() }]);
+        assert!(d.needs_attention());
         let _ = (std::fs::remove_dir_all(app), std::fs::remove_dir_all(folder));
     }
 

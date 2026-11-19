@@ -199,6 +199,9 @@ pub struct SkillView {
 pub struct Skills {
     dir: PathBuf,
     targets: Vec<PathBuf>,
+    /// Held by every change (propose, decide, publish, archive, restore, import): the reviewer's threads and the user's
+    /// commands share the library, and a version number is read and then written.
+    lock: std::sync::Mutex<()>,
 }
 
 /// Where approved skills are published: `HIVEMIND_SKILL_DIRS` (a path list) when set, else the Claude Code and Codex
@@ -367,7 +370,7 @@ pub fn used_in(events: &[SeqEvent], known: &BTreeSet<String>) -> BTreeSet<String
 
 impl Skills {
     pub fn new(dir: PathBuf, targets: Vec<PathBuf>) -> Skills {
-        Skills { dir, targets }
+        Skills { dir, targets, lock: std::sync::Mutex::new(()) }
     }
 
     fn library(&self) -> PathBuf {
@@ -428,6 +431,7 @@ impl Skills {
     }
 
     pub fn propose(&self, new: NewProposal, by: &str) -> Result<Proposal, String> {
+        let _lock = self.lock.lock().unwrap();
         let kind = new.kind.unwrap_or(Kind::Create);
         check_name(&new.name)?;
         let meta = self.meta(&new.name);
@@ -497,22 +501,32 @@ impl Skills {
     /// Approve (optionally with the user's edits) or reject a proposal. Approving a create or patch writes a new version and
     /// publishes it; approving an archive removes the published copies and keeps the library.
     pub fn decide(&self, id: &str, approve: bool, edit: Option<(String, String)>, actor: &str, why: Option<String>) -> Result<Proposal, String> {
+        let _lock = self.lock.lock().unwrap();
         let mut p = self.proposal(id)?;
         if p.state != ProposalState::Pending {
             return Err("This proposal was already decided".into());
+        }
+        // A proposal is about the skill as it was; one made before another change landed would undo that change.
+        let now = self.meta(&p.name).map(|m| m.version);
+        if approve && p.kind != Kind::Create && now != p.base_version {
+            return Err(format!("{} changed since this proposal (now v{}); reject it and propose again", p.name, now.unwrap_or(0)));
+        }
+        if approve && p.kind == Kind::Create && now.is_some() {
+            return Err(format!("A skill named {} exists now; reject this proposal", p.name));
         }
         if let Some((description, body)) = edit {
             p.description = description.trim().to_string();
             p.body = body.trim().to_string();
         }
+        let mut written = None;
         if approve {
             match p.kind {
-                Kind::Archive => self.archive(&p.name, actor, Some(&p.id))?,
+                Kind::Archive => self.archive_copies(&p.name, actor, Some(&p.id))?,
                 Kind::Create | Kind::Patch => {
                     check_body(&p.description, &p.body)?;
                     let action = format!("approve_{}", kind_word(p.kind));
                     let source = (p.session.clone(), p.note.clone());
-                    self.write_version(&p.name, &p.description, &p.body, Change { actor, action: &action, proposal: Some(&p.id), source })?;
+                    written = Some(self.write_version(&p.name, &p.description, &p.body, Change { actor, action: &action, proposal: Some(&p.id), source })?);
                 }
             }
         } else {
@@ -525,10 +539,14 @@ impl Skills {
         p.decided_at = Some(now_ms());
         p.decision = why;
         self.save_proposal(&p)?;
+        // The version is approved and stored whatever happens next; a copy that could not be written is published again later.
+        if let Some(version) = written {
+            self.publish_copies(&p.name, actor).map_err(|e| format!("Approved as v{version}, but not published everywhere: {e}"))?;
+        }
         Ok(p)
     }
 
-    /// Store a new version, make it current and publish it. Returns the new version number.
+    /// Store a new version and make it current. Returns the new version number; the caller publishes it.
     fn write_version(&self, name: &str, description: &str, body: &str, change: Change) -> Result<u32, String> {
         let Change { actor, action, proposal, source } = change;
         let now = now_ms();
@@ -553,13 +571,17 @@ impl Skills {
             at: now, actor: actor.into(), action: action.into(), name: name.into(), version: Some(version), sha256: Some(sha256(&text)),
             proposal: proposal.map(str::to_string), detail: None,
         })?;
-        self.publish(name, actor)?;
         Ok(version)
     }
 
     /// Copy the current version into every target whose CLI is set up. Refuses a folder Hivemind did not make, and a copy
     /// someone edited (import or restore it first).
     pub fn publish(&self, name: &str, actor: &str) -> Result<Vec<String>, String> {
+        let _lock = self.lock.lock().unwrap();
+        self.publish_copies(name, actor)
+    }
+
+    fn publish_copies(&self, name: &str, actor: &str) -> Result<Vec<String>, String> {
         let meta = self.meta(name).ok_or_else(|| format!("There is no skill named {name}"))?;
         if meta.archived {
             return Err(format!("{name} is archived"));
@@ -620,13 +642,30 @@ impl Skills {
 
     /// Remove the published copies (never one someone edited) and mark the skill archived. The library keeps every version.
     pub fn archive(&self, name: &str, actor: &str, proposal: Option<&str>) -> Result<(), String> {
+        let _lock = self.lock.lock().unwrap();
+        self.archive_copies(name, actor, proposal)
+    }
+
+    /// Only the two files Hivemind wrote are removed; the folder goes too when nothing else is in it, so files someone
+    /// added beside the skill stay.
+    fn archive_copies(&self, name: &str, actor: &str, proposal: Option<&str>) -> Result<(), String> {
         let mut meta = self.meta(name).ok_or_else(|| format!("There is no skill named {name}"))?;
         for target in &self.targets {
             let dir = target.join(name);
-            match self.copy_state(&dir, &meta).as_deref() {
-                Some("edited") => return Err(format!("{} was edited outside Hivemind; import or restore it before archiving", dir.display())),
-                Some(_) => std::fs::remove_dir_all(&dir).map_err(|e| format!("Could not remove {}: {e}", dir.display()))?,
-                None => {}
+            if self.copy_state(&dir, &meta).as_deref() == Some("edited") {
+                return Err(format!("{} was edited outside Hivemind; import or restore it before archiving", dir.display()));
+            }
+        }
+        for target in &self.targets {
+            let dir = target.join(name);
+            if self.copy_state(&dir, &meta).is_some() {
+                for file in ["SKILL.md", MARKER] {
+                    match std::fs::remove_file(dir.join(file)) {
+                        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(format!("Could not remove {}: {e}", dir.join(file).display())),
+                        _ => {}
+                    }
+                }
+                let _ = std::fs::remove_dir(&dir);
             }
         }
         meta.archived = true;
@@ -640,6 +679,7 @@ impl Skills {
 
     /// Make an earlier version current again, as a new version, and publish it. Also brings back an archived skill.
     pub fn restore(&self, name: &str, version: u32, actor: &str) -> Result<u32, String> {
+        let _lock = self.lock.lock().unwrap();
         let (description, body) = parse(&self.version_text(name, version)?);
         let meta = self.meta(name).ok_or_else(|| format!("There is no skill named {name}"))?;
         // A restore replaces an edited copy on purpose: the user chose the library's text.
@@ -647,18 +687,30 @@ impl Skills {
         let mut meta = meta;
         meta.archived = false;
         write_atomic(&self.meta_path(name), &serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?)?;
-        self.write_version(name, &description, &body, Change { actor, action: &format!("restore_v{version}"), proposal: None, source: (None, None) })
+        let new = self.write_version(name, &description, &body, Change { actor, action: &format!("restore_v{version}"), proposal: None, source: (None, None) })?;
+        self.publish_copies(name, actor).map_err(|e| format!("Restored as v{new}, but not published everywhere: {e}"))?;
+        Ok(new)
     }
 
     /// Take a copy edited outside Hivemind as the next version, and publish it everywhere.
+    /// Refused when two copies were edited differently: importing one would overwrite the other.
     pub fn import(&self, name: &str, actor: &str) -> Result<u32, String> {
+        let _lock = self.lock.lock().unwrap();
         let meta = self.meta(name).ok_or_else(|| format!("There is no skill named {name}"))?;
-        let dir = self.targets.iter().map(|t| t.join(name)).find(|d| self.copy_state(d, &meta).as_deref() == Some("edited"))
-            .ok_or_else(|| format!("No copy of {name} was edited outside Hivemind"))?;
-        let (description, body) = parse(&std::fs::read_to_string(dir.join("SKILL.md")).map_err(|e| e.to_string())?);
+        let edited: Vec<(PathBuf, String)> = self.targets.iter().map(|t| t.join(name))
+            .filter(|d| self.copy_state(d, &meta).as_deref() == Some("edited"))
+            .filter_map(|d| std::fs::read_to_string(d.join("SKILL.md")).ok().map(|text| (d, text)))
+            .collect();
+        let Some((dir, text)) = edited.first() else { return Err(format!("No copy of {name} was edited outside Hivemind")) };
+        if let Some((other, _)) = edited.iter().find(|(_, t)| t != text) {
+            return Err(format!("{} and {} were edited differently; make them the same or restore a version", dir.display(), other.display()));
+        }
+        let (description, body) = parse(text);
         check_body(&description, &body)?;
         self.clear_edited(&meta)?;
-        self.write_version(name, &description, &body, Change { actor, action: "import", proposal: None, source: (None, None) })
+        let new = self.write_version(name, &description, &body, Change { actor, action: "import", proposal: None, source: (None, None) })?;
+        self.publish_copies(name, actor).map_err(|e| format!("Imported as v{new}, but not published everywhere: {e}"))?;
+        Ok(new)
     }
 
     /// Drop the marker of edited copies so publish may write them again.
@@ -900,6 +952,42 @@ mod tests {
         assert!(skills.version_text("old-one", 1).is_ok());
         skills.restore("old-one", 1, "user").unwrap();
         assert!(targets[0].join("old-one").join("SKILL.md").exists());
+    }
+
+    #[test]
+    fn archive_keeps_files_someone_added_beside_the_skill() {
+        let (_g, skills, targets) = store("added");
+        let p = create(&skills, "with-notes");
+        skills.decide(&p.id, true, None, "user", None).unwrap();
+        std::fs::write(targets[0].join("with-notes").join("notes.md"), "mine").unwrap();
+        skills.archive("with-notes", "user", None).unwrap();
+        assert_eq!(std::fs::read_to_string(targets[0].join("with-notes").join("notes.md")).unwrap(), "mine");
+        assert!(!targets[0].join("with-notes").join("SKILL.md").exists());
+        assert!(!targets[1].join("with-notes").exists(), "an emptied folder goes");
+    }
+
+    #[test]
+    fn two_copies_edited_differently_are_not_imported() {
+        let (_g, skills, targets) = store("diverged");
+        let p = create(&skills, "split");
+        skills.decide(&p.id, true, None, "user", None).unwrap();
+        for (t, word) in targets.iter().zip(["once", "twice"]) {
+            std::fs::write(t.join("split").join("SKILL.md"), render("split", "Use when split.", &BODY.replace("Restart it.", &format!("Restart it {word}.")))).unwrap();
+        }
+        assert!(skills.import("split", "user").unwrap_err().contains("edited differently"));
+        assert!(std::fs::read_to_string(targets[1].join("split").join("SKILL.md")).unwrap().contains("twice"), "neither edit is lost");
+    }
+
+    #[test]
+    fn a_proposal_made_before_another_change_is_refused() {
+        let (_g, skills, _targets) = store("stale");
+        let p = create(&skills, "moving");
+        skills.decide(&p.id, true, None, "user", None).unwrap();
+        let patch = skills.propose(NewProposal { kind: Some(Kind::Patch), name: "moving".into(), description: "Use when it moves.".into(),
+            body: BODY.replace("Restart it.", "Restart it later."), ..Default::default() }, "reviewer").unwrap();
+        skills.restore("moving", 1, "user").unwrap();
+        assert!(skills.decide(&patch.id, true, None, "user", None).unwrap_err().contains("changed since this proposal"));
+        assert_eq!(skills.meta("moving").unwrap().version, 2);
     }
 
     #[test]

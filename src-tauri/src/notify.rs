@@ -58,6 +58,8 @@ pub fn session_text(report: &crate::agent::Lifecycle) -> Option<&'static str> {
     match report {
         Lifecycle::Waiting { .. } => Some("Waiting for your approval"),
         Lifecycle::TurnEnded { ok: true, .. } => Some("Finished its turn"),
+        // The user stopped it and needs no toast about it.
+        Lifecycle::TurnEnded { stopped: true, .. } => None,
         Lifecycle::TurnEnded { ok: false, .. } => Some("Stopped with an error"),
         Lifecycle::Finished { status: Status::Succeeded, .. } => Some("Finished"),
         Lifecycle::Finished { status: Status::Failed, .. } => Some("Failed"),
@@ -127,7 +129,8 @@ mod tests {
         use crate::agent::Lifecycle;
         use crate::agent::events::Status;
         assert_eq!(session_text(&Lifecycle::Waiting { id: "1".into() }), Some("Waiting for your approval"));
-        assert_eq!(session_text(&Lifecycle::TurnEnded { id: "1".into(), ok: false }), Some("Stopped with an error"));
+        assert_eq!(session_text(&Lifecycle::TurnEnded { id: "1".into(), ok: false, stopped: false }), Some("Stopped with an error"));
+        assert_eq!(session_text(&Lifecycle::TurnEnded { id: "1".into(), ok: false, stopped: true }), None);
         assert_eq!(session_text(&Lifecycle::Finished { id: "1".into(), status: Status::Failed }), Some("Failed"));
         assert_eq!(session_text(&Lifecycle::Finished { id: "1".into(), status: Status::Ended }), None);
     }

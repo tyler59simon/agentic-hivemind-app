@@ -382,8 +382,9 @@ pub enum Emit {
 /// learning reviewer. Sent after the session list has been saved, so a listener reads the new state.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Lifecycle {
-    /// An interactive session finished a turn; `ok` when it completed rather than failed, stopped or ran out of budget.
-    TurnEnded { id: String, ok: bool },
+    /// An interactive session finished a turn; `ok` when it completed rather than failed, stopped or ran out of budget;
+    /// `stopped` when the user stopped it (not a failure).
+    TurnEnded { id: String, ok: bool, stopped: bool },
     /// A session is waiting for the user to answer a permission prompt.
     Waiting { id: String },
     /// A session reached an end state.
@@ -1549,7 +1550,7 @@ impl Inner {
             if let Some(session) = sessions.get_mut(id) {
                 session.info.status = Status::Idle;
             }
-            lifecycle = Some(Lifecycle::TurnEnded { id: id.to_string(), ok: false });
+            lifecycle = Some(Lifecycle::TurnEnded { id: id.to_string(), ok: false, stopped: false });
         }
         let _ = self.persist(&mut sessions);
         drop(sessions);
@@ -1624,7 +1625,7 @@ impl Inner {
         let _ = self.persist(&mut sessions);
         drop(sessions);
         (self.sink)(Emit::SessionsChanged);
-        (self.sink)(Emit::Lifecycle(Lifecycle::TurnEnded { id: id.to_string(), ok }));
+        (self.sink)(Emit::Lifecycle(Lifecycle::TurnEnded { id: id.to_string(), ok, stopped: how == TurnEnd::Stopped }));
     }
 }
 
@@ -1673,8 +1674,12 @@ fn with_architecture(bridge: &Bridge, manager: &Manager, repo: &std::path::Path,
         Some(b) => format!("{b}\n\n{text}"),
         None => text,
     });
+    // An attended editing session accepts edits in every folder it was given, so it only reads the paths in the briefing
+    // (and asks); the read-only and research profiles get the folder itself.
     let scope = scope.map(|mut s| {
-        s.add_dirs.push(folder);
+        if !matches!(s.policy, scope::Policy::AcceptEdits { .. }) {
+            s.add_dirs.push(folder);
+        }
         s
     });
     (StartOptions { briefing, ..options }, scope)
@@ -2705,7 +2710,7 @@ mod tests {
             assert!(start.elapsed() < Duration::from_secs(20));
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert_eq!(lifecycle(&rig.seen, &started.id), vec![Lifecycle::TurnEnded { id: started.id.clone(), ok: true }]);
+        assert_eq!(lifecycle(&rig.seen, &started.id), vec![Lifecycle::TurnEnded { id: started.id.clone(), ok: true, stopped: false }]);
 
         rig.manager.amend(&started.id, |info| info.review = Some(Review { state: ReviewState::Approved, commit: None, at: 1 })).unwrap();
         rig.manager.amend(&started.id, |info| info.name = Some("again".into())).unwrap();

@@ -408,6 +408,9 @@ impl workflow::Host for AppHost {
     fn stop(&self, session: &str) {
         let _ = self.0.state::<AppState>().agents.end(session);
     }
+    fn branch_tip(&self, repo: &str, branch: &str) -> Option<String> {
+        worktree::branch_tip(std::path::Path::new(repo), branch)
+    }
 }
 
 /// What automations do, with the app's state.
@@ -434,8 +437,13 @@ impl automations::Doer for AppDoer {
                 let tasks = workflow::templates().into_iter().find(|t| t.id == template).ok_or_else(|| format!("Unknown workflow template: {template}"))?.tasks;
                 let new = workflow::NewRun { goal: automations::fill(goal, vars), project, repo, template: Some(template.clone()), unattended: true, budget_usd: a.budget_usd, tasks, ..Default::default() };
                 let run = state.workflows.create(new, Some(origin))?;
-                state.workflows.start(&run.id, &AppHost(self.0.clone()))?;
-                Ok(Started::Workflow(run.id))
+                let run = state.workflows.start(&run.id, &AppHost(self.0.clone()))?;
+                // No session report follows a workflow whose every task failed to start, so it ends here.
+                match run.state {
+                    workflow::RunState::Running => Ok(Started::Workflow(run.id)),
+                    workflow::RunState::Succeeded => Ok(Started::Done { detail: "The workflow succeeded".into(), cost: None }),
+                    _ => Err(run.tasks.iter().find_map(|t| t.error.clone()).unwrap_or_else(|| "The workflow could not start".into())),
+                }
             }
             Action::MemoryMaintenance => {
                 let reply = state.bridge.call(&["maintenance".into(), "run".into()], None)?;
@@ -467,7 +475,7 @@ impl automations::Doer for AppDoer {
             Action::CommitCapture => {
                 let mut command = std::process::Command::new("git");
                 let range = a.last_seen.as_deref().map(|s| format!("{s}..HEAD")).unwrap_or_else(|| "-5".into());
-                command.args(["--no-optional-locks", "-C", &repo, "log", "--stat", "-p", "--no-color", "--max-count=30", &range]);
+                command.args(["--no-optional-locks", "-C", &repo, "log", "--stat", "-p", "--no-color", "--no-ext-diff", "--no-textconv", "--max-count=30", &range]);
                 let log = git::run_with_timeout(command, std::time::Duration::from_secs(30))?;
                 if log.trim().is_empty() {
                     return Ok(Started::Done { detail: "No new commits".into(), cost: None });
@@ -554,20 +562,22 @@ fn orchestration_reports(app: AppHandle) -> conductor::Handler {
             if by_automation {
                 return;
             }
-            let repo = match &info.task {
-                agent::scope::AgentTask::Work { repo, .. } => repo.clone(),
-                _ => String::new(),
+            let (project, repo) = match &info.task {
+                agent::scope::AgentTask::Work { project, repo, .. } => (project.clone(), repo.clone()),
+                _ => (String::new(), String::new()),
             };
             match &report {
-                agent::Lifecycle::Finished { status: agent::events::Status::Failed, .. } => {
-                    let event = format!("A session failed: \"{}\" in {}. Error: {}. Session {}.", info.title, repo, info.error.clone().unwrap_or_default(), &info.id[..8]);
-                    state.automations.on_event(&automations::Trigger::SessionFailed, event, &doer);
+                // A chat session's crash or error ends a turn, not the session; a turn the user stopped is no failure.
+                agent::Lifecycle::Finished { status: agent::events::Status::Failed, .. } | agent::Lifecycle::TurnEnded { ok: false, stopped: false, .. } => {
+                    let error = info.error.clone().unwrap_or_else(|| "the turn ended with an error".into());
+                    let event = format!("A session failed: \"{}\" in {}. Error: {}. Session {}.", info.title, repo, error, &info.id[..8]);
+                    state.automations.on_event(&automations::Trigger::SessionFailed, &project, &repo, event, &doer);
                 }
                 agent::Lifecycle::Reviewed { state: agent::ReviewState::Approved, .. } => {
                     let branch = info.worktree.as_ref().map(|w| w.branch.clone()).unwrap_or_default();
                     let commit = info.review.as_ref().and_then(|r| r.commit.clone()).unwrap_or_default();
                     let event = format!("You approved the session \"{}\" on branch {branch} (commit {}) in {repo}.", info.title, &commit[..7.min(commit.len())]);
-                    state.automations.on_event(&automations::Trigger::ReviewApproved, event, &doer);
+                    state.automations.on_event(&automations::Trigger::ReviewApproved, &project, &repo, event, &doer);
                 }
                 _ => {}
             }
@@ -697,10 +707,20 @@ fn automation_list(state: State<'_, AppState>) -> AutomationList {
 }
 
 #[tauri::command]
-fn automation_put(app: AppHandle, state: State<'_, AppState>, automation: automations::Automation) -> Result<automations::Automation, String> {
-    let saved = state.automations.put(automation, agent::now_ms());
-    let _ = app.emit("automations-changed", ());
-    saved
+async fn automation_put(app: AppHandle, automation: automations::Automation) -> Result<automations::Automation, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let mut automation = automation;
+        // Commit capture and role sessions read this repository, so it must be registered for the project (its spelling).
+        if let (Some(project), Some(repo)) = (automation.project.as_deref(), automation.repo.as_deref()) {
+            let entry = git::project_entry(&state.bridge, project)?;
+            automation.repo = Some(agent::scope::project_repo(&entry, repo)?.display().to_string());
+        }
+        let saved = state.automations.put(automation, agent::now_ms());
+        let _ = app.emit("automations-changed", ());
+        saved
+    })
+    .await
 }
 
 #[tauri::command]
@@ -1077,8 +1097,9 @@ fn get_settings(state: State<'_, AppState>) -> Settings {
 #[tauri::command]
 fn save_settings(app: AppHandle, state: State<'_, AppState>, value: Settings) -> Result<(), String> {
     let previous = settings::load(&state.settings_path);
-    // The folder list changes only through the native picker.
-    let value = folders::keep(&previous, value);
+    // The folder list changes only through the native picker, and the rules files only through architecture_rules_set.
+    let mut value = folders::keep(&previous, value);
+    value.architecture_rules = previous.architecture_rules.clone();
     for (project, commands) in value.allowed_commands.iter().flatten() {
         for command in commands {
             agent::scope::check_command(command).map_err(|e| format!("{project}: {e}"))?;

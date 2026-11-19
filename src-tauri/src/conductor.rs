@@ -40,7 +40,7 @@ mod tests {
             ],
         );
         tx.send(Lifecycle::Waiting { id: "1".into() }).unwrap();
-        tx.send(Lifecycle::TurnEnded { id: "1".into(), ok: true }).unwrap();
+        tx.send(Lifecycle::TurnEnded { id: "1".into(), ok: true, stopped: false }).unwrap();
         drop(tx);
         for _ in 0..200 {
             if seen.lock().unwrap().len() == 4 {

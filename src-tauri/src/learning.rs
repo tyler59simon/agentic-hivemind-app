@@ -485,7 +485,8 @@ Review these commits for knowledge worth keeping.
         let mut command = Command::new(&deps.claude);
         command.args(argv()).current_dir(&self.dir).env("LIVING_MEMORY_OFF", "1").env_remove("HIVEMIND_SESSION").env_remove("CLAUDECODE");
         let _ = std::fs::create_dir_all(&self.dir);
-        let (answer, cost) = match crate::git::run_with_input(command, Some(input), TIMEOUT) {
+        let input = redact(input);
+        let (answer, cost) = match crate::git::run_with_input(command, Some(&input), TIMEOUT) {
             Ok(ran) => parse_envelope(&ran.stdout),
             Err(e) => (Err(e), None),
         };
@@ -565,6 +566,139 @@ pub fn on_review_state(state: ReviewState) -> (Option<Trigger>, Option<skills::O
 
 pub fn on_finished(status: Status) -> (Option<Trigger>, Option<skills::Outcome>) {
     (Some(Trigger::Finished), (status == Status::Failed).then_some(skills::Outcome::Failed))
+}
+
+/// Credentials taken out of a reviewer's input before it leaves the machine: private keys, tokens of a known shape,
+/// passwords in URLs, and the values of settings named like a secret. A heuristic: it cannot know every secret, and it
+/// sometimes removes a harmless value.
+pub fn redact(text: &str) -> String {
+    redact_tokens(&redact_url_passwords(&redact_assignments(&strip_private_keys(text))))
+}
+
+const REMOVED: &str = "[removed]";
+
+fn strip_private_keys(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("-----BEGIN ") {
+        let line_end = rest[start..].find('\n').map_or(rest.len(), |i| start + i);
+        if !rest[start..line_end].contains("PRIVATE KEY") {
+            out.push_str(&rest[..line_end]);
+            rest = &rest[line_end..];
+            continue;
+        }
+        out.push_str(&rest[..start]);
+        out.push_str("[private key removed]");
+        rest = match rest[start..].find("-----END ") {
+            Some(end) => {
+                let tail = &rest[start + end + "-----END ".len()..];
+                tail.find("-----").map_or("", |close| &tail[close + 5..])
+            }
+            None => "",
+        };
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Names whose value is replaced in `name = value`, `name: value` and `"name": "value"`.
+const SECRET_NAMES: [&str; 9] = ["password", "passwd", "secret", "token", "api_key", "apikey", "api-key", "access_key", "private_key"];
+
+fn redact_assignments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let lower = line.to_ascii_lowercase();
+        let bytes = line.as_bytes();
+        let mut cut: Vec<(usize, usize)> = vec![];
+        for name in SECRET_NAMES {
+            let mut from = 0;
+            while let Some(found) = lower[from..].find(name) {
+                let mut i = from + found + name.len();
+                from = i;
+                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'-') {
+                    i += 1;
+                }
+                while i < bytes.len() && matches!(bytes[i], b' ' | b'"' | b'\'') {
+                    i += 1;
+                }
+                if i >= bytes.len() || !matches!(bytes[i], b'=' | b':') {
+                    continue;
+                }
+                i += 1;
+                while i < bytes.len() && matches!(bytes[i], b' ' | b'"' | b'\'') {
+                    i += 1;
+                }
+                let start = i;
+                while i < bytes.len() && !matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n' | b'"' | b'\'' | b',' | b';' | b'}') {
+                    i += 1;
+                }
+                if i > start {
+                    cut.push((start, i));
+                }
+            }
+        }
+        cut.sort();
+        let mut at = 0;
+        for (start, end) in cut {
+            if start < at {
+                continue;
+            }
+            out.push_str(&line[at..start]);
+            out.push_str(REMOVED);
+            at = end;
+        }
+        out.push_str(&line[at..]);
+    }
+    out
+}
+
+fn redact_url_passwords(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("://") {
+        let (head, tail) = rest.split_at(i + 3);
+        out.push_str(head);
+        let end = tail.find(|c: char| c.is_whitespace() || matches!(c, '/' | '"' | '\'')).unwrap_or(tail.len());
+        let auth = &tail[..end];
+        match (auth.rfind('@'), auth.find(':')) {
+            (Some(at), Some(colon)) if colon < at => {
+                out.push_str(&auth[..colon + 1]);
+                out.push_str(REMOVED);
+                out.push_str(&auth[at..]);
+            }
+            _ => out.push_str(auth),
+        }
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Prefixes of API keys and tokens (OpenAI and Anthropic, Stripe, GitHub, GitLab, Slack, AWS, Google, npm, Hugging Face,
+/// and JWTs).
+const TOKEN_PREFIXES: [&str; 21] = [
+    "sk-", "sk_live_", "sk_test_", "rk_live_", "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", "glpat-", "xoxb-", "xoxp-", "xoxa-", "xoxs-",
+    "AKIA", "ASIA", "AIza", "npm_", "hf_", "eyJ",
+];
+
+fn redact_tokens(text: &str) -> String {
+    fn flush(word: &mut String, out: &mut String) {
+        let secret = word.len() >= 20 && word.chars().any(|c| c.is_ascii_digit()) && TOKEN_PREFIXES.iter().any(|p| word.starts_with(p));
+        out.push_str(if secret { REMOVED } else { word.as_str() });
+        word.clear();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut word = String::new();
+    for c in text.chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '+' | '/' | '=') {
+            word.push(c);
+        } else {
+            flush(&mut word, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut word, &mut out);
+    out
 }
 
 #[cfg(test)]
@@ -712,5 +846,22 @@ mod tests {
         assert!(!learning.reviewed(&s.id), "a failed review does not count");
         assert_eq!(learning.runs().len(), 1);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn secrets_are_taken_out_of_the_reviewer_input() {
+        let text = "export OPENAI_API_KEY=sk-proj-abc123def456ghi789jkl\n\
+            const config = { \"password\": \"hunter2\", user: \"ann\" };\n\
+            remote: https://ann:s3cret@github.com/acme/app.git\n\
+            -----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAA\n-----END OPENSSH PRIVATE KEY-----\n\
+            Bearer ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4\n\
+            The retry token count stays at 3 and src/sk-learn/notes.md is a path.";
+        let clean = redact(text);
+        for secret in ["sk-proj-abc123", "hunter2", "s3cret", "b3BlbnNz", "ghp_A1b2"] {
+            assert!(!clean.contains(secret), "{secret} left in:\n{clean}");
+        }
+        for kept in ["OPENAI_API_KEY=", "user: \"ann\"", "https://ann:", "@github.com/acme/app.git", "[private key removed]", "token count stays at 3", "src/sk-learn/notes.md"] {
+            assert!(clean.contains(kept), "{kept} missing from:\n{clean}");
+        }
     }
 }

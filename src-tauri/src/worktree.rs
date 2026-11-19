@@ -102,6 +102,11 @@ fn run(dir: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 /// The commit a revision names, or None when it names nothing (an unknown branch, an empty repository).
+/// The commit a local branch points at.
+pub fn branch_tip(repo: &Path, branch: &str) -> Option<String> {
+    resolve(repo, &format!("refs/heads/{branch}"))
+}
+
 fn resolve(repo: &Path, rev: &str) -> Option<String> {
     let text = run(repo, &["rev-parse", "--verify", "--quiet", "--end-of-options", &format!("{rev}^{{commit}}")]).ok()?;
     Some(text.trim().to_string()).filter(|sha| !sha.is_empty())
