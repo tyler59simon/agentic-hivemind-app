@@ -88,7 +88,10 @@ function Editor({ d, stakeholders }: { d: Draft; stakeholders: Stakeholder[] }) 
     if (edit) putRecord<Draft>("draft", { ...current.current, ...edit }).catch((e) => toast(String(e), "error"));
   };
   useEffect(() => {
-    if (subject === current.current.subject && body === current.current.body) return;
+    if (subject === current.current.subject && body === current.current.body) {
+      unsaved.current = null; // typed back to what is saved: nothing to keep
+      return;
+    }
     unsaved.current = { subject, body };
     const t = setTimeout(keep, 700);
     return () => clearTimeout(t);
@@ -170,7 +173,14 @@ function Editor({ d, stakeholders }: { d: Draft; stakeholders: Stakeholder[] }) 
         <Section title="Built on" count={d.evidence.length}><EvidenceList evidence={d.evidence} /></Section>
       </div>
       {confirm && <Confirm title="Delete this draft?" message="It is removed from Hivemind." action="Delete" danger
-        onAnswer={(yes) => { setConfirm(false); if (yes) deleteRecord("draft", d.id).then(() => openExecutive({ tab: "comms" })).catch((e) => toast(String(e), "error")); }} />}
+        onAnswer={(yes) => {
+          setConfirm(false);
+          if (!yes) return;
+          // A pending edit must not write the draft back after it is deleted; keep it if the delete fails.
+          const pending = unsaved.current;
+          unsaved.current = null;
+          deleteRecord("draft", d.id).then(() => openExecutive({ tab: "comms" })).catch((e) => { unsaved.current = pending; toast(String(e), "error"); });
+        }} />}
     </div>
   );
 }

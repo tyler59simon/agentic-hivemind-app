@@ -139,7 +139,7 @@ function ItemCard({ item, projects, ctx, onChange, onAccept, onReject, busy, pro
       {!done && (
         <div className="actions">
           <button onClick={onReject} disabled={busy}><X size="1em" aria-hidden /> Skip</button>
-          {problem?.startsWith("A similar note") && <button onClick={() => onAccept(undefined, true)} disabled={busy}>Save anyway</button>}
+          {problem?.startsWith("A similar note") && <button onClick={() => onAccept(undefined, true)} disabled={busy || !!why || !ctx.ready}>Save anyway</button>}
           <button className="primary" onClick={() => onAccept(choice === "new" ? undefined : choice)} disabled={busy || !!why || !ctx.ready} title={ctx.ready ? undefined : "Loading your notes"}>
             <Check size="1em" aria-hidden /> {choice === "new" ? "Accept" : "Accept and replace"}
           </button>
