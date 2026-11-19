@@ -1423,18 +1423,21 @@ async fn exec_extract(app: AppHandle, text: String, project: Option<String>, lab
     .await
 }
 
-/// Learn writing preferences from the user's edits to a generated draft, in the background; the suggestions wait in the
-/// capture inbox. Errors are dropped: the user did not ask for this run, and it changes nothing until they accept.
+/// Learn writing preferences from the user's edits to a generated draft; the suggestions wait in the capture inbox. True
+/// when some were staged. The webview records the draft as learned from only when this succeeds, so a failure is retried.
 #[tauri::command]
-fn exec_learn_style(app: AppHandle, generated: String, kept: String, label: String) {
-    std::thread::spawn(move || {
+async fn exec_learn_style(app: AppHandle, generated: String, kept: String, label: String) -> Result<bool, String> {
+    blocking(move || {
         let state = app.state::<AppState>();
         let saved = settings::load(&state.settings_path);
-        let Ok(deps) = exec_deps(&state, &saved) else { return };
-        if let Ok(Some(_)) = executive::learn_style(&executive::viewer(&state.bridge), &state.executive, &deps, &generated, &kept, &label) {
+        let deps = exec_deps(&state, &saved)?;
+        let staged = executive::learn_style(&executive::viewer(&state.bridge), &state.executive, &deps, &generated, &kept, &label)?.is_some();
+        if staged {
             let _ = app.emit("executive-changed", "capture");
         }
-    });
+        Ok(staged)
+    })
+    .await
 }
 
 /// Start the executive chat about `project` (or all projects).

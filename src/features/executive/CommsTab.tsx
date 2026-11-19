@@ -4,7 +4,7 @@
 import { Copy, Download, LoaderCircle, Plus, Sparkles, Trash2, Undo2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { copyText } from "../../lib/clipboard";
-import { deleteRecord, draft as generate, DRAFT_KINDS, exportText, learnStyle, putRecord, refine, type Draft, type DraftKind, type ExportFormat, type Stakeholder } from "../../lib/executive";
+import { deleteRecord, draft as generate, DRAFT_KINDS, exportText, learnStyle, listRecords, putRecord, refine, type Draft, type DraftKind, type ExportFormat, type Stakeholder } from "../../lib/executive";
 import type { Project } from "../../lib/lm";
 import { openExecutive } from "../../store";
 import { Markdown } from "../../ui/Markdown";
@@ -12,7 +12,8 @@ import { Confirm } from "../../ui/Modal";
 import { Section } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { EvidenceList, Gaps } from "./parts";
-import { edited, emlText, plainText, stripCitations } from "./texts";
+import { learnFromEdits } from "./learn";
+import { emlText, plainText, stripCitations } from "./texts";
 import { useRecords } from "./useExecutive";
 
 const TONES = ["direct", "warm", "formal", "brief"];
@@ -98,14 +99,16 @@ function Editor({ d, stakeholders }: { d: Draft; stakeholders: Stakeholder[] }) 
   }, [subject, body]);
   useEffect(() => keep, []);
 
-  // Only a draft that really left (copied, or saved to a file) teaches a preference; a cancelled export does not.
+  // Only a draft that really left (copied, or saved to a file) teaches a preference; a cancelled export does not. Errors stay
+  // quiet (the user did not ask for this), and a failed call is tried again on the next send.
   const sent = async (how: () => Promise<boolean>) => {
     if (!(await how())) return;
-    if (edited(d.generated, body) && d.learnedFrom !== d.generated) {
-      await learnStyle(d.generated, body, subject).catch(() => undefined);
-      await putRecord<Draft>("draft", { ...d, subject, body, learnedFrom: d.generated });
-      toast("Your edits will be read for writing preferences; suggestions arrive in the capture inbox");
-    }
+    const staged = await learnFromEdits(d, subject, body, {
+      learn: learnStyle,
+      latest: async (id) => (await listRecords<Draft>("draft")).find((r) => r.id === id),
+      save: (next) => putRecord<Draft>("draft", next),
+    }).catch(() => false);
+    if (staged) toast("Writing preferences from your edits are waiting in the capture inbox");
   };
   const email = stakeholders.find((s) => d.audience.startsWith(s.name))?.email ?? "";
   const exportAs = (format: ExportFormat) => sent(() => exportText(subject || "draft", format,

@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
-import type { Briefing, CaptureItem, Health, Milestone } from "../../lib/executive";
+import { describe, expect, it, vi } from "vitest";
+import type { Briefing, CaptureItem, Draft, Health, Milestone } from "../../lib/executive";
 import type { NoteRow, OpenItem, Project } from "../../lib/lm";
 import { acceptKey, acceptWrite, blocked, commitmentsNote, hasAction, itemBody, planWrite, replaceable, tagsFor, type Context } from "./items";
 import { addDays, commitmentRows, formatCommitment, parseCommitment, timing } from "./commitments";
 import { healthView, signals, suggestHealth } from "./health";
+import { learnFromEdits } from "./learn";
 import { attention, crossProject, portfolio } from "./portfolio";
 import { allGaps, briefingMarkdown, edited, emlText, knownCitations, numbered, plainText, unsupported } from "./texts";
 
@@ -227,5 +228,26 @@ describe("texts", () => {
     expect(edited("Hello there,\n\nThe plan ships Friday.", "Hello  there,\nThe plan ships Friday.")).toBe(false);
     expect(edited("The plan ships Friday.", "The plan ships Friday. Please confirm the budget by Monday.")).toBe(true);
     expect(edited("The plan ships Friday.", "The plan ships Monday.")).toBe(false);
+  });
+
+  // EXEC-10: the draft was marked learned from before the call ran, so a failed call was never tried again.
+  it("records a draft as learned from only after the call succeeds, on its latest copy", async () => {
+    const d = { id: "d1", generated: "The plan ships Friday.", body: "", subject: "Plan" } as Draft;
+    const body = "The plan ships Friday. Please confirm the budget by Monday.";
+    const io = (learn: () => Promise<boolean>) => ({ learn: vi.fn(learn), latest: vi.fn(async () => ({ ...d, body: "typed meanwhile" })), save: vi.fn(async () => undefined) });
+
+    const failing = io(() => Promise.reject(new Error("budget used")));
+    await expect(learnFromEdits(d, "Plan", body, failing)).rejects.toThrow("budget used");
+    expect(failing.save).not.toHaveBeenCalled();
+
+    const ok = io(async () => true);
+    expect(await learnFromEdits(d, "Plan", body, ok)).toBe(true);
+    expect(ok.learn).toHaveBeenCalledWith(d.generated, body, "Plan");
+    expect(ok.save).toHaveBeenCalledWith({ ...d, body: "typed meanwhile", learnedFrom: d.generated });
+
+    const none = io(async () => true);
+    expect(await learnFromEdits({ ...d, learnedFrom: d.generated }, "Plan", body, none)).toBe(false);
+    expect(await learnFromEdits(d, "Plan", "The plan ships Friday.", none)).toBe(false);
+    expect(none.learn).not.toHaveBeenCalled();
   });
 });
