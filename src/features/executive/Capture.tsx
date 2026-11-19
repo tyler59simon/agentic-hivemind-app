@@ -81,13 +81,14 @@ export function useWriteContext(projects: Project[], sourceLabel: string): Conte
 /** Run one planned write. Returns what was written: a note ref or `milestone:<id>`, and the operation. Safe to repeat for a
  *  keyed write (`acceptKey`): a milestone with that id is kept as it is, Living Memory answers a keyed note with the first
  *  one, and an action item the note already has is not added again. */
-export async function perform(write: Write, anyway?: boolean): Promise<{ ref: string; operation?: string }> {
+/** Run a write. `retry` says it repeats a recorded write that may already have run, so an action item already there counts. */
+export async function perform(write: Write, anyway?: boolean, retry?: boolean): Promise<{ ref: string; operation?: string }> {
   if (write.kind === "milestone") {
     const id = write.record.id;
     if (id && (await listRecords<Milestone>("milestone")).some((m) => m.id === id)) return { ref: `milestone:${id}` };
     return { ref: `milestone:${(await putRecord<Milestone>("milestone", write.record)).id}` };
   }
-  if (write.kind === "action" && write.key && hasAction((await read(write.ref)).body, write.text)) return { ref: write.ref };
+  if (write.kind === "action" && retry && hasAction((await read(write.ref)).body, write.text)) return { ref: write.ref };
   const r = write.kind === "action" ? await addAction(write.ref, write.text) : await capture(write.domain, anyway ? { ...write.payload, allow_similar: true } : write.payload);
   recordOperation(r.operation_id);
   return { ref: write.kind === "action" ? write.ref : `${r.domain ?? write.domain}:${r.id}`, operation: r.operation_id };
@@ -111,7 +112,10 @@ function ItemCard({ item, projects, ctx, onChange, onAccept, onReject, onRetrySa
   const done = item.state !== "pending" || unsaved;
   // An accept that started earlier is finished as it was planned; the fields stay as they were until the user starts over.
   const resuming = !done && !!item.intent && !busy;
-  const fixed = done || resuming;
+  // Fields are fixed while any write runs too, so what is recorded as accepted is what was written.
+  const fixed = done || !!item.intent || busy;
+  // A milestone keeps its id, so starting over could not change one an earlier accept already saved.
+  const restartable = resuming && (item.intent?.write as Write | undefined)?.kind !== "milestone";
   return (
     <article className={`exec-item ${done ? `done ${item.state}` : ""}`}>
       <div className="exec-row">
@@ -137,8 +141,8 @@ function ItemCard({ item, projects, ctx, onChange, onAccept, onReject, onRetrySa
       {item.quote && <blockquote className="exec-quote">{item.quote}</blockquote>}
       {resuming && (
         <p className="muted small">
-          An earlier accept of this item did not finish. Accept finishes it with the text it had then.{" "}
-          <button className="link small" onClick={() => onChange({ ...item, intent: undefined })} disabled={busy}>Start over</button> to change it first.
+          An earlier accept of this item did not finish. Accept finishes it with the text it had then.
+          {restartable && <>{" "}<button className="link small" onClick={() => onChange({ ...item, intent: undefined })} disabled={busy}>Start over</button> to change it first.</>}
         </p>
       )}
       {!fixed && noteMatches.length > 0 && (
@@ -204,7 +208,9 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
   const save = (...next: CaptureItem[]) => {
     const run = queue.current.then(async () => {
       const changed = Object.fromEntries(next.map((n) => [n.id, n]));
-      await putRecord<CaptureBatch>("capture", { ...stored, items: stored.items.map((i) => changed[i.id] ?? latest.current[i.id] ?? i) });
+      // From the batch as stored now: another review of it may have saved since this dialog's copy was read.
+      const base = (await listRecords<CaptureBatch>("capture")).find((b) => b.id === stored.id) ?? stored;
+      await putRecord<CaptureBatch>("capture", { ...base, items: base.items.map((i) => changed[i.id] ?? latest.current[i.id] ?? i) });
       setEdits((e) => ({ ...e, ...changed }));
     });
     queue.current = run.catch(() => undefined);
@@ -233,9 +239,12 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
     try {
       // The exact write goes into the batch before it runs, so a retry after a crash or a closed dialog repeats that write
       // (which finds what it already wrote) rather than one planned again from fields edited since.
-      const { write, superseded: replaced, fresh } = acceptWrite(item, () => planWrite(item, ctx, replace, acceptKey(stored.id, item.id)), replace);
-      if (fresh) await save({ ...item, intent: { write, superseded: replaced } });
-      const result = { ...(await perform(write, anyway)), superseded: replaced };
+      const planned = acceptWrite(item, () => planWrite(item, ctx, replace, acceptKey(stored.id, item.id)), replace);
+      const { superseded: replaced } = planned;
+      // "Save anyway" is part of the recorded write, so a resumed accept does not ask again.
+      const write = anyway && planned.write.kind === "note" ? { ...planned.write, payload: { ...planned.write.payload, allow_similar: true } } : planned.write;
+      if (planned.fresh || write !== planned.write) await save({ ...item, intent: { write, superseded: replaced } });
+      const result = { ...(await perform(write, anyway, !planned.fresh)), superseded: replaced };
       await saveAccepted({ ...item, intent: undefined, state: "accepted" as const, result });
       await refreshStore(client);
     } catch (e) {

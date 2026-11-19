@@ -77,9 +77,9 @@ export function acceptKey(batch: string, item: string): string | undefined {
   return /^[A-Za-z0-9-]{1,64}$/.test(key) ? key : undefined;
 }
 
-/** Whether a note body already holds `text` as an open action item: a retried accept must not add it twice. A ticked one
- *  is an earlier, finished commitment, so a new one with the same text is still added. */
-export const hasAction = (body: string, text: string) => actionItems(body).some((a) => !a.done && a.text === text.trim());
+/** Whether a note body already holds the action item `text`, open or ticked. Asked only when an accept repeats its recorded
+ *  write: the earlier attempt may have added the item, and the user may have ticked it since. */
+export const hasAction = (body: string, text: string) => actionItems(body).some((a) => a.text === text.trim());
 
 /** What accepting `item` writes. `supersedes` is set when the user chose to replace an existing note. With `key`
  *  (`acceptKey`), a milestone gets that id and a note that idempotency key, so repeating the write finds the first one. */

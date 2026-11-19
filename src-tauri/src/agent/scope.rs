@@ -496,7 +496,7 @@ const GOVERNED_COMMANDS: [&str; 20] = [
 /// capture and plan commands through before Hivemind is asked; these must never run from a session, whatever the user clicks.
 pub fn governed_memory_command(command: &str) -> bool {
     let text = command.to_lowercase();
-    (text.contains("living_memory") && names_governed(&text)) || alm_segments(&text).any(names_governed)
+    (text.contains("living_memory") && names_governed(&text)) || alm_segments(&text).iter().any(|words| names_governed(&words.join(" ")))
 }
 
 /// Whether a lower-cased command names a governed command as whole words.
@@ -508,17 +508,37 @@ fn names_governed(text: &str) -> bool {
     })
 }
 
-/// The parts of a lower-cased command line (split at ; & | and line breaks) whose program is the `alm` launcher: a first
-/// word, after `call` and `NAME=value` settings, whose file name is `alm`, `alm.exe` or `alm.cmd`. A file named alm passed
-/// to another program (`git apply alm`) is not the launcher.
-fn alm_segments(text: &str) -> impl Iterator<Item = &str> {
-    text.split(['\n', ';', '&', '|']).filter(|segment| {
-        let program = segment
-            .split(|c: char| c.is_whitespace() || "\"'`(){}".contains(c))
-            .filter(|word| !word.is_empty())
-            .find(|word| *word != "call" && !(word.contains('=') && !word.starts_with('-')));
+/// The words of each part of a lower-cased command line whose program is the `alm` launcher. Parts end at ; & | and line
+/// breaks outside quotes, and a quoted word (a path with spaces) is one word. The program is the first word after `call`
+/// and `NAME=value` settings; it is the launcher when its file name is `alm`, `alm.exe` or `alm.cmd`. A file named alm given
+/// to another program (`git apply alm`), or a quoted mention (`echo "x; alm archive"`), is not the launcher.
+fn alm_segments(text: &str) -> Vec<Vec<String>> {
+    let (mut segments, mut words, mut word, mut quote) = (vec![], vec![], String::new(), None::<char>);
+    let end_word = |word: &mut String, words: &mut Vec<String>| {
+        if !word.is_empty() {
+            words.push(std::mem::take(word));
+        }
+    };
+    for c in text.chars() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => word.push(c),
+            None if c == '"' || c == '\'' => quote = Some(c),
+            None if matches!(c, '\n' | ';' | '&' | '|') => {
+                end_word(&mut word, &mut words);
+                segments.push(std::mem::take(&mut words));
+            }
+            None if c.is_whitespace() || "(){}".contains(c) => end_word(&mut word, &mut words),
+            None => word.push(c),
+        }
+    }
+    end_word(&mut word, &mut words);
+    segments.push(words);
+    segments.retain(|words| {
+        let program = words.iter().find(|word| *word != "call" && !(word.contains('=') && !word.starts_with('-')));
         program.is_some_and(|word| matches!(word.rsplit(['/', '\\']).next().unwrap_or(word), "alm" | "alm.exe" | "alm.cmd"))
-    })
+    });
+    segments
 }
 
 /// Deny rules for the same commands, for the CLI's own rule engine: they hold even where the user's settings allow the
@@ -676,6 +696,7 @@ mod tests {
             "/home/u/.local/bin/alm --domain a archive x",
             "cd x && alm project create --payload-file p.json",
             r#"& "C:\Users\u\.local\bin\alm.exe" undo 1"#,
+            r#""C:\Program Files\alm\alm.exe" --domain a rewrite --payload-file r.json"#,
             "LIVING_MEMORY_ROOT=x alm archive a:b",
         ] {
             assert!(governed_memory_command(command), "{command}");
@@ -699,6 +720,7 @@ mod tests {
             "palm apply x",
             "realm.exe undo 1",
             "git apply --check alm",
+            r#"echo "example; alm archive x""#,
             "alm --json --domain a search x && git apply patch.diff",
         ] {
             assert!(!governed_memory_command(command), "{command}");

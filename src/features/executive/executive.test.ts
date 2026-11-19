@@ -151,10 +151,10 @@ describe("capture", () => {
     expect(acceptWrite({ ...edited, intent: undefined }, () => planWrite(edited, ctx, undefined, "b-i1")).write).not.toEqual(first.write);
   });
 
-  it("finds an open action item a note already has", () => {   // EXEC-3
+  it("finds an action item a note already has, open or ticked", () => {   // EXEC-3
     const body = ["Commitments.", "", "## Action items", "- [ ] Send the Q3 plan (owner: Dana)", "- [x] Book the room", "", "## Details", "- [ ] Not an action"].join("\n");
     expect(hasAction(body, "Send the Q3 plan (owner: Dana)")).toBe(true);
-    expect(hasAction(body, " Book the room ")).toBe(false);   // a finished one: the same commitment again is new (Codex R4)
+    expect(hasAction(body, " Book the room ")).toBe(true);   // ticked since the earlier attempt (Codex re-review N1)
     expect(hasAction(body, "Not an action")).toBe(false);
     expect(hasAction(body, "Send the Q3 plan")).toBe(false);
   });

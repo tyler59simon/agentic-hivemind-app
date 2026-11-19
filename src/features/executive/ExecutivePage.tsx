@@ -44,7 +44,7 @@ export function ExecutivePage() {
       {tab === "comms" && <CommsTab project={data.project} projects={data.projects} picked={route?.draft} />}
       {tab === "briefings" && <BriefingsTab project={data.project} projects={data.projects} picked={route?.briefing} />}
       {capturing && <CaptureDialog projects={data.projects} project={data.project} onClose={() => setCapturing(false)} />}
-      {route?.capture && <ReviewDialog id={route.capture} projects={data.projects} onClose={() => openExecutive({ ...route, capture: undefined })} />}
+      {route?.capture && <ReviewDialog key={route.capture} id={route.capture} projects={data.projects} onClose={() => openExecutive({ ...route, capture: undefined })} />}
     </div>
   );
 }

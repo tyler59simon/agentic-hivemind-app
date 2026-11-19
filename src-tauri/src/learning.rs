@@ -576,7 +576,11 @@ fn redact_auth_schemes(text: &str) -> String {
             let start = after + gap;
             let end = start + text[start..].find(|c: char| !token(c)).unwrap_or(text.len() - start);
             let value = &text[start..end];
-            if gap > 0 && value.len() >= 12 && value.chars().any(|c| c.is_ascii_digit() || !c.is_ascii_alphanumeric()) {
+            // In an Authorization header any credential goes; in prose only one that looks like a token.
+            let line = lower[..i].rsplit('\n').next().unwrap_or("");
+            let header = line.trim_end().ends_with("authorization:");
+            let shaped = value.len() >= 12 && value.chars().any(|c| c.is_ascii_digit() || !c.is_ascii_alphanumeric());
+            if gap > 0 && !value.is_empty() && (header || shaped) {
                 out.push_str(&text[at..start]);
                 out.push_str(REMOVED);
                 at = end;
@@ -912,5 +916,8 @@ mod tests {
             assert!(!clean.contains(secret), "{secret} left in:\n{clean}");
         }
         assert!(clean.contains("Authorization: Bearer [removed]") && clean.contains("Basic authentication and bearer tokens."), "{clean}");
+        // In a header, a short or all-letter credential goes too (Codex re-review).
+        let short = redact("Authorization: Bearer abcdefghijklmnop\nauthorization:  basic dXNlcjpwYXNz");
+        assert!(!short.contains("abcdefghijklmnop") && !short.contains("dXNlcjpwYXNz"), "{short}");
     }
 }
