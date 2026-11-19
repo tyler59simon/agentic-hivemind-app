@@ -17,6 +17,7 @@ import { ArrowLink, dayMonth, PageHeader, Section, Split } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
 import { useSessionDraft } from "../agents/draft";
+import { useShownEngines } from "../agents/engines";
 import { DirectDialog } from "../plans/DirectDialog";
 import { ProposedFields } from "./ProposedFields";
 import { NoteLink } from "../preview/NoteLink";
@@ -57,6 +58,8 @@ function NoteList({ rows, badge }: { rows: NoteRow[]; badge?: boolean }) {
 function AgentActions({ system, all }: { system: System; all: System[] }) {
   const client = useQueryClient();
   const available = useQuery({ queryKey: ["agent", "available"], queryFn: agentAvailable, retry: false, staleTime: 60_000 });
+  // Generating runs Claude Code in the background; with Claude Code hidden only the brief to copy is offered.
+  const claudeShown = useShownEngines().shows("claude");
   const { latest, update, fields, dismiss } = useSystemProposal(system, all);
   const running = latest?.status === "running";
   const [starting, setStarting] = useState(false);
@@ -97,16 +100,18 @@ function AgentActions({ system, all }: { system: System; all: System[] }) {
   return (
     <>
       <div className="agent-line">
-        <button className="outline" disabled={!!blocked || starting} title={blocked ?? "Run Claude Code in the background to generate the architecture output"} onClick={start}>
-          <MessageCircle size="1.15em" aria-hidden />{starting ? "Starting…" : "Generate with agent"}
-        </button>
+        {claudeShown && (
+          <button className="outline" disabled={!!blocked || starting} title={blocked ?? "Run Claude Code in the background to generate the architecture output"} onClick={start}>
+            <MessageCircle size="1.15em" aria-hidden />{starting ? "Starting…" : "Generate with agent"}
+          </button>
+        )}
         <button onClick={copy} title="Copy the same instructions to paste into an agent yourself">Copy agent brief</button>
         {latest && (
           <button className="link" onClick={() => openSession(latest.id)}>
             Last session: {latest.status} · {new Date(latest.startedAt).toISOString().slice(0, 10)}
           </button>
         )}
-        {blocked && !running && <span className="muted small">{blocked}</span>}
+        {claudeShown && blocked && !running && <span className="muted small">{blocked}</span>}
       </div>
       {update && (
         <div className="banner">

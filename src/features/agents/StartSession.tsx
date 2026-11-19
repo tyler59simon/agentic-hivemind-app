@@ -2,7 +2,7 @@ import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, FileText, Layers, Link as LinkIcon, Play, Plus } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  agentStart, APPROVALS, asksNobody, CLAUDE_MODES, enginesQuery, modelsQuery, repoBranches, rolesQuery, SANDBOXES, sessionsQuery,
+  agentStart, APPROVALS, asksNobody, CLAUDE_MODES, ENGINE_LABELS, enginesQuery, modelsQuery, repoBranches, rolesQuery, SANDBOXES, sessionsQuery,
   type Access, type Approval, type ClaudeMode, type Engine, type Interface, type Policy, type Role, type Sandbox,
 } from "../../lib/agent";
 import { useChangesEnabled, useSystemsEnabled } from "../../lib/connection";
@@ -26,6 +26,7 @@ import { noteQuery } from "../viewer/NoteView";
 import { ConnectionDialog } from "./ConnectionDialog";
 import { ResumeCli } from "./ResumeCli";
 import { useSessionDraft } from "./draft";
+import { useShownEngines } from "./engines";
 import { ALLOWED_NOTE, CODEX_ALLOWED_NOTE, codexPermissionLines, draftCounts, permissionLines, POLICIES, policyHelp, repoName, sessionBriefing } from "./session";
 import { accessLines, buildStart, defaultAccess, effortOptions, historyTarget, PROFILE_HELP, PROFILE_LABELS, terminalsIn, WHERE_HELP, withApproval, type Where } from "./start";
 
@@ -37,7 +38,6 @@ const MODELS = [
   { id: "haiku", label: "Haiku" },
 ];
 
-const ENGINES: { id: Engine; label: string }[] = [{ id: "claude", label: "Claude Code" }, { id: "codex", label: "Codex" }];
 const INTERFACES: { id: Interface; label: string }[] = [{ id: "chat", label: "Chat" }, { id: "terminal", label: "Terminal" }];
 
 const TERMINAL_APPROVALS = "The program asks for approvals itself, in the terminal, as its permission mode says. Hivemind does not see or answer those prompts.";
@@ -170,6 +170,9 @@ function StartForm({ project }: { project: Project | null }) {
   }, [linked, repo, branchList, project]);
   const engines = useQuery({ ...enginesQuery(), retry: false });
   const selected = engines.data?.find((e) => e.engine === draft.engine);
+  // A hidden engine never starts: the draft's default, or a tab's engine copied by the terminal, moves to a shown one.
+  const { shown, shows, first } = useShownEngines();
+  useEffect(() => { if (!shows(draft.engine)) draft.setEngine(first); }, [draft, shows, first]);
   // A draft can arrive with Codex and Chat (another page preselected the engine); Chat is then not allowed.
   useEffect(() => { if (selected && !selected.chat && draft.interface === "chat") draft.setInterface("terminal"); }, [selected, draft]);
   const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
@@ -362,11 +365,18 @@ function StartForm({ project }: { project: Project | null }) {
             </section>
             <section className="start-section">
               <h2>Engine</h2>
-              <Choice label="Engine" value={draft.engine} options={ENGINES.map((o) => ({ ...o, disabled: !!engines.data?.find((e) => e.engine === o.id)?.error, title: engines.data?.find((e) => e.engine === o.id)?.error ?? undefined }))}
-                onPick={(id) => {
-                  draft.setEngine(id);
-                  if (engines.data?.find((e) => e.engine === id)?.chat === false && draft.interface === "chat") draft.setInterface("terminal");
-                }} />
+              {shown.length > 1 ? (
+                <Choice label="Engine" value={draft.engine} options={shown.map((id) => ({ id, label: ENGINE_LABELS[id], disabled: !!engines.data?.find((e) => e.engine === id)?.error, title: engines.data?.find((e) => e.engine === id)?.error ?? undefined }))}
+                  onPick={(id) => {
+                    draft.setEngine(id);
+                    if (engines.data?.find((e) => e.engine === id)?.chat === false && draft.interface === "chat") draft.setInterface("terminal");
+                  }} />
+              ) : (
+                <>
+                  <p>{ENGINE_LABELS[first]}</p>
+                  {selected?.error && <p className="error small">{selected.error}</p>}
+                </>
+              )}
               <div className="control-help">
                 <span className="muted small">Use existing local sign-in.</span>
                 <ArrowLink onClick={() => setConnecting(true)} title="Sign in to the engine in a terminal">Manage connection</ArrowLink>

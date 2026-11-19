@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TaskSpec } from "../../lib/workflows";
-import { actionOf, clock, columns, minutesOf, needsProject, nextText, progressText, taskActions, taskId, toggleDependency, triggerOf, withoutTask } from "./workflows";
+import { actionOf, blankAutomation, clock, columns, minutesOf, needsProject, nextText, progressText, taskActions, taskId, toggleDependency, triggerOf, withoutTask } from "./workflows";
 
 const spec = (id: string, dependsOn: string[] = [], from: string | null = null): TaskSpec =>
   ({ id, role: "developer", engine: "claude", title: id, prompt: "p", dependsOn, from });
@@ -74,5 +74,12 @@ describe("actions", () => {
     const a = { kind: "role" as const, role: "tester" as const, engine: "claude" as const, prompt: "x" };
     expect(actionOf("role", a)).toBe(a);
     expect(actionOf("workflow", a)).toEqual({ kind: "workflow", template: "review", goal: "" });
+  });
+  it("starts a role action on the engine it is given, Claude Code by default", () => {
+    const from = { kind: "skill_upkeep" as const };
+    expect(actionOf("role", from)).toEqual({ kind: "role", role: "reviewer", engine: "claude", prompt: "" });
+    expect(actionOf("role", from, "codex")).toEqual({ kind: "role", role: "reviewer", engine: "codex", prompt: "" });
+    expect(blankAutomation(null, null).action).toMatchObject({ engine: "claude" });
+    expect(blankAutomation(null, null, "codex").action).toMatchObject({ engine: "codex" });
   });
 });

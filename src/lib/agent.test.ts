@@ -1,5 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { APPROVALS, CLAUDE_MODES, SANDBOXES, accessLabel, asksNobody, type Access } from "./agent";
+import { APPROVALS, CLAUDE_MODES, SANDBOXES, accessLabel, asksNobody, enginesText, shownEngines, type Access } from "./agent";
+
+describe("shownEngines", () => {
+  it("shows both by default and leaves out a hidden one", () => {
+    expect(shownEngines(undefined)).toEqual(["claude", "codex"]);
+    expect(shownEngines(["codex"])).toEqual(["claude"]);
+    expect(shownEngines(["claude", "other"])).toEqual(["codex"]);
+  });
+
+  it("shows both when both are hidden", () => {
+    expect(shownEngines(["claude", "codex"])).toEqual(["claude", "codex"]);
+  });
+});
+
+describe("enginesText", () => {
+  it("names the shown engines", () => {
+    expect(enginesText(["claude", "codex"], "or")).toBe("Claude Code or Codex");
+    expect(enginesText(["claude", "codex"], "and")).toBe("Claude Code and Codex");
+    expect(enginesText(["codex"], "and")).toBe("Codex");
+  });
+});
 
 describe("asksNobody", () => {
   it("is true only for the Claude modes that never ask", () => {

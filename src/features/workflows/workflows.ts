@@ -1,5 +1,5 @@
 // Pure helpers for the Workflows page: the task graph's columns, words for states, schedules and automation runs.
-import type { Role } from "../../lib/agent";
+import type { Engine, Role } from "../../lib/agent";
 import type {
   Action, ActionKind, Automation, AutomationRun, RunState, Task, TaskSpec, TaskState, Trigger, TriggerKind, WorkflowRun,
 } from "../../lib/workflows";
@@ -118,10 +118,10 @@ export const ACTION_HELP: Record<ActionKind, string> = {
 };
 
 /** An action of another kind with sensible defaults. */
-export function actionOf(kind: ActionKind, from: Action): Action {
+export function actionOf(kind: ActionKind, from: Action, engine: Engine = "claude"): Action {
   if (kind === from.kind) return from;
   switch (kind) {
-    case "role": return { kind, role: "reviewer", engine: "claude", prompt: "" };
+    case "role": return { kind, role: "reviewer", engine, prompt: "" };
     case "workflow": return { kind, template: "review", goal: "" };
     case "architecture_check": return { kind, system: "" };
     default: return { kind };
@@ -148,9 +148,9 @@ export function nextText(a: Pick<Automation, "enabled" | "nextDue" | "trigger">,
 }
 
 /** A blank automation to edit. */
-export function blankAutomation(project: string | null, repo: string | null): Automation {
+export function blankAutomation(project: string | null, repo: string | null, engine: Engine = "claude"): Automation {
   return {
-    id: "", name: "", enabled: true, trigger: { kind: "daily", at: 9 * 60 }, action: { kind: "role", role: "reviewer", engine: "claude", prompt: "" },
+    id: "", name: "", enabled: true, trigger: { kind: "daily", at: 9 * 60 }, action: { kind: "role", role: "reviewer", engine, prompt: "" },
     project, repo, askFirst: false, notify: "failures", budgetUsd: 1, createdAt: 0, lastRun: null, nextDue: null, lastSeen: null,
   };
 }

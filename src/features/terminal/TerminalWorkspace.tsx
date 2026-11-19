@@ -1,7 +1,7 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRightLeft, CodeXml, Columns2, Database, FileText, GitBranch, Network, Plus, Square, SquareTerminal, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { agentRename, agentTranscript, agentUsage, engineOf, reviewFiles, type SessionInfo } from "../../lib/agent";
+import { agentRename, agentTranscript, agentUsage, engineOf, enginesText, reviewFiles, type SessionInfo } from "../../lib/agent";
 import { getSettings } from "../../lib/lm";
 import { OTHER_FOLDERS, otherFolders, realProject } from "../../lib/folders";
 import { openReview, openSession, openSystem, startSession, useApp } from "../../store";
@@ -14,6 +14,7 @@ import { Transcript } from "../agents/AgentWorkspace";
 import { RemoveWorktree } from "../agents/Chat";
 import { build } from "../agents/events";
 import { useSessionDraft } from "../agents/draft";
+import { useShownEngines } from "../agents/engines";
 import { isEnded, repoName, waitingForReview } from "../agents/session";
 import { reviewVersion } from "../review/review";
 import { useCurrentProject } from "../projects/useProject";
@@ -277,6 +278,7 @@ function PaneView({ index, tabs, activeId, views, onView, focused, split, over, 
 /** Mock 04: one or two panes of tabs and terminals, and the Workspace rail. `onEmpty` runs when the last tab is closed. */
 export function TerminalWorkspace({ sessions, selected, onEmpty }: { sessions: SessionInfo[]; selected?: SessionInfo; onEmpty?: () => void }) {
   const project = useApp((s) => s.project) ?? null;
+  const { shown } = useShownEngines();
   const stored = useLayout();
   // Tabs closed here stay in the session list until it is refetched; they must not come back as new tabs meanwhile.
   const closed = useRef(new Set<string>());
@@ -403,11 +405,12 @@ export function TerminalWorkspace({ sessions, selected, onEmpty }: { sessions: S
   };
 
   if (!view.panes.some((pane) => pane.some((id) => byId(id))) && !selected) {
+    const names = enginesText(shown, "or");
     return (
       <div className="term-view">
         <div className="term-main">
           <div className="empty-state">
-            <p className="muted">No terminals yet. A terminal runs Claude Code or Codex in its own copy of a repository.</p>
+            <p className="muted">No terminals yet. A terminal runs {names} in its own copy of a repository.</p>
             <button className="primary" onClick={() => newTerminal()}>New terminal session</button>
           </div>
         </div>

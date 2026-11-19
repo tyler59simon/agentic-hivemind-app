@@ -3,7 +3,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Clock, GitFork, Plus, Workflow } from "lucide-react";
 import { useState } from "react";
-import { repoBranches, rolesQuery, type Engine, type Role } from "../../lib/agent";
+import { ENGINE_LABELS, repoBranches, rolesQuery, type Engine, type Role } from "../../lib/agent";
 import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import {
@@ -16,6 +16,7 @@ import { Markdown } from "../../ui/Markdown";
 import { Confirm } from "../../ui/Modal";
 import { ArrowLink, PageHeader, Row, Section, Tabs } from "../../ui/Page";
 import { toast } from "../../ui/toast";
+import { useShownEngines } from "../agents/engines";
 import { repoName } from "../agents/session";
 import { projectsQuery } from "../projects/useProject";
 import { systemsForProject } from "../projects/scope";
@@ -66,8 +67,9 @@ function ProjectRepo({ project, repo, onChange }: { project: string; repo: strin
 /** The editable task list of a planned workflow. */
 function TaskEditor({ tasks, onChange }: { tasks: TaskSpec[]; onChange: (tasks: TaskSpec[]) => void }) {
   const roles = useQuery({ ...rolesQuery(), retry: false });
+  const { shown, first } = useShownEngines();
   const put = (i: number, t: TaskSpec) => onChange(tasks.map((x, j) => (j === i ? t : x)));
-  const add = () => onChange([...tasks, { id: taskId("Task", tasks.map((t) => t.id)), role: "developer", engine: "claude", title: "", prompt: "", dependsOn: [], from: null }]);
+  const add = () => onChange([...tasks, { id: taskId("Task", tasks.map((t) => t.id)), role: "developer", engine: first, title: "", prompt: "", dependsOn: [], from: null }]);
   return (
     <div className="flow-editor">
       {tasks.map((t, i) => {
@@ -86,8 +88,8 @@ function TaskEditor({ tasks, onChange }: { tasks: TaskSpec[]; onChange: (tasks: 
               <label className="field">
                 <span>Engine</span>
                 <select value={t.engine} onChange={(e) => put(i, { ...t, engine: e.target.value as Engine })}>
-                  <option value="claude">Claude Code</option>
-                  <option value="codex">Codex</option>
+                  {/* A saved task keeps its hidden engine in the list so the select shows what it will run. */}
+                  {(shown.includes(t.engine) ? shown : [...shown, t.engine]).map((e) => <option key={e} value={e}>{ENGINE_LABELS[e]}</option>)}
                 </select>
               </label>
             </div>
@@ -129,10 +131,11 @@ function NewWorkflow({ onDone }: { onDone: (run?: WorkflowRun) => void }) {
     goal: "", project: first?.slug ?? "", repo: first?.repos[0] ?? "", baseBranch: null, template: null, model: null, unattended: false, budgetUsd: null, tasks: [],
   });
   const [busy, setBusy] = useState(false);
+  const engines = useShownEngines();
   const branches = useQuery({ queryKey: ["repo", "branches", form.project, form.repo], queryFn: () => repoBranches(form.project, form.repo), retry: false, enabled: !!form.project && !!form.repo });
   const pick = (id: string) => {
     const t = templates.data?.find((x) => x.id === id);
-    setForm({ ...form, template: t?.id ?? null, tasks: t ? t.tasks.map((x) => ({ ...x })) : [] });
+    setForm({ ...form, template: t?.id ?? null, tasks: t ? t.tasks.map((x) => ({ ...x, engine: engines.shows(x.engine) ? x.engine : engines.first })) : [] });
   };
   const create = () => {
     setBusy(true);
@@ -300,6 +303,7 @@ function AutomationForm({ initial, onDone }: { initial: Automation; onDone: (sav
   const templates = useQuery(workflowTemplatesQuery());
   const systems = useQuery({ ...systemsQuery(), enabled: useSystemsEnabled() });
   const label = useRoleLabels();
+  const engines = useShownEngines();
   const [a, setA] = useState<Automation>(initial);
   const [time, setTime] = useState("at" in initial.trigger ? clock(initial.trigger.at) : "09:00");
   const [busy, setBusy] = useState(false);
@@ -341,8 +345,10 @@ function AutomationForm({ initial, onDone }: { initial: Automation; onDone: (sav
       )}
       <label className="field">
         <span>What it does</span>
-        <select value={a.action.kind} onChange={(e) => setA({ ...a, action: actionOf(e.target.value as Automation["action"]["kind"], a.action) })}>
-          {Object.entries(ACTION_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        <select value={a.action.kind} onChange={(e) => setA({ ...a, action: actionOf(e.target.value as Automation["action"]["kind"], a.action, engines.first) })}>
+          {/* Knowledge from new commits runs the Claude Code reviewer. */}
+          {Object.entries(ACTION_LABELS).filter(([k]) => k !== "commit_capture" || engines.shows("claude") || initial.action.kind === k)
+            .map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
       </label>
       <p className="muted small">{ACTION_HELP[a.action.kind]}</p>
@@ -445,7 +451,8 @@ function AutomationsTab({ picked }: { picked?: string }) {
   const nameOf = (id: string) => list.find((a) => a.id === id)?.name ?? "Removed automation";
   const refresh = () => client.invalidateQueries({ queryKey: ["automations"] });
   const home = projects.find((p) => p.slug === current) ?? projects[0];
-  const fromTemplate = (t: Automation) => setEditing({ ...t, id: "", enabled: true, project: t.project === null ? null : home?.slug ?? "", repo: t.project === null ? null : home?.repos[0] ?? "" });
+  const engines = useShownEngines();
+  const fromTemplate = (t: Automation) => setEditing({ ...t, action: t.action.kind === "role" && !engines.shows(t.action.engine) ? { ...t.action, engine: engines.first } : t.action, id: "", enabled: true, project: t.project === null ? null : home?.slug ?? "", repo: t.project === null ? null : home?.repos[0] ?? "" });
   const runNow = (a: Automation) => automationAct("run", a.id).then((row) => {
     toast(row ? (row.state === "failed" ? row.detail ?? "The run failed" : `${a.name} started`) : `${a.name} is already running`, row?.state === "failed" ? "error" : undefined);
     refresh();
@@ -455,7 +462,7 @@ function AutomationsTab({ picked }: { picked?: string }) {
   return (
     <div className="review">
       <nav className="review-list" aria-label="Automations">
-        <button className="review-item" onClick={() => setEditing(blankAutomation(home?.slug ?? null, home?.repos[0] ?? null))}><Plus size="1.3em" aria-hidden /><span className="grow">New automation</span></button>
+        <button className="review-item" onClick={() => setEditing(blankAutomation(home?.slug ?? null, home?.repos[0] ?? null, engines.first))}><Plus size="1.3em" aria-hidden /><span className="grow">New automation</span></button>
         {data.isLoading && <p className="muted pad">Loading…</p>}
         {data.error && <p className="error pad">{classify(data.error).message}</p>}
         {list.map((a) => (
@@ -467,7 +474,7 @@ function AutomationsTab({ picked }: { picked?: string }) {
         ))}
         <h2 className="review-group">Built in</h2>
         <p className="muted small pad">Add one to change and turn it on. All start off.</p>
-        {data.data?.templates.map((t) => (
+        {data.data?.templates.filter((t) => t.action.kind !== "commit_capture" || engines.shows("claude")).map((t) => (
           <button key={t.id} className="review-item" title={ACTION_HELP[t.action.kind]} onClick={() => fromTemplate(t)}>
             <Plus size="1.3em" aria-hidden /><span className="grow">{t.name}<br /><span className="small muted">{t.triggerText}</span></span>
           </button>

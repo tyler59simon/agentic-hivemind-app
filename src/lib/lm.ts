@@ -65,6 +65,8 @@ export interface Settings {
   skills_auto_patch?: boolean | null;
   /** An architecture-rules/v1 file per system slug, for the drift check. */
   architecture_rules?: Record<string, string> | null;
+  /** Engines hidden from the interface; Rust refuses a save that hides both. */
+  hidden_engines?: ("claude" | "codex")[] | null;
 }
 export interface CaptureStatus { shortcut: string | null; error: string | null; close_to_tray: boolean }
 

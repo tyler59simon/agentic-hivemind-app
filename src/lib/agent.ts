@@ -101,6 +101,18 @@ export interface SessionInfo {
 /** The engine of a session, whatever adapter name older code stored. */
 export const engineOf = (s: Pick<SessionInfo, "adapter">): Engine => (s.adapter === "codex" ? "codex" : "claude");
 
+export const ENGINES: Engine[] = ["claude", "codex"];
+export const ENGINE_LABELS: Record<Engine, string> = { claude: "Claude Code", codex: "Codex" };
+
+/** The engines the user keeps shown, in order. Hiding every engine shows them all. */
+export function shownEngines(hidden?: readonly string[] | null): Engine[] {
+  const shown = ENGINES.filter((e) => !hidden?.includes(e));
+  return shown.length ? shown : ENGINES;
+}
+
+/** "Claude Code or Codex", or the one engine's name. */
+export const enginesText = (shown: Engine[], join: "or" | "and") => shown.map((e) => ENGINE_LABELS[e]).join(` ${join} `);
+
 export interface EngineInfo {
   engine: Engine; label: string; path: string | null; error: string | null; chat: boolean; chatReason: string | null;
 }

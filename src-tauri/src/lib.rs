@@ -262,7 +262,8 @@ fn learning_review(app: AppHandle, state: State<'_, AppState>, id: String) -> Re
 fn run_review(app: &AppHandle, id: &str, trigger: learning::Trigger) {
     let Some(state) = app.try_state::<AppState>() else { return };
     let saved = settings::load(&state.settings_path);
-    if trigger != learning::Trigger::Manual && !saved.learning_reviewer() {
+    // The reviewer runs on Claude Code; a user who hid Claude Code has no way to see or turn it off.
+    if trigger != learning::Trigger::Manual && (!saved.learning_reviewer() || !saved.shows(agent::Engine::Claude)) {
         return;
     }
     let Ok(log) = state.agents.session(id, 0) else { return };
@@ -1107,6 +1108,9 @@ fn save_settings(app: AppHandle, state: State<'_, AppState>, value: Settings) ->
     // The folder list changes only through the native picker, and the rules files only through architecture_rules_set.
     let mut value = folders::keep(&previous, value);
     value.architecture_rules = previous.architecture_rules.clone();
+    if !value.shows(agent::Engine::Claude) && !value.shows(agent::Engine::Codex) {
+        return Err("Keep at least one engine shown.".into());
+    }
     for (project, commands) in value.allowed_commands.iter().flatten() {
         for command in commands {
             agent::scope::check_command(command).map_err(|e| format!("{project}: {e}"))?;

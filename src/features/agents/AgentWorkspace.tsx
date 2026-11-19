@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { Check, ChevronDown, CircleCheck, CircleX, CodeXml, FileText, GitBranch, Layers, Lightbulb, Link as LinkIcon, LoaderCircle, MessageSquare, Network, Plus, Shield, ShieldCheck, Sparkle, SquareTerminal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import logo from "../../assets/logo.png";
-import { agentCancel, agentEnd, agentSession, agentSetPolicy, engineOf, enginesQuery, sessionsQuery, type Engine, type Interface, type Policy, type ResourceUsage, type SeqEvent, type SessionInfo } from "../../lib/agent";
+import { agentCancel, agentEnd, agentSession, agentSetPolicy, engineOf, enginesQuery, enginesText, sessionsQuery, type Engine, type Interface, type Policy, type ResourceUsage, type SeqEvent, type SessionInfo } from "../../lib/agent";
 import { PROFILE_HELP, PROFILE_LABELS } from "./start";
 import { learningQuery, learningReview } from "../../lib/skills";
 import { lastRun, runText } from "../skills/skills";
@@ -26,6 +26,7 @@ import { apply, build, cost, duration, EMPTY, merge, type Finished, type Item, t
 import { filesWord, reviewLabel } from "../review/review";
 import { ALLOWED_NOTE, CODEX_ALLOWED_NOTE, CODEX_COST_NOTE, CODEX_MODE_NOTE, codexPermissionLines, engineLabel, isCodex, isUnattended, resumeCommand, isEnded, permissionLines, POLICIES, repoName, usageText, VERDICT_LABELS, waitingForReview } from "./session";
 import { useSessionDraft } from "./draft";
+import { useShownEngines } from "./engines";
 import { StartSession } from "./StartSession";
 import { accessLabel, latestOf, whereLabel } from "../terminal/tabs";
 import { StopSession, TerminalWorkspace } from "../terminal/TerminalWorkspace";
@@ -145,8 +146,9 @@ function Toolbar({ info, face, sessions, onAsk }: { info?: SessionInfo; face: In
   const project = useApp((s) => s.project) ?? null;
   const draftEngine = useSessionDraft((s) => s.engine);
   const engines = useQuery(enginesQuery());
-  const engine: Engine = info ? engineOf(info) : draftEngine;
-  const others: Engine[] = info ? [engine === "codex" ? "claude" : "codex"] : ["claude", "codex"];
+  const { shown, shows, first } = useShownEngines();
+  const engine: Engine = info ? engineOf(info) : shows(draftEngine) ? draftEngine : first;
+  const others: Engine[] = info ? shown.filter((e) => e !== engine) : shown;
   const adapterOf = (e: Engine) => (e === "codex" ? "codex" : "claude-code");
   const setPolicy = (policy: Policy) => info && agentSetPolicy(info.id, policy).then(() => client.invalidateQueries({ queryKey: ["agent", "sessions"] })).catch((e) => toast(String(e), "error"));
   const newWith = (e: Engine) => {
@@ -227,6 +229,7 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
   const learning = useQuery(learningQuery());
   const run = lastRun(learning.data?.runs ?? [], info.id);
   const [reviewing, setReviewing] = useState(false);
+  const claudeShown = useShownEngines().shows("claude");
   const reviewNow = () => {
     setReviewing(true);
     learningReview(info.id).then(() => toast("Reviewing the session for lessons. Drafts appear in Review."), (e) => toast(String(e), "error"))
@@ -272,8 +275,10 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
         <Section title="Learning">
           {run ? <Row icon={<Lightbulb size="1.3em" aria-hidden />} meta={when(run.at)}>{runText(run)}</Row>
             : <p className="muted small">Hivemind reviews a session for notes and skills when you approve or discard its edits, or when a long session ends.</p>}
-          <button className="outline" disabled={reviewing} title="One tool-free Claude call that reads this session and proposes notes (and, after approval, a skill). It counts against the daily learning budget."
-            onClick={reviewNow}>{run ? "Review again" : "Review for lessons now"}</button>
+          {claudeShown && (
+            <button className="outline" disabled={reviewing} title="One tool-free Claude call that reads this session and proposes notes (and, after approval, a skill). It counts against the daily learning budget."
+              onClick={reviewNow}>{run ? "Review again" : "Review for lessons now"}</button>
+          )}
         </Section>
       )}
       <div className="rail-actions">
@@ -412,11 +417,13 @@ export function AgentWorkspace() {
     return groups;
   }, [all]);
 
+  const { shown } = useShownEngines();
+
   if (view === "new") return <StartSession />;
   return (
     <div className="page fill-page">
       <PageHeader title="Agent Workspace" actions={<StopSession session={currentInfo} />}
-        subtitle={terminalView ? "Run Claude Code or Codex in a local, project-aware harness with memory and context." : undefined} />
+        subtitle={terminalView ? `Run ${enginesText(shown, "or")} in a local, project-aware harness with memory and context.` : undefined} />
       {(terminalView || chatEmpty || currentInfo?.mode === "interactive") && <Toolbar info={currentInfo} face={terminalView ? "terminal" : "chat"} sessions={all} onAsk={setAsked} />}
       {!enabled ? <p className="muted">Agent sessions need a newer Living Memory (one with the <code>projects</code> command).</p>
         : sessions.isLoading ? <p className="muted">Loading…</p>

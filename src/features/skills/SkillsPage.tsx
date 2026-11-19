@@ -3,6 +3,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookOpenCheck, History, Sparkles } from "lucide-react";
 import { useState } from "react";
+import { enginesText } from "../../lib/agent";
 import { classify } from "../../lib/errors";
 import { learningQuery, skillAction, skillHistory, skillProposalsQuery, skillsQuery, skillsUpkeep, type Skill } from "../../lib/skills";
 import { openReview, openSession, useApp } from "../../store";
@@ -10,6 +11,7 @@ import { Markdown } from "../../ui/Markdown";
 import { Confirm } from "../../ui/Modal";
 import { ArrowLink, PageHeader, Row, Section } from "../../ui/Page";
 import { toast } from "../../ui/toast";
+import { useShownEngines } from "../agents/engines";
 import { noteQuery } from "../viewer/NoteView";
 import { useWorkspace } from "../../workspace/store";
 import { COPY_WORDS, copyPlace, ledgerText, reliabilityText, runText, skillState, spendText } from "./skills";
@@ -24,6 +26,7 @@ function NoteLink({ refId }: { refId: string }) {
 
 function SkillDetail({ skill }: { skill: Skill }) {
   const client = useQueryClient();
+  const names = enginesText(useShownEngines().shown, "and");
   const history = useQuery({ queryKey: ["skills", "history", skill.name], queryFn: () => skillHistory(skill.name) });
   const [asking, setAsking] = useState<null | "archive" | number>(null);
   const act = (action: "archive" | "restore" | "import" | "publish", version?: number) =>
@@ -49,7 +52,7 @@ function SkillDetail({ skill }: { skill: Skill }) {
         {skill.archived && <button className="primary" onClick={() => act("restore", skill.version)}>Restore</button>}
       </div>
       <Section title="Published copies"
-        empty={skill.copies.length ? undefined : skill.archived ? "Archived: not published." : "Not published. Claude Code and Codex folders are used only when that CLI is set up."}>
+        empty={skill.copies.length ? undefined : skill.archived ? "Archived: not published." : `Not published. Hivemind publishes to ${names} only when that CLI is set up.`}>
         {skill.copies.map((c) => (
           <Row key={c.dir} icon={<BookOpenCheck size="1.3em" aria-hidden />} meta={COPY_WORDS[c.state]} title={c.dir}>{copyPlace(c.dir)}</Row>
         ))}
@@ -73,7 +76,7 @@ function SkillDetail({ skill }: { skill: Skill }) {
         {history.data?.map((e, i) => <Row key={i} icon={<History size="1.3em" aria-hidden />} meta={when(e.at)} title={e.detail ?? undefined}>{ledgerText(e)}</Row>)}
       </Section>
       {asking === "archive" && (
-        <Confirm title={`Archive ${skill.name}?`} action="Archive" danger message="Hivemind removes it from the Claude Code and Codex skill folders and keeps every version, so you can restore it."
+        <Confirm title={`Archive ${skill.name}?`} action="Archive" danger message={`Hivemind removes it from the ${names} skill folders and keeps every version, so you can restore it.`}
           onAnswer={(yes) => { setAsking(null); if (yes) act("archive"); }} />
       )}
       {typeof asking === "number" && (
@@ -86,6 +89,7 @@ function SkillDetail({ skill }: { skill: Skill }) {
 
 export function SkillsPage() {
   const client = useQueryClient();
+  const names = enginesText(useShownEngines().shown, "and");
   const picked = useApp((s) => (s.route.page === "skills" ? s.route.skill : undefined));
   const go = useApp((s) => s.go);
   const skills = useQuery(skillsQuery());
@@ -102,7 +106,7 @@ export function SkillsPage() {
   const status = learning.data;
   return (
     <div className="page fill-page">
-      <PageHeader title="Skills" subtitle="Procedures learned from approved work, published to Claude Code and Codex."
+      <PageHeader title="Skills" subtitle={`Procedures learned from approved work, published to ${names}.`}
         actions={<button onClick={upkeep} title="Propose archiving skills unused for 30 days, or whose sessions are mostly rejected">Check for stale skills</button>} />
       <p className="muted small">
         {status ? (status.enabled

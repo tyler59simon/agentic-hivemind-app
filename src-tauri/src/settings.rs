@@ -43,6 +43,9 @@ pub struct Settings {
     /// An architecture-rules/v1 file per system slug, for the drift check. Checked in Rust before use.
     #[serde(default)]
     pub architecture_rules: Option<BTreeMap<String, String>>,
+    /// Engines the user hid from the interface ("claude", "codex"). Strings, so an unknown value never breaks loading.
+    #[serde(default)]
+    pub hidden_engines: Option<Vec<String>>,
 }
 
 pub const DEFAULT_CAPTURE_SHORTCUT: &str = "CommandOrControl+Alt+M";
@@ -75,6 +78,15 @@ impl Settings {
 
     pub fn skills_auto_patch(&self) -> bool {
         self.skills_auto_patch.unwrap_or(false)
+    }
+
+    /// Whether the user keeps the engine shown (default: both are).
+    pub fn shows(&self, engine: crate::agent::Engine) -> bool {
+        let name = match engine {
+            crate::agent::Engine::Claude => "claude",
+            crate::agent::Engine::Codex => "codex",
+        };
+        !self.hidden_engines.iter().flatten().any(|h| h == name)
     }
 
     /// The hotkey to register, or None when the user turned it off.
@@ -175,6 +187,20 @@ mod tests {
         assert_eq!((old.claude_path, old.agent_budget_usd, old.architecture_suite_plugin), (None, None, None));
         assert_eq!(old.codex_path, None);
         assert_eq!((old.allowed_commands, old.learning_reviewer, old.learning_daily_usd, old.skills_auto_patch), (None, None, None, None));
+        assert_eq!(old.hidden_engines, None);
+    }
+
+    #[test]
+    fn engines_are_shown_unless_hidden() {
+        use crate::agent::Engine;
+        let default = Settings::default();
+        assert!(default.shows(Engine::Claude) && default.shows(Engine::Codex));
+        let hidden = Settings { hidden_engines: Some(vec!["codex".into(), "gemini".into()]), ..Default::default() };
+        assert!(hidden.shows(Engine::Claude));
+        assert!(!hidden.shows(Engine::Codex));
+        // An unknown name loads and is ignored.
+        let file: Settings = serde_json::from_str(r#"{"python":null,"script":null,"root":null,"hidden_engines":["other"]}"#).unwrap();
+        assert!(file.shows(Engine::Claude) && file.shows(Engine::Codex));
     }
 
     #[test]
@@ -201,7 +227,7 @@ mod tests {
     fn save_then_load_round_trips() {
         let dir = std::env::temp_dir().join(format!("hivemind-settings-{}", std::process::id()));
         let path = dir.join("settings.json");
-        let value = Settings { python: Some("python3".into()), script: None, root: Some("/tmp/store".into()), ..Default::default() };
+        let value = Settings { python: Some("python3".into()), script: None, root: Some("/tmp/store".into()), hidden_engines: Some(vec!["claude".into()]), ..Default::default() };
         save(&path, &value).unwrap();
         assert_eq!(load(&path), value);
         std::fs::remove_dir_all(dir).ok();

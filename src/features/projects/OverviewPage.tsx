@@ -264,7 +264,7 @@ function ProjectOverview({ project }: { project: Project }) {
               </p>
               {focus.summary && <p className="clamp">{oneLine(focus.summary)}</p>}
               {session && waitingForReview(session) && (
-                <p>Claude Code proposed {session.filesChanged!.files} file change{session.filesChanged!.files === 1 ? "" : "s"}. Review before continuing.</p>
+                <p>{engineName(session.adapter)} proposed {session.filesChanged!.files} file change{session.filesChanged!.files === 1 ? "" : "s"}. Review before continuing.</p>
               )}
               <p className="focus-meta"><LinkIcon size="1.1em" aria-hidden /><span className="cap">{focus.type}</span><span>Updated {dayMonth(focus.updated)}</span>{!!parts.decisions.length && <span>{parts.decisions.length} decision{parts.decisions.length === 1 ? "" : "s"}</span>}</p>
               <div className="focus-actions">

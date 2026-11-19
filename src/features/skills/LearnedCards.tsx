@@ -1,6 +1,7 @@
 // The Review page's Learned items: a memory draft in Living Memory's proposal inbox, and a skill proposal.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { enginesText } from "../../lib/agent";
 import { classify } from "../../lib/errors";
 import { proposalAccept, proposalAcceptWith, proposalReject, proposalShow, taxonomy, type MemoryProposal } from "../../lib/lm";
 import { skillDecide, skillVersion, type ReviewRun, type SkillProposal } from "../../lib/skills";
@@ -8,6 +9,7 @@ import { openSession, openSkills } from "../../store";
 import { Markdown } from "../../ui/Markdown";
 import { ArrowLink } from "../../ui/Page";
 import { toast } from "../../ui/toast";
+import { useShownEngines } from "../agents/engines";
 import { CodeDiff } from "../review/CodeDiff";
 import { parse, proposalTitle } from "./skills";
 
@@ -75,6 +77,7 @@ export function MemoryProposalCard({ proposal, run, onDone }: { proposal: Memory
 
 export function SkillProposalCard({ proposal, onDone }: { proposal: SkillProposal; onDone: () => void }) {
   const client = useQueryClient();
+  const names = enginesText(useShownEngines().shown, "and");
   const [description, setDescription] = useState(proposal.description);
   const [body, setBody] = useState(proposal.body);
   const [why, setWhy] = useState("");
@@ -107,7 +110,7 @@ export function SkillProposalCard({ proposal, onDone }: { proposal: SkillProposa
       </p>
       {proposal.reason && <p>{proposal.reason}</p>}
       {proposal.kind === "archive" ? (
-        <p className="muted">Archiving removes the skill from the Claude Code and Codex skill folders. Hivemind keeps every version, so you can restore it.</p>
+        <p className="muted">Archiving removes the skill from the {names} skill folders. Hivemind keeps every version, so you can restore it.</p>
       ) : (
         <>
           <label className="field">
@@ -119,7 +122,7 @@ export function SkillProposalCard({ proposal, onDone }: { proposal: SkillProposa
             <span>SKILL.md (needs When to use, When not to use and Steps)</span>
             <textarea rows={16} value={body} onChange={(e) => setBody(e.target.value)} />
           </label>
-          <p className="muted small">Approving publishes it to your Claude Code and Codex skill folders, for Hivemind sessions and your own.</p>
+          <p className="muted small">Approving publishes it to your {names} skill folders, for Hivemind sessions and your own.</p>
         </>
       )}
       <div className="work-actions">
