@@ -504,12 +504,12 @@ impl automations::Doer for AppDoer {
                 }
                 let mut command = std::process::Command::new("git");
                 command.args(["--no-optional-locks", "-C", &repo, "log", "--stat", "-p", "--no-color", "--no-ext-diff", "--no-textconv"]);
-                // The exact commits of this batch (automations::COMMIT_BATCH at most, oldest first); without them, the range
-                // after the reviewed tips, or the last few commits the first time.
+                // The exact commits of this batch (automations::COMMIT_BATCH at most, parents first, in that order), or the last
+                // few commits the first time.
                 match (&vars.batch, a.last_seen.as_deref()) {
                     (Some(batch), _) if batch.is_empty() => return Ok(Started::Done { detail: "No new commits".into(), cost: None }),
-                    (Some(batch), _) => command.arg("--no-walk=sorted").args(batch),
-                    (None, Some(seen)) => command.arg(format!("--max-count={}", automations::COMMIT_BATCH)).args(["HEAD", "--not"]).args(seen.split_whitespace()),
+                    (Some(batch), _) => command.arg("--no-walk=unsorted").args(batch.iter().filter(|sha| git::is_sha(sha))),
+                    (None, Some(_)) => return Err("Could not list the commits after the last review; the reviewed commits are kept".into()),
                     (None, None) => command.arg("-5"),
                 };
                 let log = git::run_with_timeout(command, std::time::Duration::from_secs(30))?;
@@ -538,15 +538,18 @@ impl automations::Doer for AppDoer {
         let tips: Vec<&str> = reviewed.split_whitespace().collect();
         git::next_batch(std::path::Path::new(repo), &tips, limit).ok().map(|(batch, tips)| (batch, tips.join(" ")))
     }
-    fn log(&self, repo: &str, since: Option<&str>) -> String {
+    fn log(&self, repo: &str, since: Option<&str>) -> Result<String, String> {
         let mut command = std::process::Command::new("git");
         command.args(["--no-optional-locks", "-C", repo, "log", "--oneline", "--no-color"]);
         match since {
-            // `since` holds the reviewed tips, space-separated.
-            Some(s) => command.args(["--max-count=50", "HEAD", "--not"]).args(s.split_whitespace()),
+            // `since` holds the reviewed tips, space-separated; only live commit ids reach git.
+            Some(s) => {
+                let tips = git::live_tips(std::path::Path::new(repo), &s.split_whitespace().collect::<Vec<_>>());
+                command.args(["--max-count=50", "HEAD", "--not"]).args(tips)
+            }
             None => command.arg("--max-count=10"),
         };
-        git::run_with_timeout(command, std::time::Duration::from_secs(15)).unwrap_or_default()
+        git::run_with_timeout(command, std::time::Duration::from_secs(15))
     }
     fn paused(&self, a: &automations::Automation) -> Option<String> {
         let saved = settings::load(&self.0.state::<AppState>().settings_path);

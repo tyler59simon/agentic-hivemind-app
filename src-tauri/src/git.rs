@@ -191,8 +191,14 @@ pub fn head_sha(repo: &Path) -> Result<String, String> {
 /// has and the tips do not, oldest first (parents before children), and the tips that cover everything reviewed once
 /// those are too (`merge-base --independent`). Empty commits when HEAD has nothing new. Because parents come first, what
 /// is reviewed stays closed under ancestry, so no commit is skipped or reviewed twice, across merges and branch switches.
+/// When none of the reviewed tips is left (history was rewritten), nothing is reviewed and HEAD becomes the only tip, as on a
+/// first look.
 pub fn next_batch(repo: &Path, reviewed: &[&str], limit: usize) -> Result<(Vec<String>, Vec<String>), String> {
-    let reviewed: Vec<&str> = reviewed.iter().copied().filter(|sha| is_sha(sha)).collect();
+    let reviewed = live_tips(repo, reviewed);
+    if reviewed.is_empty() {
+        return Ok((vec![], vec![head_sha(repo)?]));
+    }
+    let reviewed: Vec<&str> = reviewed.iter().map(String::as_str).collect();
     let mut command = Command::new("git");
     command.args(["--no-optional-locks", "-C"]).arg(repo).args(["rev-list", "--reverse", "--topo-order", "HEAD", "--not"]).args(&reviewed);
     let text = run_with_timeout(command, TIMEOUT)?;
@@ -204,6 +210,16 @@ pub fn next_batch(repo: &Path, reviewed: &[&str], limit: usize) -> Result<(Vec<S
     command.args(["--no-optional-locks", "-C"]).arg(repo).args(["merge-base", "--independent"]).args(&reviewed).args(&batch);
     let tips = run_with_timeout(command, TIMEOUT)?.lines().map(str::trim).filter(|sha| is_sha(sha)).map(String::from).collect();
     Ok((batch, tips))
+}
+
+/// The reviewed tips that are full commit ids and still name a commit in `repo`. Anything else is never passed to git (so a
+/// stored value cannot become an option), and a tip git has pruned (a deleted branch) is dropped so the others keep working.
+pub fn live_tips(repo: &Path, tips: &[&str]) -> Vec<String> {
+    tips.iter().filter(|sha| is_sha(sha)).filter(|sha| {
+        let mut command = Command::new("git");
+        command.args(["--no-optional-locks", "-C"]).arg(repo).args(["rev-parse", "--verify", "--quiet", "--end-of-options"]).arg(format!("{sha}^{{commit}}"));
+        run_with_timeout(command, TIMEOUT).is_ok()
+    }).map(|sha| sha.to_string()).collect()
 }
 
 /// `git rev-list --count <selector...>` in `repo`, e.g. `["abc..HEAD"]` or `["--since=@1794322874", "HEAD"]`.
@@ -432,6 +448,25 @@ mod tests {
         let again: Vec<String> = batches.concat();
         assert!(!again.iter().any(|sha| side[..3].contains(sha) || sha == &base), "{again:?}");
         assert_eq!(again.len(), side.len() - 3 + main.len() + 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn only_live_commit_ids_are_passed_to_git() {   // HIDE-14, Codex review of c8a7ca5
+        if !git_available() {
+            return;
+        }
+        let dir = batch_repo("tips");
+        let first = commit(&dir, "c1");
+        let gone = "0123456789abcdef0123456789abcdef01234567";
+        let kept = live_tips(&dir, &["--output=x", "HEAD", &first[..7], gone, &first]);
+        assert_eq!(kept, [first.clone()], "options, names, short ids and pruned commits are dropped");
+        let second = commit(&dir, "c2");
+        // A pruned tip beside a live one: the live one still bounds the batch.
+        assert_eq!(next_batch(&dir, &[gone, &first], 30).unwrap(), (vec![second.clone()], vec![second.clone()]));
+        // Every tip gone: start again from HEAD, reviewing nothing.
+        assert_eq!(next_batch(&dir, &[gone], 30).unwrap(), (vec![], vec![second]));
+        assert!(!dir.join("x").exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 

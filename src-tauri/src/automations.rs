@@ -164,8 +164,9 @@ pub trait Doer: Send + Sync {
     fn run(&self, automation: &Automation, prompt_vars: &Vars) -> Result<Started, String>;
     /// The commit the repository's current branch points at.
     fn head(&self, repo: &str) -> Option<String>;
-    /// `git log --oneline` from `since` (exclusive) to HEAD, or the last few commits without `since`.
-    fn log(&self, repo: &str, since: Option<&str>) -> String;
+    /// `git log --oneline` of what HEAD has beyond `since` (the reviewed tips), or the last few commits without `since`. An
+    /// error is git failing, not an empty history.
+    fn log(&self, repo: &str, since: Option<&str>) -> Result<String, String>;
     /// The next commit capture after `reviewed` (the reviewed tips, space-separated, as `last_seen` holds them): the commit
     /// ids to review, oldest first, and the tips to keep once they are (`git::next_batch`). None when git cannot tell.
     fn next_batch(&self, repo: &str, reviewed: &str, limit: usize) -> Option<(Vec<String>, String)>;
@@ -387,6 +388,8 @@ impl Automations {
         if a.id.is_empty() {
             a.id = uuid::Uuid::new_v4().simple().to_string();
             a.created_at = now;
+            // The reviewed commits are the scheduler's to record, never the caller's.
+            a.last_seen = None;
         } else if !list.iter().any(|x| x.id == a.id) {
             return Err("Unknown automation".into());
         }
@@ -615,15 +618,13 @@ impl Automations {
         let head = (!repo.is_empty()).then(|| doer.head(&repo)).flatten();
         // A commit capture reviews at most COMMIT_BATCH commits, oldest first, and `last_seen` then covers exactly those (as
         // tips); the trigger sees HEAD not yet covered and the next run takes the rest. Without an answer from git the run
-        // covers up to HEAD, as before.
-        let batch = match (&a.action, a.last_seen.as_deref()) {
-            (Action::CommitCapture, Some(seen)) if head.is_some() => doer.next_batch(&repo, seen, COMMIT_BATCH),
-            _ => None,
-        };
-        let seen = batch.as_ref().map(|(_, tips)| tips.clone()).or(head.clone());
+        // fails (doer.run sees no batch) and the tips stay as they are.
+        let commit_capture = matches!(a.action, Action::CommitCapture) && a.last_seen.is_some() && head.is_some();
+        let batch = if commit_capture { doer.next_batch(&repo, a.last_seen.as_deref().unwrap_or_default(), COMMIT_BATCH) } else { None };
+        let seen = if commit_capture { batch.as_ref().map(|(_, tips)| tips.clone()) } else { head.clone() };
         let vars = Vars {
             event: row.event.clone().unwrap_or_default(),
-            commits: if repo.is_empty() { String::new() } else { doer.log(&repo, a.last_seen.as_deref()) },
+            commits: if repo.is_empty() { String::new() } else { doer.log(&repo, a.last_seen.as_deref()).unwrap_or_default() },
             head: head.clone(),
             batch: batch.map(|(commits, _)| commits),
         };
@@ -747,12 +748,12 @@ impl Automations {
                     // The first look only remembers where the branch is.
                     None => self.mark_seen(&a.id, head),
                     // `last_seen` holds the reviewed tips; HEAD among them, or nothing HEAD has beyond them, is caught up.
-                    Some(seen) if !seen.split_whitespace().any(|tip| tip == head) => {
-                        let log = doer.log(repo, Some(seen));
-                        if !log.trim().is_empty() {
-                            out.push(Due { id: a.id.clone(), cause: "commit", event: Some(format!("New commits:\n{log}")) });
-                        }
-                    }
+                    Some(seen) if !seen.split_whitespace().any(|tip| tip == head) => match doer.log(repo, Some(seen)) {
+                        Ok(log) if log.trim().is_empty() => {}
+                        Ok(log) => out.push(Due { id: a.id.clone(), cause: "commit", event: Some(format!("New commits:\n{log}")) }),
+                        // Git failing is not "nothing new": the run says what went wrong.
+                        Err(e) => out.push(Due { id: a.id.clone(), cause: "commit", event: Some(format!("New commits (git could not list them: {e})")) }),
+                    },
                     _ => {}
                 }
             }
@@ -885,8 +886,8 @@ mod tests {
     #[derive(Default)]
     struct Fake {
         ran: Mutex<Vec<(String, Vars)>>,
-        /// What next_batch answers (commits, tips); None stands for a git failure.
-        batch: Mutex<Option<(Vec<String>, String)>>,
+        /// What next_batch answers: unset reviews HEAD alone, Some(None) stands for a git failure.
+        batch: Mutex<Option<Option<(Vec<String>, String)>>>,
         notes: Mutex<Vec<String>>,
         head: Mutex<Option<String>>,
         broke: bool,
@@ -904,12 +905,13 @@ mod tests {
         fn head(&self, _repo: &str) -> Option<String> {
             self.head.lock().unwrap().clone()
         }
-        fn log(&self, _repo: &str, since: Option<&str>) -> String {
-            format!("log since {}", since.unwrap_or("start"))
+        fn log(&self, _repo: &str, since: Option<&str>) -> Result<String, String> {
+            Ok(format!("log since {}", since.unwrap_or("start")))
         }
         fn next_batch(&self, _repo: &str, _reviewed: &str, limit: usize) -> Option<(Vec<String>, String)> {
             assert_eq!(limit, COMMIT_BATCH);
-            self.batch.lock().unwrap().clone()
+            let head = self.head.lock().unwrap().clone();
+            self.batch.lock().unwrap().clone().unwrap_or_else(|| head.map(|h| (vec![h.clone()], h)))
         }
         fn budget_left(&self) -> bool {
             !self.broke
@@ -989,12 +991,12 @@ mod tests {
         autos.tick(now_ms(), true, &doer);
         // 45 commits land; the first run reviews the oldest 30 and the cursor covers those, not HEAD (the old code).
         *doer.head.lock().unwrap() = Some("c45".into());
-        *doer.batch.lock().unwrap() = Some((ids(1..=30), "c30".into()));
+        *doer.batch.lock().unwrap() = Some(Some((ids(1..=30), "c30".into())));
         autos.tick(now_ms(), true, &doer);
         assert_eq!(doer.ran.lock().unwrap().last().unwrap().1.batch, Some(ids(1..=30)));
         assert_eq!(autos.list()[0].last_seen.as_deref(), Some("c30"));
         // HEAD is not covered yet, so the next tick reviews the rest.
-        *doer.batch.lock().unwrap() = Some((ids(31..=45), "c45".into()));
+        *doer.batch.lock().unwrap() = Some(Some((ids(31..=45), "c45".into())));
         autos.tick(now_ms(), true, &doer);
         let ran = doer.ran.lock().unwrap().clone();
         assert_eq!((ran.len(), ran[1].1.batch.clone()), (2, Some(ids(31..=45))));
@@ -1002,18 +1004,21 @@ mod tests {
         autos.tick(now_ms(), true, &doer);
         assert_eq!(doer.ran.lock().unwrap().len(), 2, "caught up");
         // Several reviewed tips (a merge in progress): HEAD among them is caught up.
-        *doer.batch.lock().unwrap() = Some((ids(46..=47), "x9 c47".into()));
+        *doer.batch.lock().unwrap() = Some(Some((ids(46..=47), "x9 c47".into())));
         *doer.head.lock().unwrap() = Some("c47".into());
         autos.tick(now_ms(), true, &doer);
         assert_eq!(autos.list()[0].last_seen.as_deref(), Some("x9 c47"));
         autos.tick(now_ms(), true, &doer);
         assert_eq!(doer.ran.lock().unwrap().len(), 3, "c47 is one of the tips");
-        // When git cannot say what to review, the run covers up to HEAD as before.
+        // When git cannot say what to review, the reviewed tips stay (Codex review of c8a7ca5: HEAD used to replace them).
         *doer.head.lock().unwrap() = Some("d01".into());
-        *doer.batch.lock().unwrap() = None;
+        *doer.batch.lock().unwrap() = Some(None);
         autos.tick(now_ms(), true, &doer);
         assert_eq!(doer.ran.lock().unwrap().last().unwrap().1.batch, None);
-        assert_eq!(autos.list()[0].last_seen.as_deref(), Some("d01"));
+        assert_eq!(autos.list()[0].last_seen.as_deref(), Some("x9 c47"));
+        // A new automation never takes the caller's reviewed commits.
+        let def = Automation { id: String::new(), enabled: true, project: Some("p".into()), repo: Some("r".into()), last_seen: Some("--output=x".into()), ..templates().into_iter().find(|t| t.id == "commit-capture").unwrap() };
+        assert_eq!(autos.put(def, now_ms()).unwrap().last_seen, None);
         let _ = std::fs::remove_dir_all(dir);
     }
 
