@@ -940,15 +940,22 @@ mod tests {
         std::fs::remove_dir_all(&base).ok();
     }
 
-    /// Run one executive chat turn that asks the model to run `commands`, each once, and return the commands it tried and the
-    /// ones Claude Code refused. Gives up after three minutes and ends the CLI either way.
-    fn probe(spec: &crate::agent::scope::Spec, commands: &[&str]) -> (Vec<String>, Vec<String>) {
+    /// What one probe turn did: each command the model tried with its tool result (None when none came back), and the
+    /// commands Claude Code refused.
+    struct Probed {
+        tried: Vec<(String, Option<(bool, String)>)>,
+        denied: Vec<String>,
+    }
+
+    /// Run one executive chat turn that asks the model to run `commands`, each once. Gives up after three minutes; the CLI
+    /// and everything it started are ended either way.
+    fn probe(spec: &crate::agent::scope::Spec, commands: &[&str]) -> Probed {
         use crate::agent::{claude::ClaudeCode, Adapter};
         use std::io::{BufRead, BufReader, Write};
+        use std::time::Instant;
         let list: Vec<String> = commands.iter().enumerate().map(|(i, c)| format!("{}. {c}", i + 1)).collect();
-        let prompt = format!("This is an automated test of this session's permission rules. Run each of these commands once with the Bash tool,             exactly as written, one per tool call, then reply DONE. Run nothing else.
-{}", list.join("
-"));
+        let prompt = format!("This is an automated test of this session's permission rules. Run each of these commands once with the Bash tool, \
+            exactly as written, one per tool call, then reply DONE. Run nothing else.\n{}", list.join("\n"));
         let mut command = ClaudeCode.command(spec);
         command.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
         let mut child = command.spawn().expect("claude starts");
@@ -957,32 +964,43 @@ mod tests {
         let (lines, received) = std::sync::mpsc::channel();
         let stdout = child.stdout.take().unwrap();
         std::thread::spawn(move || BufReader::new(stdout).lines().map_while(Result::ok).try_for_each(|l| lines.send(l)));
-        let deadline = std::time::Instant::now() + Duration::from_secs(180);
-        let (mut tried, mut result) = (Vec::new(), None);
-        while let Ok(line) = received.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
+        let deadline = Instant::now() + Duration::from_secs(180);
+        let (mut uses, mut results, mut result) = (Vec::<(String, String)>::new(), std::collections::HashMap::new(), None);
+        while let Some(left) = deadline.checked_duration_since(Instant::now()).filter(|left| !left.is_zero()) {
+            let Ok(line) = received.recv_timeout(left) else { break };
             let Ok(value) = serde_json::from_str::<Value>(&line) else { continue };
-            if value["type"] == "assistant" {
-                let blocks = value["message"]["content"].as_array().cloned().unwrap_or_default();
-                tried.extend(blocks.iter().filter(|b| b["type"] == "tool_use").filter_map(|b| b["input"]["command"].as_str().map(String::from)));
+            for block in value["message"]["content"].as_array().into_iter().flatten() {
+                let id = block["id"].as_str().or(block["tool_use_id"].as_str()).unwrap_or_default().to_string();
+                if value["type"] == "assistant" && block["type"] == "tool_use" {
+                    uses.extend(block["input"]["command"].as_str().map(|c| (id, c.to_string())));
+                } else if value["type"] == "user" && block["type"] == "tool_result" {
+                    let content = match &block["content"] {
+                        Value::String(s) => s.clone(),
+                        other => array(&json!({"c": other}), "c").filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n"),
+                    };
+                    results.insert(id, (block["is_error"] != json!(true), content));
+                }
             }
-            if value["type"] == "result" {
+            if value["type"] == "result" && Instant::now() < deadline {
                 result = Some(value);
                 break;
             }
         }
         drop(child.stdin.take());
-        child.kill().ok();
+        crate::git::kill_tree(&mut child);
         child.wait().ok();
         let result = result.expect("the CLI sent a result within three minutes");
-        let denied = array(&result, "permission_denials").filter_map(|d| d["tool_input"]["command"].as_str().map(String::from)).collect();
-        (tried, denied)
+        Probed {
+            tried: uses.into_iter().map(|(id, command)| (command, results.get(&id).cloned())).collect(),
+            denied: array(&result, "permission_denials").filter_map(|d| d["tool_input"]["command"].as_str().map(String::from)).collect(),
+        }
     }
 
     /// EXEC-14: the executive chat's real launch (isolated, never asking, `scope::executive` rules) against a temporary
     /// store. Claude Code must refuse a write, and a read that an allow rule lets through but a deny rule names; a control
-    /// run without the `capture` deny rules must let that read run, so the deny rule, not a missing allow rule, refused it.
-    /// The store must gain no note. Costs a few cents. Runs only when HIVEMIND_TEST_LM_SCRIPT and HIVEMIND_TEST_CLAUDE are
-    /// both set; `alm` must be on PATH.
+    /// run without the `capture` deny rules must run that read and get Living Memory's answer, so the deny rule, not a
+    /// missing allow rule, refused it. The store must gain no note. Costs a few cents. Runs only when HIVEMIND_TEST_LM_SCRIPT
+    /// and HIVEMIND_TEST_CLAUDE are both set; `alm` must be on PATH.
     #[test]
     fn live_executive_chat_is_refused_memory_writes() {
         use crate::agent::scope;
@@ -997,21 +1015,22 @@ mod tests {
         let write = "alm --json --domain pay capture --type knowledge --title 'Permission probe' --summary 'A probe.'";
         // A search for the word "capture": allowed by `alm --json --domain pay search *`, named by `*alm* capture`.
         let masked = "alm --json --domain pay search capture";
+        let tried = |run: &Probed, command: &str| run.tried.iter().any(|(c, _)| c == command);
 
-        let (tried, denied) = probe(&spec(made.deny.clone()), &[masked, write]);
-        eprintln!("tried {tried:?}
-denied {denied:?}");
+        let run = probe(&spec(made.deny.clone()), &[masked, write]);
+        eprintln!("tried {:?}\ndenied {:?}", run.tried, run.denied);
         for command in [masked, write] {
-            assert!(tried.iter().any(|c| c == command), "the model did not try `{command}`, so the rule went untested (tried {tried:?}); run again");
-            assert!(denied.iter().any(|c| c == command), "`{command}` was not refused: denials {denied:?}");
+            assert!(tried(&run, command), "the model did not try `{command}`, so the rule went untested (tried {:?}); run again", run.tried);
+            assert!(run.denied.iter().any(|c| c == command), "`{command}` was not refused: denials {:?}", run.denied);
         }
         let without: Vec<String> = made.deny.iter().filter(|rule| !rule.contains(" capture")).cloned().collect();
         assert!(without.len() < made.deny.len(), "the capture deny rules exist");
-        let (tried, denied) = probe(&spec(without), &[masked]);
-        eprintln!("control: tried {tried:?}
-denied {denied:?}");
-        assert!(tried.iter().any(|c| c == masked), "the model did not try `{masked}` in the control run (tried {tried:?}); run again");
-        assert!(!denied.iter().any(|c| c == masked), "the allow rule does not let `{masked}` run, so the first run proved nothing: {denied:?}");
+        let control = probe(&spec(without), &[masked]);
+        eprintln!("control: tried {:?}\ndenied {:?}", control.tried, control.denied);
+        let answer = control.tried.iter().find(|(c, _)| c == masked).map(|(_, r)| r.clone());
+        let Some(Some((ok, output))) = answer else { panic!("the model did not run `{masked}` in the control run (tried {:?}); run again", control.tried) };
+        let reply: Option<Value> = output.lines().find_map(|l| serde_json::from_str(l.trim()).ok());
+        assert!(ok && reply.as_ref().is_some_and(|r| r["ok"] == json!(true)), "the allowed read did not succeed, so the first run proved nothing: {output}");
 
         let hits = live_call(&bridge, &["search", "Permission probe", "--domain", "pay", "--actor", "viewer"], None);
         assert!(!array(&hits, "results").any(|h| text(h, "title") == "Permission probe"), "the write reached the store");

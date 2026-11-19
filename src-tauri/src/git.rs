@@ -74,7 +74,7 @@ pub struct Ran {
 const DRAIN_GRACE: Duration = Duration::from_secs(2); // how long to wait for output once a command is over
 
 /// Kill a child and everything it started. A commit hook that outlives git would otherwise keep the output pipes open.
-fn kill_tree(child: &mut Child) {
+pub(crate) fn kill_tree(child: &mut Child) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
