@@ -127,8 +127,11 @@ export function WikiPage() {
   if (agentMode && domain) agentProjects.current.set(domain, project);
   const pickEdition = (next: "structured" | "agent") => {
     if ((next === "agent") === agentMode) return;
-    // An address of one edition names nothing in the other; only the scope comes back.
-    open({ agent: next === "agent", project: next === "agent" && domain ? agentProjects.current.get(domain) : undefined });
+    // An address of one edition names nothing in the other; only the scope comes back, and only while that project still has
+    // notes in the wiki (otherwise Whole domain, since a build of an empty project would be refused).
+    const kept = next === "agent" && domain ? agentProjects.current.get(domain) : undefined;
+    const live = kept && structured.query.data?.projects.some((p) => p.slug === kept) ? kept : undefined;
+    open({ agent: next === "agent", project: live });
   };
 
   const exportHtml = async () => {
