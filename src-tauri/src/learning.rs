@@ -555,10 +555,40 @@ pub fn on_finished(status: Status) -> (Option<Trigger>, Option<skills::Outcome>)
 /// passwords in URLs, and the values of settings named like a secret. A heuristic: it cannot know every secret, and it
 /// sometimes removes a harmless value.
 pub fn redact(text: &str) -> String {
-    redact_tokens(&redact_url_passwords(&redact_assignments(&strip_private_keys(text))))
+    redact_tokens(&redact_auth_schemes(&redact_url_passwords(&redact_assignments(&strip_private_keys(text)))))
 }
 
 const REMOVED: &str = "[removed]";
+
+/// The credential after `Bearer ` or `Basic ` (as in an Authorization header), whatever its shape: at least 12 characters
+/// of a token's alphabet with a digit or punctuation in it, so "Basic authentication" stays.
+fn redact_auth_schemes(text: &str) -> String {
+    let token = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~' | '+' | '/' | '=');
+    let lower = text.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let (mut at, mut i) = (0, 0);
+    while i < text.len() {
+        let rest = &lower[i..];
+        let scheme = ["bearer", "basic"].into_iter().find(|s| rest.starts_with(s) && !text[..i].ends_with(|c: char| c.is_ascii_alphanumeric()));
+        if let Some(scheme) = scheme {
+            let after = i + scheme.len();
+            let gap = text[after..].len() - text[after..].trim_start_matches([' ', '\t']).len();
+            let start = after + gap;
+            let end = start + text[start..].find(|c: char| !token(c)).unwrap_or(text.len() - start);
+            let value = &text[start..end];
+            if gap > 0 && value.len() >= 12 && value.chars().any(|c| c.is_ascii_digit() || !c.is_ascii_alphanumeric()) {
+                out.push_str(&text[at..start]);
+                out.push_str(REMOVED);
+                at = end;
+                i = end;
+                continue;
+            }
+        }
+        i += text[i..].chars().next().map_or(1, char::len_utf8);
+    }
+    out.push_str(&text[at..]);
+    out
+}
 
 fn strip_private_keys(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -871,5 +901,16 @@ mod tests {
         for kept in ["OPENAI_API_KEY=", "user: \"ann\"", "# note", "+[removed]", "https://ann:", "@github.com/acme/app.git", "[private key removed]", "token count stays at 3", "src/sk-learn/notes.md"] {
             assert!(clean.contains(kept), "{kept} missing from:\n{clean}");
         }
+    }
+
+    #[test]
+    fn an_authorization_credential_of_any_shape_is_taken_out() {   // Codex R2 on c65ac7b..b5e0a4b
+        let text = "curl -H 'Authorization: Bearer q8Zt1vXw9LmN0pRs4TuV' x\nAuthorization: Basic dXNlcjpwYXNzd29yZA==\n\
+            bearer\tAbCdEfGh1234ijkl\nWe use Basic authentication and bearer tokens.";
+        let clean = redact(text);
+        for secret in ["q8Zt1vXw9LmN0pRs4TuV", "dXNlcjpwYXNzd29yZA", "AbCdEfGh1234ijkl"] {
+            assert!(!clean.contains(secret), "{secret} left in:\n{clean}");
+        }
+        assert!(clean.contains("Authorization: Bearer [removed]") && clean.contains("Basic authentication and bearer tokens."), "{clean}");
     }
 }

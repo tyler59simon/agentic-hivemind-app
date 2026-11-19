@@ -8,7 +8,8 @@ import { commitmentsTitle, formatCommitment } from "./commitments";
 
 export type Write =
   | { kind: "note"; domain: string; payload: CapturePayload }
-  | { kind: "action"; ref: string; text: string }
+  /** `key` marks a captured item's write, which may be a retry: an open action item with the same text is not added again. */
+  | { kind: "action"; ref: string; text: string; key?: string }
   | { kind: "milestone"; record: Partial<Milestone> };
 
 export interface Context {
@@ -76,8 +77,9 @@ export function acceptKey(batch: string, item: string): string | undefined {
   return /^[A-Za-z0-9-]{1,64}$/.test(key) ? key : undefined;
 }
 
-/** Whether a note body already holds the action item `text`, open or ticked: a retried accept must not add it twice. */
-export const hasAction = (body: string, text: string) => actionItems(body).some((a) => a.text === text.trim());
+/** Whether a note body already holds `text` as an open action item: a retried accept must not add it twice. A ticked one
+ *  is an earlier, finished commitment, so a new one with the same text is still added. */
+export const hasAction = (body: string, text: string) => actionItems(body).some((a) => !a.done && a.text === text.trim());
 
 /** What accepting `item` writes. `supersedes` is set when the user chose to replace an existing note. With `key`
  *  (`acceptKey`), a milestone gets that id and a note that idempotency key, so repeating the write finds the first one. */
@@ -91,7 +93,7 @@ export function planWrite(item: CaptureItem, ctx: Context, supersedes?: string, 
   if (item.kind === "commitment") {
     const text = formatCommitment({ task: item.title, owner: item.owner, due: item.due });
     const existing = commitmentsNote(ctx.rows, project);
-    if (existing) return { kind: "action", ref: existing.ref, text };
+    if (existing) return key ? { kind: "action", ref: existing.ref, text, key } : { kind: "action", ref: existing.ref, text };
     const name = project?.name ?? "Cross-project";
     const body = `Commitments made in meetings and conversations${project ? ` for ${name}` : " that belong to no single project"}. Hivemind adds to this list when you accept a captured commitment.\n\n## ${HEADINGS.actions}\n- [ ] ${text}`;
     return { kind: "note", domain: domainOf(project, ctx.defaultDomain), payload: { title: commitmentsTitle(name), body, type: "plan", tags: tagsFor("plan", project, ctx.known), ...keyed } };

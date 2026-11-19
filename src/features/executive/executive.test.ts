@@ -129,16 +129,21 @@ describe("capture", () => {
     expect(note.kind === "note" && note.payload.idempotency_key).toBe(`hivemind-capture-${key}`);
     const started = planWrite(extracted({ kind: "commitment", title: "Send the Q3 plan" }), ctx, undefined, key);
     expect(started.kind === "note" && started.payload.idempotency_key).toBe(`hivemind-capture-${key}`);
+    const rows = [row({ ref: "pay:c9", title: "Commitments: PayStream", type: "plan", tags: ["project/pay"] })];
+    const added = planWrite(extracted({ kind: "commitment", title: "Send the Q3 plan" }), { ...ctx, rows }, undefined, key);
+    expect(added.kind === "action" && added.key).toBe(key);
+    // A commitment added by hand has no key, so it is never taken for a retry (Codex R4).
+    expect(planWrite(extracted({ kind: "commitment", title: "Send the Q3 plan" }), { ...ctx, rows })).not.toHaveProperty("key");
     const plain = planWrite(extracted({}), ctx);
     expect(plain.kind === "note" && plain.payload.idempotency_key).toBeUndefined();
     // The same item planned again is the same write, so Living Memory's key check matches it.
     expect(planWrite(extracted({}), ctx, undefined, key)).toEqual(note);
   });
 
-  it("finds an action item a note already has, open or ticked", () => {   // EXEC-3
+  it("finds an open action item a note already has", () => {   // EXEC-3
     const body = ["Commitments.", "", "## Action items", "- [ ] Send the Q3 plan (owner: Dana)", "- [x] Book the room", "", "## Details", "- [ ] Not an action"].join("\n");
     expect(hasAction(body, "Send the Q3 plan (owner: Dana)")).toBe(true);
-    expect(hasAction(body, " Book the room ")).toBe(true);
+    expect(hasAction(body, " Book the room ")).toBe(false);   // a finished one: the same commitment again is new (Codex R4)
     expect(hasAction(body, "Not an action")).toBe(false);
     expect(hasAction(body, "Send the Q3 plan")).toBe(false);
   });

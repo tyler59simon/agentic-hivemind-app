@@ -87,7 +87,7 @@ export async function perform(write: Write, anyway?: boolean): Promise<{ ref: st
     if (id && (await listRecords<Milestone>("milestone")).some((m) => m.id === id)) return { ref: `milestone:${id}` };
     return { ref: `milestone:${(await putRecord<Milestone>("milestone", write.record)).id}` };
   }
-  if (write.kind === "action" && hasAction((await read(write.ref)).body, write.text)) return { ref: write.ref };
+  if (write.kind === "action" && write.key && hasAction((await read(write.ref)).body, write.text)) return { ref: write.ref };
   const r = write.kind === "action" ? await addAction(write.ref, write.text) : await capture(write.domain, anyway ? { ...write.payload, allow_similar: true } : write.payload);
   recordOperation(r.operation_id);
   return { ref: write.kind === "action" ? write.ref : `${r.domain ?? write.domain}:${r.id}`, operation: r.operation_id };
@@ -180,17 +180,26 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
   const [problems, setProblems] = useState<Record<string, string>>({});
   // Items written to memory whose batch save failed, with the state to save.
   const [unsaved, setUnsaved] = useState<Record<string, CaptureItem>>({});
+  const [closing, setClosing] = useState(false);
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+  // Closing loses what only this dialog knows: which items memory has but the batch does not.
+  const close = () => (Object.keys(unsaved).length ? setClosing(true) : onClose());
   const [replacing, setReplacing] = useState<{ item: CaptureItem; ref: string } | null>(null);
   const [showText, setShowText] = useState(false);
   if (batches.isLoading) return <Modal title="Review capture" onClose={onClose}><p className="muted">Loading…</p></Modal>;
   if (!stored) return <Modal title="Review capture" onClose={onClose}><p className="muted">This capture is no longer here.</p></Modal>;
   const items = stored.items.map((i) => edits[i.id] ?? i);
 
-  // An item shows as accepted or skipped only once the batch has recorded it.
-  const save = async (...next: CaptureItem[]) => {
-    const changed = Object.fromEntries(next.map((n) => [n.id, n]));
-    await putRecord<CaptureBatch>("capture", { ...stored, items: stored.items.map((i) => changed[i.id] ?? latest.current[i.id] ?? i) });
-    setEdits((e) => ({ ...e, ...changed }));
+  // An item shows as accepted or skipped only once the batch has recorded it. The store replaces the whole batch, so saves
+  // run one at a time, each from the state the one before it left.
+  const save = (...next: CaptureItem[]) => {
+    const run = queue.current.then(async () => {
+      const changed = Object.fromEntries(next.map((n) => [n.id, n]));
+      await putRecord<CaptureBatch>("capture", { ...stored, items: stored.items.map((i) => changed[i.id] ?? latest.current[i.id] ?? i) });
+      setEdits((e) => ({ ...e, ...changed }));
+    });
+    queue.current = run.catch(() => undefined);
+    return run;
   };
 
   const saveAccepted = async (done: CaptureItem) => {
@@ -220,7 +229,9 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
       await refreshStore(client);
     } catch (e) {
       const p = classify(e);
-      setProblems((all) => ({ ...all, [item.id]: p.kind === "similar" ? `A similar note exists: "${p.title ?? p.ref}". Save this one anyway, or skip it.` : p.message }));
+      const repeated = p.message.includes("Idempotency key has different content");
+      setProblems((all) => ({ ...all, [item.id]: p.kind === "similar" ? `A similar note exists: "${p.title ?? p.ref}". Save this one anyway, or skip it.`
+        : repeated ? "This item was saved to memory earlier, with the text it had then. Skip it here; the saved note is in Activity." : p.message }));
     } finally { setBusy(null); }
   };
 
@@ -229,7 +240,7 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
   // An item already written to memory is not waiting, even before its batch save goes through.
   const pending = pendingItems(items).filter((i) => !unsaved[i.id]);
   return (
-    <Modal title={`Review: ${stored.source.label}`} onClose={onClose} wide locked={!!busy}>
+    <Modal title={`Review: ${stored.source.label}`} onClose={close} wide locked={!!busy}>
       <div className="exec-review">
         <p className="muted small">
           {items.length ? `${items.length} item${items.length === 1 ? "" : "s"} found, ${pending.length} waiting. ` : "No items were found. "}
@@ -249,9 +260,14 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
         {showText && <pre className="briefing-text">{stored.text}</pre>}
         <div className="actions">
           {pending.length > 1 && <button onClick={() => reject(...pending)} disabled={!!busy}>Skip the rest</button>}
-          <button className="primary" onClick={onClose} disabled={!!busy}>{pending.length ? "Later" : "Done"}</button>
+          <button className="primary" onClick={close} disabled={!!busy}>{pending.length ? "Later" : "Done"}</button>
         </div>
       </div>
+      {closing && (
+        <Confirm title="Close without recording?" action="Close"
+          message="Some accepted items are in memory, but this capture has not recorded them. Retry save first, or they show as waiting next time."
+          onAnswer={(yes) => { setClosing(false); if (yes) onClose(); }} />
+      )}
       {replacing && (
         <Confirm title="Replace the existing note?" action="Replace"
           message={`The new note supersedes "${replacing.item.similar.find((s) => s.ref === replacing.ref)?.title}". The old note is kept as superseded, and the change can be undone from Activity.`}

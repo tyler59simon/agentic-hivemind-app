@@ -496,20 +496,29 @@ const GOVERNED_COMMANDS: [&str; 20] = [
 /// capture and plan commands through before Hivemind is asked; these must never run from a session, whatever the user clicks.
 pub fn governed_memory_command(command: &str) -> bool {
     let text = command.to_lowercase();
-    let words: Vec<&str> = text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_')).collect();
-    (text.contains("living_memory") || names_alm(&text))
-        && GOVERNED_COMMANDS.iter().any(|command| {
-            let parts: Vec<&str> = command.split(' ').collect();
-            words.windows(parts.len()).any(|window| window == parts.as_slice())
-        })
+    (text.contains("living_memory") && names_governed(&text)) || alm_segments(&text).any(names_governed)
 }
 
-/// Whether a lower-cased command line runs the `alm` launcher: a word whose file name is `alm`, `alm.exe` or `alm.cmd`,
-/// split the way Living Memory's own guard splits it (`hivemind_governed` in core/runtime.py).
-fn names_alm(text: &str) -> bool {
-    text.split(|c: char| c.is_whitespace() || ";&|()\"'`{}<>=,".contains(c))
-        .map(|word| word.rsplit(['/', '\\']).next().unwrap_or(word))
-        .any(|name| matches!(name, "alm" | "alm.exe" | "alm.cmd"))
+/// Whether a lower-cased command names a governed command as whole words.
+fn names_governed(text: &str) -> bool {
+    let words: Vec<&str> = text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_')).collect();
+    GOVERNED_COMMANDS.iter().any(|command| {
+        let parts: Vec<&str> = command.split(' ').collect();
+        words.windows(parts.len()).any(|window| window == parts.as_slice())
+    })
+}
+
+/// The parts of a lower-cased command line (split at ; & | and line breaks) whose program is the `alm` launcher: a first
+/// word, after `call` and `NAME=value` settings, whose file name is `alm`, `alm.exe` or `alm.cmd`. A file named alm passed
+/// to another program (`git apply alm`) is not the launcher.
+fn alm_segments(text: &str) -> impl Iterator<Item = &str> {
+    text.split(['\n', ';', '&', '|']).filter(|segment| {
+        let program = segment
+            .split(|c: char| c.is_whitespace() || "\"'`(){}".contains(c))
+            .filter(|word| !word.is_empty())
+            .find(|word| *word != "call" && !(word.contains('=') && !word.starts_with('-')));
+        program.is_some_and(|word| matches!(word.rsplit(['/', '\\']).next().unwrap_or(word), "alm" | "alm.exe" | "alm.cmd"))
+    })
 }
 
 /// Deny rules for the same commands, for the CLI's own rule engine: they hold even where the user's settings allow the
@@ -666,6 +675,8 @@ mod tests {
             r"C:\Users\u\.local\bin\ALM.CMD undo 123",
             "/home/u/.local/bin/alm --domain a archive x",
             "cd x && alm project create --payload-file p.json",
+            r#"& "C:\Users\u\.local\bin\alm.exe" undo 1"#,
+            "LIVING_MEMORY_ROOT=x alm archive a:b",
         ] {
             assert!(governed_memory_command(command), "{command}");
         }
@@ -684,9 +695,11 @@ mod tests {
             "git apply patch.diff",
             "alm --json --domain a search retries",
             "alm --json --domain a inspect-plan abc",
-            // A word that only contains alm is not the launcher.
+            // A word that only contains alm is not the launcher, and nor is a file named alm given to another program.
             "palm apply x",
             "realm.exe undo 1",
+            "git apply --check alm",
+            "alm --json --domain a search x && git apply patch.diff",
         ] {
             assert!(!governed_memory_command(command), "{command}");
         }
