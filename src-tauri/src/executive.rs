@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -317,6 +318,17 @@ pub struct Deps<'a> {
     pub claude: String,
     pub ledger: &'a Ledger,
     pub cap: f64,
+    /// Set when the automation run that asked for this is cancelled; None for the user's own requests.
+    pub cancel: Option<&'a AtomicBool>,
+}
+
+impl Deps<'_> {
+    fn cancelled(&self) -> Result<(), String> {
+        match self.cancel {
+            Some(c) if c.load(Ordering::Relaxed) => Err(oneshot::CANCELLED.into()),
+            _ => Ok(()),
+        }
+    }
 }
 
 const GROUNDING: &str = "Ground every statement in the evidence, and list the evidence ids (such as E3) each part rests on in the fields \
@@ -401,7 +413,7 @@ pub fn style_schema() -> Value {
 fn call(deps: &Deps, dir: &std::path::Path, name: &str, policy: &str, schema: Value, budget_usd: f64, input: &str) -> (Result<Value, String>, Option<f64>) {
     let who = Call { who: "The executive assistant", model: MODEL, policy, schema, budget_usd };
     let id = format!("exec-{name}-{}", uuid::Uuid::new_v4().simple());
-    oneshot::run(&deps.claude, dir, deps.ledger, deps.cap, &id, &who, input, TIMEOUT)
+    oneshot::run(&deps.claude, dir, deps.ledger, deps.cap, &id, &who, input, TIMEOUT, deps.cancel)
 }
 
 pub const BRIEF_KINDS: [&str; 5] = ["weekly", "project", "priorities", "commitments", "risks"];
@@ -417,6 +429,7 @@ pub fn brief(lm: &Lm, store: &Store, deps: &Deps, kind: &str, project: Option<&s
         return Err(format!("Unknown briefing kind: {kind}"));
     }
     let days = days.clamp(1, 90);
+    deps.cancelled()?;
     let pack = pack(lm, store, project, days, today)?;
     let scope = project.map_or("all active projects".to_string(), |slug| format!("the project {}", project_name(lm, slug)));
     let input = format!("# Briefing request\nKind: {kind}. Scope: {scope}. Period: the {days} days up to {today} (today).\n\n{}", pack_text(&pack));
@@ -430,6 +443,8 @@ pub fn brief(lm: &Lm, store: &Store, deps: &Deps, kind: &str, project: Option<&s
     object.insert("evidence".into(), json!(pack.evidence));
     object.insert("packGaps".into(), json!(pack.gaps));
     object.insert("costUsd".into(), json!(cost));
+    // A cancel that came during the call: the briefing is not kept.
+    deps.cancelled()?;
     store.put("briefing", record, crate::agent::now_ms())
 }
 
@@ -965,7 +980,7 @@ mod tests {
         let store = Store::new(base.join("executive"));
         store.put("milestone", json!({"project": "pay", "title": "Public beta", "due": "2026-12-05", "status": "planned", "note": ""}), 1).unwrap();
         let ledger = Ledger::new(base.join("spend.json"));
-        let deps = Deps { claude, ledger: &ledger, cap: 2.0 };
+        let deps = Deps { claude, ledger: &ledger, cap: 2.0, cancel: None };
         let lm = viewer(&bridge);
         let notes = "Platform sync, 19 Nov.\nWe decided to keep event IDs for 30 days so late redeliveries are still deduplicated.\n\
             Dana will send the Q3 plan to the VP by 25 November.\nRisk: the provider may throttle replays; Sam owns a rate ceiling flag.\nBeta is still on track for 5 December.";

@@ -7,6 +7,7 @@ use crate::learning::{redact, Ledger};
 use serde_json::Value;
 use std::path::Path;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// What one call is: who it is in error messages ("The reviewer"), the model alias, the system prompt, the schema of the
@@ -47,9 +48,16 @@ pub fn parse_envelope(who: &str, stdout: &str) -> (Result<Value, String>, Option
     (envelope.get("structured_output").cloned().ok_or(format!("{who} gave no structured answer")), cost)
 }
 
-/// Run one call in `dir` within the daily cap. `id` names the reservation.
+/// What a cancelled call answers.
+pub const CANCELLED: &str = "Cancelled";
+
+/// Run one call in `dir` within the daily cap. `id` names the reservation. Setting `cancel` stops the call; one that had
+/// started keeps its reservation, since what it spent is unknown.
 #[allow(clippy::too_many_arguments)] // each argument is one independent part of the call
-pub fn run(claude: &str, dir: &Path, ledger: &Ledger, cap: f64, id: &str, call: &Call, input: &str, timeout: Duration) -> (Result<Value, String>, Option<f64>) {
+pub fn run(claude: &str, dir: &Path, ledger: &Ledger, cap: f64, id: &str, call: &Call, input: &str, timeout: Duration, cancel: Option<&AtomicBool>) -> (Result<Value, String>, Option<f64>) {
+    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return (Err(CANCELLED.into()), None);
+    }
     let now = crate::agent::now_ms();
     if let Err(e) = ledger.reserve(id, call.budget_usd, cap, now) {
         return (Err(e), None);
@@ -57,7 +65,7 @@ pub fn run(claude: &str, dir: &Path, ledger: &Ledger, cap: f64, id: &str, call: 
     let _ = std::fs::create_dir_all(dir);
     let mut command = Command::new(claude);
     command.args(argv(call)).current_dir(dir).env("LIVING_MEMORY_OFF", "1").env_remove("HIVEMIND_SESSION").env_remove("CLAUDECODE");
-    let ran = crate::git::run_with_input(command, Some(&redact(input)), timeout);
+    let ran = crate::git::run_cancellable(command, Some(&redact(input)), timeout, cancel);
     // A call that never started costs nothing; one that ran (even into a timeout) is charged what it reports, else its
     // whole reservation.
     let (answer, cost, recorded) = match ran {
@@ -117,7 +125,7 @@ mod tests {
     fn a_spent_budget_stops_the_call_before_it_starts() {
         let dir = std::env::temp_dir().join(format!("hivemind-oneshot-{}", std::process::id()));
         let ledger = Ledger::new(dir.join("spend.json"));
-        let (answer, cost) = run("no-such-program", &dir, &ledger, 0.1, "x", &call(), "hi", Duration::from_secs(1));
+        let (answer, cost) = run("no-such-program", &dir, &ledger, 0.1, "x", &call(), "hi", Duration::from_secs(1), None);
         assert!(answer.unwrap_err().contains("budget"));
         assert_eq!(cost, None);
         std::fs::remove_dir_all(&dir).ok();
@@ -127,10 +135,15 @@ mod tests {
     fn a_call_that_never_starts_is_not_charged() {   // EXEC-6
         let dir = std::env::temp_dir().join(format!("hivemind-oneshot-start-{}", std::process::id()));
         let ledger = Ledger::new(dir.join("spend.json"));
-        let (answer, cost) = run("no-such-program", &dir, &ledger, 1.0, "x", &call(), "hi", Duration::from_secs(5));
+        let (answer, cost) = run("no-such-program", &dir, &ledger, 1.0, "x", &call(), "hi", Duration::from_secs(5), None);
         assert!(answer.unwrap_err().starts_with(crate::git::COULD_NOT_RUN));
         assert_eq!(cost, None);
         assert!(ledger.used(crate::agent::now_ms()).abs() < 1e-9, "the old code charged the whole $0.50");
+        // Cancelled before it starts: no call and no reservation (EXEC-5).
+        let cancel = AtomicBool::new(true);
+        let (answer, _) = run("no-such-program", &dir, &ledger, 1.0, "y", &call(), "hi", Duration::from_secs(5), Some(&cancel));
+        assert_eq!(answer.unwrap_err(), CANCELLED);
+        assert!(ledger.used(crate::agent::now_ms()).abs() < 1e-9);
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -424,7 +424,7 @@ impl workflow::Host for AppHost {
 struct AppDoer(AppHandle);
 
 impl automations::Doer for AppDoer {
-    fn run(&self, a: &automations::Automation, vars: &automations::Vars) -> Result<automations::Started, String> {
+    fn run(&self, a: &automations::Automation, vars: &automations::Vars, cancel: &std::sync::atomic::AtomicBool) -> Result<automations::Started, String> {
         use automations::{Action, Started};
         let state = self.0.state::<AppState>();
         let saved = settings::load(&state.settings_path);
@@ -486,7 +486,7 @@ impl automations::Doer for AppDoer {
                 if let Some(why) = automations::Doer::paused(self, a) {
                     return Err(why);
                 }
-                let deps = exec_deps(&state, &saved)?;
+                let deps = executive::Deps { cancel: Some(cancel), ..exec_deps(&state, &saved)? };
                 let scope = Some(project.as_str()).filter(|p| !p.is_empty());
                 let record = executive::brief(&executive::viewer(&state.bridge), &state.executive, &deps, briefing, scope, *days, &origin, today())?;
                 let _ = self.0.emit("executive-changed", "briefing");
@@ -1343,7 +1343,7 @@ fn exec_deps<'a>(state: &'a AppState, saved: &Settings) -> Result<executive::Dep
     if !saved.shows(agent::Engine::Claude) {
         return Err("Drafting, briefings and capture run on Claude Code, which is hidden in Settings. Show it again to use them.".into());
     }
-    Ok(executive::Deps { claude: agent::claude::available(saved)?, ledger: state.learning.ledger(), cap: saved.learning_daily_usd() })
+    Ok(executive::Deps { claude: agent::claude::available(saved)?, ledger: state.learning.ledger(), cap: saved.learning_daily_usd(), cancel: None })
 }
 
 #[tauri::command]

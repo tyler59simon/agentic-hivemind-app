@@ -8,10 +8,10 @@ use crate::agent::roles::{Profile, Role};
 use crate::agent::{now_ms, Engine};
 use chrono::{DateTime, Datelike, Duration as Days, Local, NaiveTime, TimeZone};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
 pub const RUNS_KEPT: usize = 100;
@@ -161,7 +161,8 @@ pub enum Started {
 
 /// What automations need from the rest of the app; tests use a fake.
 pub trait Doer: Send + Sync {
-    fn run(&self, automation: &Automation, prompt_vars: &Vars) -> Result<Started, String>;
+    /// Do the action. `cancel` is set when the user cancels the run; an action that takes a while (a briefing) stops on it.
+    fn run(&self, automation: &Automation, prompt_vars: &Vars, cancel: &AtomicBool) -> Result<Started, String>;
     /// The commit the repository's current branch points at.
     fn head(&self, repo: &str) -> Option<String>;
     /// `git log --oneline` of what HEAD has beyond `since` (the reviewed tips), or the last few commits without `since`. An
@@ -320,6 +321,8 @@ pub struct Automations {
     admit: Mutex<()>,
     /// Automations the scheduler is firing on another thread.
     busy: Mutex<BTreeSet<String>>,
+    /// The cancel flag of each run whose action is under way, by run id.
+    cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 /// An automation the scheduler found due, and why.
@@ -345,7 +348,7 @@ impl Automations {
         let list: Vec<Automation> = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
         let autos = Automations {
             path, runs_dir: app_data.join("automation-runs"), state: Mutex::new(list), wake: Condvar::new(), dirty: AtomicBool::new(false),
-            admit: Mutex::new(()), busy: Mutex::new(BTreeSet::new()),
+            admit: Mutex::new(()), busy: Mutex::new(BTreeSet::new()), cancels: Mutex::new(HashMap::new()),
         };
         autos.recover();
         autos
@@ -583,6 +586,9 @@ impl Automations {
         row.state = RunState::Cancelled;
         row.ended_at = Some(now_ms());
         self.put_run(&row)?;
+        if let Some(flag) = self.cancels.lock().unwrap().get(run) {
+            flag.store(true, Ordering::Relaxed);
+        }
         Ok(row)
     }
 
@@ -613,6 +619,9 @@ impl Automations {
     /// workflow starts, so its report (or a cancel) waits until the run knows it. Other actions can take minutes and run
     /// without it. A cancel that came meanwhile wins.
     fn execute(&self, a: &Automation, mut row: RunRow, doer: &dyn Doer, admit: MutexGuard<'_, ()>) -> RunRow {
+        // Registered while `admit` is held, so a cancel (which takes it) always finds the flag.
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.cancels.lock().unwrap().insert(row.id.clone(), cancel.clone());
         drop(admit);
         let repo = a.repo.clone().unwrap_or_default();
         let head = (!repo.is_empty()).then(|| doer.head(&repo)).flatten();
@@ -631,13 +640,16 @@ impl Automations {
         let held = if matches!(a.action, Action::Role { .. } | Action::Workflow { .. }) {
             let guard = self.admit.lock().unwrap();
             if let Some(cancelled) = self.find_run(&row.id).filter(|r| r.state == RunState::Cancelled) {
+                self.cancels.lock().unwrap().remove(&row.id);
                 return cancelled;
             }
             Some(guard)
         } else {
             None
         };
-        match doer.run(a, &vars) {
+        let ran = doer.run(a, &vars, &cancel);
+        self.cancels.lock().unwrap().remove(&row.id);
+        match ran {
             Ok(Started::Done { detail, cost }) => {
                 row.state = RunState::Succeeded;
                 row.detail = Some(detail);
@@ -902,10 +914,21 @@ mod tests {
         broke: bool,
         session: bool,
         paused: Mutex<bool>,
+        /// run waits (up to 10 s) for its cancel flag, then reports whether it saw it.
+        slow: bool,
+        saw_cancel: AtomicBool,
     }
     impl Doer for Fake {
-        fn run(&self, a: &Automation, vars: &Vars) -> Result<Started, String> {
+        fn run(&self, a: &Automation, vars: &Vars, cancel: &AtomicBool) -> Result<Started, String> {
             self.ran.lock().unwrap().push((a.id.clone(), vars.clone()));
+            if self.slow {
+                let start = std::time::Instant::now();
+                while !cancel.load(Ordering::Relaxed) && start.elapsed() < Duration::from_secs(10) {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                self.saw_cancel.store(cancel.load(Ordering::Relaxed), Ordering::Relaxed);
+                return Err("Cancelled".into());
+            }
             if self.session {
                 return Ok(Started::Session("s1".into()));
             }
@@ -1135,6 +1158,30 @@ mod tests {
         assert!(again.fire(&a.id, "manual", None, &doer).is_some());
         let kept = std::fs::read_dir(dir.join("automation-runs")).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().contains("unreadable")).count();
         assert_eq!((kept, again.runs(&a.id).len()), (1, 1), "the torn file is kept aside, not overwritten");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn cancelling_a_running_action_stops_it() {   // EXEC-5
+        let (dir, autos) = store();
+        let a = autos.put(Automation { id: String::new(), ..daily("Briefing") }, now_ms()).unwrap();
+        let doer = Fake { slow: true, ..Default::default() };
+        let row = std::thread::scope(|s| {
+            let fired = s.spawn(|| autos.fire(&a.id, "manual", None, &doer));
+            let start = std::time::Instant::now();
+            let running = loop {
+                if let Some(r) = autos.runs(&a.id).into_iter().find(|r| r.state == RunState::Running) {
+                    break r;
+                }
+                assert!(start.elapsed() < Duration::from_secs(10), "the run never started");
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            assert_eq!(autos.cancel(&running.id).unwrap().state, RunState::Cancelled);
+            fired.join().unwrap().unwrap()
+        });
+        assert!(doer.saw_cancel.load(Ordering::Relaxed), "the action was told to stop");
+        assert_eq!(row.state, RunState::Cancelled);
+        assert!(autos.cancels.lock().unwrap().is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 

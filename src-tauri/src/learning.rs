@@ -480,7 +480,7 @@ Review these commits for knowledge worth keeping.
             memory: vec![], skill: None, skill_name: None, skill_applied: false, cost_usd: None, error: None,
         };
         let reservation = format!("review-{}-{}", subject.key, run.at);
-        let (value, cost) = crate::oneshot::run(&deps.claude, &self.dir, &self.ledger, deps.daily_usd, &reservation, &reviewer(), input, TIMEOUT);
+        let (value, cost) = crate::oneshot::run(&deps.claude, &self.dir, &self.ledger, deps.daily_usd, &reservation, &reviewer(), input, TIMEOUT, None);
         let answer = answer_of(value);
         run.cost_usd = cost;
         let answer = match answer {
