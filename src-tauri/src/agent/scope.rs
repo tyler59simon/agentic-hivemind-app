@@ -612,6 +612,22 @@ mod tests {
     }
 
     #[test]
+    fn the_executive_chat_is_denied_every_memory_write() {   // EXEC-14
+        let dir = std::env::temp_dir().join(format!("hivemind-agent-scope-deny-{}", std::process::id()));
+        let scope = executive(&dir, "Executive: Hi".into(), &["pay".into()]).unwrap();
+        for verb in MEMORY_WRITES {
+            for rule in ["Bash(*alm* VERB *)", "Bash(*alm* VERB)", "PowerShell(*alm* VERB *)", "PowerShell(*living_memory.py* VERB)"] {
+                let rule = rule.replace("VERB", verb);
+                assert!(scope.deny.contains(&rule), "{rule} is not denied");
+            }
+        }
+        let Policy::PreApproved { allow } = &scope.policy else { panic!("not pre-approved") };
+        let writes = |rule: &String| MEMORY_WRITES.iter().any(|verb| rule.contains(&format!(" {verb} *)")) || rule.contains(&format!(" {verb})")));
+        assert!(!allow.iter().any(writes), "an allow rule names a write: {allow:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn only_picked_folders_are_accepted() {
         let (base, _) = fixture("other-folder");
         let folder = base.join("app");
