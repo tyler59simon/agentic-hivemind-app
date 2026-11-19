@@ -104,6 +104,15 @@ export function planWrite(item: CaptureItem, ctx: Context, supersedes?: string, 
   return { kind: "note", domain, payload: supersedes ? { ...payload, supersedes: [supersedes] } : payload };
 }
 
+/** The write accepting `item` runs: the one an unfinished earlier accept recorded (`intent`), or a new plan. `fresh` says the
+ *  plan is new and must be recorded on the item before it runs. */
+export function acceptWrite(item: CaptureItem, plan: () => Write, replace?: string): { write: Write; superseded?: string; fresh: boolean } {
+  const intent = item.intent as { write: Write; superseded?: string } | undefined;
+  if (intent) return { write: intent.write, superseded: intent.superseded, fresh: false };
+  const write = plan();
+  return { write, superseded: write.kind === "note" && write.payload.supersedes ? replace : undefined, fresh: true };
+}
+
 /** A capture batch's items still waiting for the user. */
 export const pendingItems = (items: CaptureItem[]) => items.filter((i) => i.state === "pending");
 

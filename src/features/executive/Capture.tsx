@@ -12,7 +12,7 @@ import { openExecutive } from "../../store";
 import { Confirm, Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 import { NoteLink } from "../preview/NoteLink";
-import { acceptKey, blocked, hasAction, KIND_LABEL, pendingItems, planWrite, replaceable, type Context, type Write } from "./items";
+import { acceptKey, acceptWrite, blocked, hasAction, KIND_LABEL, pendingItems, planWrite, replaceable, type Context, type Write } from "./items";
 import { isoToday } from "./commitments";
 import { useNotes, useRecords, useStoreFacts } from "./useExecutive";
 
@@ -109,30 +109,39 @@ function ItemCard({ item, projects, ctx, onChange, onAccept, onReject, onRetrySa
   const set = (patch: Partial<CaptureItem>) => onChange({ ...item, ...patch });
   const dated = item.kind === "commitment" || item.kind === "milestone";
   const done = item.state !== "pending" || unsaved;
+  // An accept that started earlier is finished as it was planned; the fields stay as they were until the user starts over.
+  const resuming = !done && !!item.intent && !busy;
+  const fixed = done || resuming;
   return (
     <article className={`exec-item ${done ? `done ${item.state}` : ""}`}>
       <div className="exec-row">
-        <select aria-label="Kind" value={item.kind} disabled={done} onChange={(e) => set({ kind: e.target.value as ItemKind })}>
+        <select aria-label="Kind" value={item.kind} disabled={fixed} onChange={(e) => set({ kind: e.target.value as ItemKind })}>
           {ITEM_KINDS.map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}
         </select>
-        <select aria-label="Project" value={item.project ?? ""} disabled={done} onChange={(e) => set({ project: e.target.value || null })}>
+        <select aria-label="Project" value={item.project ?? ""} disabled={fixed} onChange={(e) => set({ project: e.target.value || null })}>
           <option value="">No project</option>
           {projects.map((p) => <option key={p.slug} value={p.slug}>{p.name}</option>)}
         </select>
         <span className={`status-chip ${item.confidence === "high" ? "ok" : item.confidence === "medium" ? "next" : "warn"}`} title="How plainly the text states it">{item.confidence} confidence</span>
         {done && <span className={`status-chip ${item.state === "accepted" ? "ok" : ""}`}>{item.state}</span>}
       </div>
-      <input className="exec-title" aria-label="Title" value={item.title} disabled={done} onChange={(e) => set({ title: e.target.value })} />
-      <textarea aria-label="Summary" rows={2} value={item.summary} disabled={done} onChange={(e) => set({ summary: e.target.value })} />
+      <input className="exec-title" aria-label="Title" value={item.title} disabled={fixed} onChange={(e) => set({ title: e.target.value })} />
+      <textarea aria-label="Summary" rows={2} value={item.summary} disabled={fixed} onChange={(e) => set({ summary: e.target.value })} />
       {dated && (
         <div className="exec-row">
-          {item.kind === "commitment" && <label className="field grow"><span>Owner</span><input value={item.owner} disabled={done} onChange={(e) => set({ owner: e.target.value })} /></label>}
-          <label className="field"><span>Due</span><input type="date" value={item.due} disabled={done} onChange={(e) => set({ due: e.target.value })} /></label>
+          {item.kind === "commitment" && <label className="field grow"><span>Owner</span><input value={item.owner} disabled={fixed} onChange={(e) => set({ owner: e.target.value })} /></label>}
+          <label className="field"><span>Due</span><input type="date" value={item.due} disabled={fixed} onChange={(e) => set({ due: e.target.value })} /></label>
         </div>
       )}
       {item.kind === "commitment" && !item.owner.trim() && !done && <p className="muted small">No owner was named. Add one, or it is saved without.</p>}
       {item.quote && <blockquote className="exec-quote">{item.quote}</blockquote>}
-      {!done && noteMatches.length > 0 && (
+      {resuming && (
+        <p className="muted small">
+          An earlier accept of this item did not finish. Accept finishes it with the text it had then.{" "}
+          <button className="link small" onClick={() => onChange({ ...item, intent: undefined })} disabled={busy}>Start over</button> to change it first.
+        </p>
+      )}
+      {!fixed && noteMatches.length > 0 && (
         <fieldset className="exec-similar">
           <legend>This may repeat an existing note</legend>
           <label className="check"><input type="radio" checked={choice === "new"} onChange={() => setChoice("new")} /> Save as a new note</label>
@@ -222,10 +231,12 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
     setBusy(item.id);
     setProblems((p) => ({ ...p, [item.id]: "" }));
     try {
-      const write = planWrite(item, ctx, replace, acceptKey(stored.id, item.id));
-      const replaced = write.kind === "note" && write.payload.supersedes ? replace : undefined;
+      // The exact write goes into the batch before it runs, so a retry after a crash or a closed dialog repeats that write
+      // (which finds what it already wrote) rather than one planned again from fields edited since.
+      const { write, superseded: replaced, fresh } = acceptWrite(item, () => planWrite(item, ctx, replace, acceptKey(stored.id, item.id)), replace);
+      if (fresh) await save({ ...item, intent: { write, superseded: replaced } });
       const result = { ...(await perform(write, anyway)), superseded: replaced };
-      await saveAccepted({ ...item, state: "accepted" as const, result });
+      await saveAccepted({ ...item, intent: undefined, state: "accepted" as const, result });
       await refreshStore(client);
     } catch (e) {
       const p = classify(e);
@@ -235,7 +246,7 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
     } finally { setBusy(null); }
   };
 
-  const reject = (...items: CaptureItem[]) => save(...items.map((i) => ({ ...i, state: "rejected" as const }))).catch((e) => toast(String(e), "error"));
+  const reject = (...items: CaptureItem[]) => save(...items.map((i) => ({ ...i, intent: undefined, state: "rejected" as const }))).catch((e) => toast(String(e), "error"));
 
   // An item already written to memory is not waiting, even before its batch save goes through.
   const pending = pendingItems(items).filter((i) => !unsaved[i.id]);

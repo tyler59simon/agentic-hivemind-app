@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Briefing, CaptureItem, Health, Milestone } from "../../lib/executive";
 import type { NoteRow, OpenItem, Project } from "../../lib/lm";
-import { acceptKey, blocked, commitmentsNote, hasAction, itemBody, planWrite, replaceable, tagsFor, type Context } from "./items";
+import { acceptKey, acceptWrite, blocked, commitmentsNote, hasAction, itemBody, planWrite, replaceable, tagsFor, type Context } from "./items";
 import { addDays, commitmentRows, formatCommitment, parseCommitment, timing } from "./commitments";
 import { healthView, signals, suggestHealth } from "./health";
 import { attention, crossProject, portfolio } from "./portfolio";
@@ -138,6 +138,17 @@ describe("capture", () => {
     expect(plain.kind === "note" && plain.payload.idempotency_key).toBeUndefined();
     // The same item planned again is the same write, so Living Memory's key check matches it.
     expect(planWrite(extracted({}), ctx, undefined, key)).toEqual(note);
+  });
+
+  it("repeats the write an unfinished accept recorded, not one planned from later edits", () => {   // EXEC-3, Codex R3
+    const item = extracted({ title: "Use event IDs as keys" });
+    const first = acceptWrite(item, () => planWrite(item, ctx, "pay:old", "b-i1"), "pay:old");
+    expect(first.fresh).toBe(true);
+    expect(first.superseded).toBe("pay:old");
+    const edited = { ...item, title: "Use event IDs as idempotency keys", intent: { write: first.write, superseded: first.superseded } };
+    const again = acceptWrite(edited, () => planWrite(edited, ctx, undefined, "b-i1"));
+    expect(again).toEqual({ write: first.write, superseded: "pay:old", fresh: false });
+    expect(acceptWrite({ ...edited, intent: undefined }, () => planWrite(edited, ctx, undefined, "b-i1")).write).not.toEqual(first.write);
   });
 
   it("finds an open action item a note already has", () => {   // EXEC-3

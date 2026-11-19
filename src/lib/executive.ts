@@ -51,6 +51,9 @@ export interface CaptureItem {
   similar: Similar[]; state: ItemState;
   /** What accepting wrote: a note ref, `milestone:<id>`, and the operation to undo. */
   result?: { ref?: string; operation?: string; superseded?: string };
+  /** An accept that started and has not been recorded: the exact write (features/executive/items.ts Write), saved before it
+   *  ran, so a retry repeats it instead of planning another one from edited fields. */
+  intent?: { write: unknown; superseded?: string };
 }
 export interface CaptureSource { kind: "paste" | "agent-session" | "draft-edits"; label: string; session?: string }
 export interface CaptureBatch extends Stamped { source: CaptureSource; project: string | null; text: string; items: CaptureItem[]; questions: string[]; costUsd: number | null }
