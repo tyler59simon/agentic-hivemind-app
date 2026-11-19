@@ -10,6 +10,7 @@ use chrono::{DateTime, Datelike, Duration as Days, Local, NaiveTime, TimeZone};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
+use crate::oneshot::Cancel;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
@@ -162,7 +163,7 @@ pub enum Started {
 /// What automations need from the rest of the app; tests use a fake.
 pub trait Doer: Send + Sync {
     /// Do the action. `cancel` is set when the user cancels the run; an action that takes a while (a briefing) stops on it.
-    fn run(&self, automation: &Automation, prompt_vars: &Vars, cancel: &AtomicBool) -> Result<Started, String>;
+    fn run(&self, automation: &Automation, prompt_vars: &Vars, cancel: &Cancel) -> Result<Started, String>;
     /// The commit the repository's current branch points at.
     fn head(&self, repo: &str) -> Option<String>;
     /// `git log --oneline` of what HEAD has beyond `since` (the reviewed tips), or the last few commits without `since`. An
@@ -321,8 +322,8 @@ pub struct Automations {
     admit: Mutex<()>,
     /// Automations the scheduler is firing on another thread.
     busy: Mutex<BTreeSet<String>>,
-    /// The cancel flag of each run whose action is under way, by run id.
-    cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// The cancel switch of each run whose action is under way, by run id.
+    cancels: Mutex<HashMap<String, Arc<Cancel>>>,
 }
 
 /// An automation the scheduler found due, and why.
@@ -583,12 +584,13 @@ impl Automations {
         if !matches!(row.state, RunState::Waiting | RunState::Running) {
             return Err("This run has ended".into());
         }
+        // An action that has already kept its result (a saved briefing) is not cancelled after the fact.
+        if self.cancels.lock().unwrap().get(run).cloned().is_some_and(|cancel| !cancel.cancel()) {
+            return Err("This run has ended".into());
+        }
         row.state = RunState::Cancelled;
         row.ended_at = Some(now_ms());
         self.put_run(&row)?;
-        if let Some(flag) = self.cancels.lock().unwrap().get(run) {
-            flag.store(true, Ordering::Relaxed);
-        }
         Ok(row)
     }
 
@@ -620,7 +622,7 @@ impl Automations {
     /// without it. A cancel that came meanwhile wins.
     fn execute(&self, a: &Automation, mut row: RunRow, doer: &dyn Doer, admit: MutexGuard<'_, ()>) -> RunRow {
         // Registered while `admit` is held, so a cancel (which takes it) always finds the flag.
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::new(Cancel::default());
         self.cancels.lock().unwrap().insert(row.id.clone(), cancel.clone());
         drop(admit);
         let repo = a.repo.clone().unwrap_or_default();
@@ -917,17 +919,25 @@ mod tests {
         /// run waits (up to 10 s) for its cancel flag, then reports whether it saw it.
         slow: bool,
         saw_cancel: AtomicBool,
+        /// run commits its result, then takes a moment to finish.
+        commits: bool,
+        committed: AtomicBool,
     }
     impl Doer for Fake {
-        fn run(&self, a: &Automation, vars: &Vars, cancel: &AtomicBool) -> Result<Started, String> {
+        fn run(&self, a: &Automation, vars: &Vars, cancel: &Cancel) -> Result<Started, String> {
             self.ran.lock().unwrap().push((a.id.clone(), vars.clone()));
             if self.slow {
                 let start = std::time::Instant::now();
-                while !cancel.load(Ordering::Relaxed) && start.elapsed() < Duration::from_secs(10) {
+                while !cancel.is_set() && start.elapsed() < Duration::from_secs(10) {
                     std::thread::sleep(Duration::from_millis(10));
                 }
-                self.saw_cancel.store(cancel.load(Ordering::Relaxed), Ordering::Relaxed);
+                self.saw_cancel.store(cancel.is_set(), Ordering::Relaxed);
                 return Err("Cancelled".into());
+            }
+            if self.commits {
+                cancel.commit(|| Ok(()))?;
+                self.committed.store(true, Ordering::Relaxed);
+                std::thread::sleep(Duration::from_millis(300));
             }
             if self.session {
                 return Ok(Started::Session("s1".into()));
@@ -1182,6 +1192,20 @@ mod tests {
         assert!(doer.saw_cancel.load(Ordering::Relaxed), "the action was told to stop");
         assert_eq!(row.state, RunState::Cancelled);
         assert!(autos.cancels.lock().unwrap().is_empty());
+        // A run that has kept its result cannot be cancelled after the fact (Codex review of 74bba49).
+        let doer = Fake { commits: true, ..Default::default() };
+        let row = std::thread::scope(|s| {
+            let fired = s.spawn(|| autos.fire(&a.id, "manual", None, &doer));
+            let start = std::time::Instant::now();
+            while !doer.committed.load(Ordering::Relaxed) {
+                assert!(start.elapsed() < Duration::from_secs(10), "the run never committed");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let running = autos.runs(&a.id).into_iter().find(|r| r.state == RunState::Running).unwrap();
+            assert_eq!(autos.cancel(&running.id).unwrap_err(), "This run has ended");
+            fired.join().unwrap().unwrap()
+        });
+        assert_eq!(row.state, RunState::Succeeded);
         let _ = std::fs::remove_dir_all(dir);
     }
 

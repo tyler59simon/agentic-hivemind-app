@@ -230,24 +230,28 @@ describe("texts", () => {
     expect(edited("The plan ships Friday.", "The plan ships Monday.")).toBe(false);
   });
 
-  // EXEC-10: the draft was marked learned from before the call ran, so a failed call was never tried again.
-  it("records a draft as learned from only after the call succeeds, on its latest copy", async () => {
+  // EXEC-10: the draft was marked learned from before the call ran, so a failed call was never tried again. The backend now
+  // marks it after a success (mark_learned); here, overlapping sends share one call and a failure frees the next one.
+  it("learns from one draft text once at a time, and a failure is tried again", async () => {
     const d = { id: "d1", generated: "The plan ships Friday.", body: "", subject: "Plan" } as Draft;
     const body = "The plan ships Friday. Please confirm the budget by Monday.";
-    const io = (learn: () => Promise<boolean>) => ({ learn: vi.fn(learn), latest: vi.fn(async () => ({ ...d, body: "typed meanwhile" })), save: vi.fn(async () => undefined) });
+    let finish: (ok: boolean) => void = () => undefined;
+    const learn = vi.fn(() => new Promise<boolean>((done) => { finish = done; }));
+    const first = learnFromEdits(d, "Plan", body, learn);
+    expect(await learnFromEdits(d, "Plan", body, learn)).toBe(false);
+    expect(learn).toHaveBeenCalledTimes(1);
+    expect(learn).toHaveBeenCalledWith("d1", d.generated, body, "Plan");
+    finish(true);
+    expect(await first).toBe(true);
 
-    const failing = io(() => Promise.reject(new Error("budget used")));
+    const failing = vi.fn(() => Promise.reject(new Error("budget used")));
     await expect(learnFromEdits(d, "Plan", body, failing)).rejects.toThrow("budget used");
-    expect(failing.save).not.toHaveBeenCalled();
+    await expect(learnFromEdits(d, "Plan", body, failing)).rejects.toThrow("budget used");
+    expect(failing).toHaveBeenCalledTimes(2);
 
-    const ok = io(async () => true);
-    expect(await learnFromEdits(d, "Plan", body, ok)).toBe(true);
-    expect(ok.learn).toHaveBeenCalledWith(d.generated, body, "Plan");
-    expect(ok.save).toHaveBeenCalledWith({ ...d, body: "typed meanwhile", learnedFrom: d.generated });
-
-    const none = io(async () => true);
+    const none = vi.fn(async () => true);
     expect(await learnFromEdits({ ...d, learnedFrom: d.generated }, "Plan", body, none)).toBe(false);
     expect(await learnFromEdits(d, "Plan", "The plan ships Friday.", none)).toBe(false);
-    expect(none.learn).not.toHaveBeenCalled();
+    expect(none).not.toHaveBeenCalled();
   });
 });

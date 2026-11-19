@@ -71,8 +71,8 @@ export const refine = (subject: string, body: string, evidence: Evidence[], inst
   invoke<Generated>("exec_refine", { subject, body, evidence, instruction });
 /** Null: nothing worth keeping was found. */
 export const extract = (text: string, project: string | null, label?: string) => invoke<CaptureBatch | null>("exec_extract", { text, project, label });
-/** True when preferences were staged in the capture inbox. */
-export const learnStyle = (generated: string, kept: string, label: string) => invoke<boolean>("exec_learn_style", { generated, kept, label });
+/** True when preferences were staged in the capture inbox. The draft is then recorded as learned from. */
+export const learnStyle = (draft: string, generated: string, kept: string, label: string) => invoke<boolean>("exec_learn_style", { draft, generated, kept, label });
 export const agentStart = (project: string | null, prompt: string, options: Pick<StartOptions, "engine" | "model">) =>
   invoke<SessionInfo>("exec_agent_start", { project, prompt, options });
 export const sessionCapture = (id: string) => invoke<CaptureBatch | null>("exec_session_capture", { id });

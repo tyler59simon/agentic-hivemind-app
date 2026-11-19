@@ -103,4 +103,20 @@ describe("navigation", () => {
     expect(app().route).toEqual({ page: "review" });
     allow();
   });
+
+  // Codex review of 6f8714e.
+  it("Back with nowhere to go asks nothing, and a stopped project switch changes nothing until it goes ahead", () => {
+    let asked = 0;
+    let later: (() => void) | null = null;
+    const clear = setLeaveGuard((proceed) => { asked++; later = proceed; return false; });
+    app().goBack();
+    expect(asked).toBe(0);
+    useApp.setState({ project: "pay" });
+    openProject("core");
+    expect(app().project).toBe("pay");
+    expect(app().route).toEqual({ page: "overview" });
+    later!();
+    expect(app().project).toBe("core");
+    clear();
+  });
 });

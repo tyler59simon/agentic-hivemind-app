@@ -2,6 +2,7 @@
 // the latest briefing, and a box to ask the assistant.
 import { LoaderCircle, MessageSquare } from "lucide-react";
 import { useState } from "react";
+import { classify } from "../../lib/errors";
 import type { Briefing } from "../../lib/executive";
 import type { Project } from "../../lib/lm";
 import { openExecutive, useApp } from "../../store";
@@ -53,7 +54,7 @@ export function TodayTab({ project, projects, attention, crossProject, loading, 
   return (
     <Split rail={
       <>
-        <Section title="Capture inbox" count={inbox.count} loading={inbox.batches.isLoading} empty={inbox.waiting.length ? undefined : "Nothing waiting. Captures and finished conversations land here for review."}>
+        <Section title="Capture inbox" count={inbox.count} loading={inbox.batches.isLoading} error={inbox.batches.error} empty={inbox.waiting.length ? undefined : "Nothing waiting. Captures and finished conversations land here for review."}>
           <ul className="item-list">
             {inbox.waiting.map((b) => {
               const n = b.items.filter((i) => i.state === "pending").length;
@@ -72,7 +73,7 @@ export function TodayTab({ project, projects, attention, crossProject, loading, 
             <button className="item-row" onClick={() => openExecutive({ tab: "briefings", briefing: latest.id })}>
               <span className="grow">{latest.title}<br /><span className="muted small">{BRIEFING_LABEL[latest.kind]} · {new Date(latest.created).toLocaleDateString()}</span></span>
             </button>
-          ) : <p className="muted small">None yet. <button className="link" onClick={() => openExecutive({ tab: "briefings" })}>Write one</button></p>}
+          ) : briefings.error ? <p className="error small">{classify(briefings.error).message}</p> : <p className="muted small">None yet. <button className="link" onClick={() => openExecutive({ tab: "briefings" })}>Write one</button></p>}
         </Section>
       </>
     }>

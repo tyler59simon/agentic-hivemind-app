@@ -8,6 +8,7 @@ use serde_json::Value;
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 /// What one call is: who it is in error messages ("The reviewer"), the model alias, the system prompt, the schema of the
@@ -51,16 +52,61 @@ pub fn parse_envelope(who: &str, stdout: &str) -> (Result<Value, String>, Option
 /// What a cancelled call answers.
 pub const CANCELLED: &str = "Cancelled";
 
+/// A run's cancel switch, shared by the run and whoever cancels it. Exactly one of the two wins: a cancel stops the run's
+/// commit (the write that makes its result last), and once that commit is done a cancel is refused.
+#[derive(Default)]
+pub struct Cancel {
+    flag: AtomicBool,
+    committed: Mutex<bool>,
+}
+
+impl Cancel {
+    pub fn flag(&self) -> &AtomicBool {
+        &self.flag
+    }
+
+    pub fn is_set(&self) -> bool {
+        self.flag.load(Ordering::Relaxed)
+    }
+
+    /// Cancel the run; false when it has committed already.
+    pub fn cancel(&self) -> bool {
+        let committed = self.committed.lock().unwrap();
+        if *committed {
+            return false;
+        }
+        self.flag.store(true, Ordering::Relaxed);
+        true
+    }
+
+    /// Do `write` unless the run was cancelled; once it succeeds, cancels are refused.
+    pub fn commit<T>(&self, write: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+        let mut committed = self.committed.lock().unwrap();
+        if self.is_set() {
+            return Err(CANCELLED.into());
+        }
+        let done = write()?;
+        *committed = true;
+        Ok(done)
+    }
+}
+
 /// Run one call in `dir` within the daily cap. `id` names the reservation. Setting `cancel` stops the call; one that had
 /// started keeps its reservation, since what it spent is unknown.
 #[allow(clippy::too_many_arguments)] // each argument is one independent part of the call
 pub fn run(claude: &str, dir: &Path, ledger: &Ledger, cap: f64, id: &str, call: &Call, input: &str, timeout: Duration, cancel: Option<&AtomicBool>) -> (Result<Value, String>, Option<f64>) {
-    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+    let cancelled = || cancel.is_some_and(|c| c.load(Ordering::Relaxed));
+    if cancelled() {
         return (Err(CANCELLED.into()), None);
     }
     let now = crate::agent::now_ms();
     if let Err(e) = ledger.reserve(id, call.budget_usd, cap, now) {
         return (Err(e), None);
+    }
+    // A cancel that came while the reservation waited for the ledger: nothing ran.
+    if cancelled() {
+        let _ = ledger.release(id, crate::agent::now_ms());
+        return (Err(CANCELLED.into()), None);
     }
     let _ = std::fs::create_dir_all(dir);
     let mut command = Command::new(claude);
@@ -73,12 +119,13 @@ pub fn run(claude: &str, dir: &Path, ledger: &Ledger, cap: f64, id: &str, call: 
             let (answer, cost) = outcome(call.who, ran.status.success(), &ran.stdout);
             (answer, cost, ledger.settle(id, cost, crate::agent::now_ms()))
         }
-        Err(e) if e.starts_with(crate::git::COULD_NOT_RUN) => (Err(e), None, ledger.release(id, crate::agent::now_ms())),
-        Err(e) => (Err(e), None, ledger.settle(id, None, crate::agent::now_ms())),
+        Err(crate::git::Failure::NotStarted(e)) => (Err(e), None, ledger.release(id, crate::agent::now_ms())),
+        Err(crate::git::Failure::Stopped(e)) => (Err(e), None, ledger.settle(id, None, crate::agent::now_ms())),
     };
-    match recorded {
-        Ok(()) => (answer, cost),
-        Err(e) => (Err(format!("{} answered, but its cost could not be recorded in the daily budget: {e}", call.who)), cost),
+    match (recorded, answer) {
+        (Ok(()), answer) => (answer, cost),
+        (Err(e), Ok(_)) => (Err(format!("{} answered, but its cost could not be recorded in the daily budget: {e}", call.who)), cost),
+        (Err(e), Err(first)) => (Err(format!("{first} (and its cost could not be recorded in the daily budget: {e})")), cost),
     }
 }
 
@@ -145,6 +192,21 @@ mod tests {
         assert_eq!(answer.unwrap_err(), CANCELLED);
         assert!(ledger.used(crate::agent::now_ms()).abs() < 1e-9);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_cancel_and_a_commit_exclude_each_other() {   // Codex review of 74bba49
+        let first = Cancel::default();
+        assert_eq!(first.commit(|| Ok(1)), Ok(1));
+        assert!(!first.cancel(), "a committed run cannot be cancelled");
+        let second = Cancel::default();
+        assert!(second.cancel());
+        let mut wrote = false;
+        assert_eq!(second.commit(|| { wrote = true; Ok(()) }).unwrap_err(), CANCELLED);
+        assert!(!wrote, "a cancelled run writes nothing");
+        let third = Cancel::default();
+        assert!(third.commit(|| Err::<(), _>("disk full".into())).is_err());
+        assert!(third.cancel(), "a failed commit can still be cancelled");
     }
 
     #[test]

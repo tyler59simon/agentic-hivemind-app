@@ -14,7 +14,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -74,7 +73,7 @@ impl Store {
                     let _guard = self.lock.lock().unwrap();
                     match read_record(&path) {
                         Ok(row) => row,
-                        Err(Unreadable::Io(e)) => return Err(failed(e)),
+                        Err(Unreadable::Io(e)) => return Err(format!("Could not read the {kind} record {}: {e}", path.display())),
                         Err(Unreadable::Invalid) => {
                             let _ = std::fs::rename(&path, path.with_extension(format!("unreadable-{}", crate::agent::now_ms())));
                             None
@@ -113,6 +112,24 @@ impl Store {
         std::fs::write(&temp, text).map_err(|e| e.to_string())?;
         std::fs::rename(&temp, &path).map_err(|e| e.to_string())?;
         Ok(record)
+    }
+
+    /// Change one stored record under the lock, leaving its other fields and its `updated` time as they are. `change` returns
+    /// false to leave the record alone. False when the record is gone or was left alone.
+    pub fn update(&self, kind: &str, id: &str, change: impl FnOnce(&mut serde_json::Map<String, Value>) -> bool) -> Result<bool, String> {
+        if !valid_id(id) {
+            return Err(format!("Not a record id: {id}"));
+        }
+        let path = self.kind_dir(kind)?.join(format!("{id}.json"));
+        let _guard = self.lock.lock().unwrap();
+        let Some(mut record) = read_record(&path).map_err(|_| format!("Could not read the {kind} record {}", path.display()))? else { return Ok(false) };
+        if !record.as_object_mut().is_some_and(change) {
+            return Ok(false);
+        }
+        let temp = path.with_extension("tmp");
+        std::fs::write(&temp, serde_json::to_string(&record).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        std::fs::rename(&temp, &path).map_err(|e| e.to_string())?;
+        Ok(true)
     }
 
     /// How far capture has read the executive conversation `session` (an event seq). Kept beside the record kinds, which
@@ -157,12 +174,13 @@ enum Unreadable {
     Invalid,
 }
 
-/// One record file: None when it is gone (deleted since the folder was listed).
+/// One record file: None when it is gone (deleted since the folder was listed). Bytes that are not UTF-8 are a malformed
+/// record, not a read error.
 fn read_record(path: &std::path::Path) -> Result<Option<Value>, Unreadable> {
-    match std::fs::read_to_string(path) {
+    match std::fs::read(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(Unreadable::Io(e)),
-        Ok(text) => serde_json::from_str::<Value>(&text).ok().filter(Value::is_object).map(Some).ok_or(Unreadable::Invalid),
+        Ok(bytes) => serde_json::from_slice::<Value>(&bytes).ok().filter(Value::is_object).map(Some).ok_or(Unreadable::Invalid),
     }
 }
 
@@ -353,14 +371,14 @@ pub struct Deps<'a> {
     pub claude: String,
     pub ledger: &'a Ledger,
     pub cap: f64,
-    /// Set when the automation run that asked for this is cancelled; None for the user's own requests.
-    pub cancel: Option<&'a AtomicBool>,
+    /// The cancel switch of the automation run that asked for this; None for the user's own requests.
+    pub cancel: Option<&'a oneshot::Cancel>,
 }
 
 impl Deps<'_> {
     fn cancelled(&self) -> Result<(), String> {
         match self.cancel {
-            Some(c) if c.load(Ordering::Relaxed) => Err(oneshot::CANCELLED.into()),
+            Some(c) if c.is_set() => Err(oneshot::CANCELLED.into()),
             _ => Ok(()),
         }
     }
@@ -448,7 +466,7 @@ pub fn style_schema() -> Value {
 fn call(deps: &Deps, dir: &std::path::Path, name: &str, policy: &str, schema: Value, budget_usd: f64, input: &str) -> (Result<Value, String>, Option<f64>) {
     let who = Call { who: "The executive assistant", model: MODEL, policy, schema, budget_usd };
     let id = format!("exec-{name}-{}", uuid::Uuid::new_v4().simple());
-    oneshot::run(&deps.claude, dir, deps.ledger, deps.cap, &id, &who, input, TIMEOUT, deps.cancel)
+    oneshot::run(&deps.claude, dir, deps.ledger, deps.cap, &id, &who, input, TIMEOUT, deps.cancel.map(oneshot::Cancel::flag))
 }
 
 pub const BRIEF_KINDS: [&str; 5] = ["weekly", "project", "priorities", "commitments", "risks"];
@@ -478,9 +496,11 @@ pub fn brief(lm: &Lm, store: &Store, deps: &Deps, kind: &str, project: Option<&s
     object.insert("evidence".into(), json!(pack.evidence));
     object.insert("packGaps".into(), json!(pack.gaps));
     object.insert("costUsd".into(), json!(cost));
-    // A cancel that came during the call: the briefing is not kept.
-    deps.cancelled()?;
-    store.put("briefing", record, crate::agent::now_ms())
+    // Saving is the run's commit: a cancel before it keeps no briefing, and one after it is refused.
+    match deps.cancel {
+        Some(cancel) => cancel.commit(|| store.put("briefing", record, crate::agent::now_ms())),
+        None => store.put("briefing", record, crate::agent::now_ms()),
+    }
 }
 
 /// What the webview asks a draft for. Names only: the evidence is gathered here.
@@ -636,6 +656,18 @@ pub fn extract(lm: &Lm, store: &Store, deps: &Deps, input: &str, project: Option
 }
 
 /// Preferences the user's edits to a generated draft show, staged for review like any capture.
+/// Record that the draft `id` was learned from, if it still exists with the same generated text (it may have been deleted
+/// or refined during the call). Only `learnedFrom` changes, so edits saved meanwhile are kept.
+pub fn mark_learned(store: &Store, id: &str, generated: &str) -> Result<bool, String> {
+    store.update("draft", id, |draft| {
+        if draft.get("generated").and_then(Value::as_str) != Some(generated) {
+            return false;
+        }
+        draft.insert("learnedFrom".into(), json!(generated));
+        true
+    })
+}
+
 pub fn learn_style(lm: &Lm, store: &Store, deps: &Deps, generated: &str, kept: &str, label: &str) -> Result<Option<Value>, String> {
     if generated.trim() == kept.trim() {
         return Ok(None);
@@ -819,8 +851,30 @@ mod tests {
         std::fs::write(dir.join("briefing"), "not a folder").unwrap();
         assert!(store.list("briefing").unwrap_err().contains("Could not read the briefing records"));
         std::fs::create_dir_all(dir.join("milestone").join("odd.json")).unwrap();
-        assert!(store.list("milestone").is_err());
+        assert!(store.list("milestone").unwrap_err().contains("odd.json"), "the error names the file");
         assert!(dir.join("milestone").join("odd.json").exists());
+        std::fs::remove_dir_all(dir.join("milestone").join("odd.json")).unwrap();
+        // Bytes that are not UTF-8 are set aside like any malformed record (Codex review of 7921fcb).
+        std::fs::write(dir.join("milestone").join("latin.json"), [0xff, 0xfe, b'{']).unwrap();
+        assert!(store.list("milestone").unwrap().is_empty());
+        assert!(!dir.join("milestone").join("latin.json").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_learned_draft_is_marked_only_if_it_is_still_the_same() {   // Codex review of 34c668a
+        let dir = temp("learned");
+        let store = Store::new(dir.clone());
+        let d = store.put("draft", json!({"subject": "Plan", "body": "Edited later", "generated": "v1"}), 5).unwrap();
+        let id = text(&d, "id");
+        assert!(mark_learned(&store, &id, "v1").unwrap());
+        let now = &store.list("draft").unwrap()[0];
+        assert_eq!((text(now, "learnedFrom"), text(now, "body"), now["updated"].as_u64()), ("v1".into(), "Edited later".into(), Some(5)));
+        store.put("draft", json!({"id": id, "generated": "v2", "created": 5}), 9).unwrap();
+        assert!(!mark_learned(&store, &id, "v1").unwrap(), "a refined draft is not marked by the older call");
+        store.delete("draft", &id).unwrap();
+        assert!(!mark_learned(&store, &id, "v2").unwrap());
+        assert!(store.list("draft").unwrap().is_empty(), "a deleted draft is not recreated");
         std::fs::remove_dir_all(&dir).ok();
     }
 

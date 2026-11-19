@@ -424,7 +424,7 @@ impl workflow::Host for AppHost {
 struct AppDoer(AppHandle);
 
 impl automations::Doer for AppDoer {
-    fn run(&self, a: &automations::Automation, vars: &automations::Vars, cancel: &std::sync::atomic::AtomicBool) -> Result<automations::Started, String> {
+    fn run(&self, a: &automations::Automation, vars: &automations::Vars, cancel: &oneshot::Cancel) -> Result<automations::Started, String> {
         use automations::{Action, Started};
         let state = self.0.state::<AppState>();
         let saved = settings::load(&state.settings_path);
@@ -1426,7 +1426,7 @@ async fn exec_extract(app: AppHandle, text: String, project: Option<String>, lab
 /// Learn writing preferences from the user's edits to a generated draft; the suggestions wait in the capture inbox. True
 /// when some were staged. The webview records the draft as learned from only when this succeeds, so a failure is retried.
 #[tauri::command]
-async fn exec_learn_style(app: AppHandle, generated: String, kept: String, label: String) -> Result<bool, String> {
+async fn exec_learn_style(app: AppHandle, draft: String, generated: String, kept: String, label: String) -> Result<bool, String> {
     blocking(move || {
         let state = app.state::<AppState>();
         let saved = settings::load(&state.settings_path);
@@ -1434,6 +1434,10 @@ async fn exec_learn_style(app: AppHandle, generated: String, kept: String, label
         let staged = executive::learn_style(&executive::viewer(&state.bridge), &state.executive, &deps, &generated, &kept, &label)?.is_some();
         if staged {
             let _ = app.emit("executive-changed", "capture");
+        }
+        // Only `learnedFrom` changes, and only on the same draft text, so a deleted or refined draft is left alone.
+        if executive::mark_learned(&state.executive, &draft, &generated)? {
+            let _ = app.emit("executive-changed", "draft");
         }
         Ok(staged)
     })

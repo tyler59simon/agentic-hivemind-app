@@ -61,6 +61,8 @@ export function setLeaveGuard(guard: LeaveGuard): () => void {
   return () => { if (leaveGuard === guard) leaveGuard = null; };
 }
 const stopped = (proceed: () => void) => !!leaveGuard && !leaveGuard(proceed);
+/** Do `move` (a change that leaves the current route, and anything else it changes) once the leave guard allows it. */
+const whenFree = (move: () => void) => { if (!stopped(move)) move(); };
 
 export const useApp = create<AppState>()(persist((set) => ({
   project: undefined,
@@ -78,6 +80,7 @@ export const useApp = create<AppState>()(persist((set) => ({
     set((s) => (same(s.route, route) ? s : { route, back: opts.replace ? s.back : [...s.back, s.route].slice(-BACK_LIMIT) }));
   },
   goBack: (force) => {
+    if (!useApp.getState().back.length) return;
     if (!force && stopped(() => useApp.getState().goBack(true))) return;
     set((s) => (s.back.length ? { route: s.back[s.back.length - 1], back: s.back.slice(0, -1) } : s));
   },
@@ -90,7 +93,7 @@ export const useApp = create<AppState>()(persist((set) => ({
 
 const app = () => useApp.getState();
 /** Pick a project (null for all memory) and show its overview. */
-export const openProject = (slug: string | null) => { app().setProject(slug); app().go({ page: "overview" }); };
+export const openProject = (slug: string | null) => whenFree(() => { app().setProject(slug); app().go({ page: "overview" }, { force: true }); });
 export const openSystem = (slug: string) => app().go({ page: "architecture", system: slug });
 export const openSession = (session: string) => app().go({ page: "agents", session });
 /** Show the Review page, on one session's edits (and one file) when given. */

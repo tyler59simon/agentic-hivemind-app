@@ -121,11 +121,27 @@ pub const COULD_NOT_RUN: &str = "Could not run";
 
 /// `run_captured` with `input` written to the command's stdin (then closed); stdin is empty when None.
 pub fn run_with_input(command: Command, input: Option<&str>, timeout: Duration) -> Result<Ran, String> {
-    run_cancellable(command, input, timeout, None)
+    run_cancellable(command, input, timeout, None).map_err(String::from)
 }
 
-/// `run_with_input` that also stops (killing the process tree) once `cancel` is set.
-pub fn run_cancellable(mut command: Command, input: Option<&str>, timeout: Duration, cancel: Option<&AtomicBool>) -> Result<Ran, String> {
+/// Why `run_cancellable` has no result: the process never started (so it cost nothing), or it started and was stopped (a
+/// timeout, a cancel) or could not be watched.
+pub enum Failure {
+    NotStarted(String),
+    Stopped(String),
+}
+
+impl From<Failure> for String {
+    fn from(failure: Failure) -> String {
+        match failure {
+            Failure::NotStarted(e) | Failure::Stopped(e) => e,
+        }
+    }
+}
+
+/// `run_with_input` that also stops (killing the process tree) once `cancel` is set. A cancel set before the process
+/// starts means it never does.
+pub fn run_cancellable(mut command: Command, input: Option<&str>, timeout: Duration, cancel: Option<&AtomicBool>) -> Result<Ran, Failure> {
     command
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
@@ -143,7 +159,11 @@ pub fn run_cancellable(mut command: Command, input: Option<&str>, timeout: Durat
         command.process_group(0);
     }
     let name = command.get_program().to_string_lossy().into_owned();
-    let mut child = command.spawn().map_err(|e| format!("{COULD_NOT_RUN} {name}: {e}"))?;
+    let cancelled_now = || cancel.is_some_and(|c| c.load(Ordering::Relaxed));
+    if cancelled_now() {
+        return Err(Failure::NotStarted(format!("{name} was cancelled")));
+    }
+    let mut child = command.spawn().map_err(|e| Failure::NotStarted(format!("{COULD_NOT_RUN} {name}: {e}")))?;
     if let (Some(text), Some(mut pipe)) = (input, child.stdin.take()) {
         let text = text.to_string();
         // A thread, so a child that never reads cannot block us past the timeout; dropping the pipe closes stdin.
@@ -157,9 +177,9 @@ pub fn run_cancellable(mut command: Command, input: Option<&str>, timeout: Durat
     let start = Instant::now();
     let mut cancelled = false;
     let status = loop {
-        match child.try_wait().map_err(|e| e.to_string())? {
+        match child.try_wait().map_err(|e| Failure::Stopped(e.to_string()))? {
             Some(status) => break Some(status),
-            None if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) => {
+            None if cancelled_now() => {
                 kill_tree(&mut child);
                 cancelled = true;
                 break None;
@@ -173,8 +193,8 @@ pub fn run_cancellable(mut command: Command, input: Option<&str>, timeout: Durat
     };
     let (stdout, stderr) = (collect(out, DRAIN_GRACE), collect(err, DRAIN_GRACE));
     match status {
-        None if cancelled => Err(format!("{name} was cancelled")),
-        None => Err(format!("{name} timed out after {}s", timeout.as_secs())),
+        None if cancelled => Err(Failure::Stopped(format!("{name} was cancelled"))),
+        None => Err(Failure::Stopped(format!("{name} timed out after {}s", timeout.as_secs()))),
         Some(status) => Ok(Ran { status, stdout, stderr }),
     }
 }
@@ -414,8 +434,14 @@ mod tests {
             });
             run_cancellable(command, None, Duration::from_secs(60), Some(&cancel))
         });
-        assert!(result.err().unwrap_or_default().contains("was cancelled"));
+        assert!(matches!(&result, Err(Failure::Stopped(e)) if e.contains("was cancelled")));
         assert!(start.elapsed() < Duration::from_secs(10));
+        // Never started: a cancel before the spawn, or a program that does not run, whatever its name says (Codex review of
+        // 5118618 and 74bba49).
+        let early = run_cancellable(Command::new("git"), None, Duration::from_secs(5), Some(&cancel));
+        assert!(matches!(early, Err(Failure::NotStarted(_))));
+        let missing = run_cancellable(Command::new("Could not run x"), None, Duration::from_secs(5), None);
+        assert!(matches!(missing, Err(Failure::NotStarted(_))));
     }
 
     fn git_available() -> bool {

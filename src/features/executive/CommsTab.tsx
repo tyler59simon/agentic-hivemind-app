@@ -4,7 +4,8 @@
 import { Copy, Download, LoaderCircle, Plus, Sparkles, Trash2, Undo2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { copyText } from "../../lib/clipboard";
-import { deleteRecord, draft as generate, DRAFT_KINDS, exportText, learnStyle, listRecords, putRecord, refine, type Draft, type DraftKind, type ExportFormat, type Stakeholder } from "../../lib/executive";
+import { classify } from "../../lib/errors";
+import { deleteRecord, draft as generate, DRAFT_KINDS, exportText, learnStyle, putRecord, refine, type Draft, type DraftKind, type ExportFormat, type Stakeholder } from "../../lib/executive";
 import type { Project } from "../../lib/lm";
 import { openExecutive } from "../../store";
 import { Markdown } from "../../ui/Markdown";
@@ -103,11 +104,7 @@ function Editor({ d, stakeholders }: { d: Draft; stakeholders: Stakeholder[] }) 
   // quiet (the user did not ask for this), and a failed call is tried again on the next send.
   const sent = async (how: () => Promise<boolean>) => {
     if (!(await how())) return;
-    const staged = await learnFromEdits(d, subject, body, {
-      learn: learnStyle,
-      latest: async (id) => (await listRecords<Draft>("draft")).find((r) => r.id === id),
-      save: (next) => putRecord<Draft>("draft", next),
-    }).catch(() => false);
+    const staged = await learnFromEdits(d, subject, body, learnStyle).catch(() => false);
     if (staged) toast("Writing preferences from your edits are waiting in the capture inbox");
   };
   const email = stakeholders.find((s) => d.audience.startsWith(s.name))?.email ?? "";
@@ -220,10 +217,12 @@ export function CommsTab({ project, projects, picked }: { project?: Project; pro
   const stakeholders = people.data ?? [];
   const list = drafts.data ?? [];
   const shown = picked === "new" ? undefined : list.find((d) => d.id === picked);
+  const failed = drafts.error ?? people.error;
   return (
     <div className="exec-comms">
       <aside className="exec-drafts">
         <button className="primary" onClick={() => openExecutive({ tab: "comms", draft: "new" })}><Plus size="1em" aria-hidden /> New draft</button>
+        {failed ? <p className="error">{classify(failed).message}</p> : null}
         <ul className="item-list">
           {list.map((d) => (
             <li key={d.id}>

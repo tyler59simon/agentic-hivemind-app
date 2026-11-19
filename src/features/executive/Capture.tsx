@@ -214,6 +214,7 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
     return false;
   }), []);
   if (batches.isLoading) return <Modal title="Review capture" onClose={onClose}><p className="muted">Loading…</p></Modal>;
+  if (batches.error) return <Modal title="Review capture" onClose={onClose}><p className="error">{classify(batches.error).message}</p></Modal>;
   if (!stored) return <Modal title="Review capture" onClose={onClose}><p className="muted">This capture is no longer here.</p></Modal>;
   const items = stored.items.map((i) => edits[i.id] ?? i);
 
@@ -304,7 +305,9 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
             setClosing(false);
             const proceed = leave.current ?? onClose;
             leave.current = null;
-            if (yes) { leaving.current = true; proceed(); }
+            // A write may have started behind this confirm (a replace answered first): leaving now would lose its retry.
+            if (yes && now.current.busy) toast("An item is still being saved. Leave once it is done.");
+            else if (yes) { leaving.current = true; proceed(); }
           }} />
       )}
       {replacing && (
