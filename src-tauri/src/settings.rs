@@ -44,6 +44,7 @@ pub struct Settings {
 
 pub const DEFAULT_CAPTURE_SHORTCUT: &str = "CommandOrControl+Alt+M";
 pub const DEFAULT_AGENT_BUDGET_USD: f64 = 5.0;
+pub const DEFAULT_LEARNING_DAILY_USD: f64 = 1.0;
 
 impl Settings {
     /// The spending limit to give an agent session.
@@ -54,6 +55,19 @@ impl Settings {
     /// The commands a project allows, as saved (each is checked again where it becomes a rule).
     pub fn allowed_commands(&self, project: &str) -> Vec<String> {
         self.allowed_commands.as_ref().and_then(|all| all.get(project)).cloned().unwrap_or_default()
+    }
+
+    pub fn learning_reviewer(&self) -> bool {
+        self.learning_reviewer.unwrap_or(true)
+    }
+
+    /// The daily cap for the reviewer and automations; zero turns paid work off.
+    pub fn learning_daily_usd(&self) -> f64 {
+        self.learning_daily_usd.filter(|usd| usd.is_finite() && *usd >= 0.0).unwrap_or(DEFAULT_LEARNING_DAILY_USD)
+    }
+
+    pub fn skills_auto_patch(&self) -> bool {
+        self.skills_auto_patch.unwrap_or(false)
     }
 
     /// The hotkey to register, or None when the user turned it off.

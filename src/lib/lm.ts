@@ -175,6 +175,21 @@ export const ORIGIN = "hivemind:local";
 export const capture = (domain: string, payload: CapturePayload, opts: { redact?: boolean } = {}) =>
   run<WriteResult>(["capture", "--domain", domain, ...(opts.redact ? ["--redact"] : [])], JSON.stringify({ origin: ORIGIN, ...payload }));
 
+// ---- Proposals: drafts agents (and Hivemind's reviewer) staged for the user to accept or reject. ----
+export interface MemoryProposal { id: string; status: string; created: string; domain: string; type: NoteType; title: string; note_ref?: string; reason?: string }
+export interface MemoryProposalDetail {
+  id: string; status: string; created: string; domain: string; warnings?: string[];
+  note: { title: string; body: string; type?: NoteType; tags?: string[]; context?: string };
+}
+export const proposalsList = () => run<{ ok: boolean; proposals: MemoryProposal[] }>(view(["proposals", "list"]));
+export const proposalShow = (id: string) => run<MemoryProposalDetail>(view(["proposals", "show", id]));
+/** Save the draft as staged, into the domain it was proposed for. */
+export const proposalAccept = (id: string) => run<WriteResult>(["capture", "--from-proposal", id]);
+/** Save a draft that has no concern tag the store knows (Living Memory refuses those), with the one the user picked. */
+export const proposalAcceptWith = (id: string, note: { title: string; body: string; type?: NoteType }, concern: string) =>
+  run<WriteResult>(["capture", "--from-proposal", id, "--type", note.type ?? "knowledge", "--concern", concern, note.title, note.body]);
+export const proposalReject = (id: string, reason?: string) => run<{ ok: boolean }>(["proposals", "reject", id, ...(reason ? ["--reason", reason] : [])]);
+
 export const check = (ref: string, index: number, done: boolean) =>
   run<WriteResult & { item: string; index: number; done: boolean; open: number }>(
     ["check", ref, "--index", String(index), "--domain", domainOf(ref), ...(done ? [] : ["--undo"])]);
