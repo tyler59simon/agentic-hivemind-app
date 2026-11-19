@@ -138,7 +138,9 @@ impl Adapter for ClaudeCode {
         let mut command = Command::new(&spec.program);
         command.current_dir(&spec.cwd).args(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]);
         match &spec.policy {
-            Policy::PreApproved { .. } => command.args(["--permission-mode", "dontAsk", "--permission-prompts", "none"]),
+            // Only the user's own settings: the repository's .claude settings could add allow rules or hooks to a session that
+            // never asks. The user settings keep Living Memory's hooks.
+            Policy::PreApproved { .. } => command.args(["--permission-mode", "dontAsk", "--permission-prompts", "none", "--setting-sources", "user"]),
             Policy::Ask { .. } => {
                 command.args(["--permission-mode", "manual", "--permission-prompts", "host", "--permission-prompt-tool", "stdio"])
             }
@@ -757,7 +759,7 @@ mod tests {
         #[rustfmt::skip]
         let expected = [
             "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-            "--permission-mode", "dontAsk", "--permission-prompts", "none",
+            "--permission-mode", "dontAsk", "--permission-prompts", "none", "--setting-sources", "user",
             "--session-id", "00000000-0000-4000-8000-000000000001", "--max-budget-usd", "5", "--json-schema", r#"{"type":"object"}"#,
             "--allowedTools", "Edit(//work/arch/**)", "Bash(*architecture-suite.py *)",
             "--add-dir", "/work/api", "/work/arch", "--plugin-dir", "/plugins/suite",
@@ -771,7 +773,7 @@ mod tests {
         #[rustfmt::skip]
         let expected = [
             "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-            "--permission-mode", "dontAsk", "--permission-prompts", "none",
+            "--permission-mode", "dontAsk", "--permission-prompts", "none", "--setting-sources", "user",
             "--session-id", "00000000-0000-4000-8000-000000000001", "--max-budget-usd", "5", "--json-schema", r#"{"type":"object"}"#,
             "--allowedTools", "Edit(//work/arch/**)", "Bash(*architecture-suite.py *)",
             "--disallowedTools", "Bash(*living_memory.py* apply *)", "Bash(*living_memory.py* apply)",

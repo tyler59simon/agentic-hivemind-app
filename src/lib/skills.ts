@@ -21,6 +21,8 @@ export interface SkillProposal {
   id: string; kind: SkillKind; name: string; description: string; body: string; reason: string;
   baseVersion: number | null; session: string | null; sessionTitle: string | null; note: string | null;
   by: "reviewer" | "upkeep" | "user"; state: ProposalState; createdAt: number; decidedAt: number | null; decision: string | null;
+  /** Set on an approval whose version was stored but not published everywhere. */
+  warning?: string | null;
 }
 
 export interface LedgerEntry {

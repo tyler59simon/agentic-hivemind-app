@@ -262,6 +262,26 @@ impl Run {
         }
     }
 
+    /// A waiting task with a prerequisite that failed, was cancelled or is blocked is blocked again. After a retry or skip
+    /// unblocks what lay downstream, a task that also needs another failed task must keep waiting for that one.
+    fn reblock(&mut self) {
+        loop {
+            let stuck: Vec<String> = self.tasks.iter()
+                .filter(|t| t.state == TaskState::Waiting)
+                .filter(|t| t.spec.depends_on.iter().any(|d| self.task(d).is_some_and(|u| matches!(u.state, TaskState::Failed | TaskState::Cancelled | TaskState::Blocked))))
+                .map(|t| t.spec.id.clone())
+                .collect();
+            if stuck.is_empty() {
+                return;
+            }
+            for id in stuck {
+                if let Some(t) = self.task_mut(&id) {
+                    t.state = TaskState::Blocked;
+                }
+            }
+        }
+    }
+
     /// The run's state from its tasks' states.
     fn settle(&mut self) {
         if matches!(self.state, RunState::Planned | RunState::Cancelled) {
@@ -359,6 +379,8 @@ pub trait Host {
     /// Commit the session's edits on its branch; None when there was nothing to commit.
     fn checkpoint(&self, session: &str, message: &str) -> Result<Option<String>, String>;
     fn stop(&self, session: &str);
+    /// The commit a branch of the repository points at now.
+    fn branch_tip(&self, repo: &str, branch: &str) -> Option<String>;
 }
 
 pub struct Workflows {
@@ -484,9 +506,21 @@ impl Workflows {
                 (run.clone(), next)
             };
             let task = run.task(&next).unwrap().clone();
-            let branch = match &task.spec.from {
-                Some(from) => run.task(from).and_then(|t| t.branch.clone()).or(run.base_branch.clone()),
-                None => run.base_branch.clone(),
+            // A task that starts from another starts from that task's checkpoint, and only when its branch still points
+            // there: a discard or a later commit would hand it a different revision than the one the run recorded. A skipped
+            // task left nothing to start from, so the base branch is used.
+            let branch = match task.spec.from.as_deref().and_then(|from| run.task(from)) {
+                Some(up) if up.state == TaskState::Succeeded && up.branch.is_some() => {
+                    let name = up.branch.clone().unwrap();
+                    match &up.checkpoint {
+                        Some(checkpoint) if host.branch_tip(&run.repo, &name).as_deref() != Some(checkpoint.as_str()) => Err(format!(
+                            "{name} no longer points at the checkpoint {} of \"{}\"; retry that task or skip this one",
+                            &checkpoint[..7.min(checkpoint.len())], up.spec.title
+                        )),
+                        _ => Ok(Some(name)),
+                    }
+                }
+                _ => Ok(run.base_branch.clone()),
             };
             let options = StartOptions {
                 briefing: Some(run.briefing(&task)),
@@ -499,8 +533,9 @@ impl Workflows {
                 budget_usd: run.budget_usd,
                 ..Default::default()
             };
-            let work = AgentTask::Work { project: run.project.clone(), repo: run.repo.clone(), branch, change: None };
-            let started = host.start(work, &task.spec.prompt, options);
+            let started = branch.and_then(|branch| {
+                host.start(AgentTask::Work { project: run.project.clone(), repo: run.repo.clone(), branch, change: None }, &task.spec.prompt, options)
+            });
             let mut runs = self.runs.lock().unwrap();
             let Some(run) = runs.get_mut(id) else { return };
             match started {
@@ -641,6 +676,7 @@ impl Workflows {
             t.state = if skip { TaskState::Skipped } else { TaskState::Waiting };
             t.error = None;
             run.unblock_after(task);
+            run.reblock();
             run.state = RunState::Running;
             run.settle();
             self.save(run)?;
@@ -662,9 +698,11 @@ mod tests {
         fail: Option<&'static str>,
         infos: RefCell<BTreeMap<String, SessionInfo>>,
         stopped: RefCell<Vec<String>>,
+        /// Branches moved since their checkpoint.
+        moved: RefCell<Vec<String>>,
     }
     fn fake(limit: usize) -> Fake {
-        Fake { started: RefCell::new(vec![]), limit, fail: None, infos: RefCell::new(BTreeMap::new()), stopped: RefCell::new(vec![]) }
+        Fake { started: RefCell::new(vec![]), limit, fail: None, infos: RefCell::new(BTreeMap::new()), stopped: RefCell::new(vec![]), moved: RefCell::new(vec![]) }
     }
 
     fn info(id: &str) -> SessionInfo {
@@ -702,6 +740,46 @@ mod tests {
         fn stop(&self, session: &str) {
             self.stopped.borrow_mut().push(session.to_string());
         }
+        fn branch_tip(&self, _repo: &str, branch: &str) -> Option<String> {
+            let session = branch.strip_prefix("hivemind/")?;
+            Some(if self.moved.borrow().iter().any(|b| b == branch) { "elsewhere".into() } else { format!("{session}-commit") })
+        }
+    }
+
+    #[test]
+    fn skipping_one_failed_prerequisite_keeps_a_task_that_needs_another_blocked() {
+        let dir = scratch();
+        let flows = Workflows::new(dir.clone());
+        let host = Fake { fail: Some("no"), ..fake(3) };
+        let tasks = vec![
+            spec("a", Role::Researcher, "A", "FAIL a", &[], None),
+            spec("b", Role::Researcher, "B", "FAIL b", &[], None),
+            spec("c", Role::Developer, "C", "do c", &["a", "b"], None),
+        ];
+        let run = flows.create(NewRun { goal: "g".into(), project: "p".into(), repo: "r".into(), tasks, ..Default::default() }, None).unwrap();
+        let run = flows.start(&run.id, &host).unwrap();
+        assert_eq!((states(&run), run.state), (vec![TaskState::Failed, TaskState::Failed, TaskState::Blocked], RunState::Failed));
+        let run = flows.retry_or_skip(&run.id, "a", true, &host).unwrap();
+        assert_eq!(states(&run)[2], TaskState::Blocked, "b still failed");
+        assert_eq!(run.state, RunState::Failed, "not running with nothing able to start");
+        let run = flows.retry_or_skip(&run.id, "b", true, &host).unwrap();
+        assert_eq!((states(&run)[2], run.state), (TaskState::Running, RunState::Running));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_task_never_starts_from_a_branch_that_moved_since_its_checkpoint() {
+        let dir = scratch();
+        let flows = Workflows::new(dir.clone());
+        let host = fake(3);
+        let run = flows.start(&feature(&flows).id, &host).unwrap();
+        turn(&flows, &host, "s0", true, None);
+        host.moved.borrow_mut().push("hivemind/s1".into());
+        turn(&flows, &host, "s1", true, None);
+        let run = flows.get(&run.id).unwrap();
+        assert_eq!(states(&run)[2..], [TaskState::Failed, TaskState::Failed]);
+        assert!(run.tasks[2].error.as_deref().unwrap().contains("no longer points at the checkpoint s1-comm"), "{:?}", run.tasks[2].error);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// The session ends its turn with a summary (and the given verdict).
@@ -711,7 +789,7 @@ mod tests {
             i.verdict = verdict;
             i.files_changed = Some(Totals { files: 2, added: 3, removed: 1 });
         }
-        flows.on_report(&Lifecycle::TurnEnded { id: session.into(), ok }, host);
+        flows.on_report(&Lifecycle::TurnEnded { id: session.into(), ok, stopped: false }, host);
     }
 
     fn scratch() -> PathBuf {

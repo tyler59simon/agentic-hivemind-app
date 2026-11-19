@@ -37,7 +37,8 @@ export type TriggerKind = Trigger["kind"];
 export type Action =
   | { kind: "role"; role: Role; engine: Engine; prompt: string }
   | { kind: "workflow"; template: string; goal: string }
-  | { kind: "memory_maintenance" } | { kind: "skill_upkeep" } | { kind: "commit_capture" };
+  | { kind: "memory_maintenance" } | { kind: "skill_upkeep" } | { kind: "commit_capture" }
+  | { kind: "architecture_check"; system: string };
 export type ActionKind = Action["kind"];
 export type Notify = "all" | "failures" | "none";
 

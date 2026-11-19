@@ -382,8 +382,9 @@ pub enum Emit {
 /// learning reviewer. Sent after the session list has been saved, so a listener reads the new state.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Lifecycle {
-    /// An interactive session finished a turn; `ok` when it completed rather than failed, stopped or ran out of budget.
-    TurnEnded { id: String, ok: bool },
+    /// An interactive session finished a turn; `ok` when it completed rather than failed, stopped or ran out of budget;
+    /// `stopped` when the user stopped it (not a failure).
+    TurnEnded { id: String, ok: bool, stopped: bool },
     /// A session is waiting for the user to answer a permission prompt.
     Waiting { id: String },
     /// A session reached an end state.
@@ -1513,7 +1514,7 @@ impl Inner {
 
         let mut sessions = self.sessions.lock().unwrap();
         let at = now_ms();
-        let stop = sessions.get_mut(id).and_then(|session| session.live.take()).and_then(|live| live.stop);
+        let (stop, interrupted) = sessions.get_mut(id).and_then(|session| session.live.take()).map_or((None, false), |live| (live.stop, live.interrupted));
         let Some((info, started)) = sessions.get(id).map(|session| (session.info.clone(), session.tape.as_ref().is_some_and(|tape| tape.started)))
         else {
             return;
@@ -1535,21 +1536,21 @@ impl Inner {
                 }
             }
         } else if matches!(info.status, Status::Running | Status::Waiting) {
-            // Started, never reported the end of this turn, and nobody asked it to stop: it crashed.
+            // Started and never reported the end of this turn: it crashed, unless the user had just stopped the turn.
             let event = RunEvent::TurnFinished {
                 ok: false,
-                reason: Some(no_result(code, &stderr)),
+                reason: (!interrupted).then(|| no_result(code, &stderr)),
                 cost_usd: info.cost_usd,
                 duration_ms: None,
                 result: None,
                 denials: 0,
-                outcome: TurnEnd::Error,
+                outcome: if interrupted { TurnEnd::Stopped } else { TurnEnd::Error },
             };
             self.record(&mut sessions, id, at, Record::Event { at, event });
             if let Some(session) = sessions.get_mut(id) {
                 session.info.status = Status::Idle;
             }
-            lifecycle = Some(Lifecycle::TurnEnded { id: id.to_string(), ok: false });
+            lifecycle = Some(Lifecycle::TurnEnded { id: id.to_string(), ok: false, stopped: interrupted });
         }
         let _ = self.persist(&mut sessions);
         drop(sessions);
@@ -1624,7 +1625,7 @@ impl Inner {
         let _ = self.persist(&mut sessions);
         drop(sessions);
         (self.sink)(Emit::SessionsChanged);
-        (self.sink)(Emit::Lifecycle(Lifecycle::TurnEnded { id: id.to_string(), ok }));
+        (self.sink)(Emit::Lifecycle(Lifecycle::TurnEnded { id: id.to_string(), ok, stopped: how == TurnEnd::Stopped }));
     }
 }
 
@@ -1657,6 +1658,31 @@ fn check_launch_options(saved: &Settings, mut options: StartOptions) -> Result<S
         }
     }
     Ok(options)
+}
+
+/// For an architect or reviewer: the architecture briefing of the system the repository belongs to, and its output folder
+/// as an extra (readable) folder. Other sessions are returned unchanged.
+fn with_architecture(bridge: &Bridge, manager: &Manager, repo: &std::path::Path, options: StartOptions, scope: Result<scope::Scope, String>) -> (StartOptions, Result<scope::Scope, String>) {
+    if !matches!(options.role, Some(Role::Architect | Role::Reviewer)) || scope.is_err() {
+        return (options, scope);
+    }
+    let systems: Vec<_> = crate::architecture::systems_for_repo(bridge, repo).into_iter().filter(|(_, _, folder)| folder.is_dir()).collect();
+    let Some((slug, name, folder)) = systems.into_iter().next() else { return (options, scope) };
+    let behind = crate::architecture::staleness(bridge, &manager.sessions(), &slug).ok().and_then(|s| s.behind);
+    let text = crate::archsuite::briefing(&name, &folder, behind);
+    let briefing = Some(match options.briefing.as_deref() {
+        Some(b) => format!("{b}\n\n{text}"),
+        None => text,
+    });
+    // An attended editing session accepts edits in every folder it was given, so it only reads the paths in the briefing
+    // (and asks); the read-only and research profiles get the folder itself.
+    let scope = scope.map(|mut s| {
+        if !matches!(s.policy, scope::Policy::AcceptEdits { .. }) {
+            s.add_dirs.push(folder);
+        }
+        s
+    });
+    (StartOptions { briefing, ..options }, scope)
 }
 
 /// Put the role's preamble before the briefing, so the first message reads: preamble, briefing, task.
@@ -1792,6 +1818,8 @@ pub fn start_task(
         None => scope::work(tree.clone(), policy, prompt),
     };
     let options = with_preamble(options);
+    // Architects and reviewers read the documented structure of the system their repository belongs to.
+    let (options, scope) = with_architecture(bridge, manager, &repo, options, scope);
     let started = scope.and_then(|mut scope| {
         if !terminal {
             return manager.start(id.clone(), task.clone(), launch(scope), prompt, &options);
@@ -2682,7 +2710,7 @@ mod tests {
             assert!(start.elapsed() < Duration::from_secs(20));
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert_eq!(lifecycle(&rig.seen, &started.id), vec![Lifecycle::TurnEnded { id: started.id.clone(), ok: true }]);
+        assert_eq!(lifecycle(&rig.seen, &started.id), vec![Lifecycle::TurnEnded { id: started.id.clone(), ok: true, stopped: false }]);
 
         rig.manager.amend(&started.id, |info| info.review = Some(Review { state: ReviewState::Approved, commit: None, at: 1 })).unwrap();
         rig.manager.amend(&started.id, |info| info.name = Some("again".into())).unwrap();

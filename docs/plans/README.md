@@ -9,6 +9,7 @@ Hivemind is being rebuilt to the UX of a set of ten mock screens. Phase 1 (theme
 | 4 | [phase-4-review.md](phase-4-review.md) | 10 Agent Code Review | Phases 1, 2 and 3 |
 | 5 | [phase-5-codex-and-terminal.md](phase-5-codex-and-terminal.md) | 04 Agent Workspace Codex Terminal | Phases 1 and 2 (4 for the "Review diff" link) |
 | 6 | [phase-6-terminal-parity.md](phase-6-terminal-parity.md) | 04 (the terminal behaves like the real CLI) | Phases 4 and 5 |
+| Workspace | [../engineering-workspace.md](../engineering-workspace.md) | Skills and Workflows pages, Drift panel, Overview additions (no mock) | Phases 2 to 6 |
 
 **How to use these documents.** Read this file first, then your phase's document, then the spike findings it cites under [spikes/](spikes/). This file holds what every phase shares: the decisions already made, the map of the code after Phase 1, the conventions, how to run and verify, and the contracts between phases. Where a phase document and this file disagree about a shared name or shape, this file wins; tell the user about the conflict in your final report.
 

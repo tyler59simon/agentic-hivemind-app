@@ -28,6 +28,7 @@ import type { CanvasNode } from "./canvas";
 import { diffModels } from "./compare";
 import { cloudResources, diagramList, externalSystems, interfaces, passportSections, techStack, type DiagramEntry } from "./passport";
 import { SystemWizard } from "./SystemWizard";
+import { DriftPanel } from "./DriftPanel";
 import { systemsQuery, useDiagram, useOlderSnapshots, useSnapshot, useStaleness, useSystem, useSystemIntent, useSystemProposal } from "./useSystem";
 
 const oneLine = (text?: string) => (text ?? "").replace(/\s+/g, " ").trim();
@@ -327,6 +328,7 @@ function SystemView({ system, all }: { system: System; all: System[] }) {
           {!!system.repos.length && <div className="repo-list">{system.repos.map((r) => <code key={r}>{r}</code>)}</div>}
           {summary && summary.trim() !== system.description.trim() && <div className="markdown small"><Markdown>{summary}</Markdown></div>}
         </Section>
+        <DriftPanel slug={system.slug} />
         <Section title="Decisions" count={parts.decisions.length} loading={rows.isLoading} error={rows.error}
           empty={!parts.decisions.length ? "No decisions recorded for this system." : undefined}>
           <NoteList rows={parts.decisions} />

@@ -88,8 +88,9 @@ export function SkillProposalCard({ proposal, onDone }: { proposal: SkillProposa
   const decide = (approve: boolean) => {
     setBusy(true);
     skillDecide(proposal.id, approve, { ...(approve && edited ? { description, body } : {}), reason: approve ? undefined : why.trim() || undefined })
-      .then(() => {
-        toast(approve ? (proposal.kind === "archive" ? `Archived ${proposal.name}` : `Published ${proposal.name}`) : "Proposal rejected");
+      .then((decided) => {
+        if (decided.warning) toast(decided.warning, "error");
+        else toast(approve ? (proposal.kind === "archive" ? `Archived ${proposal.name}` : `Published ${proposal.name}`) : "Proposal rejected");
         client.invalidateQueries({ queryKey: ["skills"] });
         onDone();
       }, (e) => toast(classify(e).message, "error"))
