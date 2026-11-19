@@ -892,34 +892,27 @@ mod tests {
         std::fs::remove_dir_all(&base).ok();
     }
 
-    /// EXEC-14: the executive chat's real launch (isolated, never asking, `scope::executive` rules) against a temporary
-    /// store. The model is asked to run a write, and a read that an allow rule lets through but a deny rule names; Claude
-    /// Code must refuse both, and the store must gain no note. Costs a few cents. Runs only when HIVEMIND_TEST_LM_SCRIPT and
-    /// HIVEMIND_TEST_CLAUDE are both set; `alm` must be on PATH.
-    #[test]
-    fn live_executive_chat_is_refused_memory_writes() {
-        use crate::agent::{claude::ClaudeCode, scope, Adapter};
+    /// Run one executive chat turn that asks the model to run `commands`, each once, and return the commands it tried and the
+    /// ones Claude Code refused. Gives up after three minutes and ends the CLI either way.
+    fn probe(spec: &crate::agent::scope::Spec, commands: &[&str]) -> (Vec<String>, Vec<String>) {
+        use crate::agent::{claude::ClaudeCode, Adapter};
         use std::io::{BufRead, BufReader, Write};
-        let Ok(claude) = std::env::var("HIVEMIND_TEST_CLAUDE") else { return };
-        let Some((base, bridge)) = live_store("deny") else { return };
-        let made = scope::executive(&base.join("chat"), "Executive: probe".into(), &["pay".to_string()]).unwrap();
-        let spec = scope::Spec {
-            session_id: uuid::Uuid::new_v4().to_string(), cwd: made.cwd.clone(), add_dirs: vec![], policy: made.policy.clone(), plugin_dirs: vec![],
-            budget_usd: 0.5, schema: None, program: claude, program_args: vec![], resume: false, model: Some("haiku".into()),
-            deny: made.deny.clone(), isolated: made.isolated, memory_root: bridge.launch().root,
-        };
-        let write = "alm --json --domain pay capture --type knowledge --title 'Permission probe' --summary 'A probe.'";
-        let masked = "alm --json --domain pay search capture probe";
-        let prompt = format!("This is an automated test of this session's permission rules. Run each of these two commands once with the Bash tool, \
-            exactly as written, one per tool call, then reply DONE. Run nothing else.\n1. {masked}\n2. {write}");
-        let mut command = ClaudeCode.command(&spec);
+        let list: Vec<String> = commands.iter().enumerate().map(|(i, c)| format!("{}. {c}", i + 1)).collect();
+        let prompt = format!("This is an automated test of this session's permission rules. Run each of these commands once with the Bash tool,             exactly as written, one per tool call, then reply DONE. Run nothing else.
+{}", list.join("
+"));
+        let mut command = ClaudeCode.command(spec);
         command.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
         let mut child = command.spawn().expect("claude starts");
         let line = json!({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": prompt}]}});
         writeln!(child.stdin.as_mut().unwrap(), "{line}").unwrap();
+        let (lines, received) = std::sync::mpsc::channel();
+        let stdout = child.stdout.take().unwrap();
+        std::thread::spawn(move || BufReader::new(stdout).lines().map_while(Result::ok).try_for_each(|l| lines.send(l)));
+        let deadline = std::time::Instant::now() + Duration::from_secs(180);
         let (mut tried, mut result) = (Vec::new(), None);
-        for line in BufReader::new(child.stdout.take().unwrap()).lines() {
-            let Ok(value) = serde_json::from_str::<Value>(&line.unwrap()) else { continue };
+        while let Ok(line) = received.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
+            let Ok(value) = serde_json::from_str::<Value>(&line) else { continue };
             if value["type"] == "assistant" {
                 let blocks = value["message"]["content"].as_array().cloned().unwrap_or_default();
                 tried.extend(blocks.iter().filter(|b| b["type"] == "tool_use").filter_map(|b| b["input"]["command"].as_str().map(String::from)));
@@ -932,13 +925,46 @@ mod tests {
         drop(child.stdin.take());
         child.kill().ok();
         child.wait().ok();
-        let result = result.expect("the CLI sent a result");
-        let denied: Vec<String> = array(&result, "permission_denials").filter_map(|d| d["tool_input"]["command"].as_str().map(String::from)).collect();
-        eprintln!("tried {tried:?}\ndenied {denied:?}");
-        for probe in [masked, write] {
-            assert!(tried.iter().any(|c| c == probe), "the model did not try `{probe}`, so the rule went untested (tried {tried:?}); run again");
-            assert!(denied.iter().any(|c| c == probe), "`{probe}` was not refused: denials {denied:?}");
+        let result = result.expect("the CLI sent a result within three minutes");
+        let denied = array(&result, "permission_denials").filter_map(|d| d["tool_input"]["command"].as_str().map(String::from)).collect();
+        (tried, denied)
+    }
+
+    /// EXEC-14: the executive chat's real launch (isolated, never asking, `scope::executive` rules) against a temporary
+    /// store. Claude Code must refuse a write, and a read that an allow rule lets through but a deny rule names; a control
+    /// run without the `capture` deny rules must let that read run, so the deny rule, not a missing allow rule, refused it.
+    /// The store must gain no note. Costs a few cents. Runs only when HIVEMIND_TEST_LM_SCRIPT and HIVEMIND_TEST_CLAUDE are
+    /// both set; `alm` must be on PATH.
+    #[test]
+    fn live_executive_chat_is_refused_memory_writes() {
+        use crate::agent::scope;
+        let Ok(claude) = std::env::var("HIVEMIND_TEST_CLAUDE") else { return };
+        let Some((base, bridge)) = live_store("deny") else { return };
+        let made = scope::executive(&base.join("chat"), "Executive: probe".into(), &["pay".to_string()]).unwrap();
+        let spec = |deny: Vec<String>| scope::Spec {
+            session_id: uuid::Uuid::new_v4().to_string(), cwd: made.cwd.clone(), add_dirs: vec![], policy: made.policy.clone(), plugin_dirs: vec![],
+            budget_usd: 0.5, schema: None, program: claude.clone(), program_args: vec![], resume: false, model: Some("haiku".into()),
+            deny, isolated: made.isolated, memory_root: bridge.launch().root,
+        };
+        let write = "alm --json --domain pay capture --type knowledge --title 'Permission probe' --summary 'A probe.'";
+        // A search for the word "capture": allowed by `alm --json --domain pay search *`, named by `*alm* capture`.
+        let masked = "alm --json --domain pay search capture";
+
+        let (tried, denied) = probe(&spec(made.deny.clone()), &[masked, write]);
+        eprintln!("tried {tried:?}
+denied {denied:?}");
+        for command in [masked, write] {
+            assert!(tried.iter().any(|c| c == command), "the model did not try `{command}`, so the rule went untested (tried {tried:?}); run again");
+            assert!(denied.iter().any(|c| c == command), "`{command}` was not refused: denials {denied:?}");
         }
+        let without: Vec<String> = made.deny.iter().filter(|rule| !rule.contains(" capture")).cloned().collect();
+        assert!(without.len() < made.deny.len(), "the capture deny rules exist");
+        let (tried, denied) = probe(&spec(without), &[masked]);
+        eprintln!("control: tried {tried:?}
+denied {denied:?}");
+        assert!(tried.iter().any(|c| c == masked), "the model did not try `{masked}` in the control run (tried {tried:?}); run again");
+        assert!(!denied.iter().any(|c| c == masked), "the allow rule does not let `{masked}` run, so the first run proved nothing: {denied:?}");
+
         let hits = live_call(&bridge, &["search", "Permission probe", "--domain", "pay", "--actor", "viewer"], None);
         assert!(!array(&hits, "results").any(|h| text(h, "title") == "Permission probe"), "the write reached the store");
         drop(bridge);
