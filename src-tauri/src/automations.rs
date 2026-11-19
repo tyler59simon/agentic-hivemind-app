@@ -279,7 +279,8 @@ pub fn check(a: &Automation) -> Result<(), String> {
         Action::Workflow { goal, template } if goal.trim().is_empty() || template.trim().is_empty() => Err("Pick a workflow template and write its goal".into()),
         Action::ArchitectureCheck { system } if system.trim().is_empty() => Err("Pick the system to check".into()),
         Action::Role { role: Role::Developer, .. } => Err("An automation may not start a developer: it would edit code with nobody watching. Use a workflow you start yourself.".into()),
-        Action::Role { role, engine: Engine::Codex, .. } if role.profile() == Profile::EditWorktree =>
+        // Turning such an automation off is always allowed.
+        Action::Role { role, engine: Engine::Codex, .. } if a.enabled && role.profile() == Profile::EditWorktree =>
             Err(format!("Codex cannot edit files without asking in an unattended session, so it cannot run the {} role here. Pick another role or show Claude Code in Settings.", role.label())),
         _ => Ok(()),
     }
@@ -820,9 +821,12 @@ mod tests {
         a.repo = Some("r".into());
         a.action = Action::Role { role: Role::Developer, engine: Engine::Claude, prompt: "x".into() };
         assert!(check(&a).unwrap_err().contains("developer"));
-        // Codex stops at its first edit with nobody to ask, so an editing role on Codex is refused when saved.
+        // Codex stops at its first edit with nobody to ask, so an enabled editing role on Codex is refused when saved.
+        a.enabled = true;
         a.action = Action::Role { role: Role::Tester, engine: Engine::Codex, prompt: "x".into() };
         assert!(check(&a).unwrap_err().contains("Codex"));
+        a.enabled = false;
+        assert!(check(&a).is_ok(), "a Codex tester automation can still be turned off");
         a.action = Action::Role { role: Role::Reviewer, engine: Engine::Codex, prompt: "x".into() };
         assert!(check(&a).is_ok());
         a.action = Action::Role { role: Role::Developer, engine: Engine::Claude, prompt: "x".into() };

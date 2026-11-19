@@ -481,9 +481,10 @@ impl automations::Doer for AppDoer {
                 Ok(Started::Done { detail: format!("{} archive proposal{} added to Review", made.len(), if made.len() == 1 { "" } else { "s" }), cost: None })
             }
             Action::CommitCapture => {
-                // The reviewer is Claude Code; a user who hid it does not expect it to run.
+                // The reviewer is Claude Code; a user who hid it does not expect it to run. A failed run keeps the last
+                // reviewed commit, so these commits are reviewed once Claude Code is shown again.
                 if !saved.shows(agent::Engine::Claude) {
-                    return Ok(Started::Done { detail: "Skipped: Claude Code is hidden in Settings".into(), cost: None });
+                    return Err("Paused: Claude Code is hidden in Settings. Show it again to review these commits.".into());
                 }
                 let mut command = std::process::Command::new("git");
                 let range = a.last_seen.as_deref().map(|s| format!("{s}..HEAD")).unwrap_or_else(|| "-5".into());
@@ -728,6 +729,12 @@ async fn automation_put(app: AppHandle, automation: automations::Automation) -> 
         if let (true, Some(project), Some(repo)) = (automation.enabled, automation.project.as_deref(), automation.repo.as_deref()) {
             let entry = git::project_entry(&state.bridge, project)?;
             automation.repo = Some(agent::scope::project_repo(&entry, repo)?.display().to_string());
+        }
+        // A workflow automation runs its template on the engines shown now; refuse one that could never run unattended.
+        if let (true, automations::Action::Workflow { template, .. }) = (automation.enabled, &automation.action)
+            && let Some(t) = workflow::templates().into_iter().find(|t| &t.id == template)
+        {
+            workflow::check_unattended(&workflow::on_shown(t.tasks, &settings::load(&state.settings_path)), true)?;
         }
         let saved = state.automations.put(automation, agent::now_ms());
         let _ = app.emit("automations-changed", ());

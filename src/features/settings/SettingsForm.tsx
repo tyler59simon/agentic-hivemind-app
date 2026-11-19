@@ -111,7 +111,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
         <input type="number" min="0" step="0.25" value={value.learning_daily_usd ?? ""} placeholder="1"
           onChange={(e) => setValue({ ...value, learning_daily_usd: e.target.value ? Number(e.target.value) : null })} />
       </label>
-      {!claudeOn && <p className="muted small">The budget also caps automations, per day (UTC); 0 stops them.</p>}
+      {!claudeOn && <p className="muted small">The budget also caps paid automations (sessions, workflows and commit reviews), per day (UTC); 0 stops them.</p>}
 
       <h3>Editor</h3>
       <label className="field">
