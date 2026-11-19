@@ -536,7 +536,11 @@ fn orchestration_reports(app: AppHandle) -> conductor::Handler {
                     }
                 }
             }
-            if !origin.is_empty() {
+            // Work an automation started never fires event automations (no loops); a workflow the user started does.
+            let by_automation = origin.starts_with("automation:")
+                || origin.strip_prefix("workflow:").and_then(|rest| rest.split(':').next()).and_then(|run| state.workflows.get(run).ok())
+                    .is_some_and(|run| run.origin.as_deref().is_some_and(|o| o.starts_with("automation:")));
+            if by_automation {
                 return;
             }
             let repo = match &info.task {

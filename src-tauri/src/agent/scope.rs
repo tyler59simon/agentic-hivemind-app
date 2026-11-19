@@ -254,6 +254,9 @@ pub fn work(tree: Worktree, policy: PolicyMode, prompt: &str) -> Result<Scope, S
 /// Tools every profile may use without asking: reading, searching, the agent's own to-do list and installed skills.
 const READ_TOOLS: [&str; 5] = ["Read", "Glob", "Grep", "TodoWrite", "Skill"];
 
+/// Git commands that only read, which every profile may run: reviewers and testers need the history and the diff.
+const READ_GIT: [&str; 5] = ["git log", "git show", "git diff", "git status", "git blame"];
+
 /// The longest command the user may allow for a project.
 const COMMAND_MAX: usize = 120;
 
@@ -286,14 +289,16 @@ fn command_rules(commands: &[String]) -> Result<Vec<String>, String> {
 /// editing session is pre-approved to edit inside `cwd` and run the allowed commands; everything else is refused. An attended
 /// one accepts edits and asks about the rest.
 pub fn profile_policy(profile: Profile, cwd: &Path, attended: bool, commands: &[String]) -> Result<Policy, String> {
+    let read_git = command_rules(&READ_GIT.map(String::from))?;
     let mut allow: Vec<String> = READ_TOOLS.iter().map(|tool| tool.to_string()).collect();
+    allow.extend(read_git.iter().cloned());
     Ok(match profile {
         Profile::ReadOnly => Policy::PreApproved { allow },
         Profile::Research => {
             allow.extend(["WebFetch".to_string(), "WebSearch".to_string()]);
             Policy::PreApproved { allow }
         }
-        Profile::EditWorktree if attended => Policy::AcceptEdits { allow: command_rules(commands)? },
+        Profile::EditWorktree if attended => Policy::AcceptEdits { allow: [read_git, command_rules(commands)?].concat() },
         Profile::EditWorktree => {
             allow.push(format!("Edit({}/**)", rule_path(&cwd.display().to_string())));
             allow.extend(command_rules(commands)?);
@@ -683,13 +688,15 @@ mod tests {
     fn profiles_become_rules() {
         let cwd = Path::new("C:/wt/pay/0f9e8d7c");
         let commands = vec!["npm test".to_string()];
-        let reads = ["Read", "Glob", "Grep", "TodoWrite", "Skill"].map(String::from).to_vec();
+        let git = command_rules(&READ_GIT.map(String::from)).unwrap();
+        assert!(git.contains(&"Bash(git log *)".to_string()) && git.contains(&"PowerShell(git diff *)".to_string()));
+        let reads = [["Read", "Glob", "Grep", "TodoWrite", "Skill"].map(String::from).to_vec(), git.clone()].concat();
         assert_eq!(profile_policy(Profile::ReadOnly, cwd, true, &commands).unwrap(), Policy::PreApproved { allow: reads.clone() });
         assert_eq!(profile_policy(Profile::ReadOnly, cwd, false, &commands).unwrap(), Policy::PreApproved { allow: reads.clone() });
         let research = profile_policy(Profile::Research, cwd, true, &[]).unwrap();
         assert!(research.allow().iter().any(|rule| rule == "WebFetch") && research.allow().iter().any(|rule| rule == "WebSearch"));
         let command_rules = ["Bash(npm test)", "Bash(npm test *)", "PowerShell(npm test)", "PowerShell(npm test *)"].map(String::from).to_vec();
-        assert_eq!(profile_policy(Profile::EditWorktree, cwd, true, &commands).unwrap(), Policy::AcceptEdits { allow: command_rules.clone() });
+        assert_eq!(profile_policy(Profile::EditWorktree, cwd, true, &commands).unwrap(), Policy::AcceptEdits { allow: [git, command_rules.clone()].concat() });
         let mut unattended = reads;
         unattended.push("Edit(//c/wt/pay/0f9e8d7c/**)".into());
         unattended.extend(command_rules);

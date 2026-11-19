@@ -9,7 +9,7 @@ import { learningQuery, learningReview } from "../../lib/skills";
 import { lastRun, runText } from "../skills/skills";
 import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { connect } from "../../lib/lm";
-import { openChange, openProject, openReview, openSession, openSystem, startSession, useApp } from "../../store";
+import { openChange, openProject, openReview, openSession, openSystem, openWorkflows, startSession, useApp } from "../../store";
 import { Markdown } from "../../ui/Markdown";
 import { Menu } from "../../ui/Menu";
 import { Confirm } from "../../ui/Modal";
@@ -343,6 +343,8 @@ function Session({ id }: { id: string }) {
           {info.role && <span className="status-chip cap">{info.role}</span>}
           {info.verdict && <span className={`status-chip ${info.verdict === "pass" ? "active" : "waiting"}`}>{VERDICT_LABELS[info.verdict]}</span>}
           {usage && <span className="muted small" title="The agent program and every process it started">{usageText(usage)}</span>}
+          {info.origin?.startsWith("workflow:") && <button className="linked-chip" title="Open the workflow" onClick={() => openWorkflows({ run: info.origin!.split(":")[1] })}>Workflow task</button>}
+          {info.origin?.startsWith("automation:") && <button className="linked-chip" title="Open the automation" onClick={() => openWorkflows({ automation: info.origin!.split(":")[1] })}>Automation</button>}
           {work?.change != null && (
             <button className="linked-chip" style={{ flexBasis: "100%" }} title="Open the change" onClick={() => openChange(work.change!)}>
               <LinkIcon size="1.1em" aria-hidden />{displayId(work.change)}

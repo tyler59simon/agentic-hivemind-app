@@ -115,6 +115,8 @@ function useLiveRefresh(enabled: boolean) {
         client.invalidateQueries({ queryKey: ["skills"] });
         client.invalidateQueries({ queryKey: ["proposals"] });
       }),
+      listen("workflows-changed", () => client.invalidateQueries({ queryKey: ["workflows"] })),
+      listen("automations-changed", () => client.invalidateQueries({ queryKey: ["automations"] })),
       listen<{ ref: string }>("open-note", (e) => useWorkspace.getState().openNote(e.payload.ref)),
     ];
     return () => { stops.forEach((stop) => stop.then((unlisten) => unlisten())); };

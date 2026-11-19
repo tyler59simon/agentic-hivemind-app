@@ -1217,3 +1217,21 @@ span.chip { display: inline-block; border: 1px solid var(--border-strong); }
   .wiki-pager { grid-template-columns: 1fr; }
   .wiki-pager .next { grid-column: 1; }
 }
+
+/* ---- Workflows ---- */
+.flow-row { display: flex; flex-wrap: wrap; gap: .6rem; align-items: flex-end; }
+.flow-row .grow { flex: 1 1 12rem; }
+.flow-checks { display: flex; flex-wrap: wrap; gap: .3rem .9rem; }
+.flow-editor { display: flex; flex-direction: column; gap: .7rem; }
+.flow-task-edit { border: 1px solid var(--border); border-radius: .5rem; padding: .5rem .8rem .7rem; display: flex; flex-direction: column; gap: .5rem; }
+.flow-task-edit legend { font-size: .86rem; color: var(--muted); padding: 0 .3rem; }
+.flow-graph { flex: none; display: flex; align-items: flex-start; gap: .4rem; overflow-x: auto; padding-bottom: .4rem; }
+.flow-step { display: flex; align-items: flex-start; gap: .4rem; }
+.flow-arrow { color: var(--muted); margin-top: 2.2rem; flex: none; }
+.flow-col { display: flex; flex-direction: column; gap: .6rem; width: 17rem; flex: none; }
+.flow-task { border: 1px solid var(--border-strong); border-radius: .5rem; padding: .6rem .75rem; background: var(--bg-alt); display: flex; flex-direction: column; gap: .3rem; min-width: 0; overflow-wrap: anywhere; }
+.flow-task.running { border-color: var(--chip-run-border); }
+.flow-task.failed, .flow-task.blocked { border-color: var(--error); }
+.flow-task-head { display: flex; justify-content: space-between; align-items: center; gap: .4rem; }
+.flow-task .status-chip { align-self: flex-start; }
+.flow-task-head .status-chip { align-self: auto; }

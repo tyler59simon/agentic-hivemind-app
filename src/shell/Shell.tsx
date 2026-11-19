@@ -9,6 +9,7 @@ import { MaintenancePage } from "../features/maintenance/MaintenancePage";
 import { RecapPage } from "../features/recap/RecapPage";
 import { ReviewPage } from "../features/review/ReviewPage";
 import { SkillsPage } from "../features/skills/SkillsPage";
+import { WorkflowsPage } from "../features/workflows/WorkflowsPage";
 import { WikiPage } from "../features/wiki/WikiPage";
 import { ArchitecturePage } from "../features/systems/ArchitecturePage";
 import type { ConnectInfo } from "../lib/lm";
@@ -29,6 +30,7 @@ const PAGES: Record<Page, () => ReactNode> = {
   maintenance: () => <MaintenancePage />,
   review: () => <ReviewPage />,
   skills: () => <SkillsPage />,
+  workflows: () => <WorkflowsPage />,
 };
 
 /** The app frame: sidebar, top bar, and the page for the current route. */

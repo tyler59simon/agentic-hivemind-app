@@ -94,6 +94,8 @@ export interface SessionInfo {
   summary: string | null;
   /** A reviewer's or tester's conclusion from its last turn. */
   verdict: Verdict | null;
+  /** What started the session when it was not the user: `workflow:<run>:<task>` or `automation:<id>`. */
+  origin?: string | null;
 }
 
 /** The engine of a session, whatever adapter name older code stored. */
