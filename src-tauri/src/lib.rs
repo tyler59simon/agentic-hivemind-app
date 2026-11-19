@@ -1558,7 +1558,6 @@ pub fn hook_main(args: &[String]) -> Option<i32> {
     term::signal::hook_main(args)
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// Hold `dir/instance.lock` for the life of the process: the one claim on Hivemind's data that every launch must win before
 /// it starts a writer. The single-instance plugin covers a second launch in the same desktop session; this lock also covers
 /// two launches at the same moment and other sessions of the same user. None when another process holds it.
@@ -1575,6 +1574,7 @@ fn claim_instance(dir: &std::path::Path) -> Result<Option<std::fs::File>, String
 /// The claim, kept until the process exits.
 static INSTANCE: std::sync::OnceLock<std::fs::File> = std::sync::OnceLock::new();
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         // First, as the plugin requires: a second copy would overwrite this one's records (EXEC-7, EXEC-12), so a second
