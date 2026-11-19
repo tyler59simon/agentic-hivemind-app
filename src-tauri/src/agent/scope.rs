@@ -465,7 +465,7 @@ const GOVERNED_COMMANDS: [&str; 37] = [
 pub fn governed_memory_command(command: &str) -> bool {
     let text = command.to_lowercase();
     let words: Vec<&str> = text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_')).collect();
-    text.contains("living_memory")
+    (text.contains("living_memory") || names_alm(&text))
         && (words.iter().any(|word| word.ends_with("-plan") && *word != "inspect-plan")
             || GOVERNED_COMMANDS.iter().any(|command| {
                 let parts: Vec<&str> = command.split(' ').collect();
@@ -473,8 +473,19 @@ pub fn governed_memory_command(command: &str) -> bool {
             }))
 }
 
+/// Whether a lower-cased command line runs the `alm` launcher: a word whose file name is `alm`, `alm.exe` or `alm.cmd`,
+/// split the way Living Memory's own guard splits it (`hivemind_governed` in core/runtime.py).
+fn names_alm(text: &str) -> bool {
+    text.split(|c: char| c.is_whitespace() || ";&|()\"'`{}<>=,".contains(c))
+        .map(|word| word.rsplit(['/', '\\']).next().unwrap_or(word))
+        .any(|name| matches!(name, "alm" | "alm.exe" | "alm.cmd"))
+}
+
 /// Deny rules for the same commands, for the CLI's own rule engine: they hold even where the user's settings allow the
-/// call, so it never becomes a question Hivemind could refuse.
+/// call, so it never becomes a question Hivemind could refuse. They name the script only. `*alm*` rules would refuse every
+/// memory search that mentions plan, archive or apply, and would double a command line that terminal sessions already pass
+/// through cmd.exe's 8191-character limit; the `alm` launcher is refused by Living Memory itself while HIVEMIND_SESSION is
+/// set (plans, apply, undo and direct writes), and by `governed_memory_command` when a session asks.
 pub fn governed_rules() -> Vec<String> {
     ["Bash", "PowerShell"]
         .into_iter()
@@ -612,6 +623,12 @@ mod tests {
             r#"python "C:\x\living_memory.py" search "apply the plan""#,
             // A plan command Living Memory may add later.
             r#"python "C:\x\living_memory.py" future-plan x"#,
+            // The launcher: bare, by path, and with its Windows extensions.
+            "alm --json --domain a apply abc --expected-plan-sha256 d",
+            r#""C:\Users\u\.local\bin\alm.exe" merge-plan a b"#,
+            r"C:\Users\u\.local\bin\ALM.CMD undo 123",
+            "/home/u/.local/bin/alm --domain a archive x",
+            "cd x && alm project create --payload-file p.json",
         ] {
             assert!(governed_memory_command(command), "{command}");
         }
@@ -623,6 +640,11 @@ mod tests {
             r#"python "C:\x\living_memory.py" search "project change""#,
             r#"python "C:\x\living_memory.py" capture --title x"#,
             "git apply patch.diff",
+            "alm --json --domain a search retries",
+            "alm --json --domain a inspect-plan abc",
+            // A word that only contains alm is not the launcher.
+            "palm apply x",
+            "realm.exe undo 1",
         ] {
             assert!(!governed_memory_command(command), "{command}");
         }
@@ -652,6 +674,7 @@ mod tests {
         }
         for command in GOVERNED_COMMANDS {
             assert!(governed_memory_command(&format!("python living_memory.py {command} x")), "{command}");
+            assert!(governed_memory_command(&format!("alm --json {command} x")), "{command}");
         }
     }
 
