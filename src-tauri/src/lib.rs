@@ -1561,6 +1561,9 @@ pub fn hook_main(args: &[String]) -> Option<i32> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // First, as the plugin requires: a second copy would overwrite this one's records (EXEC-7, EXEC-12), so a second
+        // launch brings this window to the front and exits before its setup runs.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| capture::show_main(app)))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(
