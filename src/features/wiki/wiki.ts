@@ -5,6 +5,14 @@
 // `sources` section), so the same addresses work; the helpers at the end are specific to it.
 import type { WikiFolder, WikiModel, WikiNote, WikiPageInfo, WikiPageSource, WikiProject, WikiSection } from "../../lib/lm";
 import type { WikiBuildDone, WikiBuildEvent, WikiBuildPlan } from "../../lib/wiki";
+import type { Route } from "../../store";
+
+/** The route of a wiki page. The edition and the agent edition's scope live in the route with the address, so Back returns to
+ *  the edition a page was in; a route without them (an older saved one) is the structured edition. Defaults are left out and
+ *  the key order is fixed, because routes are compared as text. `project` ("" is the whole domain) only exists in the agent edition. */
+export function wikiRoute(domain: string | undefined, o: { at?: string; agent?: boolean; project?: string } = {}): Route {
+  return { page: "wiki", domain, at: o.at || undefined, ...(o.agent ? { edition: "agent" as const, project: o.project || undefined } : {}) };
+}
 
 export interface WikiIndex {
   model: WikiModel;
@@ -337,14 +345,26 @@ export function citeLinks(body: string, count: number): string {
 /** Dollars as "$1.23". */
 export const usd = (n: number) => `$${n.toFixed(2)}`;
 
-/** The calls a dry run would make, in words. The page calls are null on a first build, whose outline call plans the pages. */
+/** The calls a dry run would make, in words. The page calls are null on a first build, whose outline call plans the pages. With an
+ *  outline or placement call in the plan the page count is only what is known before it: those calls can add pages. */
 export function callsText({ calls }: Pick<WikiBuildPlan, "calls">): string {
   const parts = [calls.outline && "an outline call", calls.place && "a placement call"].filter((p): p is string => !!p);
-  if (calls.pages === null) parts.push("one call per page once the outline has planned them");
-  else if (calls.pages) parts.push(`${calls.pages} page call${calls.pages === 1 ? "" : "s"}`);
+  if (calls.pages === null) parts.push("then one call per page (how many is not known until the outline has planned them)");
+  else if (calls.pages) parts.push(`${calls.pages} page call${calls.pages === 1 ? "" : "s"}${parts.length ? " known so far" : ""}`);
   if (!parts.length) return "no model calls, since every page is up to date";
   return parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
 }
+
+/** Why the page calls of a plan can be more than it lists, or null when the plan is complete (no outline or placement call). */
+export function callsNote({ calls }: Pick<WikiBuildPlan, "calls">): string | null {
+  if (calls.pages === null) return "The outline call decides the pages, so the page calls are counted once it has run.";
+  if (calls.place) return "Placing new notes can add page calls beyond these.";
+  if (calls.outline) return "The outline call plans the pages again, so the page calls can change.";
+  return null;
+}
+
+/** Why a build cannot start, or null. A build runs on Claude Code, so it is off while the user keeps that engine hidden. */
+export const buildBlocked = (claudeShown: boolean): string | null => (claudeShown ? null : "Claude Code is hidden in Settings. Show it again to build the wiki.");
 
 export interface BuildProgress { done: number; total: number | null; cost: number; title: string | null }
 /** The progress after one more line of the build's progress; the total stays at the last one known. */

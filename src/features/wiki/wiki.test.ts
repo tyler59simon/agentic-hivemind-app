@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { WikiModel, WikiNote } from "../../lib/lm";
 import type { WikiBuildResult } from "../../lib/wiki";
 import {
-  agentSections, applyProgress, azGroups, buildOutcome, callsText, citeIndex, CITE_PREFIX, citeLinks, citedOn, crumbs, dayGroups, folderChain, indexModel, isAgent, isSource, isStale,
-  monthGroups, monthLabel, neighbours, noteAt, pageCounts, pageStatus, pathPrefix, resolveLink, resolvePage, searchNotes, shortTitle, sourceState, treeKeys, treeOpen, treeRows, usd,
+  agentSections, applyProgress, azGroups, buildBlocked, buildOutcome, callsNote, callsText, citeIndex, CITE_PREFIX, citeLinks, citedOn, crumbs, dayGroups, folderChain, indexModel, isAgent, isSource, isStale,
+  monthGroups, monthLabel, neighbours, noteAt, pageCounts, pageStatus, pathPrefix, resolveLink, resolvePage, searchNotes, shortTitle, sourceState, treeKeys, treeOpen, treeRows, usd, wikiRoute,
 } from "./wiki";
 
 const note = (id: string, over: Partial<WikiNote> = {}): WikiNote => ({
@@ -308,12 +308,34 @@ describe("citations", () => {
 describe("build", () => {
   const plan = (calls: { outline: number; place: number; pages: number | null }) => ({ calls });
   it("says what a dry run would call", () => {
-    expect(callsText(plan({ outline: 1, place: 0, pages: null }))).toBe("an outline call and one call per page once the outline has planned them");
-    expect(callsText(plan({ outline: 0, place: 1, pages: 3 }))).toBe("a placement call and 3 page calls");
-    expect(callsText(plan({ outline: 1, place: 1, pages: 1 }))).toBe("an outline call, a placement call and 1 page call");
+    expect(callsText(plan({ outline: 1, place: 0, pages: null }))).toBe("an outline call and then one call per page (how many is not known until the outline has planned them)");
+    expect(callsText(plan({ outline: 0, place: 1, pages: 3 }))).toBe("a placement call and 3 page calls known so far");
+    expect(callsText(plan({ outline: 1, place: 1, pages: 1 }))).toBe("an outline call, a placement call and 1 page call known so far");
     expect(callsText(plan({ outline: 0, place: 0, pages: 4 }))).toBe("4 page calls");
     expect(callsText(plan({ outline: 0, place: 0, pages: 0 }))).toBe("no model calls, since every page is up to date");
     expect(usd(5)).toBe("$5.00");
+  });
+
+  it("says when a plan lists only the page calls known before the outline or placement call", () => {
+    expect(callsNote(plan({ outline: 1, place: 0, pages: null }))).toMatch(/counted once it has run/);
+    expect(callsNote(plan({ outline: 0, place: 1, pages: 3 }))).toBe("Placing new notes can add page calls beyond these.");
+    expect(callsNote(plan({ outline: 0, place: 1, pages: 0 }))).toMatch(/can add page calls/);
+    expect(callsNote(plan({ outline: 1, place: 0, pages: 8 }))).toMatch(/can change/);
+    expect(callsNote(plan({ outline: 0, place: 0, pages: 4 }))).toBeNull();
+  });
+
+  it("blocks a build while Claude Code is hidden", () => {
+    expect(buildBlocked(true)).toBeNull();
+    expect(buildBlocked(false)).toBe("Claude Code is hidden in Settings. Show it again to build the wiki.");
+  });
+
+  it("puts the edition and scope in the route, and leaves the defaults out", () => {
+    expect(wikiRoute("demo")).toEqual({ page: "wiki", domain: "demo" });
+    expect(JSON.stringify(wikiRoute("demo", { at: "p-core" }))).toBe('{"page":"wiki","domain":"demo","at":"p-core"}');
+    expect(JSON.stringify(wikiRoute("demo", { at: "", agent: true }))).toBe('{"page":"wiki","domain":"demo","edition":"agent"}');
+    expect(JSON.stringify(wikiRoute("demo", { at: "n-pg0a1b2c", agent: true, project: "core" }))).toBe('{"page":"wiki","domain":"demo","at":"n-pg0a1b2c","edition":"agent","project":"core"}');
+    // The scope belongs to the agent edition only.
+    expect(JSON.stringify(wikiRoute("demo", { project: "core" }))).toBe('{"page":"wiki","domain":"demo"}');
   });
 
   it("follows the progress lines", () => {

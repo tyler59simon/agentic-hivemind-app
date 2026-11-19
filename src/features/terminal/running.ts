@@ -4,8 +4,8 @@ import type { TermInfo } from "../../lib/term";
 import { isShellId, shellLabel } from "./shells";
 import { tabLabel } from "./tabs";
 
-/** One line for each running program and each running chat turn, for the quit dialog. */
-export function runningSummary(terms: TermInfo[], sessions: SessionInfo[]): string[] {
+/** One line for each running program, each running chat turn and a running wiki build (its domain and project), for the quit dialog. */
+export function runningSummary(terms: TermInfo[], sessions: SessionInfo[], build: { domain: string; project: string } | null = null): string[] {
   const lines: string[] = [];
   for (const t of terms) {
     if (!t.running) continue;
@@ -16,5 +16,6 @@ export function runningSummary(terms: TermInfo[], sessions: SessionInfo[]): stri
   for (const s of sessions) {
     if (s.interface === "chat" && (s.status === "running" || s.status === "waiting")) lines.push(`Chat turn · ${s.title}`);
   }
+  if (build) lines.push(`Wiki build · ${build.domain}${build.project ? ` (${build.project})` : ""}`);
   return lines;
 }

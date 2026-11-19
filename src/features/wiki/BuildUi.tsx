@@ -4,20 +4,17 @@ import { useQuery } from "@tanstack/react-query";
 import { BookOpen, Square } from "lucide-react";
 import { useState } from "react";
 import { classify } from "../../lib/errors";
-import { wikiAgentBuild } from "../../lib/wiki";
 import { Modal } from "../../ui/Modal";
 import { cancelWikiBuild, useWikiBuild } from "./build";
-import { callsText, usd } from "./wiki";
+import { agentPlanQuery } from "./useWiki";
+import { callsNote, callsText, usd } from "./wiki";
 
 /** Shows what a build would do, and starts it on Build or Refresh. Asking again with Restructure checked shows the dearer plan. */
 export function BuildDialog({ domain, project, hasEdition, onStart, onClose }: {
   domain: string; project: string; hasEdition: boolean; onStart: (restructure: boolean) => void; onClose: () => void;
 }) {
   const [restructure, setRestructure] = useState(false);
-  const plan = useQuery({
-    queryKey: ["wiki-agent-plan", domain, project, restructure], retry: false, staleTime: 0, gcTime: 0,
-    queryFn: () => wikiAgentBuild(domain, project || undefined, restructure, true),
-  });
+  const plan = useQuery(agentPlanQuery(domain, project, restructure));
   const p = plan.data;
   const verb = hasEdition ? "Refresh" : "Build";
   return (
@@ -28,7 +25,7 @@ export function BuildDialog({ domain, project, hasEdition, onStart, onClose }: {
         <>
           <p>
             Claude ({p.model}) reads {p.notes} {p.notes === 1 ? "note" : "notes"} of {project ? <>the <b>{project}</b> project</> : <>the <b>{domain}</b> domain</>} and
-            writes the pages. This makes {callsText(p)}. It stops when it has spent {usd(p.budget_usd)}, keeps the pages it finished, and the next build continues from there.
+            writes the pages. This makes {callsText(p)}.{callsNote(p) && ` ${callsNote(p)}`} It stops when it has spent {usd(p.budget_usd)}, keeps the pages it finished, and the next build continues from there.
           </p>
           <p className="muted small">Each call is billed to your Claude account. Nothing is sent until you start.</p>
         </>
@@ -69,7 +66,7 @@ export function BuildStrip() {
 }
 
 /** A domain (or project) with no agent-written edition yet. */
-export function EmptyEdition({ domain, project, onBuild, busy }: { domain: string; project: string; onBuild: () => void; busy: boolean }) {
+export function EmptyEdition({ domain, project, onBuild, busy, blocked }: { domain: string; project: string; onBuild: () => void; busy: boolean; blocked: string | null }) {
   return (
     <div className="wiki-empty">
       <BookOpen size="1.6em" aria-hidden />
@@ -78,7 +75,8 @@ export function EmptyEdition({ domain, project, onBuild, busy }: { domain: strin
         An agent reads the notes of {project ? <>the <b>{project}</b> project</> : <>the <b>{domain}</b> domain</>}, chooses the sections that fit them,
         and writes one page per topic from several notes, citing each one. The structured wiki stays as it is.
       </p>
-      <button className="primary" onClick={onBuild} disabled={busy}>Build the wiki…</button>
+      <button className="primary" onClick={onBuild} disabled={busy || !!blocked} title={blocked ?? undefined}>Build the wiki…</button>
+      {blocked && <p className="muted small">{blocked}</p>}
     </div>
   );
 }

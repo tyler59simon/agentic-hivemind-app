@@ -23,6 +23,12 @@ describe("runningSummary", () => {
     expect(lines).toEqual(["Fix login (terminal)", "Codex sign-in (terminal)", "Chat turn · Explain billing", "Chat turn · Ask"]);
   });
 
+  it("lists a running wiki build after the terminals and chat turns", () => {
+    expect(runningSummary([], [], { domain: "demo", project: "" })).toEqual(["Wiki build · demo"]);
+    expect(runningSummary([term({})], [session({ interface: "terminal" }), session({ id: "c", title: "Ask" })], { domain: "demo", project: "core" })).toEqual(["Fix login (terminal)", "Chat turn · Ask", "Wiki build · demo (core)"]);
+    expect(runningSummary([], [], null)).toEqual([]);
+  });
+
   it("lists a running PowerShell tab by its label and folder", () => {
     const shell = term({ id: "shell-1", sessionId: null, label: "PowerShell", cwd: "C:/src/paystream" });
     expect(runningSummary([shell, { ...shell, id: "shell-2", running: false }], [])).toEqual(["PowerShell · paystream (terminal)"]);

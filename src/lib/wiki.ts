@@ -1,11 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
-import { currentTheme } from "./theme";
+import { useConnection } from "./connection";
+import type { Capabilities } from "./lm";
+import { currentTheme, type Theme } from "./theme";
+
+/** The theme an exported page starts in, or null when the connected Living Memory would reject `--theme`: the flag ships with
+ *  the `wiki_agent` capability, so an older install gets the page without it (and it follows the system theme as before). */
+export const exportTheme = (capabilities: Capabilities | undefined, theme: Theme): Theme | null => ((capabilities?.wiki_agent?.version ?? 0) >= 1 ? theme : null);
 
 /** Save a domain's wiki as one HTML file: Rust asks where with a native dialog, has Living Memory write it, and opens it.
- *  `agent` exports the agent-written edition (of `project` when given). The file starts in the app's current theme.
- *  Resolves with the saved path, or null when the dialog was cancelled. */
+ *  `agent` exports the agent-written edition (of `project` when given). The file starts in the app's current theme where Living
+ *  Memory supports that. Resolves with the saved path, or null when the dialog was cancelled. */
 export const exportWiki = (domain: string, archived: boolean, o: { agent?: boolean; project?: string } = {}) =>
-  invoke<string | null>("wiki_export", { domain, archived, agent: !!o.agent, project: o.project ?? null, theme: currentTheme() });
+  invoke<string | null>("wiki_export", { domain, archived, agent: !!o.agent, project: o.project ?? null, theme: exportTheme(useConnection.getState().capabilities, currentTheme()) });
 
 /** What a dry run of `wiki --agent --build` reports: the calls it would make and the budget cap; it spends nothing.
  *  `calls.pages` is null on a first build, before the outline call has planned the pages. */

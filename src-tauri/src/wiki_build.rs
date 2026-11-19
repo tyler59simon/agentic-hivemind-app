@@ -3,19 +3,24 @@
 //!
 //! With `--progress` Living Memory writes one JSON object per line to stderr (`start`, `call`, `end`). Each is forwarded as
 //! `wiki-build-progress`, and `wiki-build-done` fires at the end. Lines that are not such objects are ignored (they only feed the
-//! error message). One build runs at a time; `cancel` kills its process tree, and the edition keeps the pages already written.
-use crate::settings::Launch;
+//! error message). One real build runs at a time; a dry run spends nothing and
+//! bypasses that slot. `cancel` stops the build's process tree, and the edition keeps the pages already written.
+use crate::settings::{Launch, Settings};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read};
-use std::process::{Command, Stdio};
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, MutexGuard};
+use std::time::Duration;
 
 pub const PROGRESS_EVENT: &str = "wiki-build-progress";
 pub const DONE_EVENT: &str = "wiki-build-done";
 pub const CANCELLED: &str = "Build cancelled.";
 
+/// The real build in the slot. `pid` is None from the moment the slot is taken until the child has started, and a cancel in that
+/// window is kept in `cancelled`, which the start checks right before spawning.
 struct Running {
-    pid: u32,
+    pid: Option<u32>,
     cancelled: bool,
 }
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
@@ -110,7 +115,28 @@ fn check_name(what: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn command(launch: &Launch, argv: &[String]) -> Command {
+/// The environment variable that points Living Memory at the native `claude` executable (it otherwise looks only on PATH).
+pub const CLAUDE_ENV: &str = "LIVING_MEMORY_CLAUDE";
+
+/// The Claude Code program Hivemind resolved for its own sessions, when it can go in `LIVING_MEMORY_CLAUDE`: an absolute path to
+/// the executable. A bare name (found on PATH, so Living Memory finds it too) or a `.cmd` or `.bat` shim is left out.
+pub fn claude_override(found: &Result<String, String>) -> Option<&str> {
+    let path = found.as_deref().ok()?;
+    let at = Path::new(path);
+    let shim = at.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"));
+    (at.is_absolute() && !shim).then_some(path)
+}
+
+/// A build runs on Claude Code; a user who hid it in Settings has no way to see or stop one, so Rust refuses it (a dry run too).
+pub fn check_shown(saved: &Settings) -> Result<(), String> {
+    if saved.shows(crate::agent::Engine::Claude) {
+        Ok(())
+    } else {
+        Err("Claude Code is hidden in Settings. Show it again to build the wiki.".into())
+    }
+}
+
+fn command(launch: &Launch, argv: &[String], claude: Option<&str>) -> Command {
     let mut command = Command::new(&launch.program);
     command.args(&launch.args).arg(&launch.script);
     if let Some(root) = &launch.root {
@@ -126,6 +152,9 @@ fn command(launch: &Launch, argv: &[String]) -> Command {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(claude) = claude {
+        command.env(CLAUDE_ENV, claude);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -135,13 +164,43 @@ fn command(launch: &Launch, argv: &[String]) -> Command {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        command.process_group(0); // so cancel can address the whole group
+        command.process_group(0); // so a cancel that has to force it can address the whole group
     }
     command
 }
 
-/// Kill a process and everything it started (`claude` children, the Python interpreter behind a launcher).
-fn kill_tree(pid: u32) {
+/// How long the builder gets to end after SIGTERM (Unix) before its whole group is killed. Living Memory starts each `claude`
+/// call in a session of its own, so the group kill misses them; on SIGTERM it stops its own provider children and exits.
+#[cfg_attr(windows, allow(dead_code))]
+const TERM_GRACE: Duration = Duration::from_secs(5);
+#[cfg_attr(windows, allow(dead_code))]
+const POLL: Duration = Duration::from_millis(100);
+
+/// Run `kill` with `args` on the build's process.
+#[cfg(unix)]
+fn send_signal(args: &[String]) {
+    let _ = Command::new("kill").args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
+}
+
+/// Stop a process and what it started, the Unix way: SIGTERM goes to the builder first, so it can stop the `claude` calls it
+/// started; if it is still running after `grace`, SIGKILL goes to its whole process group.
+#[cfg_attr(windows, allow(dead_code))]
+fn terminate_with(pid: u32, gone: &dyn Fn() -> bool, grace: Duration, step: Duration, send: &dyn Fn(&[String])) {
+    send(&["-TERM".to_string(), pid.to_string()]);
+    let started = std::time::Instant::now();
+    while started.elapsed() < grace {
+        if gone() {
+            return;
+        }
+        std::thread::sleep(step);
+    }
+    if !gone() {
+        send(&["-KILL".to_string(), format!("-{pid}")]);
+    }
+}
+
+/// Stop a process and everything it started (`claude` children, the Python interpreter behind a launcher).
+fn terminate(pid: u32) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -154,41 +213,86 @@ fn kill_tree(pid: u32) {
             .creation_flags(CREATE_NO_WINDOW)
             .status();
     }
-    #[cfg(not(windows))]
-    {
-        let _ = Command::new("kill").args(["-KILL", &format!("-{pid}")]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    #[cfg(unix)]
+    terminate_with(pid, &|| !running().as_ref().is_some_and(|r| r.pid == Some(pid)), TERM_GRACE, POLL, &send_signal);
+}
+
+/// Mark the build cancelled and return its pid; None when none runs, or when its child has not started yet (the start then sees the mark).
+fn mark_cancelled() -> Option<u32> {
+    let mut slot = running();
+    let r = slot.as_mut()?;
+    r.cancelled = true;
+    r.pid
+}
+
+/// Stop the running build, if any. The edition keeps the pages it already wrote. It returns at once; on Unix the stop can take up
+/// to `TERM_GRACE`, on a thread of its own.
+pub fn cancel() {
+    if let Some(pid) = mark_cancelled() {
+        std::thread::spawn(move || terminate(pid));
     }
 }
 
-/// Stop the running build, if any. The edition keeps the pages it already wrote.
-pub fn cancel() {
-    if let Some(r) = running().as_mut() {
-        r.cancelled = true;
-        kill_tree(r.pid);
+/// Stop the running build and wait until it is stopped: the app's exit cleanup, which must not leave a paid build behind.
+pub fn stop() {
+    if let Some(pid) = mark_cancelled() {
+        terminate(pid);
     }
+}
+
+/// Start the child. A real build (`track`) first checks its slot for a cancel that came before the child existed, and records the
+/// child's pid under the same lock, so a cancel never falls between the two.
+fn spawn(launch: &Launch, argv: &[String], claude: Option<&str>, track: bool) -> Result<Child, String> {
+    let mut slot = track.then(running);
+    if slot.as_deref().and_then(Option::as_ref).is_some_and(|r| r.cancelled) {
+        return Err(CANCELLED.into());
+    }
+    let child = command(launch, argv, claude)
+        .spawn()
+        .map_err(|e| format!("Could not start {} {}: {e}", launch.program, launch.script.display()))?;
+    if let Some(r) = slot.as_deref_mut().and_then(Option::as_mut) {
+        r.pid = Some(child.id());
+    }
+    Ok(child)
+}
+
+fn report(emit: &dyn Fn(&str, Value), domain: &str, scope: &str, outcome: &Result<Value, String>) {
+    let done = match outcome {
+        Ok(result) => json!({ "domain": domain, "scope": scope, "ok": true, "result": result }),
+        Err(error) => json!({ "domain": domain, "scope": scope, "ok": false, "error": error }),
+    };
+    emit(DONE_EVENT, done);
 }
 
 /// Run one build, or a dry run, and return the parsed stdout object. A real build also reports through `emit`
 /// (`wiki-build-progress` per line, `wiki-build-done` at the end); a dry run spends nothing and emits nothing.
-/// A second start while one runs fails at once, without events.
-pub fn run(emit: &dyn Fn(&str, Value), launch: &Launch, domain: &str, project: Option<&str>, restructure: bool, dry_run: bool) -> Result<Value, String> {
+/// A second real build while one runs fails at once, without events. A dry run does not use that slot, so previews can overlap
+/// each other and a build. `claude` is the path for `LIVING_MEMORY_CLAUDE` (see `claude_override`).
+pub fn run(emit: &dyn Fn(&str, Value), launch: &Launch, domain: &str, project: Option<&str>, restructure: bool, dry_run: bool, claude: Option<&str>) -> Result<Value, String> {
     check_name("domain", domain)?;
     if let Some(project) = project {
         check_name("project", project)?;
     }
     let scope = project.unwrap_or("domain");
-    let mut child = {
+    let _clear = if dry_run {
+        None
+    } else {
         let mut slot = running();
         if slot.is_some() {
             return Err("A wiki build is already running.".into());
         }
-        let child = command(launch, &build_argv(domain, project, restructure, dry_run))
-            .spawn()
-            .map_err(|e| format!("Could not start {} {}: {e}", launch.program, launch.script.display()))?;
-        *slot = Some(Running { pid: child.id(), cancelled: false });
-        child
+        *slot = Some(Running { pid: None, cancelled: false });
+        Some(Clear)
     };
-    let _clear = Clear;
+    let mut child = match spawn(launch, &build_argv(domain, project, restructure, dry_run), claude, !dry_run) {
+        Ok(child) => child,
+        Err(e) => {
+            if e == CANCELLED {
+                report(emit, domain, scope, &Err(e.clone()));
+            }
+            return Err(e);
+        }
+    };
     let mut stdout_pipe = child.stdout.take();
     let stdout = std::thread::spawn(move || {
         let mut text = String::new();
@@ -225,14 +329,10 @@ pub fn run(emit: &dyn Fn(&str, Value), launch: &Launch, domain: &str, project: O
     }
     let stdout = stdout.join().unwrap_or_default();
     let code = child.wait().ok().and_then(|status| status.code());
-    let cancelled = running().as_ref().is_some_and(|r| r.cancelled);
+    let cancelled = !dry_run && running().as_ref().is_some_and(|r| r.cancelled);
     let outcome = finish(code, &stdout, &tail, cancelled);
     if !dry_run {
-        let done = match &outcome {
-            Ok(result) => json!({ "domain": domain, "scope": scope, "ok": true, "result": result }),
-            Err(error) => json!({ "domain": domain, "scope": scope, "ok": false, "error": error }),
-        };
-        emit(DONE_EVENT, done);
+        report(emit, domain, scope, &outcome);
     }
     outcome
 }
@@ -285,6 +385,52 @@ mod tests {
     }
 
     #[test]
+    fn the_claude_path_goes_to_living_memory_only_when_it_is_an_executable() {
+        let found = |p: &str| -> Result<String, String> { Ok(p.to_string()) };
+        let abs = if cfg!(windows) { "C:/Users/me/.local/bin/claude.exe" } else { "/home/me/.local/bin/claude" };
+        assert_eq!(claude_override(&found(abs)), Some(abs));
+        // Found on PATH by its bare name, so Living Memory finds it as well.
+        assert_eq!(claude_override(&found("claude")), None);
+        assert_eq!(claude_override(&Err("Claude Code was not found.".to_string())), None);
+        let shim = if cfg!(windows) { "C:/Users/me/AppData/Roaming/npm/claude.cmd" } else { "/home/me/bin/claude.CMD" };
+        assert_eq!(claude_override(&found(shim)), None);
+        assert_eq!(claude_override(&found(&shim.replace(".cmd", ".bat"))), None);
+    }
+
+    #[test]
+    fn the_build_child_gets_the_claude_path_and_no_session_identity() {
+        let launch = Launch { program: "python3".into(), args: vec![], script: PathBuf::from("living_memory.py"), root: None };
+        let env = |command: &Command, key: &str| command.get_envs().find(|(k, _)| *k == key).map(|(_, v)| v.map(|v| v.to_string_lossy().into_owned()));
+        let with = command(&launch, &["wiki".to_string()], Some("C:/x/claude.exe"));
+        assert_eq!(env(&with, CLAUDE_ENV), Some(Some("C:/x/claude.exe".to_string())));
+        assert_eq!(env(&with, "HIVEMIND_SESSION"), Some(None)); // removed
+        assert_eq!(env(&command(&launch, &["wiki".to_string()], None), CLAUDE_ENV), None);
+    }
+
+    #[test]
+    fn a_hidden_claude_code_refuses_a_build() {
+        assert!(check_shown(&Settings::default()).is_ok());
+        assert!(check_shown(&Settings { hidden_engines: Some(vec!["codex".into()]), ..Default::default() }).is_ok());
+        let hidden = Settings { hidden_engines: Some(vec!["claude".into()]), ..Default::default() };
+        assert_eq!(check_shown(&hidden), Err("Claude Code is hidden in Settings. Show it again to build the wiki.".into()));
+    }
+
+    #[test]
+    fn a_stop_sends_sigterm_first_and_kills_the_group_only_when_the_builder_stays() {
+        use std::cell::{Cell, RefCell};
+        let sent = RefCell::new(Vec::<Vec<String>>::new());
+        let send = |args: &[String]| sent.borrow_mut().push(args.to_vec());
+        let polls = Cell::new(0);
+        // The builder ends on the third look: SIGTERM only.
+        terminate_with(77, &|| { polls.set(polls.get() + 1); polls.get() >= 3 }, Duration::from_secs(5), Duration::from_millis(1), &send);
+        assert_eq!(*sent.borrow(), [["-TERM", "77"]]);
+        sent.borrow_mut().clear();
+        // It never ends: SIGTERM, then SIGKILL to the group once the grace is over.
+        terminate_with(77, &|| false, Duration::from_millis(30), Duration::from_millis(1), &send);
+        assert_eq!(*sent.borrow(), [vec!["-TERM", "77"], vec!["-KILL", "-77"]]);
+    }
+
+    #[test]
     fn a_name_that_reads_as_a_flag_is_refused() {
         assert!(check_name("domain", "demo").is_ok());
         assert!(check_name("domain", "--help").is_err());
@@ -300,7 +446,8 @@ mod tests {
     }
 
     /// One test for the real process handling, because the build slot is shared: a build forwards its progress and result, a dry
-    /// run emits nothing, and cancel ends a long build and frees the slot. Skipped when there is no Python.
+    /// run emits nothing and does not use the slot, a cancel before the child exists stops it from ever starting, and cancel
+    /// ends a long build and frees the slot. Skipped when there is no Python.
     #[test]
     fn a_build_forwards_progress_and_can_be_cancelled() {
         let dir: PathBuf = std::env::temp_dir().join(format!("hivemind-wiki-build-{}", std::process::id()));
@@ -311,14 +458,16 @@ mod tests {
             "sys.stderr.write(json.dumps({'event': 'start', 'scope': 'domain', 'calls': 1}) + '\\n'); sys.stderr.flush()\n",
             "sys.stderr.write(json.dumps({'event': 'call', 'kind': 'page', 'page': 'pg000001', 'title': 'T', 'ok': True, 'done': 1, 'total': 1, 'cost_usd': 0.25}) + '\\n'); sys.stderr.flush()\n",
             "dry = '--dry-run' in sys.argv\n",
-            "print(json.dumps({'ok': True, 'dry_run': dry, 'written': [] if dry else ['pg000001'], 'argv': sys.argv[1:]}))\n",
+            "import os\n",
+            "print(json.dumps({'ok': True, 'dry_run': dry, 'written': [] if dry else ['pg000001'], 'argv': sys.argv[1:], 'claude': os.environ.get('LIVING_MEMORY_CLAUDE')}))\n",
         );
         let Some(launch) = python_launch(&dir, finished) else { return };
         let seen = Mutex::new(Vec::<(String, Value)>::new());
         let emit = |name: &str, payload: Value| seen.lock().unwrap().push((name.to_string(), payload));
 
-        let result = run(&emit, &launch, "demo", Some("core"), false, false).unwrap();
+        let result = run(&emit, &launch, "demo", Some("core"), false, false, Some("C:/x/claude.exe")).unwrap();
         assert_eq!(result["written"][0], "pg000001");
+        assert_eq!(result["claude"], "C:/x/claude.exe");
         assert!(result["argv"].as_array().unwrap().iter().any(|a| a == "--progress"));
         let events = seen.lock().unwrap().clone();
         assert_eq!(events.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), [PROGRESS_EVENT, PROGRESS_EVENT, DONE_EVENT]);
@@ -328,9 +477,17 @@ mod tests {
         assert_eq!(events[2].1["result"]["written"][0], "pg000001");
 
         seen.lock().unwrap().clear();
-        let dry = run(&emit, &launch, "demo", None, false, true).unwrap();
+        let dry = run(&emit, &launch, "demo", None, false, true, None).unwrap();
         assert_eq!(dry["dry_run"], true);
+        assert_eq!(dry["claude"], Value::Null);
         assert!(seen.lock().unwrap().is_empty());
+
+        // A cancel that came before the child existed (the slot is taken, no pid yet) keeps the child from starting.
+        *running() = Some(Running { pid: None, cancelled: true });
+        assert_eq!(spawn(&launch, &build_argv("demo", None, false, false), None, true).err(), Some(CANCELLED.to_string()));
+        *running() = None;
+        assert_eq!(mark_cancelled(), None); // nothing to cancel when no build runs
+        assert!(running().is_none());
 
         let hanging = concat!(
             "import sys, json, time\n",
@@ -338,17 +495,22 @@ mod tests {
             "time.sleep(120)\n",
         );
         let launch = python_launch(&dir, hanging).unwrap();
+        let other = dir.join("preview");
+        std::fs::create_dir_all(&other).unwrap();
+        let preview = python_launch(&other, finished).unwrap();
         seen.lock().unwrap().clear();
         let cancelling = |name: &str, payload: Value| {
             if name == PROGRESS_EVENT {
-                // The child is running; a second start is refused, then cancel.
-                assert_eq!(run(&|_: &str, _: Value| {}, &launch, "demo", None, false, true), Err("A wiki build is already running.".into()));
+                // The child is running; a second real build is refused, a dry run is not, then cancel.
+                assert_eq!(run(&|_: &str, _: Value| {}, &launch, "demo", None, false, false, None), Err("A wiki build is already running.".into()));
+                assert_eq!(run(&|_: &str, _: Value| {}, &preview, "demo", None, true, true, None).unwrap()["dry_run"], true);
+                assert!(running().is_some(), "the preview left the build's slot alone");
                 cancel();
             }
             seen.lock().unwrap().push((name.to_string(), payload));
         };
         let started = std::time::Instant::now();
-        assert_eq!(run(&cancelling, &launch, "demo", None, false, false), Err(CANCELLED.into()));
+        assert_eq!(run(&cancelling, &launch, "demo", None, false, false, None), Err(CANCELLED.into()));
         assert!(started.elapsed() < std::time::Duration::from_secs(60));
         let events = seen.lock().unwrap().clone();
         assert_eq!(events.last().unwrap().0, DONE_EVENT);

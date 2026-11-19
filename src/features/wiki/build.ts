@@ -9,6 +9,8 @@ import { wikiAgentBuild, wikiAgentCancel, type WikiBuildDone, type WikiBuildEven
 import { toast } from "../../ui/toast";
 import { applyProgress, buildOutcome, type BuildProgress } from "./wiki";
 
+const CANCELLED = "Build cancelled.";
+
 interface BuildState {
   /** What is being built: the domain and the project it is limited to ("" for the whole domain). */
   running: { domain: string; project: string } | null;
@@ -24,7 +26,7 @@ function finish(client: QueryClient, done: Pick<WikiBuildDone, "ok" | "result" |
   useWikiBuild.setState({ running: null, progress: null, cancelling: false });
   const outcome = buildOutcome(done, cancelling);
   toast(outcome.text, outcome.kind);
-  client.invalidateQueries({ queryKey: ["wiki-agent"] });
+  client.invalidateQueries({ queryKey: ["wiki", "agent"] });
 }
 
 let listening: Promise<unknown> | null = null;
@@ -39,6 +41,9 @@ export async function startWikiBuild(client: QueryClient, domain: string, projec
   useWikiBuild.setState({ running: { domain, project }, progress: null, cancelling: false });
   try {
     await listenOnce(client);
+    // A Cancel pressed while the listeners were being set up found no build in Rust to stop: it is latched in `cancelling`, and the
+    // build never starts, so nothing is spent. (A later Cancel is Rust's: it keeps one for a build that has not spawned yet.)
+    if (useWikiBuild.getState().cancelling) { finish(client, { ok: false, error: CANCELLED }); return; }
     finish(client, { ok: true, result: await wikiAgentBuild(domain, project || undefined, restructure, false) });
   } catch (e) {
     finish(client, { ok: false, error: classify(e).message });

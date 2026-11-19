@@ -14,6 +14,8 @@ import { appQuit, notifyTray, quitAck, termList } from "./lib/term";
 import { useAttentionEvents } from "./features/terminal/attention";
 import { QuitDialog } from "./features/terminal/QuitDialog";
 import { runningSummary } from "./features/terminal/running";
+import { useWikiBuild } from "./features/wiki/build";
+import { invalidateWiki } from "./features/wiki/useWiki";
 import { needsLmUpdate, useConnection } from "./lib/connection";
 import { refreshStore } from "./lib/refresh";
 import { Shell } from "./shell/Shell";
@@ -41,10 +43,10 @@ function useShortcuts() {
   }, []);
 }
 
-/** What runs now: terminals and chat turns, one line each. Empty when nothing does or when the lists cannot be read. */
+/** What runs now: terminals, chat turns and a wiki build, one line each. The terminal and chat lines are left out when their lists cannot be read. */
 async function running(): Promise<string[]> {
   const lists = await Promise.all([termList(), agentSessions()]).catch(() => null);
-  return lists ? runningSummary(lists[0], lists[1]) : [];
+  return runningSummary(lists?.[0] ?? [], lists?.[1] ?? [], useWikiBuild.getState().running);
 }
 
 /** Closing the window hides it to the tray while anything runs, or when that is on (the quick-capture hotkey keeps working);
@@ -106,7 +108,7 @@ function useLiveRefresh(enabled: boolean) {
         client.invalidateQueries({ queryKey: ["log"] });
         client.invalidateQueries({ queryKey: ["recap"] });
         client.invalidateQueries({ queryKey: ["maintenance"] });
-        client.invalidateQueries({ queryKey: ["wiki"] }); // projects.json and bindings decide the wiki's projects and folders
+        invalidateWiki(client); // projects.json and bindings decide the wiki's projects and folders (both editions)
       }),
       listen("agent-sessions-changed", () => client.invalidateQueries({ queryKey: ["agent", "sessions"] })),
       // A post-session review finished: its drafts are in the proposal inbox and the skill proposals.

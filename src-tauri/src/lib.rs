@@ -1159,10 +1159,11 @@ async fn folder_pick(app: AppHandle, state: State<'_, AppState>) -> Result<Optio
 /// The themes the exported page can start in (the app's own: `src/lib/theme.ts`).
 const WIKI_THEMES: [&str; 3] = ["purple", "emerald", "emerald-light"];
 
-/// The `wiki` argv that writes the page to `path`, starting in `theme`. It runs as the main actor: a viewer may not write files.
+/// The `wiki` argv that writes the page to `path`, starting in `theme` when one is given (the page sends it only when the connected
+/// Living Memory has `--theme`; an older one rejects the flag). It runs as the main actor: a viewer may not write files.
 /// `agent` exports the agent-written edition (of one project when `project` is set); `archived` only applies to the structured one.
-fn wiki_export_argv(domain: &str, path: &str, archived: bool, agent: bool, project: Option<&str>, theme: &str) -> Result<Vec<String>, String> {
-    if !WIKI_THEMES.contains(&theme) {
+fn wiki_export_argv(domain: &str, path: &str, archived: bool, agent: bool, project: Option<&str>, theme: Option<&str>) -> Result<Vec<String>, String> {
+    if let Some(theme) = theme.filter(|t| !WIKI_THEMES.contains(t)) {
         return Err(format!("Unknown theme {theme:?}"));
     }
     let mut argv: Vec<String> = ["wiki", "--domain", domain, "--out", path].map(String::from).into();
@@ -1174,7 +1175,9 @@ fn wiki_export_argv(domain: &str, path: &str, archived: bool, agent: bool, proje
     } else if archived {
         argv.push("--archived".into());
     }
-    argv.extend(["--theme".into(), theme.into()]);
+    if let Some(theme) = theme {
+        argv.extend(["--theme".into(), theme.into()]);
+    }
     Ok(argv)
 }
 
@@ -1188,18 +1191,18 @@ fn wiki_file_name(domain: &str, agent: bool, project: Option<&str>) -> String {
 /// Export a domain's wiki as one HTML file. A native save dialog picks the path (so the webview never supplies one), Living Memory
 /// writes the file, and it opens in the default browser. None when the dialog was cancelled.
 #[tauri::command]
-async fn wiki_export(app: AppHandle, state: State<'_, AppState>, domain: String, archived: bool, agent: bool, project: Option<String>, theme: String) -> Result<Option<String>, String> {
+async fn wiki_export(app: AppHandle, state: State<'_, AppState>, domain: String, archived: bool, agent: bool, project: Option<String>, theme: Option<String>) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
     use tauri_plugin_opener::OpenerExt;
     let bridge = state.bridge.clone();
     blocking(move || {
         // Refuse an unknown theme before asking where to save.
-        wiki_export_argv(&domain, "", archived, agent, project.as_deref(), &theme)?;
+        wiki_export_argv(&domain, "", archived, agent, project.as_deref(), theme.as_deref())?;
         let Some(picked) = app.dialog().file().add_filter("HTML page", &["html"]).set_file_name(wiki_file_name(&domain, agent, project.as_deref())).blocking_save_file() else {
             return Ok(None);
         };
         let path = picked.into_path().map_err(|e| e.to_string())?.to_string_lossy().into_owned();
-        let reply = bridge.call(&wiki_export_argv(&domain, &path, archived, agent, project.as_deref(), &theme)?, None)?;
+        let reply = bridge.call(&wiki_export_argv(&domain, &path, archived, agent, project.as_deref(), theme.as_deref())?, None)?;
         if reply.exit_code != 0 {
             let message = reply.error.get("message").and_then(Value::as_str).map(String::from);
             return Err(message.unwrap_or_else(|| format!("Living Memory exited with code {}", reply.exit_code)));
@@ -1212,15 +1215,21 @@ async fn wiki_export(app: AppHandle, state: State<'_, AppState>, domain: String,
 
 /// Build the agent-written wiki (or dry-run it: the calls and budget it would use, spending nothing). It runs as its own Living
 /// Memory process, not through the bridge, so a build of minutes blocks nothing. A real build reports `wiki-build-progress` events
-/// and `wiki-build-done`; one build runs at a time. Returns Living Memory's result object.
+/// and `wiki-build-done`; one real build runs at a time (a dry run does not count). It is refused while Claude Code is hidden in
+/// Settings, a dry run too. `LIVING_MEMORY_CLAUDE` is set to the Claude Code program Hivemind uses for its own sessions, when that
+/// is an absolute path to an executable. Returns Living Memory's result object.
 #[tauri::command]
 async fn wiki_agent_build(app: AppHandle, state: State<'_, AppState>, domain: String, project: Option<String>, restructure: bool, dry_run: bool) -> Result<Value, String> {
     let launch = state.bridge.launch();
+    let settings_path = state.settings_path.clone();
     blocking(move || {
+        let saved = settings::load(&settings_path);
+        wiki_build::check_shown(&saved)?;
+        let claude = agent::claude::available(&saved);
         let emit = |name: &str, payload: Value| {
             let _ = app.emit(name, payload);
         };
-        wiki_build::run(&emit, &launch, &domain, project.as_deref(), restructure, dry_run)
+        wiki_build::run(&emit, &launch, &domain, project.as_deref(), restructure, dry_run, wiki_build::claude_override(&claude))
     })
     .await
 }
@@ -1417,12 +1426,13 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|app, event| {
-            // An agent session or a terminal must not outlive the app that started it.
+            // An agent session, a terminal or a wiki build must not outlive the app that started it.
             if let tauri::RunEvent::Exit = event
                 && let Some(state) = app.try_state::<AppState>()
             {
                 state.agents.stop_all();
                 state.terminals.stop_all();
+                wiki_build::stop();
             }
         });
 }
@@ -1452,22 +1462,25 @@ mod tests {
 
     #[test]
     fn wiki_export_runs_as_main_and_writes_to_the_chosen_path() {
-        let argv = |archived, agent, project: Option<&str>, theme| wiki_export_argv("demo", "C:/x/demo-wiki.html", archived, agent, project, theme);
-        assert_eq!(argv(false, false, None, "purple").unwrap(), ["wiki", "--domain", "demo", "--out", "C:/x/demo-wiki.html", "--theme", "purple"]);
-        let archived = wiki_export_argv("demo", "p.html", true, false, None, "emerald").unwrap();
+        let argv = |archived, agent, project: Option<&str>, theme: Option<&str>| wiki_export_argv("demo", "C:/x/demo-wiki.html", archived, agent, project, theme);
+        assert_eq!(argv(false, false, None, Some("purple")).unwrap(), ["wiki", "--domain", "demo", "--out", "C:/x/demo-wiki.html", "--theme", "purple"]);
+        let archived = wiki_export_argv("demo", "p.html", true, false, None, Some("emerald")).unwrap();
         assert_eq!(archived, ["wiki", "--domain", "demo", "--out", "p.html", "--archived", "--theme", "emerald"]);
         assert!(!archived.iter().any(|a| a == "--actor"));
         // The agent edition passes --agent and the project, and has no retired notes to show.
         assert_eq!(
-            argv(true, true, Some("core"), "emerald-light").unwrap(),
+            argv(true, true, Some("core"), Some("emerald-light")).unwrap(),
             ["wiki", "--domain", "demo", "--out", "C:/x/demo-wiki.html", "--agent", "--project", "core", "--theme", "emerald-light"]
         );
-        assert_eq!(argv(false, true, None, "purple").unwrap().iter().filter(|a| *a == "--agent").count(), 1);
+        assert_eq!(argv(false, true, None, Some("purple")).unwrap().iter().filter(|a| *a == "--agent").count(), 1);
         // A project only narrows the agent edition.
-        assert!(!argv(false, false, Some("core"), "purple").unwrap().iter().any(|a| a == "--project"));
+        assert!(!argv(false, false, Some("core"), Some("purple")).unwrap().iter().any(|a| a == "--project"));
         for theme in ["", "sepia", "Purple", "--out"] {
-            assert!(argv(false, false, None, theme).is_err(), "{theme}");
+            assert!(argv(false, false, None, Some(theme)).is_err(), "{theme}");
         }
+        // An older Living Memory has no --theme: without one, the flag is not sent.
+        assert_eq!(argv(false, false, None, None).unwrap(), ["wiki", "--domain", "demo", "--out", "C:/x/demo-wiki.html"]);
+        assert!(!argv(false, true, Some("core"), None).unwrap().iter().any(|a| a == "--theme"));
         assert_eq!(wiki_file_name("sandbox", false, None), "sandbox-wiki.html");
         assert_eq!(wiki_file_name("a b/c", false, None), "a_b_c-wiki.html");
         assert_eq!(wiki_file_name("sandbox", true, None), "sandbox-agent-wiki.html");

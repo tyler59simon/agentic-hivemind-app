@@ -8,13 +8,14 @@ import { exportWiki } from "../../lib/wiki";
 import { useApp } from "../../store";
 import { PageHeader } from "../../ui/Page";
 import { toast } from "../../ui/toast";
+import { useShownEngines } from "../agents/engines";
 import { AgentMainPage, AgentPage } from "./agent";
 import { startWikiBuild, useWikiBuild } from "./build";
 import { BuildDialog, BuildStrip, EmptyEdition } from "./BuildUi";
 import { AzPage, FolderPage, MainPage, MissingPage, NotePage, ProjectPage, RecentPage, SearchPage, SectionPage } from "./pages";
 import { NavProvider } from "./parts";
 import { useAgentWiki, useWiki } from "./useWiki";
-import { crumbs, resolvePage, searchNotes, treeKeys, treeOpen, treeRows, type TreeIcon, type WikiIndex, type WikiView } from "./wiki";
+import { buildBlocked, crumbs, resolvePage, searchNotes, treeKeys, treeOpen, treeRows, wikiRoute, type TreeIcon, type WikiIndex, type WikiView } from "./wiki";
 
 const TREE_ICONS: Record<TreeIcon, typeof House> = { home: House, box: Package, list: List, clock: Clock };
 
@@ -96,14 +97,14 @@ export function WikiPage() {
   const domain = route?.domain ?? appDomain ?? known.data?.domains[0]?.name ?? null;
   const at = route?.at;
   const [archived, setArchived] = useState(false);
-  const [edition, setEdition] = useState<"structured" | "agent">("structured");
-  const [project, setProject] = useState(""); // the agent edition's scope: "" is the whole domain
+  const project = route?.project ?? ""; // the agent edition's scope: "" is the whole domain
+  const blocked = buildBlocked(useShownEngines().shows("claude"));
   const [planning, setPlanning] = useState(false);
   const [q, setQ] = useState("");
   const [navOpen, setNavOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const structured = useWiki(domain, archived);
-  const agentMode = agentEnabled && edition === "agent";
+  const agentMode = agentEnabled && route?.edition === "agent";
   const agent = useAgentWiki(domain, project, agentMode);
   const { query, ix } = agentMode ? agent : structured;
   const noEdition = agentMode && agent.query.isSuccess && agent.query.data === null;
@@ -111,19 +112,19 @@ export function WikiPage() {
   const asked = useDeferredValue(q.trim());
   const hits = useMemo(() => (ix && asked ? searchNotes(ix.model.notes, asked) : []), [ix, asked]);
 
-  const goTo = useCallback((to: string) => {
+  // The edition and scope are part of the route, so Back returns to the edition a page was in.
+  const open = useCallback((o: { at?: string; agent: boolean; project?: string }) => {
     setQ(""); setNavOpen(false);
-    go({ page: "wiki", domain: domain ?? undefined, at: to || undefined });
+    go(wikiRoute(domain ?? undefined, o));
   }, [go, domain]);
+  const goTo = useCallback((at: string) => open({ at, agent: agentMode, project }), [open, agentMode, project]);
   const nav = useMemo(() => (ix ? { ix, goTo } : null), [ix, goTo]);
   // A new page starts at the top.
   useEffect(() => { document.querySelector("main.page-host")?.scrollTo({ top: 0 }); }, [at, asked]);
 
-  useEffect(() => { setProject(""); }, [domain]);
   const pickEdition = (next: "structured" | "agent") => {
-    if (next === edition) return;
-    setEdition(next);
-    goTo(""); // an address of one edition names nothing in the other
+    if ((next === "agent") === agentMode) return;
+    open({ agent: next === "agent" }); // an address of one edition names nothing in the other
   };
 
   const exportHtml = async () => {
@@ -148,7 +149,7 @@ export function WikiPage() {
     <div className="page wiki-page">
       <div className="wiki-bar">
         <h1 className="wiki-title">Wiki</h1>
-        <select value={domain ?? ""} onChange={(e) => go({ page: "wiki", domain: e.target.value })} aria-label="Domain">
+        <select value={domain ?? ""} onChange={(e) => go(wikiRoute(e.target.value, { agent: agentMode }))} aria-label="Domain">
           {!domain && <option value="">Choose a domain…</option>}
           {known.data?.domains.map((d) => <option key={d.name} value={d.name}>{d.name} ({d.active})</option>)}
           {domain && !known.data?.domains.some((d) => d.name === domain) && <option value={domain}>{domain}</option>}
@@ -160,7 +161,7 @@ export function WikiPage() {
           </div>
         )}
         {agentMode ? (
-          <select value={project} onChange={(e) => { setProject(e.target.value); goTo(""); }} aria-label="Scope">
+          <select value={project} onChange={(e) => open({ agent: true, project: e.target.value })} aria-label="Scope">
             <option value="">Whole domain</option>
             {structured.query.data?.projects.map((p) => <option key={p.slug} value={p.slug}>{p.name}</option>)}
             {project && !structured.query.data?.projects.some((p) => p.slug === project) && <option value={project}>{project}</option>}
@@ -168,7 +169,7 @@ export function WikiPage() {
         ) : <label className="check"><input type="checkbox" checked={archived} onChange={(e) => setArchived(e.target.checked)} />Show retired</label>}
         <span className="fill" />
         {agentMode && !noEdition && (
-          <button className="outline" onClick={() => setPlanning(true)} disabled={!domain || !!building || !ix} title="Rewrite the pages whose sources changed, and place new notes">
+          <button className="outline" onClick={() => setPlanning(true)} disabled={!domain || !!building || !ix || !!blocked} title={blocked ?? "Rewrite the pages whose sources changed, and place new notes"}>
             <RefreshCw size="1.1em" aria-hidden />Refresh
           </button>
         )}
@@ -184,7 +185,7 @@ export function WikiPage() {
       {query.isLoading ? <p className="muted">{agentMode ? "Reading the agent-written wiki…" : "Building the wiki…"}</p>
         : query.error && !ix ? <p className="error">{classify(query.error).message}</p>
         : !domain ? <p className="muted">Choose a domain to read as a wiki.</p>
-        : noEdition ? <EmptyEdition domain={domain} project={project} busy={!!building} onBuild={() => setPlanning(true)} />
+        : noEdition ? <EmptyEdition domain={domain} project={project} busy={!!building} blocked={blocked} onBuild={() => setPlanning(true)} />
         : ix && nav && (
           <div className="wiki-layout">
             <aside className="wiki-side">

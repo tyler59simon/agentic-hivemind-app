@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { wikiRoute } from "./features/wiki/wiki";
 import { openProject, openReview, openSession, openSystem, startSession, useApp } from "./store";
 
 const app = () => useApp.getState();
@@ -69,5 +70,13 @@ describe("navigation", () => {
     app().go({ page: "wiki", domain: "demo", at: "n-0a1b2c3d" });
     expect(app().route).toEqual({ page: "wiki", domain: "demo", at: "n-0a1b2c3d" });
     expect(app().back).toEqual([{ page: "overview" }, { page: "wiki", domain: "demo", at: "p-core" }]);
+  });
+
+  it("Back from the structured edition returns to the agent edition and its scope", () => {
+    app().go(wikiRoute("demo", { at: "n-pg0a1b2c", agent: true, project: "core" }));
+    app().go(wikiRoute("demo", { at: "p-core" }));
+    expect(app().route).toEqual({ page: "wiki", domain: "demo", at: "p-core" });
+    app().goBack();
+    expect(app().route).toEqual({ page: "wiki", domain: "demo", at: "n-pg0a1b2c", edition: "agent", project: "core" });
   });
 });
