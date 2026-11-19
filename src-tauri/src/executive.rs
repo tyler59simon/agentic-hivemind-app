@@ -583,16 +583,22 @@ one line that starts with \"Decision:\", \"Commitment:\", \"Risk:\" or \"Status:
 when they are known); Hivemind extracts those lines for the user to review when the conversation ends. Draft emails and updates when asked. \
 Write plainly: lead with the answer, no filler, no em dashes, no emoji.";
 
+/// The domains the executive chat reads: the charter domain of `project`, or of every active project. The briefing names
+/// them and the chat's allow rules (`agent::scope::executive`) are built from them.
+pub fn bound_domains(lm: &Lm, project: Option<&str>) -> Result<BTreeSet<String>, String> {
+    let registry = lm(&["projects"])?;
+    Ok(array(&registry, "projects")
+        .filter(|p| project.map_or(text(p, "status") == "active", |slug| text(p, "slug") == slug))
+        .filter_map(|p| text(p, "charter").split_once(':').map(|(d, _)| d.to_string()))
+        .collect())
+}
+
 /// The executive chat's briefing: the preamble, the scope and the evidence.
 pub fn agent_briefing(lm: &Lm, store: &Store, project: Option<&str>, today: NaiveDate) -> Result<String, String> {
     let pack = pack_within(lm, store, project, 14, today, AGENT_PACK_CHARS)?;
     let scope = project.map_or("all active projects".to_string(), |slug| format!("the project {}", project_name(lm, slug)));
     // The chat's folder is bound to no domain, so Living Memory's own session hook gives it no command: name them here.
-    let registry = lm(&["projects"])?;
-    let domains: BTreeSet<String> = array(&registry, "projects")
-        .filter(|p| project.map_or(text(p, "status") == "active", |slug| text(p, "slug") == slug))
-        .filter_map(|p| text(p, "charter").split_once(':').map(|(d, _)| d.to_string()))
-        .collect();
+    let domains = bound_domains(lm, project)?;
     let domain = domains.iter().next().map_or("DOMAIN", |d| d.as_str());
     let reads = format!("To read Living Memory, run its commands in the shell, one domain at a time (domains: {}): \
 `alm --json --domain {domain} search 'query'`, `alm --json --domain {domain} ask 'question'`, `alm --json --domain {domain} read REF`, \

@@ -1140,6 +1140,7 @@ pub(super) mod tests {
             resume: false,
             model: None,
             deny: vec![],
+            isolated: false,
             memory_root,
         };
         let env = |command: &Command, name: &str| command.get_envs().find(|(key, _)| *key == name).and_then(|(_, value)| value.map(|v| v.to_string_lossy().into_owned()));

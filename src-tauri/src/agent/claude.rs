@@ -140,7 +140,10 @@ impl Adapter for ClaudeCode {
         match &spec.policy {
             // Only the user's own settings: the repository's .claude settings could add allow rules or hooks to a session that
             // never asks. The user settings keep Living Memory's hooks.
-            Policy::PreApproved { .. } => command.args(["--permission-mode", "dontAsk", "--permission-prompts", "none", "--setting-sources", "user"]),
+            Policy::PreApproved { .. } if !spec.isolated => {
+                command.args(["--permission-mode", "dontAsk", "--permission-prompts", "none", "--setting-sources", "user"])
+            }
+            Policy::PreApproved { .. } => command.args(["--permission-mode", "dontAsk", "--permission-prompts", "none"]),
             Policy::Ask { .. } => {
                 command.args(["--permission-mode", "manual", "--permission-prompts", "host", "--permission-prompt-tool", "stdio"])
             }
@@ -148,6 +151,11 @@ impl Adapter for ClaudeCode {
                 command.args(["--permission-mode", "acceptEdits", "--permission-prompts", "host", "--permission-prompt-tool", "stdio"])
             }
         };
+        if spec.isolated {
+            // No settings file at all (so no user allow rules), no MCP servers, skills or commands, and only the shell and the
+            // to-do list: what may run is exactly the allow rules below.
+            command.args(["--restricted", "--tools", "Bash,PowerShell,TodoWrite", "--strict-mcp-config", "--disable-slash-commands"]);
+        }
         command.args([if spec.resume { "--resume" } else { "--session-id" }, &spec.session_id]);
         command.args(["--max-budget-usd", &spec.budget_usd.to_string()]);
         if let Some(model) = &spec.model {
@@ -743,8 +751,24 @@ mod tests {
             resume: false,
             model: None,
             deny: vec![],
+            isolated: false,
             memory_root: None,
         }
+    }
+
+    #[test]
+    fn an_isolated_session_loads_no_settings_and_only_the_shell() {
+        let mut executive = spec(Policy::PreApproved { allow: vec!["TodoWrite".into(), "Bash(alm --json --domain pay search *)".into()] });
+        (executive.isolated, executive.add_dirs, executive.plugin_dirs, executive.schema) = (true, vec![], vec![], None);
+        #[rustfmt::skip]
+        let expected = [
+            "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+            "--permission-mode", "dontAsk", "--permission-prompts", "none",
+            "--restricted", "--tools", "Bash,PowerShell,TodoWrite", "--strict-mcp-config", "--disable-slash-commands",
+            "--session-id", "00000000-0000-4000-8000-000000000001", "--max-budget-usd", "5",
+            "--allowedTools", "TodoWrite", "Bash(alm --json --domain pay search *)",
+        ];
+        assert_eq!(args_of(&ClaudeCode.command(&executive)), expected);
     }
 
     fn args_of(command: &Command) -> Vec<String> {

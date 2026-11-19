@@ -111,6 +111,9 @@ pub struct Spec {
     pub model: Option<String>,
     /// Rules the CLI must refuse whatever else allows them (`--disallowedTools`). Copied from the scope.
     pub deny: Vec<String>,
+    /// Start the CLI without the user's settings, skills or MCP servers, and with only the shell and its to-do list. Copied
+    /// from the scope.
+    pub isolated: bool,
     /// The Living Memory store the app is connected to; the CLI's hooks must use the same one. None when the app uses
     /// Living Memory's own default.
     pub memory_root: Option<PathBuf>,
@@ -131,6 +134,8 @@ pub struct Scope {
     pub worktree: Option<Worktree>,
     /// Rules denied in every session: `deny_rules()`. Set for passport and work scopes alike.
     pub deny: Vec<String>,
+    /// No user settings, skills, MCP servers or file tools: only the allow rules here decide what runs. The executive chat.
+    pub isolated: bool,
 }
 
 /// A folder as Claude Code's permission rules spell it: POSIX separators and one extra leading
@@ -195,6 +200,7 @@ fn system_passport(entry: &Value, saved: &Settings, home: &Path) -> Result<Scope
         mode: Mode::Unattended,
         worktree: None,
         deny: deny_rules(),
+        isolated: false,
     })
 }
 
@@ -341,6 +347,7 @@ pub fn work_as(tree: Worktree, profile: Profile, attended: bool, commands: &[Str
         mode: Mode::Interactive,
         worktree: Some(tree),
         deny: deny_rules(),
+        isolated: false,
     })
 }
 
@@ -372,6 +379,7 @@ fn place(cwd: PathBuf, worktree: Option<Worktree>, policy: PolicyMode, title: St
         mode: Mode::Interactive,
         worktree,
         deny: deny_rules(),
+        isolated: false,
     })
 }
 
@@ -387,6 +395,8 @@ const MEMORY_READS: [&str; 10] = ["search", "ask", "read", "open", "list", "reca
 /// Living Memory's writes the executive chat may not run: what it learns reaches memory only through the user's review.
 const MEMORY_WRITES: [&str; 12] = ["capture", "update", "propose", "check", "confirm", "resolve", "reopen", "supersede", "restore", "batch", "distinct", "proposals"];
 
+/// Deny rules only: a rule matches the CLI's name anywhere in the command, which over-denies (the safe side) and would
+/// over-allow. Allow rules are exact command prefixes (`memory_reads`).
 fn memory_rules(verbs: &[&str]) -> Vec<String> {
     ["Bash", "PowerShell"]
         .into_iter()
@@ -398,12 +408,27 @@ fn memory_rules(verbs: &[&str]) -> Vec<String> {
         .collect()
 }
 
-/// The executive chat's scope: an empty working folder of Hivemind's, reading only (files and Living Memory), never asking,
-/// and denied every Living Memory write besides the governed ones.
-pub fn executive(dir: &Path, title: String) -> Result<Scope, String> {
+/// Allow rules for exactly the read commands the executive briefing names: `alm --json --domain D VERB ...` for each bound
+/// domain, and the cross-domain `open` by tag. A domain whose name could not be spelled as one plain command is left out.
+fn memory_reads(domains: &[String]) -> Vec<String> {
+    let mut commands: Vec<String> = domains
+        .iter()
+        .filter(|domain| !domain.is_empty() && !domain.contains(char::is_whitespace))
+        .flat_map(|domain| MEMORY_READS.iter().map(move |verb| format!("alm --json --domain {domain} {verb}")))
+        .filter(|command| check_command(command).is_ok())
+        .collect();
+    commands.push("alm --json open --all-domains --tag".into());
+    command_rules(&commands).unwrap_or_default()
+}
+
+/// The executive chat's scope: an empty working folder of Hivemind's, reading only Living Memory (exact `alm` read commands
+/// for `domains`), never asking, denied every Living Memory write, and isolated from the user's own settings, skills and MCP
+/// servers (which could allow more). Living Memory's hooks live in those settings, so they do not run here; the folder is
+/// bound to no domain, so they gave this chat nothing, and the CLI still refuses governed commands under HIVEMIND_SESSION.
+pub fn executive(dir: &Path, title: String, domains: &[String]) -> Result<Scope, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("Could not create the executive folder {}: {e}", dir.display()))?;
-    let mut allow: Vec<String> = READ_TOOLS.iter().map(|tool| tool.to_string()).collect();
-    allow.extend(memory_rules(&MEMORY_READS));
+    let mut allow = vec!["TodoWrite".to_string()];
+    allow.extend(memory_reads(domains));
     let mut deny = deny_rules();
     deny.extend(memory_rules(&MEMORY_WRITES));
     Ok(Scope {
@@ -417,15 +442,23 @@ pub fn executive(dir: &Path, title: String) -> Result<Scope, String> {
         mode: Mode::Interactive,
         worktree: None,
         deny,
+        isolated: true,
     })
+}
+
+/// A stored executive session's scope. The folder was chosen by Rust when the session started; only an executive folder
+/// is accepted back. The domains are read again, so a project bound since then is readable.
+fn executive_session(lm: &crate::executive::Lm, info: &SessionInfo, project: Option<&str>) -> Result<Scope, String> {
+    let dir = info.workspace.first().map(PathBuf::from).filter(|d| d.ends_with(Path::new("executive").join("agent")));
+    let dir = dir.ok_or("This session's folder is not an executive folder")?;
+    let domains: Vec<String> = crate::executive::bound_domains(lm, project)?.into_iter().collect();
+    executive(&dir, info.title.clone(), &domains)
 }
 
 /// The scope of a stored work session, checked against the registry again before a process is started for it.
 pub fn for_session(bridge: &Bridge, saved: &Settings, info: &SessionInfo) -> Result<Scope, String> {
-    if let AgentTask::Executive { .. } = &info.task {
-        // The folder was chosen by Rust when the session started; only an executive folder is accepted back.
-        let dir = info.workspace.first().map(PathBuf::from).filter(|d| d.ends_with(Path::new("executive").join("agent")));
-        return executive(&dir.ok_or("This session's folder is not an executive folder")?, info.title.clone());
+    if let AgentTask::Executive { project } = &info.task {
+        return executive_session(&crate::executive::viewer(bridge), info, project.as_deref());
     }
     let AgentTask::Work { project, repo, .. } = &info.task else { return Err("This session does not take messages".into()) };
     if info.direct.is_some() {
@@ -532,12 +565,20 @@ mod tests {
         let dir = base.join("executive").join("agent");
         let saved = Settings::default();
         let bridge = Bridge::new(crate::settings::resolve(&saved, |_| None));
-        let made = executive(&dir, "Executive: Hi".into()).unwrap();
+        let made = executive(&dir, "Executive: Hi".into(), &[]).unwrap();
         let info = super::super::session_info("id", "claude-code", AgentTask::Executive { project: Some("pay".into()) }, &made, &Default::default());
         assert_eq!(info.project.as_deref(), Some("pay"));
-        let scope = for_session(&bridge, &saved, &info).unwrap();
+        // A domain bound since the session started is readable on resume.
+        let lm = |argv: &[&str]| -> Result<Value, String> {
+            assert_eq!(argv, ["projects"]);
+            Ok(serde_json::json!({"projects": [{"slug": "pay", "status": "active", "charter": "payments:charter"}, {"slug": "ops", "status": "active", "charter": "ops:c"}]}))
+        };
+        let scope = executive_session(&lm, &info, Some("pay")).unwrap();
         assert_eq!((scope.cwd, scope.title.as_str(), scope.mode, scope.worktree), (dir.clone(), "Executive: Hi", Mode::Interactive, None));
-        assert!(matches!(scope.policy, Policy::PreApproved { .. }));
+        assert!(scope.isolated);
+        let Policy::PreApproved { allow } = &scope.policy else { panic!("not pre-approved") };
+        assert!(allow.iter().any(|rule| rule == "Bash(alm --json --domain payments search *)"));
+        assert!(!allow.iter().any(|rule| rule.contains("--domain ops")), "only the session's project");
         let elsewhere = SessionInfo { workspace: vec![base.join("repo").display().to_string()], ..info.clone() };
         assert_eq!(for_session(&bridge, &saved, &elsewhere).unwrap_err(), "This session's folder is not an executive folder");
         std::fs::remove_dir_all(&base).ok();

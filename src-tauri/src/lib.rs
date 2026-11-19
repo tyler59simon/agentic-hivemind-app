@@ -1425,8 +1425,10 @@ async fn exec_agent_start(app: AppHandle, project: Option<String>, prompt: Strin
     blocking(move || {
         let state = app.state::<AppState>();
         let saved = settings::load(&state.settings_path);
-        let briefing = executive::agent_briefing(&executive::viewer(&state.bridge), &state.executive, project.as_deref(), today())?;
-        agent::start_executive(&state.agents, &state.bridge, &saved, &state.executive.agent_dir(), project, briefing, &prompt, options)
+        let lm = executive::viewer(&state.bridge);
+        let briefing = executive::agent_briefing(&lm, &state.executive, project.as_deref(), today())?;
+        let domains: Vec<String> = executive::bound_domains(&lm, project.as_deref())?.into_iter().collect();
+        agent::start_executive(&state.agents, &state.bridge, &saved, &state.executive.agent_dir(), project, &domains, briefing, &prompt, options)
     })
     .await
 }

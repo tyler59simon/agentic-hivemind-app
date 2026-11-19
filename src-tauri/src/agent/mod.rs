@@ -1355,6 +1355,7 @@ impl Inner {
             resume,
             model: info.model.clone(),
             deny: launch.scope.deny.clone(),
+            isolated: launch.scope.isolated,
             memory_root: launch.memory_root.clone(),
         };
         let mut command = self.adapter_of(info).command(&spec);
@@ -1844,8 +1845,9 @@ pub fn start_task(
 }
 
 /// Start an executive chat in `dir` (Hivemind's own empty folder), about `project` or all projects. `briefing` is the
-/// preamble and the evidence, built by the caller from Living Memory. The session never asks: it may read and run Living
-/// Memory's read commands, and is refused everything else.
+/// preamble and the evidence, built by the caller from Living Memory, and `domains` the ones it names
+/// (`executive::bound_domains`). The session never asks: it may run Living Memory's read commands in those domains, and is
+/// refused everything else.
 #[allow(clippy::too_many_arguments)] // each argument is one independent part of the new session
 pub fn start_executive(
     manager: &Manager,
@@ -1853,6 +1855,7 @@ pub fn start_executive(
     saved: &Settings,
     dir: &Path,
     project: Option<String>,
+    domains: &[String],
     briefing: String,
     prompt: &str,
     options: StartOptions,
@@ -1868,7 +1871,7 @@ pub fn start_executive(
     check_combination(&task, options.engine, options.interface)?;
     let options = check_launch_options(saved, options)?;
     let cli = chat_program(options.engine, saved)?;
-    let scope = scope::executive(dir, format!("Executive: {}", scope::task_title(prompt)))?;
+    let scope = scope::executive(dir, format!("Executive: {}", scope::task_title(prompt)), domains)?;
     let launch = Launch { scope, program: cli.program, program_args: cli.args, budget_usd: saved.agent_budget_usd(), memory_root: bridge.launch().root };
     manager.start(uuid::Uuid::new_v4().to_string(), task, launch, prompt, &options)
 }
@@ -2193,6 +2196,7 @@ mod tests {
                 mode: Mode::Unattended,
                 worktree: None,
                 deny: scope::governed_rules(),
+                isolated: false,
             };
             let task = AgentTask::SystemPassport { slug: "billing".into() };
             let id = uuid::Uuid::new_v4().to_string();
@@ -2243,6 +2247,7 @@ mod tests {
                 mode: Mode::Interactive,
                 worktree: tree,
                 deny: scope::governed_rules(),
+                isolated: false,
             }
         }
 
@@ -2937,6 +2942,7 @@ mod tests {
             mode: Mode::Unattended,
             worktree: None,
             deny: scope::governed_rules(),
+            isolated: false,
         };
         let launch = Launch { memory_root: None, ..unattended.launch(scope) };
         let task = AgentTask::SystemPassport { slug: "billing".into() };
@@ -3808,7 +3814,8 @@ mod tests {
         let saved = Settings { claude_path: Some(harmless), ..Default::default() };
         let bridge = Bridge::new(crate::settings::resolve(&saved, |_| None));
         let dir = rig.dir.join("executive").join("agent");
-        let started = start_executive(&rig.manager, &bridge, &saved, &dir, None, "You are the executive assistant.".into(), "What is overdue?", StartOptions::default());
+        let domains = ["payments".to_string()];
+        let started = start_executive(&rig.manager, &bridge, &saved, &dir, None, &domains, "You are the executive assistant.".into(), "What is overdue?", StartOptions::default());
         let info = started.unwrap();
         assert_eq!(info.task, AgentTask::Executive { project: None });
         assert_eq!((info.title.as_str(), info.mode, info.policy, info.profile), ("Executive: What is overdue?", Mode::Interactive, PolicyMode::PreApproved, Some(Profile::ReadOnly)));
@@ -3822,13 +3829,20 @@ mod tests {
         let specs = rig.specs.lock().unwrap();
         let spec = specs.last().unwrap();
         assert_eq!(spec.cwd, dir);
-        assert!(matches!(&spec.policy, Policy::PreApproved { allow } if allow.iter().any(|r| r == "Bash(*alm* search *)")));
+        let Policy::PreApproved { allow } = &spec.policy else { panic!("not pre-approved") };
+        for rule in ["TodoWrite", "Bash(alm --json --domain payments search *)", "PowerShell(alm --json --domain payments read *)", "Bash(alm --json open --all-domains --tag *)"] {
+            assert!(allow.iter().any(|r| r == rule), "{rule} in {allow:?}");
+        }
+        // Exact prefixes only: no file tools, no skills, no rule that matches the CLI's name anywhere in a command.
+        assert!(!allow.iter().any(|r| ["Read", "Glob", "Grep", "Skill"].contains(&r.as_str()) || r.contains('*') && !r.ends_with(" *)")), "{allow:?}");
+        assert!(!allow.iter().any(|r| r.contains("*alm*") || r.contains("capture")), "{allow:?}");
+        assert!(spec.isolated);
         assert!(spec.deny.iter().any(|r| r == "Bash(*alm* capture *)") && spec.deny.iter().any(|r| r == "PowerShell(*living_memory.py* update *)"));
         assert!(scope::governed_rules().iter().all(|r| spec.deny.contains(r)));
         drop(specs);
-        assert!(start_executive(&rig.manager, &bridge, &saved, &dir, None, String::new(), " ", StartOptions::default()).is_err(), "an empty question is refused");
+        assert!(start_executive(&rig.manager, &bridge, &saved, &dir, None, &domains, String::new(), " ", StartOptions::default()).is_err(), "an empty question is refused");
         let terminal = StartOptions { interface: Interface::Terminal, ..Default::default() };
-        let as_chat = start_executive(&rig.manager, &bridge, &saved, &dir, None, String::new(), "Hi", terminal).unwrap();
+        let as_chat = start_executive(&rig.manager, &bridge, &saved, &dir, None, &domains, String::new(), "Hi", terminal).unwrap();
         assert_eq!(as_chat.interface, Interface::Chat, "the executive assistant is always a chat");
     }
 
