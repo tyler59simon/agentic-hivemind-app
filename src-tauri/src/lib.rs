@@ -1448,7 +1448,7 @@ fn capture_session(app: &AppHandle, id: &str, manual: bool) -> Result<Option<Val
         state.capturing.wait(id)
     };
     let saved = settings::load(&state.settings_path);
-    let mut covered = executive::captured_upto(&state.executive.list("capture")?, id);
+    let mut covered = executive::captured_upto(&state.executive.list("capture")?, id).max(state.executive.capture_cursor(id));
     let (mut again, mut first) = (manual, None);
     // One transcript the extractor reads whole at a time, oldest first; the cursor moves only past what was sent.
     loop {
@@ -1465,6 +1465,10 @@ fn capture_session(app: &AppHandle, id: &str, manual: bool) -> Result<Option<Val
         let staged = executive::extract(&executive::viewer(&state.bridge), &state.executive, &exec_deps(&state, &saved)?, &text, project.as_deref(), source, today())?;
         let _ = app.emit("executive-changed", "capture");
         first = first.or(staged);
+        // Saved even when the part yielded nothing, so it is not paid for again; an error above leaves it unchanged.
+        if let Some(upto) = upto {
+            state.executive.set_capture_cursor(id, upto)?;
+        }
         covered = upto;
     }
     Ok(first)

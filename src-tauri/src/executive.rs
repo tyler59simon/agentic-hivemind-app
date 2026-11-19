@@ -95,6 +95,28 @@ impl Store {
         Ok(record)
     }
 
+    /// How far capture has read the executive conversation `session` (an event seq). Kept beside the record kinds, which
+    /// the webview writes, so a part that yields no batch still moves it.
+    pub fn capture_cursor(&self, session: &str) -> Option<u64> {
+        if !valid_id(session) {
+            return None;
+        }
+        std::fs::read_to_string(self.dir.join("cursors").join(format!("{session}.json"))).ok()?.trim().parse().ok()
+    }
+
+    pub fn set_capture_cursor(&self, session: &str, upto: u64) -> Result<(), String> {
+        if !valid_id(session) {
+            return Err(format!("Not a session id: {session}"));
+        }
+        let _guard = self.lock.lock().unwrap();
+        let dir = self.dir.join("cursors");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = dir.join(format!("{session}.json"));
+        let temp = path.with_extension("tmp");
+        std::fs::write(&temp, upto.to_string()).map_err(|e| e.to_string())?;
+        std::fs::rename(&temp, &path).map_err(|e| e.to_string())
+    }
+
     pub fn delete(&self, kind: &str, id: &str) -> Result<(), String> {
         if !valid_id(id) {
             return Err(format!("Not a record id: {id}"));
@@ -635,14 +657,15 @@ pub fn transcript(title: &str, events: &[SeqEvent]) -> String {
 }
 
 /// How many of `events`, from the first, fit in one transcript the extractor reads whole (at least one), so a capture
-/// covers only what it sent.
+/// covers only what it sent. A part ends before a user turn when one fits.
 pub fn transcript_fits(title: &str, events: &[SeqEvent]) -> usize {
     let mut used = transcript_head(title).chars().count();
     for (i, event) in events.iter().enumerate() {
         let Some(line) = transcript_line(event) else { continue };
         used += line.chars().count() + 1;
         if used > SOURCE_CHARS && i > 0 {
-            return i;
+            // Between turns when a whole turn fits; inside a turn otherwise (the next part resumes there).
+            return events[..=i].iter().rposition(|e| matches!(e.event, RunEvent::UserMessage { .. })).filter(|&turn| turn > 0).unwrap_or(i);
         }
     }
     events.len()
@@ -656,14 +679,14 @@ pub fn captured_upto(batches: &[Value], session: &str) -> Option<u64> {
 }
 
 /// What an executive conversation still owes the capture inbox: the finished events after `covered`. While a turn is
-/// running (`busy`), that turn is left for a later capture, so a reply is never cut off by the cursor. None when no user
-/// turn is new, except that a manual capture then takes the whole conversation again. The bool says whether the events
-/// start after an earlier capture.
+/// running (`busy`), that turn is left for a later capture, so a reply is never cut off by the cursor. A reply that a
+/// split left after the cursor is owed too. None when nothing said is new, except that a manual capture then takes the
+/// whole conversation again. The bool says whether the events start after an earlier capture.
 pub fn session_window(covered: Option<u64>, events: &[SeqEvent], manual: bool, busy: bool) -> Option<(&[SeqEvent], bool)> {
     let turn = |e: &SeqEvent| matches!(e.event, RunEvent::UserMessage { .. });
     let finished = if busy { &events[..events.iter().rposition(turn).unwrap_or(0)] } else { events };
     let start = covered.map_or(0, |seq| finished.iter().position(|e| e.seq > seq).unwrap_or(finished.len()));
-    if finished[start..].iter().any(turn) {
+    if finished[start..].iter().any(|e| transcript_line(e).is_some()) {
         Some((&finished[start..], start > 0))
     } else if manual && finished.iter().any(turn) {
         Some((finished, false))
@@ -1090,9 +1113,11 @@ mod tests {
         // Everything captured: the session end skips; asked by hand, the whole conversation is taken again.
         assert_eq!(seqs(session_window(Some(3), &events, false, false)), None);
         assert_eq!(seqs(session_window(Some(3), &events, true, false)), Some((vec![0, 1, 2, 3], false)));
-        // A reply with no new user turn is not worth a capture.
-        let only_reply = turn_events(&[(true, "turn 0"), (false, "reply 1"), (false, "reply 2")]);
-        assert_eq!(seqs(session_window(Some(1), &only_reply, false, false)), None);
+        // The rest of a reply that a split left after the cursor is owed (Codex re-review of 545f75e); events with no
+        // text are not.
+        let only_reply = turn_events(&[(true, "turn 0"), (false, "reply 1"), (false, "reply 2"), (false, " ")]);
+        assert_eq!(seqs(session_window(Some(1), &only_reply, false, false)), Some((vec![2, 3], true)));
+        assert_eq!(seqs(session_window(Some(2), &only_reply, false, false)), None);
         assert_eq!(seqs(session_window(None, &[], true, false)), None);
     }
 
@@ -1129,11 +1154,30 @@ mod tests {
         let first = transcript_fits("Sync", &events);
         assert!(first > 0 && first < events.len(), "{first}");
         assert!(!transcript("Sync", &events[..first]).contains("left out"), "the first part is read whole");
-        assert!(transcript("Sync", &events[..first + 1]).chars().count() > SOURCE_CHARS, "and is as long as fits");
+        assert!(transcript("Sync", &events[..first + 2]).chars().count() > SOURCE_CHARS, "and holds every whole turn that fits");
         let rest = &events[first..];
         assert!(!transcript("Sync", &rest[..transcript_fits("Sync", rest)]).contains("left out"));
         assert_eq!(transcript_fits("Sync", &events[..3]), 3);
         assert_eq!(transcript_fits("Sync", &[]), 0);
+        // A part ends before a user turn when one fits (here each turn is a user line and a reply).
+        assert!(matches!(events[first].event, RunEvent::UserMessage { .. }), "split between turns");
+        // One turn too long for a part: split inside it, and the rest of the reply is still owed.
+        let one = turn_events(&(0..9).map(|i| (i == 0, long.as_str())).collect::<Vec<_>>());
+        let cut = transcript_fits("Sync", &one);
+        assert!(cut > 1 && cut < one.len(), "{cut}");
+        assert_eq!(seqs(session_window(Some(one[cut - 1].seq), &one, false, false)).map(|(e, _)| e.len()), Some(one.len() - cut));
+    }
+
+    #[test]
+    fn the_capture_cursor_is_kept_apart_from_the_records() {   // EXEC-4, Codex re-review of 545f75e
+        let dir = temp("cursor");
+        let store = Store::new(dir.clone());
+        assert_eq!(store.capture_cursor("s-1"), None);
+        store.set_capture_cursor("s-1", 7).unwrap();
+        assert_eq!(store.capture_cursor("s-1"), Some(7));
+        assert!(store.set_capture_cursor("../x", 1).is_err());
+        assert!(store.list("capture").unwrap().is_empty(), "no batch is made for it");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
