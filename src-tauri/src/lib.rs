@@ -45,6 +45,8 @@ struct AppState {
     workflows: Arc<workflow::Workflows>,
     automations: Arc<automations::Automations>,
     executive: executive::Store,
+    /// Executive conversations being captured now.
+    capturing: executive::Claims,
     watcher: Mutex<Option<notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>>,
     /// Why the quick-capture hotkey could not be registered, for the settings screen.
     shortcut_error: Mutex<Option<String>>,
@@ -1397,7 +1399,7 @@ async fn exec_extract(app: AppHandle, text: String, project: Option<String>, lab
         let state = app.state::<AppState>();
         let saved = settings::load(&state.settings_path);
         let label = label.filter(|l| !l.trim().is_empty()).unwrap_or_else(|| format!("Quick capture, {}", today()));
-        let source = executive::Source { kind: "paste".into(), label, session: None };
+        let source = executive::Source { kind: "paste".into(), label, session: None, upto: None };
         let staged = executive::extract(&executive::viewer(&state.bridge), &state.executive, &exec_deps(&state, &saved)?, &text, project.as_deref(), source, today())?;
         let _ = app.emit("executive-changed", "capture");
         Ok(staged)
@@ -1433,19 +1435,22 @@ async fn exec_agent_start(app: AppHandle, project: Option<String>, prompt: Strin
     .await
 }
 
-/// Extract what an executive conversation decided, committed to or learned into a capture batch. Each conversation is captured
-/// once on its own (when it ends); the user may ask again.
-fn capture_session(app: &AppHandle, id: &str, again: bool) -> Result<Option<Value>, String> {
+/// Extract what an executive conversation decided, committed to or learned into a capture batch. Each capture takes the
+/// turns after the last batch from this conversation (when it ends, and whenever the user asks); asked for with nothing
+/// new, it takes the whole conversation again. A failed capture moves no cursor, so the next one retries those turns.
+fn capture_session(app: &AppHandle, id: &str, manual: bool) -> Result<Option<Value>, String> {
     let state = app.state::<AppState>();
+    let Some(_claim) = state.capturing.claim(id) else {
+        return if manual { Err("This conversation is already being captured".into()) } else { Ok(None) };
+    };
     let log = state.agents.session(id, 0)?;
     let agent::scope::AgentTask::Executive { project } = &log.info.task else { return Err("Only executive conversations are captured here".into()) };
-    let done = state.executive.list("capture")?.iter().any(|c| c.pointer("/source/session").and_then(Value::as_str) == Some(id));
-    if (done && !again) || log.info.turns == 0 {
-        return Ok(None);
-    }
+    let batches = state.executive.list("capture")?;
+    let Some((events, upto, later)) = executive::session_window(&batches, id, &log.events, manual) else { return Ok(None) };
     let saved = settings::load(&state.settings_path);
-    let source = executive::Source { kind: "agent-session".into(), label: log.info.title.clone(), session: Some(id.to_string()) };
-    let text = executive::transcript(&log.info.title, &log.events);
+    let source = executive::Source { kind: "agent-session".into(), label: log.info.title.clone(), session: Some(id.to_string()), upto: Some(upto) };
+    let title = if later { format!("{} (continued after an earlier capture)", log.info.title) } else { log.info.title.clone() };
+    let text = executive::transcript(&title, events);
     let staged = executive::extract(&executive::viewer(&state.bridge), &state.executive, &exec_deps(&state, &saved)?, &text, project.as_deref(), source, today())?;
     let _ = app.emit("executive-changed", "capture");
     Ok(staged)
@@ -1466,8 +1471,10 @@ fn executive_reports(app: AppHandle) -> conductor::Handler {
         }
         let (app, id) = (app.clone(), id.clone());
         std::thread::spawn(move || {
-            if let Ok(Some(_)) = capture_session(&app, &id, false) {
-                notify::session(&app, &id, "Executive assistant", "What this conversation decided is ready to review in Executive");
+            match capture_session(&app, &id, false) {
+                Ok(Some(_)) => notify::session(&app, &id, "Executive assistant", "What this conversation decided is ready to review in Executive"),
+                Ok(None) => {}
+                Err(e) => notify::session(&app, &id, "Executive assistant", &format!("Could not capture what this conversation decided ({e}). Capture it again from the conversation.")),
             }
         });
     })
@@ -1588,6 +1595,7 @@ pub fn run() {
                 automations: Arc::new(automations::Automations::new(app.path().app_data_dir()?)),
                 skills: skills::Skills::new(app.path().app_data_dir()?.join("skills"), skills::default_targets()),
                 executive: executive::Store::new(app.path().app_data_dir()?.join("executive")),
+                capturing: executive::Claims::default(),
                 watcher: Mutex::new(None),
                 shortcut_error: Mutex::new(shortcut_error),
             });

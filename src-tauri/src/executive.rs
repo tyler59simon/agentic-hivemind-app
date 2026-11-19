@@ -467,6 +467,9 @@ pub struct Source {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+    /// For an agent session: the last event seq the batch covers, so a later capture takes only what came after.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upto: Option<u64>,
 }
 
 const NOTE_KINDS: [&str; 5] = ["decision", "risk", "status", "knowledge", "preference"];
@@ -571,7 +574,7 @@ pub fn learn_style(lm: &Lm, store: &Store, deps: &Deps, generated: &str, kept: &
         "kind": "preference", "project": "", "title": text(p, "title"), "summary": text(p, "summary"), "details": [format!("Example: {}", text(p, "example"))],
         "owner": "", "due": "", "quote": text(p, "example"), "confidence": "medium",
     })).collect();
-    let source = Source { kind: "draft-edits".into(), label: format!("Your edits to \"{}\"", clip(label, 80)), session: None };
+    let source = Source { kind: "draft-edits".into(), label: format!("Your edits to \"{}\"", clip(label, 80)), session: None, upto: None };
     stage(lm, store, &json!({"items": items, "questions": []}), source, None, kept, cost, crate::agent::now_ms())
 }
 
@@ -622,6 +625,51 @@ pub fn transcript(title: &str, events: &[SeqEvent]) -> String {
     }
     let tail: String = all.chars().rev().take(SOURCE_CHARS).collect::<Vec<_>>().into_iter().rev().collect();
     format!("[... the start of the conversation is left out ...]\n{tail}")
+}
+
+/// What an executive conversation still owes the capture inbox: the events after the last batch staged from it, and the
+/// seq the new batch will cover (`Source::upto`). A batch from before `upto` existed covers the events up to its creation.
+/// None when no user turn is new, except that a manual capture then takes the whole conversation again. The bool says
+/// whether the events start after an earlier capture.
+pub fn session_window<'a>(batches: &[Value], session: &str, events: &'a [SeqEvent], manual: bool) -> Option<(&'a [SeqEvent], u64, bool)> {
+    let upto = events.last()?.seq;
+    let covered = batches.iter().filter(|b| b.pointer("/source/session").and_then(Value::as_str) == Some(session))
+        .filter_map(|b| match b.pointer("/source/upto").and_then(Value::as_u64) {
+            Some(seq) => Some(seq),
+            None => {
+                let created = b.get("created").and_then(Value::as_u64).unwrap_or(u64::MAX);
+                events.iter().filter(|e| e.at <= created).map(|e| e.seq).max()
+            }
+        })
+        .max();
+    let turn = |e: &SeqEvent| matches!(e.event, RunEvent::UserMessage { .. });
+    let start = covered.map_or(0, |seq| events.iter().position(|e| e.seq > seq).unwrap_or(events.len()));
+    if events[start..].iter().any(turn) {
+        Some((&events[start..], upto, start > 0))
+    } else if manual && events.iter().any(turn) {
+        Some((events, upto, false))
+    } else {
+        None
+    }
+}
+
+/// Conversations being captured now, so a manual and an automatic capture of one conversation never both run.
+#[derive(Default)]
+pub struct Claims(Mutex<BTreeSet<String>>);
+
+/// Held while a conversation is captured; dropping it frees the conversation.
+pub struct Claim<'a>(&'a Claims, String);
+
+impl Claims {
+    pub fn claim(&self, id: &str) -> Option<Claim<'_>> {
+        self.0.lock().unwrap().insert(id.to_string()).then(|| Claim(self, id.to_string()))
+    }
+}
+
+impl Drop for Claim<'_> {
+    fn drop(&mut self) {
+        self.0 .0.lock().unwrap().remove(&self.1);
+    }
 }
 
 #[cfg(test)]
@@ -734,7 +782,7 @@ mod tests {
             {"kind": "commitment", "project": "nowhere", "title": "Send the plan", "summary": "S", "details": [], "owner": "Dana", "due": "", "quote": "q", "confidence": "high"},
             {"kind": "risk", "project": "", "title": " ", "summary": "", "details": [], "owner": "", "due": "", "quote": "", "confidence": "low"}],
             "questions": ["Who owns the plan?"]});
-        let source = Source { kind: "paste".into(), label: "Standup".into(), session: None };
+        let source = Source { kind: "paste".into(), label: "Standup".into(), session: None, upto: None };
         let saved = stage(&fake, &store, &answer, source.clone(), None, "notes", Some(0.01), 7).unwrap().unwrap();
         let items: Vec<&Value> = array(&saved, "items").collect();
         assert_eq!(items.len(), 2, "an item without a title is dropped");
@@ -828,7 +876,7 @@ mod tests {
              "owner": "", "due": "", "quote": "keep event ids for 30 days", "confidence": "high"},
             {"kind": "commitment", "project": "pay", "title": "Review the retention window", "summary": "", "details": [], "owner": "Sam", "due": "2026-12-01", "quote": "", "confidence": "medium"}],
             "questions": []});
-        let staged = stage(&lm, &store, &answer, Source { kind: "paste".into(), label: "Sync".into(), session: None }, Some("pay"), "notes", None, 1).unwrap().unwrap();
+        let staged = stage(&lm, &store, &answer, Source { kind: "paste".into(), label: "Sync".into(), session: None, upto: None }, Some("pay"), "notes", None, 1).unwrap().unwrap();
         assert_eq!(staged["items"][0]["similar"][0]["ref"], json!(old), "the repeat is found");
 
         // What accepting does (lib/executive items.ts): the decision replaces the old one, the commitment joins the list.
@@ -865,7 +913,7 @@ mod tests {
         let lm = viewer(&bridge);
         let notes = "Platform sync, 19 Nov.\nWe decided to keep event IDs for 30 days so late redeliveries are still deduplicated.\n\
             Dana will send the Q3 plan to the VP by 25 November.\nRisk: the provider may throttle replays; Sam owns a rate ceiling flag.\nBeta is still on track for 5 December.";
-        let source = Source { kind: "paste".into(), label: "Platform sync".into(), session: None };
+        let source = Source { kind: "paste".into(), label: "Platform sync".into(), session: None, upto: None };
         let batch = extract(&lm, &store, &deps, notes, None, source, today()).unwrap().expect("something to keep");
         let kinds: Vec<String> = array(&batch, "items").map(|i| text(i, "kind")).collect();
         assert!(kinds.contains(&"decision".to_string()) && kinds.contains(&"commitment".to_string()), "{batch:#}");
@@ -969,6 +1017,43 @@ denied {denied:?}");
         assert!(!array(&hits, "results").any(|h| text(h, "title") == "Permission probe"), "the write reached the store");
         drop(bridge);
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn a_capture_takes_only_the_turns_after_the_last_batch() {   // EXEC-4
+        let ev = |seq, at, user: bool| SeqEvent { session_id: "s".into(), seq, at, event: if user {
+            RunEvent::UserMessage { text: format!("turn {seq}"), context: vec![] } } else { RunEvent::Text { text: format!("reply {seq}") } } };
+        let events = vec![ev(0, 10, true), ev(1, 11, false), ev(2, 20, true), ev(3, 21, false)];
+        let seqs = |w: Option<(&[SeqEvent], u64, bool)>| w.map(|(e, upto, later)| (e.iter().map(|e| e.seq).collect::<Vec<_>>(), upto, later));
+        // Nothing captured yet: everything, up to the last event.
+        assert_eq!(seqs(session_window(&[], "s", &events, false)), Some((vec![0, 1, 2, 3], 3, false)));
+        // A manual capture after the first reply: the session end takes the later turn only (the old code skipped it).
+        let manual = json!({"source": {"kind": "agent-session", "label": "", "session": "s", "upto": 1}, "created": 12});
+        assert_eq!(seqs(session_window(std::slice::from_ref(&manual), "s", &events, false)), Some((vec![2, 3], 3, true)));
+        // Everything captured: the session end skips; asked by hand, the whole conversation is taken again.
+        let all = json!({"source": {"session": "s", "upto": 3}, "created": 30});
+        assert_eq!(seqs(session_window(&[manual.clone(), all.clone()], "s", &events, false)), None);
+        assert_eq!(seqs(session_window(&[all], "s", &events, true)), Some((vec![0, 1, 2, 3], 3, false)));
+        // A batch saved before upto existed covers the events up to its creation; another conversation's batch covers none.
+        let legacy = json!({"source": {"session": "s"}, "created": 15});
+        assert_eq!(seqs(session_window(&[legacy], "s", &events, false)), Some((vec![2, 3], 3, true)));
+        let other = json!({"source": {"session": "t", "upto": 3}, "created": 30});
+        assert_eq!(seqs(session_window(&[other], "s", &events, false)), Some((vec![0, 1, 2, 3], 3, false)));
+        // A reply with no new user turn is not worth a capture.
+        let only_reply = vec![ev(0, 10, true), ev(1, 11, false), ev(2, 12, false)];
+        let first = json!({"source": {"session": "s", "upto": 1}, "created": 11});
+        assert_eq!(seqs(session_window(&[first], "s", &only_reply, false)), None);
+        assert_eq!(seqs(session_window(&[], "s", &[], true)), None);
+    }
+
+    #[test]
+    fn one_capture_of_a_conversation_runs_at_a_time() {   // EXEC-4
+        let claims = Claims::default();
+        let held = claims.claim("s").expect("free");
+        assert!(claims.claim("s").is_none(), "a second capture of the same conversation is refused");
+        assert!(claims.claim("t").is_some(), "another conversation is not blocked");
+        drop(held);
+        assert!(claims.claim("s").is_some(), "freed when the capture ends, failed or not");
     }
 
     #[test]
