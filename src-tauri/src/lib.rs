@@ -6,10 +6,12 @@ mod conductor;
 mod drafts;
 mod folders;
 mod git;
+mod learning;
 mod notify;
 mod resources;
 mod review;
 mod settings;
+mod skills;
 mod term;
 mod watcher;
 mod worktree;
@@ -32,6 +34,8 @@ struct AppState {
     snapshots_dir: PathBuf,
     agents: agent::Manager,
     terminals: term::Manager,
+    learning: learning::Learning,
+    skills: skills::Skills,
     watcher: Mutex<Option<notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>>,
     /// Why the quick-capture hotkey could not be registered, for the settings screen.
     shortcut_error: Mutex<Option<String>>,
@@ -209,6 +213,176 @@ async fn agent_engines(state: State<'_, AppState>) -> Result<Vec<EngineInfo>, St
 async fn agent_models(state: State<'_, AppState>, engine: agent::Engine) -> Result<agent::models::AgentModels, String> {
     let path = state.settings_path.clone();
     blocking(move || Ok(agent::models::list(engine, &settings::load(&path)))).await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LearningStatus {
+    enabled: bool,
+    daily_usd: f64,
+    spent_today: f64,
+    review_usd: f64,
+    auto_patch: bool,
+    runs: Vec<learning::Run>,
+}
+
+/// The post-session reviewer's settings, today's spending and its latest runs.
+#[tauri::command]
+fn learning_status(state: State<'_, AppState>) -> LearningStatus {
+    let saved = settings::load(&state.settings_path);
+    let mut runs = state.learning.runs();
+    runs.truncate(50);
+    LearningStatus {
+        enabled: saved.learning_reviewer(),
+        daily_usd: saved.learning_daily_usd(),
+        spent_today: state.learning.spent_today(),
+        review_usd: learning::REVIEW_USD,
+        auto_patch: saved.skills_auto_patch(),
+        runs,
+    }
+}
+
+/// Review a session for knowledge and skills now, in the background; `learning-changed` fires when it is done.
+#[tauri::command]
+fn learning_review(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let log = state.agents.session(&id, 0)?;
+    if learning::wanted(&log.info, learning::Trigger::Manual, 0).is_none() {
+        return Err("Only chat sessions on a project can be reviewed: a terminal keeps no log Hivemind can read.".into());
+    }
+    std::thread::spawn(move || run_review(&app, &id, learning::Trigger::Manual));
+    Ok(())
+}
+
+/// One review on this thread. Reads the session's log, then calls the reviewer within the daily cap.
+fn run_review(app: &AppHandle, id: &str, trigger: learning::Trigger) {
+    let Some(state) = app.try_state::<AppState>() else { return };
+    let saved = settings::load(&state.settings_path);
+    if trigger != learning::Trigger::Manual && !saved.learning_reviewer() {
+        return;
+    }
+    let Ok(log) = state.agents.session(id, 0) else { return };
+    let claude = match agent::claude::available(&saved) {
+        Ok(path) => path,
+        Err(e) => {
+            if trigger == learning::Trigger::Manual {
+                notify::session(app, id, "Session review", &e);
+            }
+            return;
+        }
+    };
+    let deps = learning::Deps { bridge: &state.bridge, skills: &state.skills, claude, daily_usd: saved.learning_daily_usd(), auto_patch: saved.skills_auto_patch() };
+    if let Some(run) = state.learning.review(&deps, &log.info, &log.events, trigger) {
+        let _ = app.emit("learning-changed", &run);
+        let staged = run.memory.len() + usize::from(run.skill.is_some());
+        if staged > 0 {
+            notify::session(app, id, &run.title, &format!("Hivemind learned {staged} thing{} from this session; see Review", if staged == 1 { "" } else { "s" }));
+        } else if run.state == "failed" && trigger == learning::Trigger::Manual {
+            notify::session(app, id, &run.title, run.error.as_deref().unwrap_or("The review failed"));
+        }
+    }
+}
+
+/// Reviews and skill bookkeeping driven by session reports: which skills a turn used, how the work was judged, and a review
+/// when the user decides or a long session ends. Reviews run on their own thread so the conductor never waits.
+fn learning_reports(app: AppHandle) -> conductor::Handler {
+    Box::new(move |report| {
+        let Some(state) = app.try_state::<AppState>() else { return };
+        let id = report.id().to_string();
+        let (trigger, outcome) = match report {
+            agent::Lifecycle::TurnEnded { .. } => {
+                if let Ok(log) = state.agents.session(&id, 0) {
+                    let used = skills::used_in(&log.events, &state.skills.names());
+                    if !used.is_empty() {
+                        let _ = state.skills.record_uses(&id, &log.info.adapter, &used);
+                    }
+                }
+                (None, None)
+            }
+            agent::Lifecycle::Reviewed { state: review, .. } => learning::on_review_state(*review),
+            agent::Lifecycle::Finished { status, .. } => learning::on_finished(*status),
+            agent::Lifecycle::Waiting { .. } => (None, None),
+        };
+        if let Some(outcome) = outcome {
+            let _ = state.skills.record_outcome(&id, outcome);
+        }
+        if let Some(trigger) = trigger {
+            let app = app.clone();
+            std::thread::spawn(move || run_review(&app, &id, trigger));
+        }
+    })
+}
+
+#[tauri::command]
+fn skills_list(state: State<'_, AppState>) -> Vec<skills::SkillView> {
+    state.skills.list(agent::now_ms())
+}
+
+#[tauri::command]
+fn skill_proposals(state: State<'_, AppState>, all: Option<bool>) -> Vec<skills::Proposal> {
+    state.skills.proposals(if all == Some(true) { None } else { Some(skills::ProposalState::Pending) })
+}
+
+/// Approve (with the user's edits, when given) or reject a skill proposal.
+#[tauri::command]
+fn skill_decide(
+    state: State<'_, AppState>, id: String, approve: bool, description: Option<String>, body: Option<String>, reason: Option<String>,
+) -> Result<skills::Proposal, String> {
+    let edit = match (description, body) {
+        (Some(d), Some(b)) => Some((d, b)),
+        (None, None) => None,
+        _ => return Err("An edit needs both the description and the text".into()),
+    };
+    state.skills.decide(&id, approve, edit, "user", reason.filter(|r| !r.trim().is_empty()))
+}
+
+/// What the user can do to an approved skill: archive, restore a version, take an edited copy, publish again.
+#[tauri::command]
+fn skill_action(state: State<'_, AppState>, name: String, action: String, version: Option<u32>) -> Result<(), String> {
+    skills::check_name(&name)?;
+    match action.as_str() {
+        "archive" => state.skills.archive(&name, "user", None),
+        "restore" => state.skills.restore(&name, version.ok_or("Which version?")?, "user").map(|_| ()),
+        "import" => state.skills.import(&name, "user").map(|_| ()),
+        "publish" => state.skills.publish(&name, "user").map(|_| ()),
+        _ => Err(format!("Unknown skill action: {action}")),
+    }
+}
+
+#[tauri::command]
+fn skill_version(state: State<'_, AppState>, name: String, version: u32) -> Result<String, String> {
+    state.skills.version_text(&name, version)
+}
+
+#[tauri::command]
+fn skill_history(state: State<'_, AppState>, name: Option<String>) -> Vec<skills::LedgerEntry> {
+    let mut rows = state.skills.history(name.as_deref());
+    rows.truncate(200);
+    rows
+}
+
+/// Propose archiving skills that are stale or whose sessions are mostly rejected.
+#[tauri::command]
+fn skills_upkeep(state: State<'_, AppState>) -> Vec<skills::Proposal> {
+    state.skills.upkeep(agent::now_ms())
+}
+
+/// A skill proposal from a runbook note: the note's text becomes the skill's, for the user to edit and approve.
+#[tauri::command]
+async fn skill_from_note(state: State<'_, AppState>, note: String) -> Result<skills::Proposal, String> {
+    let reply = state.bridge.call(&["read".into(), note.clone(), "--actor".into(), "viewer".into()], None)?;
+    if reply.exit_code != 0 {
+        return Err(format!("Living Memory could not read {note}: {}", reply.error));
+    }
+    let title = reply.result.get("title").and_then(Value::as_str).unwrap_or_default();
+    let body = reply.result.get("body").and_then(Value::as_str).unwrap_or_default();
+    let (description, text) = skills::from_note(body);
+    state.skills.propose(
+        skills::NewProposal {
+            kind: Some(skills::Kind::Create), name: skills::slug(title), description, body: text,
+            reason: format!("Made from the runbook note \"{title}\""), note: Some(note), ..Default::default()
+        },
+        "user",
+    )
 }
 
 /// The roles a chat session can be started in, with their default permission profiles.
@@ -764,10 +938,12 @@ pub fn run() {
                 snapshots_dir,
                 agents,
                 terminals,
+                learning: learning::Learning::new(app.path().app_data_dir()?.join("learning")),
+                skills: skills::Skills::new(app.path().app_data_dir()?.join("skills"), skills::default_targets()),
                 watcher: Mutex::new(None),
                 shortcut_error: Mutex::new(shortcut_error),
             });
-            conductor::run(report_queue, vec![session_notices(app.handle().clone())]);
+            conductor::run(report_queue, vec![session_notices(app.handle().clone()), learning_reports(app.handle().clone())]);
             let (state, sampled) = (app.handle().clone(), app.handle().clone());
             resources::watch(
                 move || state.try_state::<AppState>().map(|s| [s.agents.pids(), s.terminals.pids()].concat()).unwrap_or_default(),
@@ -788,7 +964,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
-            agent_available, agent_roles, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, repo_branches,
+            agent_available, agent_roles, learning_status, learning_review, skills_list, skill_proposals, skill_decide, skill_action, skill_version, skill_history,
+            skills_upkeep, skill_from_note, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, repo_branches,
             agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_stop_and_approve, review_request_changes, review_request_terminal_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
             system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export
         ])

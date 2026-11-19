@@ -111,10 +111,15 @@ fn collect(reader: std::thread::JoinHandle<String>, grace: Duration) -> String {
 }
 
 /// Run a command to its end, or kill it after `timeout`. An error means it could not start or it timed out.
-pub fn run_captured(mut command: Command, timeout: Duration) -> Result<Ran, String> {
+pub fn run_captured(command: Command, timeout: Duration) -> Result<Ran, String> {
+    run_with_input(command, None, timeout)
+}
+
+/// `run_captured` with `input` written to the command's stdin (then closed); stdin is empty when None.
+pub fn run_with_input(mut command: Command, input: Option<&str>, timeout: Duration) -> Result<Ran, String> {
     command
         .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(windows)]
@@ -130,6 +135,14 @@ pub fn run_captured(mut command: Command, timeout: Duration) -> Result<Ran, Stri
     }
     let name = command.get_program().to_string_lossy().into_owned();
     let mut child = command.spawn().map_err(|e| format!("Could not run {name}: {e}"))?;
+    if let (Some(text), Some(mut pipe)) = (input, child.stdin.take()) {
+        let text = text.to_string();
+        // A thread, so a child that never reads cannot block us past the timeout; dropping the pipe closes stdin.
+        std::thread::spawn(move || {
+            use std::io::Write;
+            let _ = pipe.write_all(text.as_bytes());
+        });
+    }
     let out = drain(child.stdout.take());
     let err = drain(child.stderr.take());
     let start = Instant::now();
