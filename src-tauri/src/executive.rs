@@ -609,16 +609,23 @@ pub fn agent_briefing(lm: &Lm, store: &Store, project: Option<&str>, today: Naiv
     Ok(format!("{PREAMBLE}\n\n{reads}\n\nToday is {today}. Scope: {scope}.\n\n{}", pack_text(&pack)))
 }
 
+/// One transcript line for an event, or None for events the extractor does not read.
+fn transcript_line(event: &SeqEvent) -> Option<String> {
+    match &event.event {
+        RunEvent::UserMessage { text, .. } => Some(format!("\nUser: {}", clip(text.trim(), 3000))),
+        RunEvent::Text { text } if !text.trim().is_empty() => Some(format!("Assistant: {}", clip(text.trim(), 3000))),
+        _ => None,
+    }
+}
+
+fn transcript_head(title: &str) -> String {
+    format!("Conversation with the executive assistant: {title}")
+}
+
 /// An executive conversation for the extractor: what the user and the assistant said.
 pub fn transcript(title: &str, events: &[SeqEvent]) -> String {
-    let mut lines = vec![format!("Conversation with the executive assistant: {title}")];
-    for event in events {
-        match &event.event {
-            RunEvent::UserMessage { text, .. } => lines.push(format!("\nUser: {}", clip(text.trim(), 3000))),
-            RunEvent::Text { text } if !text.trim().is_empty() => lines.push(format!("Assistant: {}", clip(text.trim(), 3000))),
-            _ => {}
-        }
-    }
+    let mut lines = vec![transcript_head(title)];
+    lines.extend(events.iter().filter_map(transcript_line));
     let all = lines.join("\n");
     if all.chars().count() <= SOURCE_CHARS {
         return all;
@@ -627,27 +634,39 @@ pub fn transcript(title: &str, events: &[SeqEvent]) -> String {
     format!("[... the start of the conversation is left out ...]\n{tail}")
 }
 
-/// What an executive conversation still owes the capture inbox: the events after the last batch staged from it, and the
-/// seq the new batch will cover (`Source::upto`). A batch from before `upto` existed covers the events up to its creation.
-/// None when no user turn is new, except that a manual capture then takes the whole conversation again. The bool says
-/// whether the events start after an earlier capture.
-pub fn session_window<'a>(batches: &[Value], session: &str, events: &'a [SeqEvent], manual: bool) -> Option<(&'a [SeqEvent], u64, bool)> {
-    let upto = events.last()?.seq;
-    let covered = batches.iter().filter(|b| b.pointer("/source/session").and_then(Value::as_str) == Some(session))
-        .filter_map(|b| match b.pointer("/source/upto").and_then(Value::as_u64) {
-            Some(seq) => Some(seq),
-            None => {
-                let created = b.get("created").and_then(Value::as_u64).unwrap_or(u64::MAX);
-                events.iter().filter(|e| e.at <= created).map(|e| e.seq).max()
-            }
-        })
-        .max();
+/// How many of `events`, from the first, fit in one transcript the extractor reads whole (at least one), so a capture
+/// covers only what it sent.
+pub fn transcript_fits(title: &str, events: &[SeqEvent]) -> usize {
+    let mut used = transcript_head(title).chars().count();
+    for (i, event) in events.iter().enumerate() {
+        let Some(line) = transcript_line(event) else { continue };
+        used += line.chars().count() + 1;
+        if used > SOURCE_CHARS && i > 0 {
+            return i;
+        }
+    }
+    events.len()
+}
+
+/// The last event seq the capture batches of `session` cover (`Source::upto`). A batch saved before `upto` existed has no
+/// exact boundary, so it covers nothing and its turns are offered again (the review flags repeats).
+pub fn captured_upto(batches: &[Value], session: &str) -> Option<u64> {
+    batches.iter().filter(|b| b.pointer("/source/session").and_then(Value::as_str) == Some(session))
+        .filter_map(|b| b.pointer("/source/upto").and_then(Value::as_u64)).max()
+}
+
+/// What an executive conversation still owes the capture inbox: the finished events after `covered`. While a turn is
+/// running (`busy`), that turn is left for a later capture, so a reply is never cut off by the cursor. None when no user
+/// turn is new, except that a manual capture then takes the whole conversation again. The bool says whether the events
+/// start after an earlier capture.
+pub fn session_window(covered: Option<u64>, events: &[SeqEvent], manual: bool, busy: bool) -> Option<(&[SeqEvent], bool)> {
     let turn = |e: &SeqEvent| matches!(e.event, RunEvent::UserMessage { .. });
-    let start = covered.map_or(0, |seq| events.iter().position(|e| e.seq > seq).unwrap_or(events.len()));
-    if events[start..].iter().any(turn) {
-        Some((&events[start..], upto, start > 0))
-    } else if manual && events.iter().any(turn) {
-        Some((events, upto, false))
+    let finished = if busy { &events[..events.iter().rposition(turn).unwrap_or(0)] } else { events };
+    let start = covered.map_or(0, |seq| finished.iter().position(|e| e.seq > seq).unwrap_or(finished.len()));
+    if finished[start..].iter().any(turn) {
+        Some((&finished[start..], start > 0))
+    } else if manual && finished.iter().any(turn) {
+        Some((finished, false))
     } else {
         None
     }
@@ -655,20 +674,34 @@ pub fn session_window<'a>(batches: &[Value], session: &str, events: &'a [SeqEven
 
 /// Conversations being captured now, so a manual and an automatic capture of one conversation never both run.
 #[derive(Default)]
-pub struct Claims(Mutex<BTreeSet<String>>);
+pub struct Claims {
+    held: Mutex<BTreeSet<String>>,
+    freed: std::sync::Condvar,
+}
 
 /// Held while a conversation is captured; dropping it frees the conversation.
 pub struct Claim<'a>(&'a Claims, String);
 
 impl Claims {
+    /// The conversation, or None while another capture of it runs.
     pub fn claim(&self, id: &str) -> Option<Claim<'_>> {
-        self.0.lock().unwrap().insert(id.to_string()).then(|| Claim(self, id.to_string()))
+        self.held.lock().unwrap().insert(id.to_string()).then(|| Claim(self, id.to_string()))
+    }
+
+    /// The conversation, once any capture of it that is running has ended.
+    pub fn wait(&self, id: &str) -> Claim<'_> {
+        let mut held = self.held.lock().unwrap();
+        while !held.insert(id.to_string()) {
+            held = self.freed.wait(held).unwrap();
+        }
+        Claim(self, id.to_string())
     }
 }
 
 impl Drop for Claim<'_> {
     fn drop(&mut self) {
-        self.0 .0.lock().unwrap().remove(&self.1);
+        self.0.held.lock().unwrap().remove(&self.1);
+        self.0.freed.notify_all();
     }
 }
 
@@ -1038,40 +1071,87 @@ mod tests {
         std::fs::remove_dir_all(&base).ok();
     }
 
+    fn turn_events(texts: &[(bool, &str)]) -> Vec<SeqEvent> {
+        texts.iter().enumerate().map(|(i, (user, text))| SeqEvent { session_id: "s".into(), seq: i as u64, at: i as u64, event: if *user {
+            RunEvent::UserMessage { text: text.to_string(), context: vec![] } } else { RunEvent::Text { text: text.to_string() } } }).collect()
+    }
+
+    fn seqs(window: Option<(&[SeqEvent], bool)>) -> Option<(Vec<u64>, bool)> {
+        window.map(|(events, later)| (events.iter().map(|e| e.seq).collect(), later))
+    }
+
     #[test]
     fn a_capture_takes_only_the_turns_after_the_last_batch() {   // EXEC-4
-        let ev = |seq, at, user: bool| SeqEvent { session_id: "s".into(), seq, at, event: if user {
-            RunEvent::UserMessage { text: format!("turn {seq}"), context: vec![] } } else { RunEvent::Text { text: format!("reply {seq}") } } };
-        let events = vec![ev(0, 10, true), ev(1, 11, false), ev(2, 20, true), ev(3, 21, false)];
-        let seqs = |w: Option<(&[SeqEvent], u64, bool)>| w.map(|(e, upto, later)| (e.iter().map(|e| e.seq).collect::<Vec<_>>(), upto, later));
-        // Nothing captured yet: everything, up to the last event.
-        assert_eq!(seqs(session_window(&[], "s", &events, false)), Some((vec![0, 1, 2, 3], 3, false)));
+        let events = turn_events(&[(true, "turn 0"), (false, "reply 1"), (true, "turn 2"), (false, "reply 3")]);
+        // Nothing captured yet: everything.
+        assert_eq!(seqs(session_window(None, &events, false, false)), Some((vec![0, 1, 2, 3], false)));
         // A manual capture after the first reply: the session end takes the later turn only (the old code skipped it).
-        let manual = json!({"source": {"kind": "agent-session", "label": "", "session": "s", "upto": 1}, "created": 12});
-        assert_eq!(seqs(session_window(std::slice::from_ref(&manual), "s", &events, false)), Some((vec![2, 3], 3, true)));
+        assert_eq!(seqs(session_window(Some(1), &events, false, false)), Some((vec![2, 3], true)));
         // Everything captured: the session end skips; asked by hand, the whole conversation is taken again.
-        let all = json!({"source": {"session": "s", "upto": 3}, "created": 30});
-        assert_eq!(seqs(session_window(&[manual.clone(), all.clone()], "s", &events, false)), None);
-        assert_eq!(seqs(session_window(&[all], "s", &events, true)), Some((vec![0, 1, 2, 3], 3, false)));
-        // A batch saved before upto existed covers the events up to its creation; another conversation's batch covers none.
-        let legacy = json!({"source": {"session": "s"}, "created": 15});
-        assert_eq!(seqs(session_window(&[legacy], "s", &events, false)), Some((vec![2, 3], 3, true)));
-        let other = json!({"source": {"session": "t", "upto": 3}, "created": 30});
-        assert_eq!(seqs(session_window(&[other], "s", &events, false)), Some((vec![0, 1, 2, 3], 3, false)));
+        assert_eq!(seqs(session_window(Some(3), &events, false, false)), None);
+        assert_eq!(seqs(session_window(Some(3), &events, true, false)), Some((vec![0, 1, 2, 3], false)));
         // A reply with no new user turn is not worth a capture.
-        let only_reply = vec![ev(0, 10, true), ev(1, 11, false), ev(2, 12, false)];
-        let first = json!({"source": {"session": "s", "upto": 1}, "created": 11});
-        assert_eq!(seqs(session_window(&[first], "s", &only_reply, false)), None);
-        assert_eq!(seqs(session_window(&[], "s", &[], true)), None);
+        let only_reply = turn_events(&[(true, "turn 0"), (false, "reply 1"), (false, "reply 2")]);
+        assert_eq!(seqs(session_window(Some(1), &only_reply, false, false)), None);
+        assert_eq!(seqs(session_window(None, &[], true, false)), None);
+    }
+
+    #[test]
+    fn a_running_turn_is_left_for_a_later_capture() {   // EXEC-4, Codex review of d352d27
+        // Captured by hand while turn 2 runs: only the finished turn, so the cursor stops before turn 2 and its reply.
+        let running = turn_events(&[(true, "turn 0"), (false, "reply 1"), (true, "turn 2"), (false, "half a reply")]);
+        assert_eq!(seqs(session_window(None, &running, true, true)), Some((vec![0, 1], false)));
+        // When the session ends, turn 2 and its whole reply are still owed.
+        let ended = turn_events(&[(true, "turn 0"), (false, "reply 1"), (true, "turn 2"), (false, "half a reply"), (false, "the rest")]);
+        assert_eq!(seqs(session_window(Some(1), &ended, false, false)), Some((vec![2, 3, 4], true)));
+        // The only turn still running: nothing to capture yet.
+        assert_eq!(seqs(session_window(None, &running[..2], true, true)), None);
+    }
+
+    #[test]
+    fn captured_upto_reads_only_exact_cursors_of_the_conversation() {   // EXEC-4
+        let batches = [
+            json!({"source": {"session": "s", "upto": 1}}),
+            json!({"source": {"session": "s", "upto": 4}}),
+            json!({"source": {"session": "t", "upto": 9}}),
+            // Saved before upto existed: no exact boundary, so it covers nothing (Codex review of d352d27).
+            json!({"source": {"session": "s"}, "created": 99}),
+        ];
+        assert_eq!(captured_upto(&batches, "s"), Some(4));
+        assert_eq!(captured_upto(&batches[3..], "s"), None);
+        assert_eq!(captured_upto(&batches, "u"), None);
+    }
+
+    #[test]
+    fn a_long_window_is_sent_in_parts_the_extractor_reads_whole() {   // EXEC-4, Codex review of d352d27
+        let long = "x".repeat(2900);
+        let events = turn_events(&(0..20).map(|i| (i % 2 == 0, long.as_str())).collect::<Vec<_>>());
+        let first = transcript_fits("Sync", &events);
+        assert!(first > 0 && first < events.len(), "{first}");
+        assert!(!transcript("Sync", &events[..first]).contains("left out"), "the first part is read whole");
+        assert!(transcript("Sync", &events[..first + 1]).chars().count() > SOURCE_CHARS, "and is as long as fits");
+        let rest = &events[first..];
+        assert!(!transcript("Sync", &rest[..transcript_fits("Sync", rest)]).contains("left out"));
+        assert_eq!(transcript_fits("Sync", &events[..3]), 3);
+        assert_eq!(transcript_fits("Sync", &[]), 0);
     }
 
     #[test]
     fn one_capture_of_a_conversation_runs_at_a_time() {   // EXEC-4
-        let claims = Claims::default();
+        let claims = std::sync::Arc::new(Claims::default());
         let held = claims.claim("s").expect("free");
-        assert!(claims.claim("s").is_none(), "a second capture of the same conversation is refused");
+        assert!(claims.claim("s").is_none(), "a second manual capture of the same conversation is refused");
         assert!(claims.claim("t").is_some(), "another conversation is not blocked");
+        // The session-end capture waits for the manual one instead of giving up (Codex review of d352d27).
+        let (waiting, done) = (claims.clone(), std::sync::mpsc::channel());
+        let thread = std::thread::spawn(move || {
+            let _claim = waiting.wait("s");
+            done.0.send(()).unwrap();
+        });
+        assert!(done.1.recv_timeout(Duration::from_millis(200)).is_err(), "it waits while the manual capture runs");
         drop(held);
+        done.1.recv_timeout(Duration::from_secs(5)).expect("it runs once the manual capture ends");
+        thread.join().unwrap();
         assert!(claims.claim("s").is_some(), "freed when the capture ends, failed or not");
     }
 

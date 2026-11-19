@@ -1435,25 +1435,39 @@ async fn exec_agent_start(app: AppHandle, project: Option<String>, prompt: Strin
     .await
 }
 
-/// Extract what an executive conversation decided, committed to or learned into a capture batch. Each capture takes the
-/// turns after the last batch from this conversation (when it ends, and whenever the user asks); asked for with nothing
-/// new, it takes the whole conversation again. A failed capture moves no cursor, so the next one retries those turns.
+/// Extract what an executive conversation decided, committed to or learned into capture batches. Each capture takes the
+/// finished turns after the last batch from this conversation (when it ends, and whenever the user asks); asked for with
+/// nothing new, it takes the whole conversation again. Returns the first batch staged. A failed extraction moves no
+/// cursor past its turns, so the next capture retries them.
 fn capture_session(app: &AppHandle, id: &str, manual: bool) -> Result<Option<Value>, String> {
     let state = app.state::<AppState>();
-    let Some(_claim) = state.capturing.claim(id) else {
-        return if manual { Err("This conversation is already being captured".into()) } else { Ok(None) };
+    // A manual capture while one runs is refused; the session-end capture waits its turn and then reads the log again.
+    let _claim = if manual {
+        state.capturing.claim(id).ok_or("This conversation is already being captured")?
+    } else {
+        state.capturing.wait(id)
     };
-    let log = state.agents.session(id, 0)?;
-    let agent::scope::AgentTask::Executive { project } = &log.info.task else { return Err("Only executive conversations are captured here".into()) };
-    let batches = state.executive.list("capture")?;
-    let Some((events, upto, later)) = executive::session_window(&batches, id, &log.events, manual) else { return Ok(None) };
     let saved = settings::load(&state.settings_path);
-    let source = executive::Source { kind: "agent-session".into(), label: log.info.title.clone(), session: Some(id.to_string()), upto: Some(upto) };
-    let title = if later { format!("{} (continued after an earlier capture)", log.info.title) } else { log.info.title.clone() };
-    let text = executive::transcript(&title, events);
-    let staged = executive::extract(&executive::viewer(&state.bridge), &state.executive, &exec_deps(&state, &saved)?, &text, project.as_deref(), source, today())?;
-    let _ = app.emit("executive-changed", "capture");
-    Ok(staged)
+    let mut covered = executive::captured_upto(&state.executive.list("capture")?, id);
+    let (mut again, mut first) = (manual, None);
+    // One transcript the extractor reads whole at a time, oldest first; the cursor moves only past what was sent.
+    loop {
+        let log = state.agents.session(id, 0)?;
+        let agent::scope::AgentTask::Executive { project } = &log.info.task else { return Err("Only executive conversations are captured here".into()) };
+        let busy = matches!(log.info.status, agent::events::Status::Running | agent::events::Status::Waiting);
+        let Some((window, later)) = executive::session_window(covered, &log.events, again, busy) else { break };
+        again = false;
+        let title = if later { format!("{} (continued after an earlier capture)", log.info.title) } else { log.info.title.clone() };
+        let part = &window[..executive::transcript_fits(&title, window)];
+        let upto = part.last().map(|e| e.seq);
+        let source = executive::Source { kind: "agent-session".into(), label: log.info.title.clone(), session: Some(id.to_string()), upto };
+        let text = executive::transcript(&title, part);
+        let staged = executive::extract(&executive::viewer(&state.bridge), &state.executive, &exec_deps(&state, &saved)?, &text, project.as_deref(), source, today())?;
+        let _ = app.emit("executive-changed", "capture");
+        first = first.or(staged);
+        covered = upto;
+    }
+    Ok(first)
 }
 
 #[tauri::command]
