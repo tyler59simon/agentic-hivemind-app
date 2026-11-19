@@ -1,15 +1,18 @@
 import { useQuery } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ArrowRight, Bookmark, CircleCheck, CircleEllipsis, Clock, CodeXml, Ellipsis, Laptop, Layers, Link as LinkIcon, Network, Plus } from "lucide-react";
+import { ArrowRight, Bookmark, Bot, CircleCheck, CircleEllipsis, Clock, CodeXml, Ellipsis, Laptop, Layers, Link as LinkIcon, Network, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { reviewRefresh, sessionsQuery } from "../../lib/agent";
 import { useChangesEnabled, useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import type { RepoActivity } from "../../lib/git";
-import { list, openWork, review, writeProject, type NoteRow, type Project } from "../../lib/lm";
+import { driftQuery } from "../../lib/architecture";
+import { list, openWork, proposalsList, review, writeProject, type NoteRow, type Project } from "../../lib/lm";
+import { skillHistory, skillProposalsQuery } from "../../lib/skills";
+import { automationsQuery, workflowsQuery } from "../../lib/workflows";
 import { sections } from "../../lib/note";
 import { ago } from "../../lib/text";
-import { openChange, openSession, openSystem, startSession, useApp } from "../../store";
+import { openChange, openSession, openSkills, openSystem, openWorkflows, startSession, useApp } from "../../store";
 import { Menu } from "../../ui/Menu";
 import { Modal } from "../../ui/Modal";
 import { ArrowLink, dayMonth, PageHeader, Row, Section, Split } from "../../ui/Page";
@@ -25,6 +28,7 @@ import { MiniDiagram } from "../systems/MiniDiagram";
 import { systemsQuery, useStaleness, useSystem } from "../systems/useSystem";
 import { groupOpenItems } from "../work/work";
 import { WorkView } from "../work/WorkView";
+import { agentActivity, agentNeeds, type Need } from "./agentwork";
 import { buildBriefing } from "./briefing";
 import { proposedFiles } from "../review/review";
 import { useProjectIntent } from "./intent";
@@ -118,8 +122,20 @@ function NeedsReview({ project }: { project?: Project }) {
   const files = proposedFiles((sessions.data ?? []).filter((s) => !project || s.project === project.slug));
   const behind = system && stale.data?.behind ? stale.data.behind : 0;
   const notes = due.data?.due ?? 0;
+  const memoryDrafts = useQuery({ queryKey: ["proposals", "list"], queryFn: proposalsList, enabled: projectsOn, retry: false });
+  const skillDrafts = useQuery({ ...skillProposalsQuery(), retry: false });
+  const automations = useQuery({ ...automationsQuery(), retry: false });
+  const workflows = useQuery({ ...workflowsQuery(), retry: false });
+  const drift = useQuery({ ...driftQuery(system?.slug ?? ""), enabled: !!system, retry: false });
+  const needs = agentNeeds({
+    memoryDrafts: memoryDrafts.data?.proposals.length ?? 0, skillDrafts: skillDrafts.data?.length ?? 0,
+    runs: automations.data?.runs ?? [], workflows: (workflows.data ?? []).filter((w) => !project || w.project === project.slug),
+    drift: drift.data, behindShown: behind > 0, stale: due.data?.counts?.stale, duplicates: due.data?.counts?.duplicate, now: Date.now(),
+  });
+  const open = (n: Need) => (n.target.page === "review" ? go({ page: "review" })
+    : n.target.page === "architecture" ? openSystem(n.target.system) : openWorkflows({ tab: n.target.tab, run: n.target.run }));
   return (
-    <Section title="Needs your review" loading={due.isLoading} error={due.error} empty={due.data && !files && !behind && !notes ? "Nothing is waiting for you." : undefined}>
+    <Section title="Needs your review" loading={due.isLoading} error={due.error} empty={due.data && !files && !behind && !notes && !needs.length ? "Nothing is waiting for you." : undefined}>
       {files > 0 && (
         <Row icon={<CodeXml size="1.3em" aria-hidden />} onClick={() => go({ page: "review" })}>{files} proposed file change{files === 1 ? "" : "s"}</Row>
       )}
@@ -127,6 +143,36 @@ function NeedsReview({ project }: { project?: Project }) {
         <Row icon={<Layers size="1.3em" aria-hidden />} onClick={() => openSystem(system.slug)}>Architecture snapshot is {behind} commit{behind === 1 ? "" : "s"} behind</Row>
       )}
       {notes > 0 && <Row icon={<Clock size="1.3em" aria-hidden />} onClick={() => go({ page: "review" })}>{notes} note{notes === 1 ? "" : "s"} due for review</Row>}
+      {needs.map((n) => (
+        <Row key={n.key} icon={<Bot size="1.3em" aria-hidden />} onClick={() => open(n)}>{n.text}</Row>
+      ))}
+    </Section>
+  );
+}
+
+/** What agent sessions, workflows, automations and the skills library did lately. */
+function AgentActivity({ project }: { project?: Project }) {
+  const sessions = useQuery(sessionsQuery());
+  const workflows = useQuery({ ...workflowsQuery(), retry: false });
+  const automations = useQuery({ ...automationsQuery(), retry: false });
+  const ledger = useQuery({ queryKey: ["skills", "history", "*"], queryFn: () => skillHistory(), retry: false });
+  const names = new Map((automations.data?.automations ?? []).map((a) => [a.id, a.name]));
+  const items = agentActivity({
+    sessions: (sessions.data ?? []).filter((s) => !project || s.project === project.slug),
+    workflows: (workflows.data ?? []).filter((w) => !project || w.project === project.slug),
+    runs: (automations.data?.runs ?? []).filter((r) => {
+      const a = automations.data?.automations.find((x) => x.id === r.automation);
+      return !project || !a?.project || a.project === project.slug;
+    }),
+    ledger: ledger.data ?? [], automationName: (id) => names.get(id) ?? "A removed automation",
+  });
+  return (
+    <Section title="Agent activity" loading={sessions.isLoading} empty={!items.length ? "No agent activity yet." : undefined}>
+      {items.map((a) => (
+        <Row key={a.key} meta={ago(new Date(a.at).toISOString())}
+          onClick={() => ("session" in a.target ? openSession(a.target.session) : "workflow" in a.target ? openWorkflows({ run: a.target.workflow })
+            : "skill" in a.target ? openSkills(a.target.skill) : openWorkflows({ tab: "automations" }))}>{a.text}</Row>
+      ))}
     </Section>
   );
 }
@@ -190,6 +236,7 @@ function ProjectOverview({ project }: { project: Project }) {
       <Split rail={<>
         <SystemContext project={project} />
         <NeedsReview project={project} />
+        <AgentActivity project={project} />
       </>}>
         <Section title="Continue your work" loading={rows.isLoading} error={rows.error}
           empty={rows.data && !focus && !top ? "Nothing is in progress. A plan note with action items shows up here." : undefined}>
@@ -303,7 +350,7 @@ function StoreOverview({ projectsOn }: { projectsOn: boolean }) {
       <PageHeader title="All memory" subtitle="Everything your agents and you have recorded, across projects."
         actions={projectsOn && <button className="primary big" onClick={() => useProjectIntent.getState().openWizard()}><Plus size="1.2em" aria-hidden />New project</button>} />
       {!projectsOn && <div className="banner warn">Projects, open work and review need a newer Living Memory (API 2 with the <code>projects</code> command). Notes, search, the graph and activity work as they are.</div>}
-      <Split rail={projectsOn && <NeedsReview />}>
+      <Split rail={projectsOn && <><NeedsReview /><AgentActivity /></>}>
         {projectsOn && (
           <Section title="Open work" loading={open.isLoading} error={open.error} empty={open.data && !next.length ? "No open action items." : undefined}
             actions={!!open.data?.count && <ArrowLink onClick={() => go({ page: "overview", view: "work" })}>All open work</ArrowLink>}>

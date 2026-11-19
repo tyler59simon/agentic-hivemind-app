@@ -53,7 +53,7 @@ pub fn system_entry(bridge: &Bridge, slug: &str) -> Result<Value, String> {
         .ok_or_else(|| format!("Unknown system: {slug}"))
 }
 
-fn folder_of(entry: &Value) -> Option<PathBuf> {
+pub fn folder_of(entry: &Value) -> Option<PathBuf> {
     entry.get("architecture").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(PathBuf::from)
 }
 
@@ -102,6 +102,22 @@ fn tool_version(manifest: &Value) -> Option<String> {
     let owners = manifest.get("owners")?.as_object()?;
     let version = |owner: &Value| owner.get("tool_version").and_then(Value::as_str).map(str::to_string);
     owners.get("c4").and_then(version).or_else(|| owners.values().find_map(version))
+}
+
+/// The registered systems (not retired) whose repositories include `repo`, with their architecture folders.
+pub fn systems_for_repo(bridge: &Bridge, repo: &Path) -> Vec<(String, String, PathBuf)> {
+    let norm = |p: &str| p.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let want = norm(&repo.to_string_lossy());
+    let Ok(reply) = bridge.call(&["systems".into(), "--actor".into(), "viewer".into()], None) else { return vec![] };
+    reply.result.get("systems").and_then(Value::as_array).into_iter().flatten()
+        .filter(|s| s.get("status").and_then(Value::as_str) != Some("retired"))
+        .filter(|s| s.get("repos").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).any(|r| norm(r) == want))
+        .filter_map(|s| {
+            let slug = s.get("slug")?.as_str()?.to_string();
+            let name = s.get("name").and_then(Value::as_str).unwrap_or(&slug).to_string();
+            Some((slug, name, folder_of(s)?))
+        })
+        .collect()
 }
 
 /// What an Architecture Suite output folder holds. Never fails: a missing piece is left empty.

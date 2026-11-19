@@ -1235,3 +1235,6 @@ span.chip { display: inline-block; border: 1px solid var(--border-strong); }
 .flow-task-head { display: flex; justify-content: space-between; align-items: center; gap: .4rem; }
 .flow-task .status-chip { align-self: flex-start; }
 .flow-task-head .status-chip { align-self: auto; }
+
+.plain-list { margin: .3rem 0 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: .15rem; }
+.flow-system { display: flex; flex-direction: column; gap: .3rem; flex: none; }

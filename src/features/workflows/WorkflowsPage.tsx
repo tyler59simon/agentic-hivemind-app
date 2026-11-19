@@ -4,20 +4,23 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Clock, GitFork, Plus, Workflow } from "lucide-react";
 import { useState } from "react";
 import { repoBranches, rolesQuery, type Engine, type Role } from "../../lib/agent";
-import { useProjectsEnabled } from "../../lib/connection";
+import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import {
   automationAct, automationDelete, automationPut, automationsQuery, workflowAct, workflowCreate, workflowDelete, workflowEdit,
   workflowReport, workflowsQuery, workflowTemplatesQuery,
   type Automation, type AutomationRun, type NewRun, type Task, type TaskSpec, type WorkflowRun,
 } from "../../lib/workflows";
-import { openSession, openWorkflows, useApp } from "../../store";
+import { openSession, openSystem, openWorkflows, useApp } from "../../store";
 import { Markdown } from "../../ui/Markdown";
 import { Confirm } from "../../ui/Modal";
 import { ArrowLink, PageHeader, Row, Section, Tabs } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { repoName } from "../agents/session";
 import { projectsQuery } from "../projects/useProject";
+import { systemsForProject } from "../projects/scope";
+import { MiniDiagram } from "../systems/MiniDiagram";
+import { systemsQuery, useSystem } from "../systems/useSystem";
 import {
   ACTION_HELP, ACTION_LABELS, actionOf, AUTOMATION_ROLES, AUTOMATION_RUN_WORDS, blankAutomation, CAUSE_WORDS, clock, columns, minutesOf, needsProject,
   nextText, progressText, RUN_WORDS, TASK_WORDS, taskActions, taskId, toggleDependency, tone, TRIGGER_LABELS, triggerOf, WEEKDAYS, withoutTask,
@@ -198,6 +201,21 @@ function TaskCard({ run, task, label, onAct }: { run: WorkflowRun; task: Task; l
   );
 }
 
+/** The system the run's repository belongs to, drawn small, with a link to its architecture. */
+function RunSystem({ repo }: { repo: string }) {
+  const systems = useQuery({ ...systemsQuery(), enabled: useSystemsEnabled() });
+  const system = systemsForProject({ repos: [repo] }, (systems.data?.systems ?? []).filter((s) => s.status !== "retired"))[0];
+  const { architecture } = useSystem(system?.slug);
+  const model = architecture.data?.model ?? null;
+  if (!system || !model) return null;
+  return (
+    <div className="flow-system">
+      <ArrowLink onClick={() => openSystem(system.slug)}>{system.name}</ArrowLink>
+      <MiniDiagram model={model} />
+    </div>
+  );
+}
+
 function RunDetail({ run }: { run: WorkflowRun }) {
   const client = useQueryClient();
   const label = useRoleLabels();
@@ -217,6 +235,7 @@ function RunDetail({ run }: { run: WorkflowRun }) {
         {run.budgetUsd ? ` · $${run.budgetUsd.toFixed(2)} per session` : ""} · Created {when(run.createdAt)}{origin ? ` · ${origin}` : ""}
       </p>
       {run.goal.includes("\n") && <div className="markdown"><Markdown>{run.goal}</Markdown></div>}
+      <RunSystem repo={run.repo} />
       <div className="work-actions">
         {run.state === "planned" && !editing && <button className="primary" onClick={() => act("start")}>Start</button>}
         {run.state === "planned" && !editing && <button onClick={() => setEditing(run.tasks.map(({ id, role, engine, title, prompt, dependsOn, from }) => ({ id, role, engine, title, prompt, dependsOn, from })))}>Edit tasks</button>}
@@ -279,6 +298,7 @@ function RunsTab({ picked }: { picked?: string }) {
 function AutomationForm({ initial, onDone }: { initial: Automation; onDone: (saved?: Automation) => void }) {
   const client = useQueryClient();
   const templates = useQuery(workflowTemplatesQuery());
+  const systems = useQuery({ ...systemsQuery(), enabled: useSystemsEnabled() });
   const label = useRoleLabels();
   const [a, setA] = useState<Automation>(initial);
   const [time, setTime] = useState("at" in initial.trigger ? clock(initial.trigger.at) : "09:00");
@@ -352,6 +372,18 @@ function AutomationForm({ initial, onDone }: { initial: Automation; onDone: (sav
             </label>
             <label className="field"><span>Goal</span><textarea rows={3} value={act.goal} onChange={(e) => setA({ ...a, action: { ...act, goal: e.target.value } })} /></label>
           </>
+        );
+      })()}
+      {a.action.kind === "architecture_check" && (() => {
+        const act = a.action;
+        return (
+          <label className="field">
+            <span>System</span>
+            <select value={act.system} onChange={(e) => setA({ ...a, action: { ...act, system: e.target.value } })}>
+              <option value="">Pick a system</option>
+              {(systems.data?.systems ?? []).filter((s) => s.status !== "retired" && s.architecture).map((s) => <option key={s.slug} value={s.slug}>{s.name}</option>)}
+            </select>
+          </label>
         );
       })()}
       {needsProject(a) && <ProjectRepo project={a.project ?? ""} repo={a.repo ?? ""} onChange={(project, repo) => setA({ ...a, project, repo })} />}

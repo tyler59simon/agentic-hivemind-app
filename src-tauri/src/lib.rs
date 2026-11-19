@@ -1,6 +1,7 @@
 mod agent;
 mod automations;
 mod architecture;
+mod archsuite;
 mod bridge;
 mod capture;
 mod conductor;
@@ -449,6 +450,16 @@ impl automations::Doer for AppDoer {
                     other => Ok(Started::Done { detail: format!("Living Memory maintenance {other}"), cost: None }),
                 }
             }
+            Action::ArchitectureCheck { system } => {
+                let d = drift_now(&self.0, system)?;
+                let _ = self.0.emit("architecture-drift", &d.system);
+                let detail = if d.problems.is_empty() { d.text() } else { format!("{}. Could not check: {}", d.text(), d.problems.join("; ")) };
+                if d.needs_attention() {
+                    // Drift is what the user asked to hear about, whatever the notification level says about failures.
+                    notify::notice(&self.0, &a.name, &detail);
+                }
+                Ok(Started::Done { detail, cost: None })
+            }
             Action::SkillUpkeep => {
                 let made = state.skills.upkeep(agent::now_ms());
                 Ok(Started::Done { detail: format!("{} archive proposal{} added to Review", made.len(), if made.len() == 1 { "" } else { "s" }), cost: None })
@@ -562,6 +573,51 @@ fn orchestration_reports(app: AppHandle) -> conductor::Handler {
             }
         });
     })
+}
+
+/// Work out a system's drift now and keep it as its last drift.
+fn drift_now(app: &AppHandle, slug: &str) -> Result<archsuite::Drift, String> {
+    let state = app.state::<AppState>();
+    let saved = settings::load(&state.settings_path);
+    let entry = architecture::system_entry(&state.bridge, slug)?;
+    let behind = architecture::staleness(&state.bridge, &state.agents.sessions(), slug).ok().and_then(|s| s.behind);
+    let snapshots = architecture::list_snapshots(&state.snapshots_dir, slug).unwrap_or_default().into_iter().take(archsuite::SNAPSHOTS_READ)
+        .filter_map(|s| architecture::read_snapshot(&state.snapshots_dir, slug, &s.id).ok().map(|x| (x.taken_at, x.model)))
+        .collect();
+    let home = dirs::home_dir().ok_or("Could not find your home folder")?;
+    let cli = archsuite::locate(saved.architecture_suite_plugin.as_deref(), &home);
+    let inputs = archsuite::Inputs { slug, folder: architecture::folder_of(&entry), behind, snapshots, rules: saved.architecture_rules(slug) };
+    archsuite::drift(&app.path().app_data_dir().map_err(|e| e.to_string())?, cli, inputs)
+}
+
+/// A system's last drift, or a new one when `refresh` (runs the Architecture Suite; seconds).
+#[tauri::command]
+async fn architecture_drift(app: AppHandle, slug: String, refresh: bool) -> Result<Option<archsuite::Drift>, String> {
+    blocking(move || {
+        if refresh {
+            drift_now(&app, &slug).map(Some)
+        } else {
+            Ok(archsuite::last_drift(&app.path().app_data_dir().map_err(|e| e.to_string())?, &slug))
+        }
+    })
+    .await
+}
+
+/// Set or clear a system's rules file; the file must be an architecture-rules/v1 document.
+#[tauri::command]
+fn architecture_rules_set(state: State<'_, AppState>, slug: String, path: Option<String>) -> Result<(), String> {
+    let path = path.map(|p| p.trim().trim_matches('"').to_string()).filter(|p| !p.is_empty());
+    if let Some(p) = &path {
+        archsuite::check_rules(std::path::Path::new(p))?;
+    }
+    let mut saved = settings::load(&state.settings_path);
+    let mut rules = saved.architecture_rules.take().unwrap_or_default();
+    match path {
+        Some(p) => rules.insert(slug, p),
+        None => rules.remove(&slug),
+    };
+    saved.architecture_rules = Some(rules);
+    settings::save(&state.settings_path, &saved)
 }
 
 #[tauri::command]
@@ -1268,7 +1324,7 @@ pub fn run() {
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_roles, learning_status, learning_review, skills_list, skill_proposals, skill_decide, skill_action, skill_version, skill_history,
             skills_upkeep, skill_from_note, workflow_templates, workflow_list, workflow_create, workflow_edit, workflow_act, workflow_delete, workflow_report,
-            automation_list, automation_put, automation_delete, automation_act, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, repo_branches,
+            automation_list, automation_put, automation_delete, automation_act, architecture_drift, architecture_rules_set, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, repo_branches,
             agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_stop_and_approve, review_request_changes, review_request_terminal_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
             system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export
         ])

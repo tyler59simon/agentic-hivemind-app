@@ -40,6 +40,9 @@ pub struct Settings {
     /// Whether reviewed patches to a well-used skill are published without asking (default off).
     #[serde(default)]
     pub skills_auto_patch: Option<bool>,
+    /// An architecture-rules/v1 file per system slug, for the drift check. Checked in Rust before use.
+    #[serde(default)]
+    pub architecture_rules: Option<BTreeMap<String, String>>,
 }
 
 pub const DEFAULT_CAPTURE_SHORTCUT: &str = "CommandOrControl+Alt+M";
@@ -64,6 +67,10 @@ impl Settings {
     /// The daily cap for the reviewer and automations; zero turns paid work off.
     pub fn learning_daily_usd(&self) -> f64 {
         self.learning_daily_usd.filter(|usd| usd.is_finite() && *usd >= 0.0).unwrap_or(DEFAULT_LEARNING_DAILY_USD)
+    }
+
+    pub fn architecture_rules(&self, system: &str) -> Option<std::path::PathBuf> {
+        self.architecture_rules.as_ref()?.get(system).filter(|p| !p.trim().is_empty()).map(std::path::PathBuf::from)
     }
 
     pub fn skills_auto_patch(&self) -> bool {

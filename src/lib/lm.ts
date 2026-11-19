@@ -63,6 +63,8 @@ export interface Settings {
   learning_reviewer?: boolean | null; learning_daily_usd?: number | null;
   /** Whether reviewed patches to a well-used skill are published without asking (default off). */
   skills_auto_patch?: boolean | null;
+  /** An architecture-rules/v1 file per system slug, for the drift check. */
+  architecture_rules?: Record<string, string> | null;
 }
 export interface CaptureStatus { shortcut: string | null; error: string | null; close_to_tray: boolean }
 

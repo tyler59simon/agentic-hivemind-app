@@ -106,7 +106,7 @@ export function triggerOf(kind: TriggerKind, from: Trigger): Trigger {
 
 export const ACTION_LABELS: Record<ActionKind, string> = {
   role: "Start a session in a role", workflow: "Start a workflow", memory_maintenance: "Living Memory maintenance",
-  skill_upkeep: "Skill upkeep", commit_capture: "Knowledge from new commits",
+  skill_upkeep: "Skill upkeep", commit_capture: "Knowledge from new commits", architecture_check: "Architecture drift check",
 };
 export const ACTION_HELP: Record<ActionKind, string> = {
   role: "An unattended chat session with the role's own permissions. {event} and {commits} in the instructions are filled in.",
@@ -114,6 +114,7 @@ export const ACTION_HELP: Record<ActionKind, string> = {
   memory_maintenance: "Runs Living Memory's own maintenance, with its own budget and rules.",
   skill_upkeep: "Proposes archiving skills unused for 30 days or mostly rejected. Nothing is archived until you approve.",
   commit_capture: "The reviewer reads the new commits and drafts notes for Review. Counts against the learning budget.",
+  architecture_check: "Runs the Architecture Suite's diff, check and verify on a system and notifies you when its output has drifted. Regenerating stays your decision.",
 };
 
 /** An action of another kind with sensible defaults. */
@@ -122,6 +123,7 @@ export function actionOf(kind: ActionKind, from: Action): Action {
   switch (kind) {
     case "role": return { kind, role: "reviewer", engine: "claude", prompt: "" };
     case "workflow": return { kind, template: "review", goal: "" };
+    case "architecture_check": return { kind, system: "" };
     default: return { kind };
   }
 }

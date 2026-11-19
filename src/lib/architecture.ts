@@ -50,3 +50,18 @@ export interface Snapshot { sessionId: string; takenAt: number; sourceSha: strin
 export const systemStaleness = (slug: string) => invoke<Staleness>("system_staleness", { slug });
 export const systemSnapshots = (slug: string) => invoke<SnapshotInfo[]>("system_snapshots", { slug });
 export const systemSnapshot = (slug: string, id: string) => invoke<Snapshot>("system_snapshot", { slug, id });
+
+/** A system's architecture drift, as the Architecture Suite's diff, check and verify and git found it (archsuite.rs). */
+export interface DriftChange { section: string; id: string; kind: string; name: string | null }
+export interface DriftFinding { rule: string; source: string; destination: string; severity: string; existing: boolean }
+export interface Drift {
+  system: string; at: number; behind: number | null; edited: { path: string; state: "edited" | "missing" }[];
+  changes: DriftChange[] | null; baselineAt: number | null; findings: DriftFinding[] | null; rules: string | null;
+  layout: { status: string; diagrams: number; findings: number } | null; problems: string[];
+  /** The drift in words, and whether the user should look at it. */
+  summary: string; attention: boolean;
+}
+/** The last drift, or a new one when `refresh` (runs the Suite). */
+export const architectureDrift = (slug: string, refresh = false) => invoke<Drift | null>("architecture_drift", { slug, refresh });
+export const architectureRulesSet = (slug: string, path: string | null) => invoke<void>("architecture_rules_set", { slug, path });
+export const driftQuery = (slug: string) => ({ queryKey: ["architecture", "drift", slug], queryFn: () => architectureDrift(slug) });

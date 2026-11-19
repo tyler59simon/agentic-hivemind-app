@@ -1659,6 +1659,27 @@ fn check_launch_options(saved: &Settings, mut options: StartOptions) -> Result<S
     Ok(options)
 }
 
+/// For an architect or reviewer: the architecture briefing of the system the repository belongs to, and its output folder
+/// as an extra (readable) folder. Other sessions are returned unchanged.
+fn with_architecture(bridge: &Bridge, manager: &Manager, repo: &std::path::Path, options: StartOptions, scope: Result<scope::Scope, String>) -> (StartOptions, Result<scope::Scope, String>) {
+    if !matches!(options.role, Some(Role::Architect | Role::Reviewer)) || scope.is_err() {
+        return (options, scope);
+    }
+    let systems: Vec<_> = crate::architecture::systems_for_repo(bridge, repo).into_iter().filter(|(_, _, folder)| folder.is_dir()).collect();
+    let Some((slug, name, folder)) = systems.into_iter().next() else { return (options, scope) };
+    let behind = crate::architecture::staleness(bridge, &manager.sessions(), &slug).ok().and_then(|s| s.behind);
+    let text = crate::archsuite::briefing(&name, &folder, behind);
+    let briefing = Some(match options.briefing.as_deref() {
+        Some(b) => format!("{b}\n\n{text}"),
+        None => text,
+    });
+    let scope = scope.map(|mut s| {
+        s.add_dirs.push(folder);
+        s
+    });
+    (StartOptions { briefing, ..options }, scope)
+}
+
 /// Put the role's preamble before the briefing, so the first message reads: preamble, briefing, task.
 fn with_preamble(options: StartOptions) -> StartOptions {
     let Some(role) = options.role else { return options };
@@ -1792,6 +1813,8 @@ pub fn start_task(
         None => scope::work(tree.clone(), policy, prompt),
     };
     let options = with_preamble(options);
+    // Architects and reviewers read the documented structure of the system their repository belongs to.
+    let (options, scope) = with_architecture(bridge, manager, &repo, options, scope);
     let started = scope.and_then(|mut scope| {
         if !terminal {
             return manager.start(id.clone(), task.clone(), launch(scope), prompt, &options);

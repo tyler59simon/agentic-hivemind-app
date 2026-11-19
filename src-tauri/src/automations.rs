@@ -48,6 +48,8 @@ pub enum Action {
     SkillUpkeep,
     /// Review the new commits for knowledge worth keeping; drafts go to Review.
     CommitCapture,
+    /// Work out a system's architecture drift (commits since its output, hand edits, structural changes, rule findings).
+    ArchitectureCheck { system: String },
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -227,6 +229,7 @@ pub fn templates() -> Vec<Automation> {
             Action::Role { role: Role::Reviewer, engine: Engine::Claude, prompt: "Review the commits made since the last review:\n{commits}\nReport bugs, risks and missing tests, most serious first.".into() }, true),
         make("nightly-maintenance", "Nightly memory maintenance", Trigger::Daily { at: 2 * 60 }, Action::MemoryMaintenance, false),
         make("weekly-skill-upkeep", "Weekly skill upkeep", Trigger::Weekly { days: vec![6], at: 18 * 60 }, Action::SkillUpkeep, false),
+        make("architecture-check", "Weekly architecture drift check", Trigger::Weekly { days: vec![0], at: 8 * 60 }, Action::ArchitectureCheck { system: String::new() }, false),
         make("commit-capture", "Knowledge from new commits", Trigger::Commit, Action::CommitCapture, true),
         make("health-check", "Daily project health check", Trigger::Daily { at: 8 * 60 },
             Action::Role { role: Role::Tester, engine: Engine::Claude, prompt: "Run the project's allowed test and build commands and report what fails. Do not edit files.".into() }, true),
@@ -256,6 +259,7 @@ pub fn check(a: &Automation) -> Result<(), String> {
     match &a.action {
         Action::Role { prompt, .. } if prompt.trim().is_empty() => Err("Write the session's instructions".into()),
         Action::Workflow { goal, template } if goal.trim().is_empty() || template.trim().is_empty() => Err("Pick a workflow template and write its goal".into()),
+        Action::ArchitectureCheck { system } if system.trim().is_empty() => Err("Pick the system to check".into()),
         Action::Role { role: Role::Developer, .. } => Err("An automation may not start a developer: it would edit code with nobody watching. Use a workflow you start yourself.".into()),
         _ => Ok(()),
     }
@@ -603,6 +607,10 @@ mod tests {
             if a.project.is_some() {
                 a.project = Some("p".into());
                 a.repo = Some("r".into());
+            }
+            if matches!(a.action, Action::ArchitectureCheck { .. }) {
+                assert!(check(&a).unwrap_err().contains("system"));
+                a.action = Action::ArchitectureCheck { system: "pay".into() };
             }
             assert!(check(&a).is_ok(), "{}", a.id);
         }

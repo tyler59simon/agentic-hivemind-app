@@ -6,7 +6,7 @@ It runs on Tauri 2 with React and TypeScript, on Windows, macOS and Linux. It is
 
 ## What it does
 
-- **Layout:** a sidebar with a project picker and six sections (Overview, Agent Workspace, Changes, Architecture, Memory, Review), and a top bar with a breadcrumb and a search field. Every section is scoped to the picked project, or to all memory.
+- **Layout:** a sidebar with a project picker and its sections (Overview, Agent Workspace, Changes, Architecture, Memory, Dashboards, Wiki, Recap, Maintenance, Review, Skills, Workflows), and a top bar with a breadcrumb and a search field. Every section is scoped to the picked project, or to all memory.
 - **Memory:**
   - a library with search, tabs by note type, and Status, Scope (project, domain, all domains) and Tag filters; the selected note is previewed beside the list
   - a quick switcher (Ctrl+O) and a command palette (Ctrl+P)
@@ -27,6 +27,14 @@ It runs on Tauri 2 with React and TypeScript, on Windows, macOS and Linux. It is
 - **Activity** (Ctrl+Shift+A, under Memory): who changed what, with diffs and Undo. Who acted is inferred, because Living Memory's journal does not record it.
 - **Tags** (under Memory): the taxonomy by facet with usage counts. Tags can be added, renamed or merged, and tags in use but not registered can be fixed.
 - **Quick capture:** a global hotkey (default Ctrl+Alt+M) or the tray icon opens a small window to save a note without opening the app.
+- **Agent roles:** chat sessions start as an architect, developer, reviewer, researcher or tester, each with a permission profile Hivemind builds (read only, research, or edit its own worktree), live CPU and memory use, and a verdict from reviewers and testers.
+- **Learning:** after you approve or dismiss a session's edits, a capped, tool-free reviewer drafts notes for Living Memory and skill proposals; you approve them in Review.
+- **Skills:** approved procedures are kept with every version and published to Claude Code and Codex (`~/.claude/skills`, `~/.codex/skills`), with use counts and how the sessions that used them were reviewed.
+- **Workflows:** a goal split into tasks for agents in roles, run in dependency order in separate worktrees, with checkpoint commits and a report. Nothing is merged or pushed.
+- **Automations:** scheduled or event-driven work (reviews of new commits, memory maintenance, skill upkeep, drift checks, failure investigations) with ask-first, budgets and notifications.
+- **Architecture drift:** the Architecture Suite's diff, check and verify, plus hand-edited outputs and commits since the output was made.
+
+See [docs/engineering-workspace.md](docs/engineering-workspace.md) for how the agent features work, their safety model and their limits.
 
 ## How it works
 
@@ -56,6 +64,8 @@ It uses whichever store Living Memory is configured for. You can override these 
 | `HIVEMIND_PYTHON` | Python interpreter (default `py -3` on Windows, `python3` elsewhere) |
 | `HIVEMIND_LM_SCRIPT` | Path to `living_memory.py`, e.g. a development checkout |
 | `HIVEMIND_LM_ROOT` | Store root; use a throwaway store while developing |
+| `HIVEMIND_SKILL_DIRS` | Skill folders to publish to, separated by `;` on Windows and `:` elsewhere (default `~/.claude/skills` and `~/.codex/skills`); use scratch folders while developing |
+| `HIVEMIND_ARCHSUITE_PYTHON` | Interpreter for the Architecture Suite's command line (default the one its setup installs in `~/.architecture-suite/runtime`) |
 
 Settings also sets:
 - the quick-capture hotkey (or turns it off)
