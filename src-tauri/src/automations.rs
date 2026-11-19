@@ -165,6 +165,11 @@ pub trait Doer: Send + Sync {
     fn log(&self, repo: &str, since: Option<&str>) -> String;
     /// Whether today's learning and automation budget has room.
     fn budget_left(&self) -> bool;
+    /// Why the automation may not run on its own now (its engine is hidden), or None. A paused automation is not admitted
+    /// and keeps its last seen commit; Run now still tries it and reports the reason.
+    fn paused(&self, _automation: &Automation) -> Option<String> {
+        None
+    }
     fn notify(&self, title: &str, text: &str);
     /// Something changed that the UI shows.
     fn changed(&self);
@@ -479,6 +484,12 @@ impl Automations {
             || (scheduled && a.next_due.is_none_or(|due| due > now))
             || source.as_ref().is_some_and(|s| !hears(&a, s))
         {
+            return None;
+        }
+        if cause != "manual" && doer.paused(&a).is_some() {
+            if scheduled {
+                self.skip_due(id, now);
+            }
             return None;
         }
         if self.runs(id).iter().any(|r| matches!(r.state, RunState::Waiting | RunState::Running)) {
@@ -841,6 +852,7 @@ mod tests {
         head: Mutex<Option<String>>,
         broke: bool,
         session: bool,
+        paused: Mutex<bool>,
     }
     impl Doer for Fake {
         fn run(&self, a: &Automation, vars: &Vars) -> Result<Started, String> {
@@ -858,6 +870,9 @@ mod tests {
         }
         fn budget_left(&self) -> bool {
             !self.broke
+        }
+        fn paused(&self, _a: &Automation) -> Option<String> {
+            self.paused.lock().unwrap().then(|| "paused".into())
         }
         fn notify(&self, title: &str, text: &str) {
             self.notes.lock().unwrap().push(format!("{title}: {text}"));
@@ -939,6 +954,20 @@ mod tests {
         assert_eq!(autos.list()[0].last_seen.as_deref(), Some("bbb"));
         autos.tick(now_ms(), true, &doer);
         assert_eq!(doer.ran.lock().unwrap().len(), 1, "nothing new");
+
+        // While paused, new commits start nothing, record no run and keep the cursor for later.
+        *doer.paused.lock().unwrap() = true;
+        *doer.head.lock().unwrap() = Some("ccc".into());
+        let rows = autos.runs(&a.id).len();
+        autos.tick(now_ms(), true, &doer);
+        autos.tick(now_ms(), true, &doer);
+        assert_eq!(doer.ran.lock().unwrap().len(), 1);
+        assert_eq!(autos.runs(&a.id).len(), rows);
+        assert_eq!(autos.list()[0].last_seen.as_deref(), Some("bbb"));
+        *doer.paused.lock().unwrap() = false;
+        autos.tick(now_ms(), true, &doer);
+        assert_eq!(doer.ran.lock().unwrap().last().unwrap().1.commits, "log since bbb");
+        assert_eq!(autos.list()[0].last_seen.as_deref(), Some("ccc"));
 
         let broke = Fake { broke: true, ..Default::default() };
         let row = autos.fire(&a.id, "manual", None, &broke).unwrap();

@@ -481,10 +481,9 @@ impl automations::Doer for AppDoer {
                 Ok(Started::Done { detail: format!("{} archive proposal{} added to Review", made.len(), if made.len() == 1 { "" } else { "s" }), cost: None })
             }
             Action::CommitCapture => {
-                // The reviewer is Claude Code; a user who hid it does not expect it to run. A failed run keeps the last
-                // reviewed commit, so these commits are reviewed once Claude Code is shown again.
-                if !saved.shows(agent::Engine::Claude) {
-                    return Err("Paused: Claude Code is hidden in Settings. Show it again to review these commits.".into());
+                // Only Run now gets here while paused; a failed run keeps the last reviewed commit.
+                if let Some(why) = automations::Doer::paused(self, a) {
+                    return Err(why);
                 }
                 let mut command = std::process::Command::new("git");
                 let range = a.last_seen.as_deref().map(|s| format!("{s}..HEAD")).unwrap_or_else(|| "-5".into());
@@ -518,6 +517,11 @@ impl automations::Doer for AppDoer {
             None => command.arg("--max-count=10"),
         };
         git::run_with_timeout(command, std::time::Duration::from_secs(15)).unwrap_or_default()
+    }
+    fn paused(&self, a: &automations::Automation) -> Option<String> {
+        let saved = settings::load(&self.0.state::<AppState>().settings_path);
+        (matches!(a.action, automations::Action::CommitCapture) && !saved.shows(agent::Engine::Claude))
+            .then(|| "Paused: Claude Code is hidden in Settings. Show it again to review these commits.".into())
     }
     fn budget_left(&self) -> bool {
         let state = self.0.state::<AppState>();
