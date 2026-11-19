@@ -57,12 +57,30 @@ pub fn run(claude: &str, dir: &Path, ledger: &Ledger, cap: f64, id: &str, call: 
     let _ = std::fs::create_dir_all(dir);
     let mut command = Command::new(claude);
     command.args(argv(call)).current_dir(dir).env("LIVING_MEMORY_OFF", "1").env_remove("HIVEMIND_SESSION").env_remove("CLAUDECODE");
-    let (answer, cost) = match crate::git::run_with_input(command, Some(&redact(input)), timeout) {
-        Ok(ran) => parse_envelope(call.who, &ran.stdout),
-        Err(e) => (Err(e), None),
+    let ran = crate::git::run_with_input(command, Some(&redact(input)), timeout);
+    // A call that never started costs nothing; one that ran (even into a timeout) is charged what it reports, else its
+    // whole reservation.
+    let (answer, cost, recorded) = match ran {
+        Ok(ran) => {
+            let (answer, cost) = outcome(call.who, ran.status.success(), &ran.stdout);
+            (answer, cost, ledger.settle(id, cost, crate::agent::now_ms()))
+        }
+        Err(e) if e.starts_with(crate::git::COULD_NOT_RUN) => (Err(e), None, ledger.release(id, crate::agent::now_ms())),
+        Err(e) => (Err(e), None, ledger.settle(id, None, crate::agent::now_ms())),
     };
-    let _ = ledger.settle(id, cost, crate::agent::now_ms());
-    (answer, cost)
+    match recorded {
+        Ok(()) => (answer, cost),
+        Err(e) => (Err(format!("{} answered, but its cost could not be recorded in the daily budget: {e}", call.who)), cost),
+    }
+}
+
+/// The answer of a call that ran: its envelope, and a non-zero exit is a failure even when the envelope claims success.
+fn outcome(who: &str, exit_ok: bool, stdout: &str) -> (Result<Value, String>, Option<f64>) {
+    let (answer, cost) = parse_envelope(who, stdout);
+    match answer {
+        Ok(_) if !exit_ok => (Err(format!("{who} exited with an error")), cost),
+        answer => (answer, cost),
+    }
 }
 
 #[cfg(test)]
@@ -103,5 +121,25 @@ mod tests {
         assert!(answer.unwrap_err().contains("budget"));
         assert_eq!(cost, None);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_call_that_never_starts_is_not_charged() {   // EXEC-6
+        let dir = std::env::temp_dir().join(format!("hivemind-oneshot-start-{}", std::process::id()));
+        let ledger = Ledger::new(dir.join("spend.json"));
+        let (answer, cost) = run("no-such-program", &dir, &ledger, 1.0, "x", &call(), "hi", Duration::from_secs(5));
+        assert!(answer.unwrap_err().starts_with(crate::git::COULD_NOT_RUN));
+        assert_eq!(cost, None);
+        assert!(ledger.used(crate::agent::now_ms()).abs() < 1e-9, "the old code charged the whole $0.50");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_non_zero_exit_is_a_failure() {   // EXEC-6
+        let ok = json!({"subtype": "success", "is_error": false, "total_cost_usd": 0.02, "structured_output": {"a": 1}}).to_string();
+        assert_eq!(outcome("The helper", true, &ok), (Ok(json!({"a": 1})), Some(0.02)));
+        assert_eq!(outcome("The helper", false, &ok), (Err("The helper exited with an error".into()), Some(0.02)), "the cost is still counted");
+        let capped = json!({"subtype": "error_max_budget_usd", "is_error": true, "total_cost_usd": 0.5}).to_string();
+        assert_eq!(outcome("The helper", false, &capped), (Err("The helper reached its spending cap".into()), Some(0.5)));
     }
 }

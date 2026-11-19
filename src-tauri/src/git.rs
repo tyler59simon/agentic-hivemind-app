@@ -115,6 +115,9 @@ pub fn run_captured(command: Command, timeout: Duration) -> Result<Ran, String> 
     run_with_input(command, None, timeout)
 }
 
+/// How a run that could not start says so (`Could not run git: ...`), so a caller can tell it from a timeout.
+pub const COULD_NOT_RUN: &str = "Could not run";
+
 /// `run_captured` with `input` written to the command's stdin (then closed); stdin is empty when None.
 pub fn run_with_input(mut command: Command, input: Option<&str>, timeout: Duration) -> Result<Ran, String> {
     command
@@ -134,7 +137,7 @@ pub fn run_with_input(mut command: Command, input: Option<&str>, timeout: Durati
         command.process_group(0);
     }
     let name = command.get_program().to_string_lossy().into_owned();
-    let mut child = command.spawn().map_err(|e| format!("Could not run {name}: {e}"))?;
+    let mut child = command.spawn().map_err(|e| format!("{COULD_NOT_RUN} {name}: {e}"))?;
     if let (Some(text), Some(mut pipe)) = (input, child.stdin.take()) {
         let text = text.to_string();
         // A thread, so a child that never reads cannot block us past the timeout; dropping the pipe closes stdin.

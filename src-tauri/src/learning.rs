@@ -125,6 +125,14 @@ impl Ledger {
         self.save(&spend)
     }
 
+    /// Drop a reservation without charging it: the call never started.
+    pub fn release(&self, id: &str, now: u64) -> Result<(), String> {
+        let _guard = self.lock.lock().unwrap();
+        let mut spend = self.load(now);
+        spend.reserved.remove(id);
+        self.save(&spend)
+    }
+
     /// Replace a reservation with what the call cost; an unknown cost keeps the whole reservation.
     pub fn settle(&self, id: &str, cost: Option<f64>, now: u64) -> Result<(), String> {
         let _guard = self.lock.lock().unwrap();
@@ -867,6 +875,11 @@ mod tests {
         ledger.reserve("c", 0.2, 0.5, now).unwrap();
         assert!((ledger.used(now + DAY_MS) - 0.0).abs() < 1e-9, "a new day starts empty, even with a reservation left over");
         assert!(ledger.reserve("d", 0.25, 0.0, now + DAY_MS).is_err(), "a zero cap turns paid work off");
+        // A call that never started is not charged (EXEC-6).
+        let later = now + 2 * DAY_MS;
+        ledger.reserve("e", 0.25, 0.5, later).unwrap();
+        ledger.release("e", later).unwrap();
+        assert!(ledger.used(later).abs() < 1e-9);
         let _ = std::fs::remove_dir_all(dir);
     }
 
