@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, ChevronDown, Database, GitBranch, House, LayoutDashboard, Network, Wrench, ScrollText, SquareCheck, Terminal, type LucideIcon } from "lucide-react";
+import { BookOpen, ChevronDown, Database, GitBranch, House, LayoutDashboard, Network, Wrench, ScrollText, Sparkles, SquareCheck, Terminal, type LucideIcon } from "lucide-react";
 import logo from "../assets/logo.png";
 import { ProjectSwitcher } from "../features/projects/ProjectSwitcher";
 import { dotOf, useAttention } from "../features/terminal/attention";
@@ -23,6 +23,7 @@ export const SECTIONS: { page: Page; label: string; icon: LucideIcon }[] = [
   { page: "recap", label: "Recap", icon: ScrollText },
   { page: "maintenance", label: "Maintenance", icon: Wrench },
   { page: "review", label: "Review", icon: SquareCheck },
+  { page: "skills", label: "Skills", icon: Sparkles },
 ];
 
 export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; onSettings: () => void; onReconnect: () => void }) {

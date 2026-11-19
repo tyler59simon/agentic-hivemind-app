@@ -289,7 +289,7 @@ pub fn parse(text: &str) -> (String, String) {
 }
 
 /// A note's text as a skill draft: the paragraph before the first heading becomes the description, the sections the body.
-/// A missing "When not to use" section is added empty, for the user to fill in before approving.
+/// Missing required sections are added empty, for the user to fill in before approving.
 pub fn from_note(note_body: &str) -> (String, String) {
     let text = note_body.replace("\r\n", "\n");
     let first = if text.starts_with("## ") { Some(0) } else { text.find("\n## ").map(|i| i + 1) };
@@ -298,11 +298,16 @@ pub fn from_note(note_body: &str) -> (String, String) {
         None => (text.trim(), ""),
     };
     let mut body = rest.to_string();
+    if section(&body, "When to use").is_none() {
+        body = format!("## When to use\n\n{body}");
+    }
     if section(&body, "When not to use").is_none() {
-        body = match body.find("\n## Steps") {
-            Some(i) => format!("{}\n\n## When not to use\n\n{}", body[..i].trim_end(), body[i..].trim_start()),
-            None => format!("{body}\n\n## When not to use\n"),
-        };
+        // Right after "When to use", where a reader looks for it.
+        let after = section(&body, "When to use").map(|s| s.as_ptr() as usize - body.as_ptr() as usize + s.len()).unwrap_or(0);
+        body = format!("{}\n\n## When not to use\n\n{}", body[..after].trim_end(), body[after..].trim_start());
+    }
+    if section(&body, "Steps").is_none() {
+        body = format!("{}\n\n## Steps\n", body.trim_end());
     }
     (lead.chars().take(DESCRIPTION_MAX).collect(), body.trim().to_string())
 }
@@ -808,6 +813,8 @@ mod tests {
         assert_eq!(body, "## When to use\nA stacked PR conflicts.\n\n## When not to use\n\n## Steps\n1. Rebase.\n\n## Check\nSame tree.");
         assert!(check_body(&description, &body).unwrap_err().contains("When not to use"), "the user fills it in");
         assert_eq!(from_note(BODY).1, BODY);
+        let (_, loose) = from_note("Lead.\n\n## Details\n- pause\n- replay");
+        assert_eq!(loose, "## When to use\n\n## When not to use\n\n## Details\n- pause\n- replay\n\n## Steps");
     }
 
     #[test]

@@ -5,6 +5,8 @@ import { classify } from "../../lib/errors";
 import { archiveNote, domainOf, plan, reopenNote, resolveNote, restoreNote, supersedeNote } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
+import { skillFromNote } from "../../lib/skills";
+import { openReview } from "../../store";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
 import { useChangeIntent } from "../changes/intent";
@@ -65,6 +67,13 @@ export function NoteMenu({ refId }: { refId: string }) {
       <NotePicker title="Merge this note into…" domain={n.domain} exclude={refId} onClose={close}
         onPick={(t) => setDialog(<MergeComposer source={{ ref: refId, title: n.title }} target={t} onClose={close} />)} />) },
     { label: "Adopt as change…", show: adoptable, act: () => { setOpen(false); useChangeIntent.getState().open({ mode: "adopt", ref: refId, title: n.title }); } },
+    { label: "Make a skill…", show: n.type === "runbook" && n.status === "active", act: () => {
+      setOpen(false);
+      skillFromNote(refId).then((p) => {
+        client.invalidateQueries({ queryKey: ["skills"] });
+        toast(`Skill proposal ${p.name} is waiting in Review`, "info", { label: "Open Review", run: () => openReview() });
+      }, (e) => toast(classify(e).message, "error"));
+    } },
     { label: "Copy reference", show: true, act: () => { setOpen(false); navigator.clipboard.writeText(refId).then(() => toast(`Copied ${refId}`)); } },
     { label: "Delete…", show: true, danger: true, act: () => run(
       <PlanDialog title={`Delete “${n.title}”`} make={() => plan("delete", refId)} applyLabel="Delete" danger onClose={close}

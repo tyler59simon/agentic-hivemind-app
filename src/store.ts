@@ -16,7 +16,8 @@ export type Route =
   | { page: "wiki"; domain?: string; at?: string }
   | { page: "recap" }
   | { page: "maintenance" }
-  | { page: "review"; session?: string; file?: string };
+  | { page: "review"; session?: string; file?: string }
+  | { page: "skills"; skill?: string };
 export type Page = Route["page"];
 
 export const safeStorage: StateStorage = {
@@ -74,5 +75,6 @@ export const openSystem = (slug: string) => app().go({ page: "architecture", sys
 export const openSession = (session: string) => app().go({ page: "agents", session });
 /** Show the Review page, on one session's edits (and one file) when given. */
 export const openReview = (session?: string, file?: string) => app().go({ page: "review", session, file });
+export const openSkills = (skill?: string) => app().go({ page: "skills", skill });
 export const startSession = () => app().go({ page: "agents", view: "new" });
 export const openChange = (id: number) => app().go({ page: "changes", id, view: "detail" });

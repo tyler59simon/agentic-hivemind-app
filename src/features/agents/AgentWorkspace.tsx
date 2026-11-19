@@ -1,10 +1,12 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
-import { Check, ChevronDown, CircleCheck, CircleX, CodeXml, FileText, GitBranch, Layers, Link as LinkIcon, LoaderCircle, MessageSquare, Network, Plus, Shield, ShieldCheck, Sparkle, SquareTerminal } from "lucide-react";
+import { Check, ChevronDown, CircleCheck, CircleX, CodeXml, FileText, GitBranch, Layers, Lightbulb, Link as LinkIcon, LoaderCircle, MessageSquare, Network, Plus, Shield, ShieldCheck, Sparkle, SquareTerminal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import logo from "../../assets/logo.png";
 import { agentCancel, agentEnd, agentSession, agentSetPolicy, engineOf, enginesQuery, sessionsQuery, type Engine, type Interface, type Policy, type ResourceUsage, type SeqEvent, type SessionInfo } from "../../lib/agent";
 import { PROFILE_HELP, PROFILE_LABELS } from "./start";
+import { learningQuery, learningReview } from "../../lib/skills";
+import { lastRun, runText } from "../skills/skills";
 import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { connect } from "../../lib/lm";
 import { openChange, openProject, openReview, openSession, openSystem, startSession, useApp } from "../../store";
@@ -222,6 +224,14 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
   const ended = isEnded(info);
   const files = info.filesChanged?.files ?? 0;
   const resume = resumeCommand(info);
+  const learning = useQuery(learningQuery());
+  const run = lastRun(learning.data?.runs ?? [], info.id);
+  const [reviewing, setReviewing] = useState(false);
+  const reviewNow = () => {
+    setReviewing(true);
+    learningReview(info.id).then(() => toast("Reviewing the session for lessons. Drafts appear in Review."), (e) => toast(String(e), "error"))
+      .finally(() => setReviewing(false));
+  };
   const refresh = () => client.invalidateQueries({ queryKey: ["agent", "sessions"] });
   const end = () => agentEnd(info.id).then(refresh).catch((e) => toast(String(e), "error"));
   return (
@@ -258,6 +268,14 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
         {files ? <Row icon={<FileText size="1.3em" aria-hidden />} onClick={onReview}>{filesWord(files)} {waitingForReview(info) ? "awaiting review" : "changed"}</Row>
           : <p className="muted small">No file changes yet.</p>}
       </Section>
+      {info.interface === "chat" && task && (
+        <Section title="Learning">
+          {run ? <Row icon={<Lightbulb size="1.3em" aria-hidden />} meta={when(run.at)}>{runText(run)}</Row>
+            : <p className="muted small">Hivemind reviews a session for notes and skills when you approve or discard its edits, or when a long session ends.</p>}
+          <button className="outline" disabled={reviewing} title="One tool-free Claude call that reads this session and proposes notes (and, after approval, a skill). It counts against the daily learning budget."
+            onClick={reviewNow}>{run ? "Review again" : "Review for lessons now"}</button>
+        </Section>
+      )}
       <div className="rail-actions">
         {!ended && <button className="danger-text" onClick={() => (info.status === "idle" ? end() : setAsking("end"))}>End session</button>}
         <RemoveWorktree info={info} />

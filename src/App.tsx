@@ -109,6 +109,12 @@ function useLiveRefresh(enabled: boolean) {
         client.invalidateQueries({ queryKey: ["wiki"] }); // projects.json and bindings decide the wiki's projects and folders
       }),
       listen("agent-sessions-changed", () => client.invalidateQueries({ queryKey: ["agent", "sessions"] })),
+      // A post-session review finished: its drafts are in the proposal inbox and the skill proposals.
+      listen("learning-changed", () => {
+        client.invalidateQueries({ queryKey: ["learning"] });
+        client.invalidateQueries({ queryKey: ["skills"] });
+        client.invalidateQueries({ queryKey: ["proposals"] });
+      }),
       listen<{ ref: string }>("open-note", (e) => useWorkspace.getState().openNote(e.payload.ref)),
     ];
     return () => { stops.forEach((stop) => stop.then((unlisten) => unlisten())); };

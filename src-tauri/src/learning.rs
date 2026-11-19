@@ -321,8 +321,27 @@ pub fn parse_envelope(stdout: &str) -> (Result<Answer, String>, Option<f64>) {
     (answer, cost)
 }
 
+/// The tags a staged draft needs to be saved later: a `concern/` tag this store's taxonomy has (Living Memory refuses a
+/// capture without one, and its default for some types, such as risk, is not in every taxonomy) and the project's tag.
+pub struct Tags {
+    pub concern: Option<String>,
+    pub project: Option<String>,
+}
+
+/// Living Memory's default concern for the type, then the type's own name, then knowledge: the first the taxonomy has.
+pub fn tags_for(kind: &str, project: &str, known: &[String]) -> Tags {
+    let default = match kind {
+        "runbook" => "workflow",
+        "risk" => "constraint",
+        other => other,
+    };
+    let concern = [default, kind, "knowledge"].into_iter().map(|c| format!("concern/{c}")).find(|t| known.contains(t));
+    let project = Some(format!("project/{project}")).filter(|t| known.contains(t)).map(|_| project.to_string());
+    Tags { concern, project }
+}
+
 /// `propose` arguments for one memory item. Unknown types become knowledge.
-pub fn propose_argv(item: &MemoryItem, proposer: &str, domain: Option<&str>, cwd: &str, context: &str) -> Vec<String> {
+pub fn propose_argv(item: &MemoryItem, proposer: &str, domain: Option<&str>, cwd: &str, context: &str, known: &[String], project: &str) -> Vec<String> {
     let kind = if MEMORY_TYPES.contains(&item.kind.as_str()) { item.kind.as_str() } else { "knowledge" };
     let mut argv: Vec<String> = vec!["propose".into(), "--session".into(), proposer.into()];
     match domain {
@@ -332,6 +351,13 @@ pub fn propose_argv(item: &MemoryItem, proposer: &str, domain: Option<&str>, cwd
     argv.extend(["--type".into(), kind.into(), "--title".into(), clip(item.title.trim(), 120), "--summary".into(), item.summary.trim().into()]);
     for s in item.sections.iter().filter(|s| !s.heading.trim().is_empty() && !s.text.trim().is_empty()) {
         argv.extend(["--section".into(), s.heading.trim().into(), s.text.trim().into()]);
+    }
+    let tags = tags_for(kind, project, known);
+    if let Some(concern) = tags.concern {
+        argv.extend(["--concern".into(), concern]);
+    }
+    if let Some(project) = tags.project {
+        argv.extend(["--project".into(), project]);
     }
     argv.extend(["--context".into(), context.into()]);
     argv
@@ -441,8 +467,12 @@ impl Learning {
         let domain = crate::git::project_entry(deps.bridge, project).ok()
             .and_then(|p| p.get("charter").and_then(Value::as_str).and_then(|c| c.split_once(':')).map(|(d, _)| d.to_string()));
         let context = format!("Hivemind's review of the session \"{}\" ({}).", run.title, &info.id[..8.min(info.id.len())]);
+        let known: Vec<String> = deps.bridge.call(&["taxonomy".into(), "--actor".into(), "viewer".into()], None).ok()
+            .and_then(|r| r.result.get("tags").and_then(Value::as_array).map(|a| a.iter().filter_map(|t| t.as_str().map(str::to_string)).collect()))
+            .unwrap_or_default();
         for item in items.iter().filter(|i| !i.title.trim().is_empty() && !i.summary.trim().is_empty()) {
-            let argv = propose_argv(item, &format!("hivemind-review-{}", info.id), domain.as_deref(), repo, &format!("{context} {}", item.reason.trim()));
+            let reason = format!("{context} {}", item.reason.trim());
+            let argv = propose_argv(item, &format!("hivemind-review-{}", info.id), domain.as_deref(), repo, &reason, &known, project);
             match deps.bridge.call(&argv, None) {
                 Ok(reply) if reply.exit_code == 0 => {
                     let id = reply.result.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
@@ -586,10 +616,22 @@ mod tests {
     fn propose_arguments() {
         let item = MemoryItem { kind: "made-up".into(), title: "Retry needs jitter".into(), summary: "S.".into(),
             sections: vec![SectionItem { heading: "Why".into(), text: "Thundering herd.".into() }, SectionItem { heading: " ".into(), text: "x".into() }], reason: "R".into() };
-        let argv = propose_argv(&item, "hivemind-review-1", Some("pay"), "C:/src/pay", "ctx");
+        let known: Vec<String> = ["concern/knowledge", "concern/risk", "project/pay"].map(String::from).to_vec();
+        let argv = propose_argv(&item, "hivemind-review-1", Some("pay"), "C:/src/pay", "ctx", &known, "pay");
         assert_eq!(argv, ["propose", "--session", "hivemind-review-1", "--domain", "pay", "--type", "knowledge", "--title", "Retry needs jitter", "--summary", "S.",
-            "--section", "Why", "Thundering herd.", "--context", "ctx"]);
-        assert!(propose_argv(&item, "p", None, "C:/src/pay", "c").windows(2).any(|w| w == ["--cwd", "C:/src/pay"]));
+            "--section", "Why", "Thundering herd.", "--concern", "concern/knowledge", "--project", "pay", "--context", "ctx"]);
+        assert!(propose_argv(&item, "p", None, "C:/src/pay", "c", &[], "pay").windows(2).any(|w| w == ["--cwd", "C:/src/pay"]));
+        assert!(!propose_argv(&item, "p", None, "C:/src/pay", "c", &[], "pay").iter().any(|a| a == "--concern" || a == "--project"));
+    }
+
+    #[test]
+    fn a_concern_the_taxonomy_has() {
+        let mine: Vec<String> = ["concern/constraint", "concern/workflow", "concern/knowledge"].map(String::from).to_vec();
+        let demo: Vec<String> = ["concern/risk", "concern/knowledge"].map(String::from).to_vec();
+        assert_eq!(tags_for("risk", "x", &mine).concern.as_deref(), Some("concern/constraint"), "Living Memory's own default first");
+        assert_eq!(tags_for("risk", "x", &demo).concern.as_deref(), Some("concern/risk"));
+        assert_eq!(tags_for("runbook", "x", &demo).concern.as_deref(), Some("concern/knowledge"));
+        assert_eq!(tags_for("bug", "x", &[]).concern, None);
     }
 
     #[test]
