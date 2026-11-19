@@ -52,18 +52,37 @@ impl Store {
         if KINDS.contains(&kind) { Ok(self.dir.join(kind)) } else { Err(format!("Unknown record kind: {kind}")) }
     }
 
-    /// Newest first. A file that does not parse is renamed aside, not deleted.
+    /// Newest first. A kind with no folder yet has no records; any other read error is an error, not an empty list. A file
+    /// that does not parse is read again under the lock (a save may have been under way) and only then renamed aside, not
+    /// deleted.
     pub fn list(&self, kind: &str) -> Result<Vec<Value>, String> {
         let dir = self.kind_dir(kind)?;
-        let Ok(entries) = std::fs::read_dir(&dir) else { return Ok(vec![]) };
+        let failed = |e: std::io::Error| format!("Could not read the {kind} records: {e}");
+        let entries = match std::fs::read_dir(&dir) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+            entries => entries.map_err(failed)?,
+        };
         let mut rows = vec![];
-        for path in entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")) {
-            match std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).filter(Value::is_object) {
-                Some(row) => rows.push(row),
-                None => {
-                    let _ = std::fs::rename(&path, path.with_extension(format!("unreadable-{}", crate::agent::now_ms())));
-                }
+        for entry in entries {
+            let path = entry.map_err(failed)?.path();
+            if !path.extension().is_some_and(|x| x == "json") {
+                continue;
             }
+            let row = match read_record(&path) {
+                Ok(row) => row,
+                Err(_) => {
+                    let _guard = self.lock.lock().unwrap();
+                    match read_record(&path) {
+                        Ok(row) => row,
+                        Err(Unreadable::Io(e)) => return Err(failed(e)),
+                        Err(Unreadable::Invalid) => {
+                            let _ = std::fs::rename(&path, path.with_extension(format!("unreadable-{}", crate::agent::now_ms())));
+                            None
+                        }
+                    }
+                }
+            };
+            rows.extend(row);
         }
         rows.sort_by_key(|r| std::cmp::Reverse(r.get("updated").and_then(Value::as_u64).unwrap_or(0)));
         Ok(rows)
@@ -131,6 +150,22 @@ impl Store {
 }
 
 /// A read-only Living Memory command: argv without `--actor`, the result on exit code 0.
+/// Why a record file could not be read.
+enum Unreadable {
+    Io(std::io::Error),
+    /// Read, but not a JSON object.
+    Invalid,
+}
+
+/// One record file: None when it is gone (deleted since the folder was listed).
+fn read_record(path: &std::path::Path) -> Result<Option<Value>, Unreadable> {
+    match std::fs::read_to_string(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(Unreadable::Io(e)),
+        Ok(text) => serde_json::from_str::<Value>(&text).ok().filter(Value::is_object).map(Some).ok_or(Unreadable::Invalid),
+    }
+}
+
 pub type Lm<'a> = dyn Fn(&[&str]) -> Result<Value, String> + 'a;
 
 /// Living Memory through the app's bridge, as a viewer.
@@ -779,6 +814,13 @@ mod tests {
         store.delete("milestone", &id).unwrap();
         assert!(store.list("milestone").unwrap().is_empty());
         assert!(store.list("draft").unwrap().is_empty(), "a kind with no folder yet lists nothing");
+        // Any other read error is reported, not shown as no records, and a file that cannot be read is not set aside
+        // (EXEC-8).
+        std::fs::write(dir.join("briefing"), "not a folder").unwrap();
+        assert!(store.list("briefing").unwrap_err().contains("Could not read the briefing records"));
+        std::fs::create_dir_all(dir.join("milestone").join("odd.json")).unwrap();
+        assert!(store.list("milestone").is_err());
+        assert!(dir.join("milestone").join("odd.json").exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 
