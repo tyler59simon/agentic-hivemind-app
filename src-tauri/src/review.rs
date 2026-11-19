@@ -393,6 +393,19 @@ pub fn approve(agents: &Manager, worktrees_dir: &Path, id: &str, message: &str) 
     Ok(commit)
 }
 
+/// A workflow checkpoint: the session's edits as a commit on its own branch, without recording a review decision (the
+/// user still approves the session in Review; the approval then finds this commit). None when nothing changed.
+pub fn checkpoint(agents: &Manager, worktrees_dir: &Path, id: &str, message: &str) -> Result<Option<String>, String> {
+    let _held = agents.reserve(id)?;
+    let tree = checked_worktree(&agents.info(id)?, worktrees_dir)?;
+    checked_for_write(id, &tree)?;
+    match commit_all(&tree, message) {
+        Ok(commit) => Ok(Some(commit)),
+        Err(e) if e.starts_with("There is nothing to approve") => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// Send the text to the session as a new message, and record that changes were requested once it is on its way.
 pub fn request_changes(agents: &Manager, bridge: &Bridge, saved: &Settings, id: &str, text: &str) -> Result<(), String> {
     if text.trim().is_empty() {
@@ -572,6 +585,7 @@ mod tests {
             profile: None,
             summary: None,
             verdict: None,
+            origin: None,
         }
     }
 
