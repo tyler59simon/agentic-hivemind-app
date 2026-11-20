@@ -589,7 +589,9 @@ impl automations::Doer for AppDoer {
     }
     fn charge(&self, usd: f64) {
         let id = format!("charge-{}", uuid::Uuid::new_v4().simple());
-        let _ = self.0.state::<AppState>().automation_spend.settle(&id, Some(usd), agent::now_ms());
+        if let Err(e) = self.0.state::<AppState>().automation_spend.settle(&id, Some(usd), agent::now_ms()) {
+            notify::notice(&self.0, "Automations", &format!("Hivemind could not record ${usd:.2} of automation spending ({e}); today's total may be too low"));
+        }
     }
     fn stop(&self, started: &automations::Started) {
         let state = self.0.state::<AppState>();

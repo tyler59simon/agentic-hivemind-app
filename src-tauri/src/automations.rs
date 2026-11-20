@@ -527,6 +527,15 @@ impl Automations {
         self.write_runs(&row.automation, &rows)
     }
 
+    /// Write a run's row once its action is under way and nothing can be undone. A failure is told to the user, since the
+    /// run's history (and whether its automation counts as busy) may be wrong until the next start (Codex review F15-2).
+    fn keep_run(&self, row: &RunRow, doer: &dyn Doer) {
+        if let Err(e) = self.put_run(row) {
+            let name = self.list().into_iter().find(|a| a.id == row.automation).map_or_else(|| "Automation".to_string(), |a| a.name);
+            doer.notify(&name, &format!("Hivemind could not save this run ({e}); its history may be wrong until Hivemind restarts"));
+        }
+    }
+
     fn find_run(&self, run: &str) -> Option<RunRow> {
         self.all_runs().into_iter().find(|r| r.id == run)
     }
@@ -742,7 +751,7 @@ impl Automations {
             // end leaves a session's process running). Until it is, the automation counts as busy, so no new run of it
             // starts beside it.
             let kept = RunRow { session: row.session, workflow: row.workflow, ..cancelled };
-            let _ = self.put_run(&kept);
+            self.keep_run(&kept, doer);
             let kept = self.take_early(kept, doer).0;
             drop(admit);
             doer.stop(&child);
@@ -753,7 +762,7 @@ impl Automations {
         if seen.is_some() && row.state != RunState::Failed {
             self.mark_ran(&a.id, row.at, seen);
         }
-        let _ = self.put_run(&row);
+        self.keep_run(&row, doer);
         if starts {
             row = self.take_early(row, doer).0;
             self.start_done(&a.id);
@@ -802,7 +811,7 @@ impl Automations {
             row.cost_usd = ended.cost;
             row.ended_at = Some(now_ms());
         }
-        let _ = self.put_run(&row);
+        self.keep_run(&row, doer);
         doer.charge(cost);
         row
     }
@@ -1251,6 +1260,23 @@ mod tests {
         let def = Automation { id: String::new(), enabled: true, project: Some("p".into()), repo: Some("r".into()), last_seen: Some("--output=x".into()), ..templates().into_iter().find(|t| t.id == "commit-capture").unwrap() };
         assert_eq!(autos.put(def, now_ms()).unwrap().last_seen, None);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_run_that_cannot_be_saved_says_so_and_still_counts_its_cost() {   // Codex review F15-2
+        let store = store();
+        let (role, _) = starting(&store);
+        let autos = &store.1;
+        let doer = Fake { session: true, ..Default::default() };
+        assert_eq!(autos.fire(&role.id, "manual", None, &doer).unwrap().state, RunState::Running);
+        // A folder where the temporary file goes: every write of this automation's runs fails.
+        std::fs::create_dir(store.0.join("automation-runs").join(format!("{}.tmp", role.id))).unwrap();
+        let ended = autos.finished(Some("s1"), None, true, "done".into(), Some(0.2), &doer).unwrap();
+        assert_eq!(ended.state, RunState::Succeeded);
+        let notes = doer.notes.lock().unwrap().clone();
+        assert!(notes.iter().any(|n| n.starts_with(&format!("{}: Hivemind could not save this run", role.name))), "{notes:?}");
+        assert_eq!(*doer.charged.lock().unwrap(), [0.2]);
+        let _ = std::fs::remove_dir_all(&store.0);
     }
 
     #[test]
