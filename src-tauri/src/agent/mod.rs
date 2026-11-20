@@ -2991,6 +2991,19 @@ mod tests {
     }
 
     #[test]
+    fn a_stop_followed_by_an_exit_without_a_result_is_stopped_not_an_error() {
+        // The CLI reads the interrupt line and exits without a result.
+        let rig = Rig::scripted("stop-then-exit", &[&["<", INIT, "<"]]);
+        let started = rig.begin();
+        wait_for(&rig.seen, &started.id, "the start", |events| events.iter().any(|event| matches!(event.event, RunEvent::Started { .. })));
+        rig.manager.interrupt(&started.id).unwrap();
+        let live = rig.turns(&started.id, 1);
+        assert!(matches!(&live.last().unwrap().event, RunEvent::TurnFinished { ok: false, outcome: TurnEnd::Stopped, reason: None, .. }), "{:?}", kinds(&live));
+        assert!(!live.iter().any(|event| matches!(event.event, RunEvent::Finished { .. })));
+        assert_eq!(rig.info(&started.id).status, Status::Idle);
+    }
+
+    #[test]
     fn process_that_never_starts_fails_the_session() {
         let nothing: &[&str] = &[];
         let rig = Rig::scripted("never-starts", &[nothing]);
