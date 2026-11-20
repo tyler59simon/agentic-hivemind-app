@@ -109,6 +109,7 @@ Hermes Agent learns skills with a forked reviewer after turns, prefers patching,
 
 - Sessions stop when Hivemind exits; automations run only while it runs.
 - A role or workflow run is admitted only when its budget per session fits in what is left of the automation budget, but nothing is reserved: runs that start together all see the same balance, and a workflow can spend its session budget once per task.
+- A workflow task stopped by a cancel before its turn ended counts toward its automation what its session had reported by then; a cost the session reports later is not added.
 - Credential removal before the reviewer call is a pattern match; a secret of an unknown shape in a session or commit still reaches Claude.
 - Every session is denied `--output`, `--ext-diff` and `--textconv` with any git command, but a diff helper or text conversion the repository's own git config sets up still runs for a plain `git diff`, as it does for the user.
 - Role sessions load the user's own Claude Code settings, for Living Memory's hooks, so the user's allow rules apply in them too; only the deny rules Hivemind adds (destructive git, governed Living Memory commands, unsafe git options, the architecture folder) win over them.
