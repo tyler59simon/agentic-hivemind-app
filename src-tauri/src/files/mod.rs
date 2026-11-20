@@ -3,6 +3,7 @@
 //! `FileFormat` and written back on save.
 pub mod atomic;
 pub mod contain;
+pub mod encoding;
 pub mod guard;
 pub mod watch;
 
@@ -15,16 +16,15 @@ use std::time::UNIX_EPOCH;
 
 /// Files above this open in the large-file viewer (NS-6B), never in an editor.
 pub const MAX_READ: u64 = 64 * 1024 * 1024;
-/// A NUL byte this early means the file is binary.
-const SNIFF: usize = 8000;
-const BOM: &[u8] = b"\xEF\xBB\xBF";
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Eol {
     Lf,
     Crlf,
-    /// More than one style, or lone CRs: shown read-only until NS-6A lets the user choose one.
+    /// Lone carriage returns only (classic Mac OS files).
+    Cr,
+    /// More than one style: shown read-only until NS-6A lets the user choose one.
     Mixed,
     /// No line break at all.
     None,
@@ -32,10 +32,13 @@ pub enum Eol {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct FileFormat {
-    /// An encoding_rs name. Only "UTF-8" is written in NS-1A.
+    /// An encoding_rs name: "UTF-8", "UTF-16LE", "UTF-16BE", "windows-1252", ...
     pub encoding: String,
     pub bom: bool,
     pub eol: Eol,
+    /// How the encoding was found: a byte order mark, valid bytes, or a guess.
+    #[serde(default)]
+    pub confidence: encoding::Confidence,
 }
 
 /// What the webview gets for an open file.
@@ -50,6 +53,9 @@ pub struct Loaded {
     /// Why the file cannot be edited; None when it can.
     pub read_only: Option<String>,
     pub binary: bool,
+    /// Read-only only because of its encoding, so Convert to UTF-8 makes it editable (NS-1B).
+    #[serde(default)]
+    pub convertible: bool,
 }
 
 /// The identity of a file's bytes, used as a save precondition.
@@ -109,46 +115,40 @@ pub fn detect_eol(text: &str) -> Eol {
         (0, 0, 0) => Eol::None,
         (_, 0, 0) => Eol::Lf,
         (0, _, 0) => Eol::Crlf,
+        (0, 0, _) => Eol::Cr,
         _ => Eol::Mixed,
     }
 }
 
-/// Decode a file's bytes for the editor.
+/// Decode a file's bytes for the editor (NS-1B: any encoding `files::encoding` detects). The text has LF line breaks;
+/// the encoding, byte order mark and line-ending style go into the format and are written back on save.
 pub fn decode(bytes: &[u8]) -> (String, FileFormat, Option<String>, bool) {
-    let utf8 = FileFormat { encoding: "UTF-8".into(), bom: false, eol: Eol::None };
-    if bytes.iter().take(SNIFF).any(|b| *b == 0) {
-        return (String::new(), utf8, Some("This is not a text file".into()), true);
+    let d = encoding::decode(bytes);
+    let mut format = FileFormat { encoding: d.encoding.to_string(), bom: d.bom, eol: Eol::None, confidence: d.confidence };
+    if d.binary {
+        return (String::new(), format, d.read_only, true);
     }
-    let (bom, body) = match bytes.strip_prefix(BOM) {
-        Some(rest) => (true, rest),
-        None => (false, bytes),
+    format.eol = detect_eol(&d.text);
+    let read_only = d.read_only.or_else(|| (format.eol == Eol::Mixed).then(|| "This file mixes line-ending styles".to_string()));
+    let text = match format.eol {
+        Eol::Lf | Eol::None => d.text,
+        _ => d.text.replace("\r\n", "\n").replace('\r', "\n"),
     };
-    let (text, read_only) = match std::str::from_utf8(body) {
-        Ok(text) => (text.to_string(), None),
-        Err(_) => (String::from_utf8_lossy(body).into_owned(), Some("This file is not UTF-8. Other encodings arrive in a later version".to_string())),
-    };
-    let eol = detect_eol(&text);
-    let read_only = read_only.or_else(|| (eol == Eol::Mixed).then(|| "This file mixes line-ending styles".to_string()));
-    let text = if eol == Eol::Lf || eol == Eol::None { text } else { text.replace("\r\n", "\n").replace('\r', "\n") };
-    (text, FileFormat { encoding: "UTF-8".into(), bom, eol }, read_only, false)
+    (text, format, read_only, false)
 }
 
-/// The bytes to write for editor text in `format`.
+/// The bytes to write for editor text in `format`. Characters the encoding cannot hold refuse the save.
 pub fn encode(text: &str, format: &FileFormat) -> Result<Vec<u8>, String> {
-    if !format.encoding.eq_ignore_ascii_case("UTF-8") {
-        return Err(format!("Saving in {} is not supported yet", format.encoding));
-    }
     if format.eol == Eol::Mixed {
         return Err("This file mixes line-ending styles, so Hivemind does not save it".into());
     }
     let text = text.replace("\r\n", "\n");
-    let text = if format.eol == Eol::Crlf { text.replace('\n', "\r\n") } else { text };
-    let mut bytes = Vec::with_capacity(text.len() + 3);
-    if format.bom {
-        bytes.extend_from_slice(BOM);
-    }
-    bytes.extend_from_slice(text.as_bytes());
-    Ok(bytes)
+    let text = match format.eol {
+        Eol::Crlf => text.replace('\n', "\r\n"),
+        Eol::Cr => text.replace('\n', "\r"),
+        _ => text,
+    };
+    encoding::encode(&text, &format.encoding, format.bom)
 }
 
 // Tests run code here between a check and the act it guards, to show that nothing slips in between.
@@ -192,10 +192,14 @@ pub fn read(path: &Path) -> Result<Loaded, String> {
     }
     let bytes = std::fs::read(path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
     let (text, format, mut read_only, binary) = decode(&bytes);
-    if read_only.is_none() && meta.permissions().readonly() {
+    let attribute = meta.permissions().readonly();
+    // Converting helps only when the encoding is the reason: not for a binary file, mixed line endings or a file
+    // marked read-only.
+    let convertible = read_only.is_some() && !binary && format.eol != Eol::Mixed && !attribute;
+    if read_only.is_none() && attribute {
         read_only = Some("This file is read-only on disk".into());
     }
-    Ok(Loaded { text, stamp: Stamp { sha256: sha256(&bytes), size: bytes.len() as u64, mtime_ms: mtime_ms(&meta) }, format, read_only, binary })
+    Ok(Loaded { text, stamp: Stamp { sha256: sha256(&bytes), size: bytes.len() as u64, mtime_ms: mtime_ms(&meta) }, format, read_only, binary, convertible })
 }
 
 /// One lock per file, so two saves of the same path never interleave between the hash check and the rename.
@@ -241,17 +245,22 @@ pub fn is_own_write(path: &Path) -> bool {
 }
 
 /// Why bytes on disk must not be replaced by editor text: they are not text Hivemind can edit, so the text the user
-/// merged against was not their real content (Codex review of 32fd236, D3).
-fn not_editable(bytes: &[u8]) -> Option<String> {
+/// merged against was not their real content (Codex review of 32fd236, D3). With `convert` (the user chose Convert to
+/// UTF-8 for this file), text that does not decode may be replaced; a binary file never is.
+fn not_editable(bytes: &[u8], convert: bool) -> Option<String> {
     let (_, _, read_only, binary) = decode(bytes);
     if binary {
         return Some("The file on disk is no longer a text file. Your edits are kept as a draft".into());
     }
+    if convert {
+        return None;
+    }
     read_only.map(|why| format!("The file on disk changed to something Hivemind cannot save over ({why}). Your edits are kept as a draft"))
 }
 
-/// Save editor text over a file that still holds the bytes the editor loaded.
-pub fn save(path: &Path, text: &str, pre: &Stamp, format: &FileFormat) -> Result<SaveOutcome, String> {
+/// Save editor text over a file that still holds the bytes the editor loaded. `convert` is set once the user chose
+/// Convert to UTF-8 for a file that opened read-only.
+pub fn save(path: &Path, text: &str, pre: &Stamp, format: &FileFormat, convert: bool) -> Result<SaveOutcome, String> {
     let bytes = encode(text, format)?;
     let lock = lock_for(path);
     let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -277,7 +286,7 @@ pub fn save(path: &Path, text: &str, pre: &Stamp, format: &FileFormat) -> Result
     if sha != pre.sha256 {
         return Ok(SaveOutcome::Stale { sha256: sha });
     }
-    if let Some(why) = not_editable(&current) {
+    if let Some(why) = not_editable(&current, convert) {
         return Err(why);
     }
     if held.file.metadata().map(|m| m.permissions().readonly()).unwrap_or(false) {
@@ -397,7 +406,8 @@ mod tests {
         assert_eq!(detect_eol("a\nb\n"), Eol::Lf);
         assert_eq!(detect_eol("a\r\nb\r\n"), Eol::Crlf);
         assert_eq!(detect_eol("a\r\nb\n"), Eol::Mixed);
-        assert_eq!(detect_eol("a\rb"), Eol::Mixed);
+        assert_eq!(detect_eol("a\rb"), Eol::Cr);
+        assert_eq!(detect_eol("a\rb\n"), Eol::Mixed);
         assert_eq!(detect_eol("one line"), Eol::None);
     }
 
@@ -413,9 +423,9 @@ mod tests {
     }
 
     #[test]
-    fn binary_non_utf8_and_mixed_files_are_read_only() {
+    fn binary_undecodable_and_mixed_files_are_read_only() {
         assert!(decode(b"PK\x03\x04\x00\x00").3);
-        assert!(decode(b"caf\xe9").2.unwrap().contains("not UTF-8"));
+        assert!(decode(b"caf\xc3\xa9 \xff").2.unwrap().contains("not valid UTF-8"));
         let (_, format, read_only, _) = decode(b"a\r\nb\n");
         assert!(read_only.unwrap().contains("line-ending"));
         assert!(encode("a\nb", &format).is_err());
@@ -423,7 +433,7 @@ mod tests {
 
     #[test]
     fn a_text_with_no_line_break_gains_lf_breaks() {
-        let format = FileFormat { encoding: "UTF-8".into(), bom: false, eol: Eol::None };
+        let format = FileFormat { encoding: "UTF-8".into(), bom: false, eol: Eol::None, confidence: Default::default() };
         assert_eq!(encode("a\nb", &format).unwrap(), b"a\nb");
     }
 
@@ -433,16 +443,16 @@ mod tests {
         let page = dir.join("Page.md");
         std::fs::write(&page, "one\n").unwrap();
         let loaded = read(&page).unwrap();
-        assert_eq!(save(&page, "two\n", &loaded.stamp, &loaded.format).unwrap(), SaveOutcome::Saved(read(&page).unwrap().stamp));
+        assert_eq!(save(&page, "two\n", &loaded.stamp, &loaded.format, false).unwrap(), SaveOutcome::Saved(read(&page).unwrap().stamp));
         assert_eq!(std::fs::read_to_string(&page).unwrap(), "two\n");
         // The first stamp is now stale.
-        match save(&page, "three\n", &loaded.stamp, &loaded.format).unwrap() {
+        match save(&page, "three\n", &loaded.stamp, &loaded.format, false).unwrap() {
             SaveOutcome::Stale { sha256: now } => assert_eq!(now, sha256(b"two\n")),
             other => panic!("{other:?}"),
         }
         assert_eq!(std::fs::read_to_string(&page).unwrap(), "two\n");
         std::fs::remove_file(&page).unwrap();
-        assert_eq!(save(&page, "four\n", &loaded.stamp, &loaded.format).unwrap(), SaveOutcome::Gone);
+        assert_eq!(save(&page, "four\n", &loaded.stamp, &loaded.format, false).unwrap(), SaveOutcome::Gone);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -454,10 +464,10 @@ mod tests {
         std::fs::write(&page, "one\n").unwrap();
         let loaded = read(&page).unwrap();
         let writer = std::fs::OpenOptions::new().append(true).open(&page).unwrap();
-        assert!(save(&page, "two\n", &loaded.stamp, &loaded.format).unwrap_err().contains("in use"));
+        assert!(save(&page, "two\n", &loaded.stamp, &loaded.format, false).unwrap_err().contains("in use"));
         drop(writer);
         assert_eq!(std::fs::read_to_string(&page).unwrap(), "one\n");
-        assert!(matches!(save(&page, "two\n", &loaded.stamp, &loaded.format).unwrap(), SaveOutcome::Saved(_)));
+        assert!(matches!(save(&page, "two\n", &loaded.stamp, &loaded.format, false).unwrap(), SaveOutcome::Saved(_)));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -468,7 +478,7 @@ mod tests {
         std::fs::write(&page, "one\n").unwrap();
         let loaded = read(&page).unwrap();
         let reader = std::fs::File::open(&page).unwrap();
-        assert!(matches!(save(&page, "two\n", &loaded.stamp, &loaded.format).unwrap(), SaveOutcome::Saved(_)));
+        assert!(matches!(save(&page, "two\n", &loaded.stamp, &loaded.format, false).unwrap(), SaveOutcome::Saved(_)));
         drop(reader);
         assert_eq!(std::fs::read_to_string(&page).unwrap(), "two\n");
         std::fs::remove_dir_all(&dir).unwrap();
@@ -583,6 +593,50 @@ mod tests {
     }
 
     #[test]
+    fn every_supported_encoding_saves_one_changed_line_and_nothing_else() {
+        // NS-1B exit criterion: windows-1252, UTF-16 LE with a BOM and CRLF UTF-8 each change one line on save.
+        let dir = scratch();
+        let cases: [(&str, Vec<u8>); 3] = [
+            ("cp1252.txt", b"caf\xe9 one\r\nna\xefve two\r\nthree\r\n".to_vec()),
+            ("utf16.txt", [&[0xFF, 0xFE][..], &"one \u{e9}\r\ntwo\r\nthree\r\n".encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>()].concat()),
+            ("crlf.md", b"# one\r\ntwo\r\nthree".to_vec()),
+        ];
+        for (name, bytes) in cases {
+            let path = dir.join(name);
+            std::fs::write(&path, &bytes).unwrap();
+            let loaded = read(&path).unwrap();
+            assert_eq!(loaded.read_only, None, "{name}");
+            assert_eq!(encode(&loaded.text, &loaded.format).unwrap(), bytes, "{name}: unchanged text gives the same bytes");
+            let edited = loaded.text.replacen("two", "TWO", 1);
+            assert!(matches!(save(&path, &edited, &loaded.stamp, &loaded.format, false).unwrap(), SaveOutcome::Saved(_)));
+            let after = std::fs::read(&path).unwrap();
+            let expected = encode(&edited, &loaded.format).unwrap();
+            assert_eq!(after, expected, "{name}");
+            let changed = after.iter().zip(&bytes).filter(|(a, b)| a != b).count();
+            assert!(changed > 0 && changed <= 6, "{name}: only the edited letters changed ({changed} bytes)");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn convert_to_utf8_saves_over_undecodable_text_but_never_binary() {
+        let dir = scratch();
+        let path = dir.join("Broken.txt");
+        let bytes = b"caf\xc3\xa9 \xff\n".to_vec();
+        std::fs::write(&path, &bytes).unwrap();
+        let loaded = read(&path).unwrap();
+        assert!(loaded.read_only.is_some() && loaded.convertible);
+        let utf8 = FileFormat { encoding: "UTF-8".into(), bom: false, eol: loaded.format.eol, confidence: Default::default() };
+        assert!(save(&path, &loaded.text, &loaded.stamp, &utf8, false).is_err(), "not without Convert");
+        assert!(matches!(save(&path, &loaded.text, &loaded.stamp, &utf8, true).unwrap(), SaveOutcome::Saved(_)));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "café \u{fffd}\n");
+        std::fs::write(&path, b"PK\x03\x04\x00\x00").unwrap();
+        let stamp = Stamp { sha256: sha256(b"PK\x03\x04\x00\x00"), size: 6, mtime_ms: 0 };
+        assert!(save(&path, "x", &stamp, &utf8, true).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn trash_with_a_stamp_moves_only_those_bytes() {
         let dir = scratch();
         std::fs::write(dir.join("Page.md"), "seen").unwrap();
@@ -613,12 +667,13 @@ mod tests {
     fn a_save_never_replaces_a_file_that_became_binary_or_undecodable() {
         let dir = scratch();
         let page = dir.join("Turned.md");
-        let format = FileFormat { encoding: "UTF-8".into(), bom: false, eol: Eol::Lf };
-        for bytes in [&b"PK\x03\x04\x00\x00"[..], &b"caf\xe9\n"[..]] {
+        let format = FileFormat { encoding: "UTF-8".into(), bom: false, eol: Eol::Lf, confidence: Default::default() };
+        // Since NS-1B Latin-1 bytes are an editable windows-1252 page; UTF-8 with a bad byte is still not editable.
+        for bytes in [&b"PK\x03\x04\x00\x00"[..], &b"caf\xc3\xa9 \xff\n"[..]] {
             std::fs::write(&page, bytes).unwrap();
             // The stamp of the bytes now on disk, as a merge against them would carry.
             let stamp = Stamp { sha256: sha256(bytes), size: bytes.len() as u64, mtime_ms: 0 };
-            assert!(save(&page, "merged text\n", &stamp, &format).unwrap_err().contains("draft"));
+            assert!(save(&page, "merged text\n", &stamp, &format, false).unwrap_err().contains("draft"));
             assert_eq!(std::fs::read(&page).unwrap(), bytes);
         }
         std::fs::remove_dir_all(&dir).unwrap();
@@ -635,7 +690,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&page).unwrap(), "previous\n");
         std::fs::remove_file(&page).unwrap();
         std::fs::write(atomic::beside(&page, "old-").unwrap(), "previous\n").unwrap();
-        assert!(matches!(save(&page, "next\n", &loaded.stamp, &loaded.format).unwrap(), SaveOutcome::Saved(_)));
+        assert!(matches!(save(&page, "next\n", &loaded.stamp, &loaded.format, false).unwrap(), SaveOutcome::Saved(_)));
         assert_eq!(std::fs::read_to_string(&page).unwrap(), "next\n");
         std::fs::remove_dir_all(&dir).unwrap();
     }

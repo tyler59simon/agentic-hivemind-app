@@ -5,9 +5,13 @@ import remarkGfm from "remark-gfm";
 import { MermaidPre } from "../../ui/Mermaid";
 import { useWorkspace } from "../../workspace/store";
 import { remarkWikilinks, WIKI_PREFIX } from "../viewer/remarkWikilinks";
+import { pictureUrl } from "./pictures";
 
-/** A Markdown page as it reads. `[[links]]` call `onLink`; web links open in the browser; nothing navigates the app. */
-export function PageView({ text, tabId, onLink }: { text: string; tabId: string; onLink: (target: string, split: boolean) => void }) {
+/** A Markdown page as it reads. `[[links]]` call `onLink`; web links open in the browser; nothing navigates the app.
+ *  Pictures beside the page load through `hmfile` from `pictures.base` (the grant's prefix), relative to `folder`. */
+export function PageView({ text, tabId, onLink, pictures }: {
+  text: string; tabId: string; onLink: (target: string, split: boolean) => void; pictures?: { base?: string; folder: string };
+}) {
   const reveal = useWorkspace((s) => s.reveal);
   useEffect(() => {
     if (reveal?.tabId === tabId) document.getElementById(`${tabId}-l${reveal.line}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -25,12 +29,14 @@ export function PageView({ text, tabId, onLink }: { text: string; tabId: string;
     };
     return {
       a: ({ href, children }) => link(href, children),
-      // Pictures arrive with NS-1B, which lets the webview read notebook files; until then the alt text stands in.
-      img: ({ alt, src }) => <span className="muted" title={src}>[{alt || "image"}]</span>,
+      img: ({ alt, src }) => {
+        const url = pictureUrl(typeof src === "string" ? src : undefined, pictures?.base, pictures?.folder ?? "");
+        return url ? <img src={url} alt={alt ?? ""} loading="lazy" /> : <span className="muted" title={typeof src === "string" ? src : undefined}>[{alt || "image"}]</span>;
+      },
       pre: MermaidPre,
       h1: heading("h1"), h2: heading("h2"), h3: heading("h3"), h4: heading("h4"), h5: heading("h5"), h6: heading("h6"),
     };
-  }, [tabId, onLink]);
+  }, [tabId, onLink, pictures?.base, pictures?.folder]);
   return (
     <article className="note page-view">
       <div className="markdown">

@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import { keyOf, useDocuments } from "../documents/store";
 import { notebooksQuery } from "../lib/notebooks";
+import { isLoose, recentQuery, recentRef } from "../lib/opens";
 import { outline } from "../lib/note";
 import { SourceHistory } from "../features/history/HistoryViews";
 import { LinksPanel, LocalGraphPanel } from "../features/links/LinksPanel";
@@ -58,9 +59,13 @@ export function PageRail() {
   const tab = useWorkspace(activeTab);
   const notebooks = useQuery(notebooksQuery());
   const base = useDocuments((s) => (tab?.file ? s.docs[keyOf(tab.file)]?.base : undefined));
+  const recent = useQuery({ ...recentQuery(), enabled: !!tab?.file && isLoose(tab.file) });
   if (!tab?.file) return <aside className="note-rail"><p className="muted">Open a page to see its outline.</p></aside>;
   const nb = notebooks.data?.find((n) => n.id === tab.file!.notebook);
-  const rows: [string, ReactNode][] = [["Notebook", nb?.title ?? tab.file.notebook], ["Path", <code>{tab.file.path}</code>]];
+  const full = recent.data?.find((r) => recentRef(r).notebook === tab.file!.notebook)?.path;
+  const rows: [string, ReactNode][] = isLoose(tab.file)
+    ? [["File", <code>{full ?? tab.file.path}</code>]]
+    : [["Notebook", nb?.title ?? tab.file.notebook], ["Path", <code>{tab.file.path}</code>]];
   if (base) {
     rows.push(["Size", `${base.stamp.size.toLocaleString()} bytes`], ["Modified", new Date(base.stamp.mtimeMs).toLocaleString()]);
     rows.push(["Format", `${base.format.encoding}${base.format.bom ? " with BOM" : ""}, ${base.format.eol.toUpperCase()} line endings`]);
@@ -77,7 +82,7 @@ export function PageRail() {
   );
 }
 
-const RAIL_VIEWS: Record<TabKind, () => ReactNode> = { note: () => <NoteRail />, "new-note": () => <NoteRail />, file: () => <PageRail /> };
+const RAIL_VIEWS: Record<TabKind, () => ReactNode> = { note: () => <NoteRail />, "new-note": () => <NoteRail />, file: () => <PageRail />, "new-file": () => <PageRail /> };
 
 /** The rail for whatever the focused tab shows. */
 export function ContextRail() {

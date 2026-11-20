@@ -33,6 +33,7 @@ const toLoaded = (raw: RawLoaded): Loaded => ({
   format: raw.format,
   readOnly: raw.readOnly,
   binary: raw.binary,
+  convertible: raw.convertible,
 });
 
 export const keyOf = (ref: FileRef) => docKey({ kind: "file", file: ref });
@@ -125,6 +126,13 @@ async function load(key: string, ref: FileRef, attempt: number) {
     const loaded = toLoaded(await readFile(ref.notebook, ref.path));
     const draft = await getFileDraft(await draftKeyOf(key)).catch(() => null);
     if (!current(key, attempt)) return;
+    // A page the user was converting to UTF-8 comes back converted, with its edits.
+    if (draft?.convert && loaded.convertible && draft.precondition.sha256 === loaded.stamp.sha256) {
+      dispatch(key, { type: "loaded", loaded });
+      dispatch(key, { type: "convert" });
+      dispatch(key, { type: "edited", text: draft.mine });
+      return;
+    }
     if (!draft || loaded.readOnly || loaded.binary) { dispatch(key, { type: "loaded", loaded }); return; }
     if (draft.precondition.sha256 === loaded.stamp.sha256) {
       dispatch(key, { type: "loaded", loaded, draft: { text: draft.mine, at: draft.savedAt } });
@@ -203,6 +211,7 @@ async function keepDraft(key: string, s: DocState | undefined, ref: FileRef | un
     await putDraft({
       key: draftKey, kind: "file", target: ref, precondition: s.base.stamp, format: s.base.format,
       base: utf8Bytes(s.base.text) <= BASE_LIMIT ? s.base.text : undefined, mine: s.text, savedAt: new Date().toISOString(),
+      convert: s.convert || undefined,
     });
     kept.set(key, s.text);
     drafted(key, ref, null);
@@ -245,6 +254,12 @@ export function draftsPending(): boolean {
     || Object.entries(docs).some(([k, d]) => isUnsaved(d) && kept.get(k) !== d.text);
 }
 
+/** Convert to UTF-8: the page becomes editable and the next save writes UTF-8 (NS-1B). */
+export function convertToUtf8(key: string) {
+  dispatch(key, { type: "convert" });
+  scheduleDraft(key);
+}
+
 export function edit(key: string, text: string) {
   dispatch(key, { type: "edited", text });
   scheduleDraft(key);
@@ -259,7 +274,7 @@ export async function save(key: string) {
   const generation = generations.get(key);
   const run = (async () => {
     try {
-      const out = await saveFile(ref.notebook, ref.path, text, s.base!.stamp, s.base!.format);
+      const out = await saveFile(ref.notebook, ref.path, text, s.base!.stamp, s.base!.format, !!s.convert);
       if (!current(key, generation)) return;
       if (out.status === "saved") {
         dispatch(key, { type: "saved", stamp: { sha256: out.sha256, size: out.size, mtimeMs: out.mtimeMs } });

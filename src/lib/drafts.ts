@@ -25,6 +25,8 @@ export interface FileDraft {
   base?: string;
   mine: string;
   savedAt: string;
+  /** The user chose Convert to UTF-8 for this page. */
+  convert?: boolean;
 }
 
 export type Draft = NoteDraft | FileDraft;

@@ -25,6 +25,7 @@ import { toast, Toasts } from "./ui/toast";
 import { useWorkspace } from "./workspace/store";
 import { onFilesChanged, startDocumentSync } from "./documents/sync";
 import { draftsPending, flushAllDrafts, onDraftLost } from "./documents/store";
+import { useOpenRequests } from "./features/notes/opening";
 import { newPageHere } from "./features/notes/actions";
 import type { FilesChanged } from "./lib/notebooks";
 
@@ -79,7 +80,8 @@ function useKeepDrafts() {
 /** Closing the window hides it to the tray while anything runs, or when that is on (the quick-capture hotkey keeps working);
  *  otherwise, with unsaved edits, it asks first (the drafts survive either way). */
 function useCloseGuard() {
-  const [asking, setAsking] = useState(false);
+  // Whether any unsaved tab is a never-saved text file, which has no draft.
+  const [asking, setAsking] = useState<{ untitled: boolean } | null>(null);
   const [keepDrafts, draftDialog] = useKeepDrafts();
   useEffect(() => {
     const win = getCurrentWindow();
@@ -93,7 +95,12 @@ function useCloseGuard() {
       }
       const status = await captureStatus().catch(() => null);
       if (status?.close_to_tray) { e.preventDefault(); await win.hide(); return; }
-      if (Object.values(useWorkspace.getState().dirty).some(Boolean)) { e.preventDefault(); setAsking(true); return; }
+      const ws = useWorkspace.getState();
+      if (Object.values(ws.dirty).some(Boolean)) {
+        e.preventDefault();
+        setAsking({ untitled: ws.panes.some((p) => p.tabs.some((t) => t.kind === "new-file" && ws.dirty[t.id])) });
+        return;
+      }
       // No unsaved tab, but a closed page's draft may still be on its way, or have failed: write or report it first
       // (Codex re-review of b82e9ab, N3).
       if (draftsPending()) { e.preventDefault(); void keepDrafts(() => { void getCurrentWindow().destroy(); }); }
@@ -104,8 +111,8 @@ function useCloseGuard() {
     <>
       {asking && (
         <Confirm title="Quit with unsaved changes?" danger action="Quit"
-          message="Some tabs have edits that are not saved. They are kept as drafts and come back when you reopen those notes and pages."
-          onAnswer={(yes) => { setAsking(false); if (yes) void keepDrafts(() => { void getCurrentWindow().destroy(); }); }} />
+          message={`Some tabs have edits that are not saved. They are kept as drafts and come back when you reopen those notes and pages.${asking.untitled ? " A new text file that was never saved is lost." : ""}`}
+          onAnswer={(yes) => { setAsking(null); if (yes) void keepDrafts(() => { void getCurrentWindow().destroy(); }); }} />
       )}
       {draftDialog}
     </>
@@ -183,6 +190,7 @@ export default function App() {
   useAttentionEvents();
   const closeGuard = useCloseGuard();
   const quitDialog = useQuitRequest();
+  const folderOffer = useOpenRequests();
   useEffect(() => startDocumentSync(), []);
   useEffect(() => onDraftLost((line) => toast(`Unsaved edits could not be kept as a draft: ${line}`, "error")), []);
   useEffect(() => { if (link.data) useConnection.getState().set(link.data.version); }, [link.data]);
@@ -197,7 +205,7 @@ export default function App() {
   const reconnect = useCallback(() => { setSettings(false); client.resetQueries(); }, [client]);
 
   // The dialogs belong to every branch: tray Quit must show its dialog while Settings is open or the connection has failed.
-  const dialogs = <>{closeGuard}{quitDialog}</>;
+  const dialogs = <>{closeGuard}{quitDialog}{folderOffer}</>;
   if (link.isLoading) return <><main className="center muted">Connecting to Living Memory…</main>{dialogs}</>;
   const outdated = link.isSuccess && needsLmUpdate(link.data.version);
   if (link.error || outdated || settings) {

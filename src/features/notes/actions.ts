@@ -80,7 +80,7 @@ export function renamed(path: string, name: string, section = false) {
 }
 
 /** Close every tab showing `path` or a page under it; returns the pages they showed. */
-function closeTabsUnder(notebook: string, path: string) {
+export function closeTabsUnder(notebook: string, path: string) {
   const ws = useWorkspace.getState();
   const closed = new Map<string, FileRef>();
   for (const pane of ws.panes) {
@@ -121,6 +121,7 @@ export async function trashPath(client: QueryClient, notebook: string, path: str
 export async function newPageHere(client: QueryClient) {
   const notebooks = await client.ensureQueryData(notebooksQuery());
   const { notebook, folder } = currentNotebook(notebooks[0]?.id);
-  if (!notebook) { toast("Add a notebook first: pick any folder of Markdown files.", "warn"); return; }
+  // With no notebook yet, Ctrl+N starts an untitled text file (NS-1B).
+  if (!notebook) { useWorkspace.getState().openTab({ kind: "new-file" }); return; }
   await newPage(client, notebook, folder).catch((e) => toast(classify(e).message, "error"));
 }

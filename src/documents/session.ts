@@ -3,7 +3,7 @@
 import type { FileFormat, Stamp } from "../lib/notebooks";
 
 /** A file as read from disk. */
-export interface Loaded { text: string; stamp: Stamp; format: FileFormat; readOnly: string | null; binary: boolean }
+export interface Loaded { text: string; stamp: Stamp; format: FileFormat; readOnly: string | null; binary: boolean; convertible?: boolean }
 
 export type Status = "loading" | "clean" | "dirty" | "saving" | "stale" | "readOnly" | "error";
 export type Banner =
@@ -28,6 +28,8 @@ export interface DocState {
   saving?: string;
   /** Why the latest unsaved edits could not be kept as a draft; cleared when a draft write succeeds. */
   draftError?: string;
+  /** The user chose Convert to UTF-8: the next save writes UTF-8 over bytes that did not decode (NS-1B). */
+  convert?: boolean;
 }
 
 export type DocEvent =
@@ -42,11 +44,12 @@ export type DocEvent =
   | { type: "reloaded"; theirs: Loaded }
   | { type: "failed"; error: string }
   | { type: "draft"; error: string | null }
+  | { type: "convert" }
   | { type: "dismiss" };
 
 export const initial: DocState = { status: "loading", base: null, text: "", version: 0 };
 
-const dirtyOr = (s: DocState, text: string): Status => (s.base && text === s.base.text ? "clean" : "dirty");
+const dirtyOr = (s: DocState, text: string): Status => (s.base && text === s.base.text && !s.convert ? "clean" : "dirty");
 
 export function reduce(s: DocState, e: DocEvent): DocState {
   switch (e.type) {
@@ -66,7 +69,7 @@ export function reduce(s: DocState, e: DocEvent): DocState {
     case "saved": {
       if (!s.base || s.saving === undefined) return s;
       const base = { ...s.base, text: s.saving, stamp: e.stamp };
-      return { ...s, base, saving: undefined, status: s.text === s.saving ? "clean" : "dirty", banner: undefined, theirs: undefined };
+      return { ...s, base, saving: undefined, status: s.text === s.saving ? "clean" : "dirty", banner: undefined, theirs: undefined, convert: undefined };
     }
     case "stale":
       return { ...s, status: "stale", saving: undefined, theirs: e.theirs };
@@ -93,6 +96,14 @@ export function reduce(s: DocState, e: DocEvent): DocState {
       return s.base ? { ...s, status: s.status === "saving" ? "dirty" : s.status, saving: undefined, error: e.error } : { ...s, status: "error", error: e.error };
     case "draft":
       return e.error === (s.draftError ?? null) ? s : { ...s, draftError: e.error ?? undefined };
+    case "convert": {
+      // The page becomes editable as UTF-8 (same line endings), unsaved until written: from a read-only page whose
+      // encoding was the problem, or from an unsaved page whose characters its encoding cannot hold.
+      const from = s.status === "readOnly" ? !!s.base?.convertible : s.status === "dirty";
+      if (!s.base || s.base.binary || !from) return s;
+      const format = { ...s.base.format, encoding: "UTF-8", bom: false, confidence: "valid" as const };
+      return { ...s, status: "dirty", base: { ...s.base, format, readOnly: null }, convert: true, error: undefined };
+    }
     case "dismiss":
       return { ...s, banner: undefined, error: undefined };
   }

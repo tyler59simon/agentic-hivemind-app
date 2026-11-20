@@ -7,7 +7,9 @@ mod capture;
 mod conductor;
 mod drafts;
 mod executive;
+mod assets;
 mod files;
+mod opens;
 mod folders;
 mod git;
 mod instance;
@@ -65,6 +67,14 @@ struct AppState {
     notebook_watcher: Mutex<Option<notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>>,
     /// The Living Memory store root from the last connect; a notebook may not be inside it.
     store_root: Mutex<Option<PathBuf>>,
+    /// Files from Explorer and drops waiting for the webview (`open_pending`).
+    open_queue: Arc<opens::OpenQueue>,
+    /// Loose files the user opened, newest first (`open-files.json`).
+    grants: opens::Grants,
+    /// Folders pages may load pictures from (`hmfile`).
+    assets: assets::AssetGrants,
+    /// Folders dropped on the window, by token, for "Add as a notebook".
+    dropped_folders: Mutex<Vec<(String, PathBuf, std::time::Instant)>>,
 }
 
 #[derive(Serialize)]
@@ -1650,17 +1660,50 @@ pub fn hook_main(args: &[String]) -> Option<i32> {
     term::signal::hook_main(args)
 }
 
+/// A message for a launch that has no window of its own (it exits right after).
+#[cfg(windows)]
+fn tell(text: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OK};
+    let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    let (text, title) = (wide(text), wide("Hivemind"));
+    // SAFETY: both strings are NUL-terminated UTF-16 that outlive the call; there is no owner window.
+    unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONINFORMATION) };
+}
+
+#[cfg(not(windows))]
+fn tell(text: &str) {
+    eprintln!("{text}");
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let context = tauri::generate_context!();
     // Before any window or writer: a second copy would overwrite this one's records (EXEC-7, EXEC-12). A launch that finds
     // the data folder taken brings the running copy to the front and exits.
     let data_dir = dirs::data_dir().unwrap_or_default().join(&context.config().identifier);
+    // Files Explorer asked this launch to open ("Open with", a double-click on an associated type).
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let launch = opens::launch_paths(std::env::args_os().skip(1), &cwd);
     let owner = match instance::claim(&data_dir) {
         Ok(instance::Claim::Owner(owner)) => owner,
         Ok(instance::Claim::Taken) => {
-            if !instance::knock(&data_dir, std::time::Duration::from_secs(5)) {
-                eprintln!("Hivemind is already running but did not answer; this copy exits.");
+            let wait = std::time::Duration::from_secs(5);
+            if launch.is_empty() {
+                if !instance::knock(&data_dir, wait) {
+                    eprintln!("Hivemind is already running but did not answer; this copy exits.");
+                }
+            } else {
+                let request = instance::Knock {
+                    v: 1,
+                    id: Some(uuid::Uuid::new_v4().simple().to_string()),
+                    open: launch.iter().map(|p| p.display().to_string()).collect(),
+                    cwd: Some(cwd.display().to_string()),
+                };
+                match instance::knock_open(&data_dir, &request, wait) {
+                    instance::Delivery::Opened => {}
+                    instance::Delivery::RaisedOnly => tell("The Hivemind that is running is an older version that cannot open files. Restart Hivemind to open them."),
+                    instance::Delivery::NoAnswer => eprintln!("Hivemind is already running but did not answer; this copy exits."),
+                }
             }
             std::process::exit(0);
         }
@@ -1669,6 +1712,9 @@ pub fn run() {
             std::process::exit(1);
         }
     };
+    let open_queue = Arc::new(opens::OpenQueue::default());
+    open_queue.push(None, launch);
+    let state_queue = open_queue.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -1687,7 +1733,17 @@ pub fn run() {
                 return Err(format!("Hivemind claimed {} but writes {}", data_dir.display(), app.path().app_data_dir()?.display()).into());
             }
             let shown = app.handle().clone();
-            owner.serve(move || capture::show_main(&shown));
+            owner.serve(move |knock| {
+                // Only existing files, made absolute against the launch's folder, at most 32.
+                let cwd = knock.cwd.as_deref().map(PathBuf::from).unwrap_or_default();
+                let paths = opens::launch_paths(knock.open.iter().map(std::ffi::OsString::from), &cwd);
+                let any = !paths.is_empty();
+                open_queue.push(knock.id.as_deref(), paths);
+                capture::show_main(&shown);
+                if any {
+                    let _ = shown.emit("open-requested", ());
+                }
+            });
             files::guard::set_app_dirs(vec![app.path().app_data_dir()?, app.path().app_config_dir()?, app.path().app_local_data_dir()?]);
             let settings_path = app.path().app_config_dir()?.join("settings.json");
             let drafts_dir = app.path().app_data_dir()?.join("drafts");
@@ -1760,6 +1816,10 @@ pub fn run() {
                 notebook_meta_dir: app.path().app_data_dir()?.join("notebook-meta"),
                 notebook_watcher: Mutex::new(None),
                 store_root: Mutex::new(None),
+                open_queue: state_queue.clone(),
+                grants: opens::Grants::new(app.path().app_data_dir()?.join("open-files.json")),
+                assets: assets::AssetGrants::default(),
+                dropped_folders: Mutex::new(Vec::new()),
             });
             studio::rewatch(app.handle());
             conductor::run(report_queue, vec![session_notices(app.handle().clone()), learning_reports(app.handle().clone()), orchestration_reports(app.handle().clone()), executive_reports(app.handle().clone())]);
@@ -1776,8 +1836,23 @@ pub fn run() {
             );
             Ok(())
         })
+        // Pictures and PDFs beside a page (NS-1B). The handler reads files, so it answers off the main thread.
+        .register_asynchronous_uri_scheme_protocol(assets::SCHEME, |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            let label = ctx.webview_label().to_string();
+            std::thread::spawn(move || {
+                let state = app.state::<AppState>();
+                let protected = studio::protected(&state);
+                responder.respond(assets::serve(&request, &label, &state.assets, &protected));
+            });
+        })
         // The hidden capture window must not keep the app alive once the main window is really closed.
         .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event
+                && window.label() == "main"
+            {
+                opens::dropped(window.app_handle(), paths);
+            }
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
                 window.app_handle().exit(0);
             }
@@ -1806,7 +1881,8 @@ pub fn run() {
             system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export, wiki_agent_build, wiki_agent_cancel,
             studio::notebooks_list, studio::notebook_add, studio::notebook_remove, studio::notebook_rename, studio::notebook_tree, studio::notebook_meta_get,
             studio::notebook_meta_set, studio::file_read, studio::file_save, studio::file_create, studio::file_mkdir, studio::file_rename, studio::file_delete,
-            studio::file_reveal
+            studio::file_reveal, studio::asset_base, studio::notebook_add_dropped, opens::open_dialog, opens::open_pending, opens::open_recent,
+            opens::open_forget, opens::file_save_as
         ])
         .build(context)
         .expect("error while running tauri application")

@@ -6,7 +6,8 @@ const files = new Map<string, string>();
 const drafts = new Map<string, unknown>();
 const gates = new Map<string, Promise<void>>();
 const calls: string[] = [];
-const flags = { failDrafts: false, readError: new Map<string, string>(), deleteError: "" };
+const flags = { failDrafts: false, readError: new Map<string, string>(), deleteError: "", convertible: new Set<string>() };
+const converted: string[] = [];
 function gate(name: string) {
   let open = () => {};
   gates.set(name, new Promise<void>((resolve) => { open = resolve; }));
@@ -23,6 +24,9 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "file_read":
         if (flags.readError.has(path)) throw new Error(flags.readError.get(path));
         if (!files.has(path)) throw new Error(`${path} not found`);
+        if (flags.convertible.has(path)) {
+          return { ...loaded(files.get(path)!), format: { encoding: "windows-1252", bom: false, eol: "lf" }, readOnly: "This file contains bytes that are not valid windows-1252", convertible: true };
+        }
         return loaded(files.get(path)!);
       case "file_rename": {
         const from = a.from as string, to = a.to as string;
@@ -47,6 +51,7 @@ vi.mock("@tauri-apps/api/core", () => ({
         const pre = a.pre as { sha256: string };
         if (sha(files.get(path)!) !== pre.sha256) return { status: "stale", sha256: sha(files.get(path)!) };
         files.set(path, a.text as string);
+        if (a.convert) converted.push(path);
         return { status: "saved", sha256: sha(a.text as string), size: 1, mtimeMs: 2 };
       }
       case "file_delete":
@@ -81,7 +86,7 @@ describe("documents store", () => {
     // them when the fake store is cleared.
     for (const d of drafts.values()) forgetMoved("nb-1", (d as { target: { path: string } }).target.path);
     files.clear(); drafts.clear(); gates.clear(); calls.length = 0;
-    flags.failDrafts = false; flags.readError.clear(); flags.deleteError = "";
+    flags.failDrafts = false; flags.readError.clear(); flags.deleteError = ""; flags.convertible.clear(); converted.length = 0;
     files.set("A.md", "one");
     useWorkspace.setState({ panes: [{ id: "p0", tabs: [], active: null }], focused: "p0", dirty: {}, reveal: null });
     useApp.setState({ route: { page: "notes" }, back: [] });
@@ -538,6 +543,26 @@ describe("documents store", () => {
       format: { encoding: "UTF-8", bom: false, eol: "lf" }, mine: "never stored", savedAt: "t",
     })).rejects.toThrow();
     expect(await getFileDraft(draftKey)).toBeNull();
+  });
+
+  it("NS-1B: Convert to UTF-8 survives a restart as a draft and the save asks Rust to convert", async () => {
+    files.set("L.txt", "caf?");
+    flags.convertible.add("L.txt");
+    ws().openTab({ kind: "file", file: ref("L.txt") });
+    await docs.open(ref("L.txt"));
+    expect(state("L.txt")).toMatchObject({ status: "readOnly", base: { convertible: true } });
+    docs.convertToUtf8(key("L.txt"));
+    docs.edit(key("L.txt"), "café");
+    await docs.flushAllDrafts();
+    // Closed and reopened (the app restarted): still converted, with the edits.
+    ws().closeTab("p0", ws().panes[0].tabs[0].id);
+    docs.release(key("L.txt"));
+    ws().openTab({ kind: "file", file: ref("L.txt") });
+    await docs.open(ref("L.txt"));
+    expect(state("L.txt")).toMatchObject({ status: "dirty", convert: true, text: "café", base: { format: { encoding: "UTF-8" } } });
+    await docs.save(key("L.txt"));
+    expect(converted).toEqual(["L.txt"]);
+    expect(files.get("L.txt")).toBe("café");
   });
 
   it("U2: renaming a section keeps every dot of the new name", async () => {

@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useChangesEnabled, useProjectsEnabled, useSystemsEnabled, useWikiEnabled } from "../../lib/connection";
 import { domains, list } from "../../lib/lm";
 import { folderOf, notebooksQuery, pageTitle, treeQuery } from "../../lib/notebooks";
+import { recentQuery, recentRef } from "../../lib/opens";
+import { openFromDisk } from "../notes/opening";
 import { newPageHere, openPage } from "../notes/actions";
 import { useAddNotebook } from "../notes/NotesPage";
 import { refreshStore } from "../../lib/refresh";
@@ -39,6 +41,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
   const systems = useQuery({ ...systemsQuery(), enabled: systemsOn && app.palette === "commands" });
   const notebooks = useQuery({ ...notebooksQuery(), enabled: app.palette === "notes" });
   const trees = useQueries({ queries: (notebooks.data ?? []).map((nb) => ({ ...treeQuery(nb.id), enabled: app.palette === "notes" })) });
+  const recent = useQuery({ ...recentQuery(), enabled: app.palette === "notes" });
   const addNotebook = useAddNotebook();
   useEffect(() => { setQuery(""); setIndex(0); }, [app.palette]);
 
@@ -53,13 +56,21 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
         key: `${nb.id}:${e.path}`, label: pageTitle(e.path), detail: [nb.title, folderOf(e.path)].filter(Boolean).join(" · "),
         run: () => { app.setPalette(null); openPage({ notebook: nb.id, path: e.path }); },
       })));
-      return [...found, ...pages];
+      // Files opened from outside a notebook, newest first (NS-1B).
+      const files = (recent.data ?? []).filter((r) => r.exists).map((r) => ({
+        key: `recent:${r.id}`, label: r.name, detail: `${r.path.slice(0, r.path.lastIndexOf("\\"))} · recent file`,
+        run: () => { app.setPalette(null); openPage(recentRef(r)); },
+      }));
+      // The newest few lead, so an empty query shows them; ties keep this order.
+      return [...files.slice(0, 8), ...found, ...pages, ...files.slice(8)];
     }
     const close = () => app.setPalette(null);
     const page = (route: Route) => () => { close(); app.go(route); };
     const all: Entry[] = [
       { key: "go", label: "Go to note…", detail: "Ctrl+O", run: () => app.setPalette("notes") },
       { key: "new", label: "New note", detail: "Ctrl+N", run: () => { close(); ws.openTab({ kind: "new-note" }); } },
+      { key: "open-file", label: "Open file…", run: () => { close(); void openFromDisk(); } },
+      { key: "new-file", label: "New text file", run: () => { close(); ws.openTab({ kind: "new-file" }); } },
       { key: "overview", label: "Overview", run: page({ page: "overview" }) },
       { key: "memory", label: "Memory library", section: "memory" as Page, run: page({ page: "memory" }) },
       { key: "notes", label: "Notes", section: "notes" as Page, run: page({ page: "notes" }) },
@@ -107,14 +118,19 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       })),
     ];
     return all.filter((e) => !e.section || !hidden.includes(e.section));
-  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, changesOn, wikiOn, hidden, client, onSettings, onReconnect, notebooks.data, trees, addNotebook]);
+  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, changesOn, wikiOn, hidden, client, onSettings, onReconnect, notebooks.data, trees, addNotebook, recent.data]);
 
-  const shown = useMemo(() => entries
-    .map((e) => ({ e, score: fuzzy(query, e.label) }))
-    .filter((x) => x.score !== null)
-    .sort((a, b) => (b.score! - a.score!))
-    .slice(0, 50)
-    .map((x) => x.e), [entries, query]);
+  const shown = useMemo(() => {
+    const best = entries
+      .map((e) => ({ e, score: fuzzy(query, e.label) }))
+      .filter((x) => x.score !== null)
+      .sort((a, b) => (b.score! - a.score!))
+      .slice(0, 50)
+      .map((x) => x.e);
+    // Ctrl+O always ends with the way to any file on disk (NS-1B).
+    if (app.palette !== "notes") return best;
+    return [...best, { key: "open-from-disk", label: "Open file from disk…", detail: "any file", run: () => { app.setPalette(null); void openFromDisk(); } }];
+  }, [entries, query, app]);
 
   if (!app.palette) return null;
   const choose = (entry?: Entry) => entry?.run();

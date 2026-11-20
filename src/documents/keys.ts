@@ -9,8 +9,8 @@ export function docKey(tab: Keyed): string {
   return `${tab.kind}:${tab.ref ?? ""}`;
 }
 
-/** Whether two tabs show the same document. New notes are never the same as anything. */
-export const sameDoc = (a: Keyed, b: Keyed) => a.kind === b.kind && a.kind !== "new-note" && docKey(a) === docKey(b);
+/** Whether two tabs show the same document. New notes and new text files are never the same as anything. */
+export const sameDoc = (a: Keyed, b: Keyed) => a.kind === b.kind && a.kind !== "new-note" && a.kind !== "new-file" && docKey(a) === docKey(b);
 
 /** `path` moved from `from` to `to` (a file, or a folder and everything in it); null when the move does not touch it. */
 export function movedPath(path: string, from: string, to: string): string | null {

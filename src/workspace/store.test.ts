@@ -92,6 +92,16 @@ describe("workspace", () => {
     expect(ws().panes[0].tabs.map((t) => t.kind)).toEqual(["new-note", "new-note"]);
   });
 
+  it("a new text file is always its own tab, is never split and is not kept across restarts", () => {
+    ws().openTab({ kind: "new-file" });
+    ws().openTab({ kind: "new-file" });
+    expect(ws().panes[0].tabs.map((t) => t.kind)).toEqual(["new-file", "new-file"]);
+    ws().split();
+    expect(ws().panes[1]?.tabs ?? []).toEqual([]);
+    const stored = useWorkspace.persist.getOptions().partialize!(ws());
+    expect(JSON.stringify(stored)).not.toContain("new-file");
+  });
+
   it("an older stored layout keeps only its note tabs", () => {
     const stored = {
       focused: "b", panel: null,

@@ -8,7 +8,8 @@ import { sessionsQuery } from "../lib/agent";
 import { useSystemsEnabled } from "../lib/connection";
 import { OTHER_FOLDERS, realProject } from "../lib/folders";
 import { useApp } from "../store";
-import { notebooksQuery, pageTitle } from "../lib/notebooks";
+import { fileName, notebooksQuery, pageTitle } from "../lib/notebooks";
+import { isLoose } from "../lib/opens";
 import { activeTab, useWorkspace } from "../workspace/store";
 import { SECTIONS } from "./Sidebar";
 
@@ -31,6 +32,7 @@ function useCrumbs(): Crumb[] {
   const root: Crumb = { label: project?.name ?? (other ? "Other folders" : "All memory"), go: () => go({ page: "overview" }) };
   if (route.page === "overview") return route.view === "work" ? [root, { label: "Open work" }] : [{ label: "Projects" }, { label: root.label }];
   const section: Crumb = { label: SECTIONS.find((s) => s.page === route.page)?.label ?? route.page, go: () => go({ page: route.page }) };
+  if (route.page === "notes" && page && isLoose(page)) return [root, section, { label: "Opened files" }, { label: fileName(page.path) }];
   if (route.page === "notes" && page) {
     return [root, section, { label: notebooks.data?.find((n) => n.id === page.notebook)?.title ?? "Notebook" }, { label: pageTitle(page.path) }];
   }

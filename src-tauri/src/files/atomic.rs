@@ -267,6 +267,34 @@ fn copy_streams(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Give `to` the creation time and attributes (hidden, system, not indexed, ...) of the held file, so a save keeps them
+/// (NS-1B: loose files opened from anywhere). Explicit per-file permissions are not copied; `to` inherits its folder's.
+#[cfg(windows)]
+fn copy_basic_info(held: &std::fs::File, to: &Path) -> Result<(), String> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileBasicInfo, GetFileInformationByHandleEx, SetFileInformationByHandle, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_HIDDEN,
+        FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_SYSTEM, FILE_BASIC_INFO, FILE_WRITE_ATTRIBUTES,
+    };
+    let mut info = FILE_BASIC_INFO::default();
+    let size = std::mem::size_of::<FILE_BASIC_INFO>() as u32;
+    // SAFETY: `info` is a FILE_BASIC_INFO of `size` bytes and the handle is open for reading.
+    if unsafe { GetFileInformationByHandleEx(held.as_raw_handle() as _, FileBasicInfo, &mut info as *mut _ as *mut _, size) } == 0 {
+        return Ok(()); // nothing to keep is better than no save
+    }
+    let kept = FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED;
+    let attributes = info.FileAttributes & kept;
+    // Zero leaves a time as it is: the new file keeps its own write and access times.
+    let wanted = FILE_BASIC_INFO { CreationTime: info.CreationTime, LastAccessTime: 0, LastWriteTime: 0, ChangeTime: 0, FileAttributes: if attributes == 0 { FILE_ATTRIBUTE_NORMAL } else { attributes } };
+    let file = std::fs::OpenOptions::new().access_mode(FILE_WRITE_ATTRIBUTES).open(to).map_err(|e| format!("Could not save {}: {e}", to.display()))?;
+    // SAFETY: `wanted` is a FILE_BASIC_INFO of `size` bytes and the handle has FILE_WRITE_ATTRIBUTES.
+    if unsafe { SetFileInformationByHandle(file.as_raw_handle() as _, FileBasicInfo, &wanted as *const _ as *const _, size) } == 0 {
+        return Err(format!("Could not save {}: {}", to.display(), std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
 impl Held {
     /// Move the held file to `to` through its own handle, failing if `to` exists. What moves is exactly what the
     /// caller read (Codex review of 32fd236, W5).
@@ -288,7 +316,7 @@ impl Held {
     pub fn replace(self, bytes: &[u8]) -> Result<(), String> {
         let shown = self.path.display().to_string();
         let temp = write_temp(&self.path, bytes)?;
-        if let Err(e) = copy_streams(&self.path, &temp) {
+        if let Err(e) = copy_streams(&self.path, &temp).and_then(|_| copy_basic_info(&self.file, &temp)) {
             let _ = std::fs::remove_file(&temp);
             return Err(e);
         }
@@ -413,6 +441,24 @@ mod tests {
         names.sort();
         assert_eq!(names, ["Zone.Identifier", "app.data"]);
         assert!(leftovers(&dir).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_save_keeps_creation_time_and_the_hidden_attribute() {
+        use std::os::windows::fs::MetadataExt;
+        let dir = scratch();
+        let page = dir.join("Kept.txt");
+        std::fs::write(&page, "old").unwrap();
+        let made = std::fs::metadata(&page).unwrap().creation_time();
+        std::process::Command::new("attrib").arg("+h").arg(&page).status().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        hold(&page).unwrap().replace(b"new").unwrap();
+        let meta = std::fs::metadata(&page).unwrap();
+        assert_eq!(meta.creation_time(), made);
+        assert_ne!(meta.file_attributes() & 0x2, 0, "still hidden");
+        assert_eq!(std::fs::read(&page).unwrap(), b"new");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

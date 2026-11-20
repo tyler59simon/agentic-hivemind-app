@@ -62,6 +62,29 @@ describe("document session", () => {
     expect(run({ type: "loaded", loaded: file("same"), draft: { text: "same", at: "x" } }).status).toBe("clean");
   });
 
+  it("Convert to UTF-8 makes a page read-only for its encoding editable and unsaved until written", () => {
+    const legacy = { ...file("caf?"), format: { encoding: "windows-1252", bom: false, eol: "crlf" as const }, readOnly: "This file contains bytes that are not valid windows-1252", convertible: true };
+    let s = run({ type: "loaded", loaded: legacy }, { type: "convert" });
+    expect(s).toMatchObject({ status: "dirty", convert: true, base: { readOnly: null, format: { encoding: "UTF-8", bom: false, eol: "crlf" } } });
+    // Unsaved even with the text unchanged: the bytes on disk are still the old encoding.
+    expect(reduce(s, { type: "edited", text: "caf?" }).status).toBe("dirty");
+    s = reduce(reduce(s, { type: "saveStarted" }), { type: "saved", stamp: { sha256: "utf8", size: 4, mtimeMs: 2 } });
+    expect(s.status).toBe("clean");
+    expect(s.convert).toBeUndefined();
+  });
+
+  it("Convert to UTF-8 does nothing for a binary file, a file read-only for another reason, or a clean page", () => {
+    const binary = run({ type: "loaded", loaded: { ...file(""), binary: true, readOnly: "This is not a text file" } });
+    expect(reduce(binary, { type: "convert" })).toBe(binary);
+    const attribute = run({ type: "loaded", loaded: { ...file("x"), readOnly: "This file is read-only on disk" } });
+    expect(reduce(attribute, { type: "convert" })).toBe(attribute);
+    const clean = run({ type: "loaded", loaded: file("x") });
+    expect(reduce(clean, { type: "convert" })).toBe(clean);
+    // An unsaved page whose characters its encoding cannot hold converts.
+    const legacy = run({ type: "loaded", loaded: { ...file("x"), format: { encoding: "windows-1252", bom: false, eol: "lf" } } }, { type: "edited", text: "x 中" });
+    expect(reduce(legacy, { type: "convert" })).toMatchObject({ status: "dirty", convert: true, base: { format: { encoding: "UTF-8" } } });
+  });
+
   it("read-only files ignore edits", () => {
     const s = run({ type: "loaded", loaded: { ...file("x"), readOnly: "This file is not UTF-8" } });
     expect(s.status).toBe("readOnly");

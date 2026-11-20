@@ -7,10 +7,11 @@ export type EntryKind = "dir" | "page" | "text" | "other";
 export interface Entry { path: string; kind: EntryKind; size: number; mtimeMs: number }
 export interface Tree { entries: Entry[]; truncated: boolean }
 
-export type Eol = "lf" | "crlf" | "mixed" | "none";
-export interface FileFormat { encoding: string; bom: boolean; eol: Eol }
+export type Eol = "lf" | "crlf" | "cr" | "mixed" | "none";
+/** `encoding` is an encoding_rs name ("UTF-8", "UTF-16LE", "windows-1252", ...); `confidence` says how it was found. */
+export interface FileFormat { encoding: string; bom: boolean; eol: Eol; confidence?: "bom" | "valid" | "guess" }
 export interface Stamp { sha256: string; size: number; mtimeMs: number }
-export interface Loaded extends Stamp { text: string; format: FileFormat; readOnly: string | null; binary: boolean }
+export interface Loaded extends Stamp { text: string; format: FileFormat; readOnly: string | null; binary: boolean; convertible?: boolean }
 export type SaveOutcome = ({ status: "saved" } & Stamp) | { status: "stale"; sha256: string } | { status: "gone" };
 
 /** Settings kept in the notebook's `.hivemind/notebook.json` (README 5.4). Unknown keys are kept by Rust. */
@@ -39,8 +40,9 @@ export const notebookMeta = (id: string) => invoke<NotebookMeta>("notebook_meta_
 export const setNotebookMeta = (id: string, patch: NotebookMeta) => invoke<NotebookMeta>("notebook_meta_set", { id, patch });
 
 export const readFile = (notebook: string, path: string) => invoke<Loaded>("file_read", { notebook, path });
-export const saveFile = (notebook: string, path: string, text: string, pre: Stamp, format: FileFormat) =>
-  invoke<SaveOutcome>("file_save", { notebook, path, text, pre, format });
+/** `convert`: the user chose Convert to UTF-8, so text that does not decode may be replaced. */
+export const saveFile = (notebook: string, path: string, text: string, pre: Stamp, format: FileFormat, convert = false) =>
+  invoke<SaveOutcome>("file_save", { notebook, path, text, pre, format, convert });
 export const createFile = (notebook: string, path: string, text: string) => invoke<Stamp>("file_create", { notebook, path, text });
 export const makeFolder = (notebook: string, path: string) => invoke<void>("file_mkdir", { notebook, path });
 export const renameFile = (notebook: string, from: string, to: string) => invoke<void>("file_rename", { notebook, from, to });

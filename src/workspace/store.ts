@@ -9,14 +9,14 @@ import { prefs } from "../lib/prefs";
 import { safeStorage, useApp } from "../store";
 
 export type Mode = "reading" | "live" | "source" | "history";
-export type TabKind = "note" | "new-note" | "file";
-const KINDS: readonly string[] = ["note", "new-note", "file"];
+export type TabKind = "note" | "new-note" | "file" | "new-file";
+const KINDS: readonly string[] = ["note", "new-note", "file", "new-file"];
 export type { FileRef };
 export interface Tab {
   id: string;
   kind: TabKind;
   ref?: string;           // note tabs: domain:id
-  file?: FileRef;         // file tabs: a page of a folder notebook
+  file?: FileRef;         // file tabs: a page of a folder notebook, or a loose file (notebook "@<grant>")
   mode?: Mode;            // note and file tabs
   title?: string;         // last known title, for the tab strip
   init?: { title?: string; type?: NoteType; domain?: string; tags?: string[] }; // new-note tabs
@@ -60,7 +60,7 @@ export const sameTab = (a: Omit<Tab, "id">, b: Tab) => sameDoc(a, b);
 export function showTab(tab: Pick<Tab, "kind">) {
   const { route, go } = useApp.getState();
   if (route.page === "notes" || (route.page === "memory" && route.view === "notes")) return;
-  go(tab.kind === "file" ? { page: "notes" } : { page: "memory", view: "notes" });
+  go(tab.kind === "file" || tab.kind === "new-file" ? { page: "notes" } : { page: "memory", view: "notes" });
 }
 
 /** The mode a second view of a tab opens in. */
@@ -140,7 +140,7 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
       const s = get();
       const pane = s.panes.find((p) => p.id === s.focused);
       const tab = pane?.tabs.find((t) => t.id === pane.active);
-      if (tab && tab.kind !== "new-note") get().openTab({ ...tab, mode: splitMode(tab) }, { split: true });
+      if (tab && tab.kind !== "new-note" && tab.kind !== "new-file") get().openTab({ ...tab, mode: splitMode(tab) }, { split: true });
       else if (s.panes.length < MAX_PANES) { const p = firstPane(); set({ panes: [...s.panes, p], focused: p.id }); }
     },
 
@@ -176,8 +176,8 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
   // Tabs of a kind this build does not know (written by a newer one) are dropped.
   merge: (stored, current) => ({ ...current, ...knownKinds(stored as Partial<WorkspaceState>) }),
   partialize: (s) => ({
-    // New-note tabs hold unsaved text in drafts, not here; keep only reopenable tabs.
-    panes: s.panes.map((p) => ({ ...p, tabs: p.tabs.filter((t) => t.kind !== "new-note") })),
+    // New-note tabs hold unsaved text in drafts, not here, and a new text file has none; keep only reopenable tabs.
+    panes: s.panes.map((p) => ({ ...p, tabs: p.tabs.filter((t) => t.kind !== "new-note" && t.kind !== "new-file") })),
     focused: s.focused,
     rail: s.rail,
     railSplit: s.railSplit,
