@@ -2,7 +2,8 @@
 //! `--strict-mcp-config`, the one-shot calls with `--safe-mode` and `--strict-mcp-config`. Managed policy still applies under
 //! all of them, hooks included, and a deployed `managed-mcp.json` makes Claude Code exit on `--strict-mcp-config`. So
 //! Hivemind looks for managed policy before each Claude call and refuses the call when it finds one (EXEC-11, EXEC-R7).
-//! Server-managed settings from the claude.ai console leave nothing on this computer to find.
+//! Server-managed settings from the claude.ai console are found only once Claude Code has cached them
+//! (`remote-settings.json`); a policy it has not fetched yet leaves nothing to find, nor does a Windows policy that WSL inherits.
 use std::path::{Path, PathBuf};
 
 /// The files Claude Code reads in its managed folder, and the folder of drop-in files beside them.
@@ -12,17 +13,27 @@ const DROP_INS: &str = "managed-settings.d";
 #[cfg_attr(not(any(windows, test)), allow(dead_code))]
 const KEYS: [&str; 2] = [r"HKLM\SOFTWARE\Policies\ClaudeCode", r"HKCU\SOFTWARE\Policies\ClaudeCode"];
 
-/// The first managed policy source present: a file in `folder`, a `.json` file in its drop-in folder, a registry key in
-/// `keys` for which `has_settings` finds a `Settings` value, or a file in `plists`. Its name, as the user would look for it.
-fn found(folder: &Path, keys: &[&str], has_settings: impl Fn(&str) -> bool, plists: &[PathBuf]) -> Option<String> {
+/// The first managed policy source present: a file in `folder`, a drop-in file Claude Code would read (a `.json` file whose
+/// name does not start with a dot), a registry key in `keys` for which `has_settings` finds a `Settings` value, or one of
+/// `others` (managed preference files, the server-managed cache). Its name, as the user would look for it.
+fn found(folder: &Path, keys: &[&str], has_settings: impl Fn(&str) -> bool, others: &[PathBuf]) -> Option<String> {
     let file = FILES.iter().map(|name| folder.join(name)).find(|path| path.exists());
     let drop_in = || {
         let entries = std::fs::read_dir(folder.join(DROP_INS)).ok()?;
-        entries.flatten().map(|entry| entry.path()).find(|path| path.extension().is_some_and(|ext| ext == "json"))
+        let read = |entry: &std::fs::DirEntry| !entry.file_name().to_string_lossy().starts_with('.');
+        entries.flatten().filter(read).map(|entry| entry.path()).find(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "json"))
     };
     let path = file.or_else(drop_in).map(|path| path.display().to_string());
     path.or_else(|| keys.iter().find(|key| has_settings(key)).map(|key| format!(r"{key}\Settings")))
-        .or_else(|| plists.iter().find(|path| path.exists()).map(|path| path.display().to_string()))
+        .or_else(|| others.iter().find(|path| path.exists()).map(|path| path.display().to_string()))
+}
+
+/// Where Claude Code caches server-managed settings: `remote-settings.json` in its config folder (`CLAUDE_CONFIG_DIR`, else
+/// `~/.claude`).
+#[cfg(not(test))]
+fn remote_cache() -> Vec<PathBuf> {
+    let dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).or_else(|| dirs::home_dir().map(|home| home.join(".claude")));
+    dir.map(|dir| vec![dir.join("remote-settings.json")]).unwrap_or_default()
 }
 
 /// Whether the registry key has a `Settings` value: `reg query` exits 0 only then.
@@ -44,21 +55,22 @@ fn has_settings(key: &str) -> bool {
 /// The managed policy source on this computer, from the places Claude Code's documentation names for each system.
 #[cfg(all(windows, not(test)))]
 pub fn policy() -> Option<String> {
-    found(Path::new(r"C:\Program Files\ClaudeCode"), &KEYS, has_settings, &[])
+    found(Path::new(r"C:\Program Files\ClaudeCode"), &KEYS, has_settings, &remote_cache())
 }
 
 #[cfg(all(target_os = "macos", not(test)))]
 pub fn policy() -> Option<String> {
-    let mut plists = vec![PathBuf::from("/Library/Managed Preferences/com.anthropic.claudecode.plist")];
+    let mut others = vec![PathBuf::from("/Library/Managed Preferences/com.anthropic.claudecode.plist")];
     if let Ok(user) = std::env::var("USER") {
-        plists.push(PathBuf::from(format!("/Library/Managed Preferences/{user}/com.anthropic.claudecode.plist")));
+        others.push(PathBuf::from(format!("/Library/Managed Preferences/{user}/com.anthropic.claudecode.plist")));
     }
-    found(Path::new("/Library/Application Support/ClaudeCode"), &[], |_| false, &plists)
+    others.extend(remote_cache());
+    found(Path::new("/Library/Application Support/ClaudeCode"), &[], |_| false, &others)
 }
 
 #[cfg(all(not(any(windows, target_os = "macos")), not(test)))]
 pub fn policy() -> Option<String> {
-    found(Path::new("/etc/claude-code"), &[], |_| false, &[])
+    found(Path::new("/etc/claude-code"), &[], |_| false, &remote_cache())
 }
 
 #[cfg(test)]
@@ -96,7 +108,9 @@ mod tests {
         let none = |_: &str| false;
         assert_eq!(found(&dir, &KEYS, none, &[]), None, "an empty folder and drop-in folder hold no policy");
         std::fs::write(dir.join(DROP_INS).join("notes.txt"), "x").unwrap();
-        assert_eq!(found(&dir, &KEYS, none, &[]), None, "only .json drop-ins count");
+        std::fs::write(dir.join(DROP_INS).join(".old.json"), "{}").unwrap();
+        std::fs::create_dir(dir.join(DROP_INS).join("folder.json")).unwrap();
+        assert_eq!(found(&dir, &KEYS, none, &[]), None, "only .json files Claude Code reads count: no dot files, no folders");
         let plist = dir.join("com.anthropic.claudecode.plist");
         std::fs::write(&plist, "x").unwrap();
         assert_eq!(found(&dir, &KEYS, none, std::slice::from_ref(&plist)), Some(plist.display().to_string()));
