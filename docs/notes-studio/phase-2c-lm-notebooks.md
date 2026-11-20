@@ -6,11 +6,13 @@ Read [README.md](README.md), [phase-1a-workspace.md](phase-1a-workspace.md) and 
 
 These rules come from the Codex review of the design ([reviews/ns0-codex-review.md](reviews/ns0-codex-review.md)). Where the text below says otherwise, these win.
 
-- Page bodies over 512 KiB are written to `app_data/lm-staging/<uuid>.md` and sent as `--body-file`; the file is deleted after the reply. Hivemind never builds a bridge frame over 2 MiB (C2).
+- Page bodies whose JSON-escaped form exceeds 512 KiB are written to `app_data/lm-staging/<uuid>.md` and sent as `--body-file`; the file is deleted after the reply. The bridge measures the encoded frame and never sends one over 2 MiB (C2).
 - Every `doc` read, list, search and history call from Hivemind carries `--include-private` (LM design section 6).
 - Reach settings for folder notebooks: Hivemind calls `doc folder set PATH --visibility V [--private]` when a notebook is registered (searchable by default) and whenever reach or Private changes, and `doc folder unset PATH` when it is removed; the sidecar is updated too when it can be written. The registry is what makes Private and Hidden effective when the sidecar cannot be written (S6).
-- Read commands (`doc list`, `doc read`, `doc search`, `search`, `ask`) get a bridge deadline of 20 s; on a timeout the bridge restarts its process and the caller shows a retry. Writes keep no deadline, because an unknown outcome is worse than waiting (U6).
-- Notebook settings of a notebook-only domain offer choosing its Obsidian vault, which runs `sync DOMAIN VAULT` (U5).
+- There is no bridge deadline. The bridge serializes calls under one lock, so a stalled write would hold a read past any deadline, and restarting the process would leave the write's outcome unknown. Living Memory bounds its own `doc` work instead (LM design 8.1) (U6).
+- The `lmdoc` adapter applies the file service's format rules to page text: BOM and line endings are detected on `doc read`, the editor gets LF text, mixed line endings open read-only, and `doc write` sends the bytes re-encoded with the detected BOM and line endings. Its round-trip tests mirror NS-1A's (C4).
+- Notebook settings of a notebook-only domain offer choosing its Obsidian vault, which runs `sync --domain DOMAIN VAULT` (U5).
+- Hivemind's notebook registry (`notebooks.json`) keeps a copy of each folder notebook's reach and Private, written with every `doc folder set`; Hivemind's AI features read the stricter of that copy and the sidecar (S10).
 
 ## 1. What the user sees
 

@@ -8,6 +8,7 @@ These rules come from the Codex review of the design ([reviews/ns0-codex-review.
 
 - Block ownership: at parse, every top-level block gets a `srcId` attribute (its index in the original document), set when the document is built, never by an `appendTransaction`. On save, a block emits its original source slice only if it is the first block carrying its `srcId` and `node.eq(original[srcId])`; the original gap before it is emitted only when the previous emitted block is `srcId - 1`. Copies, moves, inserts and undo therefore never reuse a slice they do not own; everything else goes through the serializer. This replaces the identity WeakMap and the `node.eq` fallback (C5).
 - Files with mixed line endings are read-only (NS-1A), so Rich mode never edits them; it works on the file service's LF text and file-level format. Round-trip tests run through the file adapter and `file_save` (BOM, CRLF, no final newline), not on source slices alone (C4). Tests also cover equal blocks with different spellings and gaps, copy, move, delete and undo (C5).
+- Round 2: the text before the first block (the prefix) is emitted only when the first emitted block is the original first block (`srcId` 0) and still owns its slice; the text after the last block (the suffix) only when the last emitted block is the original last block. Tests cover leading blank lines, frontmatter-free files, and edits and moves at both ends (C5).
 
 ## 1. What the user sees
 

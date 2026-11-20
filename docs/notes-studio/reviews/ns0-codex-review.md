@@ -51,4 +51,34 @@ Three verdicts depend on one assumption, now written down in README section 4: H
 | S12 | accepted | Commit uses `git commit --only -- ":(literal)<path>"`, tested with another staged file and pathspec characters | phase-5 |
 | S13 | accepted | A 2 GB expanded budget across nested archives, depth 2, link members and colliding names refused, undo only of files still matching the import receipt | phase-9b |
 
+## Round 2 (re-review of the fixes)
+
+Codex re-reviewed `ade27da` and `558f0c9` and judged 16 findings closed and 22 open or partly closed. The second round of fixes, all accepted:
+
+| ID | Resolution |
+| --- | --- |
+| U1 | Saves hold the target without write or delete sharing, rename it aside through its own handle and move the new file in without replacing (`files::atomic::Held`, with tests); the guarantee is now complete |
+| U3 | Recovery checks both the blob folder and the asset path by hash; the journal records created or reused; undo of a reused asset removes only the reference |
+| S5 | The guarantee is limited, in README and LM design, to Living Memory commands and structured tools; shell writes are the stated limit |
+| S6 | The registry files are protected config; unset keeps private and hidden entries as tombstones unless `--forget` |
+| S8 | Redaction by effect path for every operation kind, with a durable notebook `uid` and a privacy ledger that outlives deletion |
+| S9 | The managed-vault exclusion also filters cached rows at retrieval, and rows are purged when a vault becomes managed |
+| S10 | AI features use the stricter of Hivemind's registry copy and the sidecar |
+| S11 | The guarantee says what each engine confines; Claude's shell commands are not confined |
+| S2 | The guard covers writes; three narrow read exceptions are named and enforced where used |
+| S1 | Partly: saves replace by rename, so a hard link never lets a save change another file; reading through a hard link is within the trust model |
+| S4 | Hidden notebooks are searchable only by `doc` commands that name them; the flag denial runs before the unbound-session return |
+| U6 | No bridge deadline (a shared lock defeats it); the stat walk gets a 0.2 s resumable budget and `pages_stale` |
+| C2 | The bridge measures the encoded frame and escaped stdin |
+| C3 | Hivemind takes only `origin: "lm"` from Living Memory; folder hits come from its own index |
+| C4 | The `lmdoc` adapter applies the same format rules and tests |
+| C5 | Prefix and suffix have explicit owners |
+| U4 | Restore keeps live bindings of domains with uncovered notebooks; blob effects go through apply, recovery and undo |
+| U5 | `sync --domain DOMAIN VAULT` |
+| U8 | `NewNote.tsx` and `NoteEditor.tsx` flush their pending draft on unmount |
+| U9 | `file_rename` moves drafts in Rust in the same command (`drafts::retarget`, with tests) |
+| C1, U7 | Exit criteria split by capability; `doc query` filters by notebook, folder and tag |
+
+Stopping point: after this round the design documents are not re-reviewed as a whole again. Each phase's code gets its own Codex review, which checks the implementation against these documents.
+
 All findings are tracked as action items in Living Memory ("Notes Studio NS-0 design review findings (Codex, 2026-11-20)").

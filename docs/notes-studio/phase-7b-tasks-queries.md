@@ -7,6 +7,7 @@ Read [phase-4a-index-search.md](phase-4a-index-search.md) first; tasks and prope
 These rules come from the Codex review of the design ([reviews/ns0-codex-review.md](reviews/ns0-codex-review.md)). Where the text below says otherwise, these win.
 
 - Living Memory tasks and properties come from `doc tasks` and `doc query` (NS-2B), not from Hivemind's index; ticking a task or editing a property of a Living Memory page writes it with `doc write --expected-revision` (U7).
+- Exit criteria split by capability: Living Memory task and property write-back is checked only when `docs.search` is present; folder notebooks are checked always. `doc query` filters by notebook, folder (path prefix) and tag (`tags` frontmatter) as well as by properties, so saved queries mean the same over both kinds (C1, U7).
 
 ## 1. What the user sees
 

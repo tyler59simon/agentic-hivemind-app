@@ -8,6 +8,7 @@ These rules come from the Codex review of the design ([reviews/ns0-codex-review.
 
 - The index covers notebook pages only. Loose files opened from disk are not indexed; recent files find them (U12).
 - Living Memory pages are searched through `search`'s `pages` array (both origins, README 5.8), gated on `docs.search`; before NS-2B ships, the Living Memory group is absent (C1).
+- Hivemind searches folder notebooks in its own index and takes only `origin: "lm"` entries from Living Memory's `pages`; `origin: "folder"` results are for agents. So a registered folder is never shown twice (C3).
 
 ## 1. What the user sees
 

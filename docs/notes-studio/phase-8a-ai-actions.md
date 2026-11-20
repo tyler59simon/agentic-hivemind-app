@@ -8,6 +8,7 @@ These rules come from the Codex review of the design ([reviews/ns0-codex-review.
 
 - One apply rule (README section 3): a selection result applies when its anchor text is still in the page and is saved through the session save against the latest base; a whole-page result applies only if the page still has the captured hash or revision (C6).
 - Rust checks the origin of every input at dispatch, not the webview: the page and its notebook must not be private, embeds are expanded in Rust and each embedded source is checked the same way, and the check runs again right before the model is called, so a notebook made private while work is queued is refused (S10).
+- Round 2: the effective Private of a folder notebook is the stricter of Hivemind's registry copy and the sidecar (NS-2C), the same rule Living Memory uses, at every AI entry point, embedded sources included (S10).
 
 ## 1. What the user sees
 
