@@ -72,11 +72,13 @@ fn daily(saved: Option<f64>, default: f64) -> f64 {
     saved.filter(|usd| usd.is_finite() && *usd >= 0.0).unwrap_or(default)
 }
 
-/// One call's limit as saved: more than zero (a call with no money cannot run; the daily cap turns calls off), else the
-/// default, and never more than the daily cap it draws from, so a call can always be afforded on a fresh day.
+/// One call's limit as saved: at least a cent (a call with no money cannot run; the daily cap turns calls off), else the
+/// default, and never more than the daily cap it draws from, so a call can always be afforded on a fresh day. Whole cents,
+/// since the CLI is given the limit in cents and the reservation must match it.
 fn per_call(saved: Option<f64>, default: f64, cap: f64) -> f64 {
-    let usd = saved.filter(|usd| usd.is_finite() && *usd > 0.0).unwrap_or(default);
-    if cap > 0.0 { usd.min(cap) } else { usd }
+    let cents = |usd: f64| (usd * 100.0).round() / 100.0;
+    let usd = saved.filter(|usd| usd.is_finite() && cents(*usd) >= 0.01).map_or(default, cents);
+    if cap > 0.0 { usd.min(cap.max(0.01)) } else { usd }
 }
 
 impl Settings {
@@ -99,9 +101,11 @@ impl Settings {
         daily(self.learning_daily_usd, DEFAULT_LEARNING_DAILY_USD)
     }
 
-    /// The daily cap for the sessions and workflows automations start; zero turns them off.
+    /// The daily cap for the sessions and workflows automations start; zero turns them off. Before this cap existed, a
+    /// learning cap of zero also stopped these automations, so a settings file from then keeps them stopped.
     pub fn automation_daily_usd(&self) -> f64 {
-        daily(self.automation_daily_usd, DEFAULT_AUTOMATION_DAILY_USD)
+        let off_before = self.automation_daily_usd.is_none() && self.learning_daily_usd == Some(0.0);
+        if off_before { 0.0 } else { daily(self.automation_daily_usd, DEFAULT_AUTOMATION_DAILY_USD) }
     }
 
     /// The most one reviewer call may spend.
@@ -265,6 +269,18 @@ mod tests {
         assert_eq!((low_cap.review_call_usd(), low_cap.executive_calls_usd()["brief"]), (0.3, 0.3));
         let off = Settings { learning_daily_usd: Some(0.0), ..s };
         assert_eq!(off.review_call_usd(), 0.4, "a zero cap turns calls off at the ledger, not here");
+        // Whole cents, as the CLI is given them; under a cent is the default (Codex review R7-2).
+        let cents = |usd: f64| Settings { review_call_usd: Some(usd), ..Default::default() }.review_call_usd();
+        assert_eq!((cents(0.126), cents(0.004), cents(0.006)), (0.13, 0.25, 0.01));
+    }
+
+    #[test]
+    fn a_learning_cap_of_zero_from_before_the_automation_cap_keeps_automations_off() {   // Codex review R7-1
+        let old: Settings = serde_json::from_str(r#"{"python":null,"script":null,"root":null,"learning_daily_usd":0.0}"#).unwrap();
+        assert_eq!(old.automation_daily_usd(), 0.0);
+        // Once the user sets the automation cap, it is theirs.
+        assert_eq!(Settings { automation_daily_usd: Some(3.0), ..old.clone() }.automation_daily_usd(), 3.0);
+        assert_eq!(Settings { learning_daily_usd: Some(2.0), ..old }.automation_daily_usd(), 5.0);
     }
 
     #[test]

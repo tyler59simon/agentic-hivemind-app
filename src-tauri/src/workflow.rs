@@ -418,7 +418,8 @@ impl Workflows {
     pub fn new(dir: PathBuf) -> Workflows {
         let mut runs = BTreeMap::new();
         if let Ok(entries) = std::fs::read_dir(&dir) {
-            for entry in entries.flatten() {
+            // Only `<id>.json`: a temporary file left by a crash mid-save holds an older copy of a run (Codex review D4-2).
+            for entry in entries.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "json")) {
                 let Some(mut run) = std::fs::read_to_string(entry.path()).ok().and_then(|t| serde_json::from_str::<Run>(&t).ok()) else { continue };
                 if run.state == RunState::Running {
                     for t in run.tasks.iter_mut().filter(|t| t.state == TaskState::Running) {
@@ -869,6 +870,20 @@ mod tests {
         assert!(on_disk.get("saveError").is_none());
         // The progress missed by the failed save is on disk now: a restart keeps both finished tasks.
         assert_eq!(states(&Workflows::new(dir.clone()).get(&run.id).unwrap())[..2], [TaskState::Succeeded, TaskState::Succeeded]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_temporary_file_left_by_a_crash_is_not_loaded() {   // Codex review D4-2
+        let dir = scratch();
+        let flows = Workflows::new(dir.clone());
+        let run = feature(&flows);
+        // What write_atomic leaves when the app stops between writing and renaming: an older copy of the run.
+        let older = Run { goal: "An older goal".into(), ..run.clone() };
+        std::fs::write(dir.join(format!("{}.tmp-0123", run.id)), serde_json::to_string(&older).unwrap()).unwrap();
+        let loaded = Workflows::new(dir.clone());
+        assert_eq!(loaded.get(&run.id).unwrap().goal, "Add retries");
+        assert_eq!(loaded.list().len(), 1);
         let _ = std::fs::remove_dir_all(dir);
     }
 

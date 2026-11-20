@@ -33,10 +33,11 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
       <input value={value[key] ?? ""} placeholder={hint} onChange={(e) => setValue({ ...value, [key]: e.target.value || null })} />
     </label>
   );
-  const money = (key: "agent_budget_usd" | "automation_daily_usd" | "learning_daily_usd" | "review_call_usd", label: string, usd: number) => (
+  // A daily budget may be 0 (that spending is off); a limit per run or per call must be more than 0, or empty for the default.
+  const money = (key: "agent_budget_usd" | "automation_daily_usd" | "learning_daily_usd" | "review_call_usd", label: string, usd: number, min = 0) => (
     <label className="field">
       <span>{label}</span>
-      <input type="number" min="0" step="any" value={value[key] ?? ""} placeholder={String(usd)}
+      <input type="number" min={min} step="any" value={value[key] ?? ""} placeholder={String(usd)}
         onChange={(e) => setValue({ ...value, [key]: amount(e.target.value) })} />
     </label>
   );
@@ -110,19 +111,19 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
 
       <h3>Budgets</h3>
       <p className="muted small">Amounts are in US dollars. Leave a field empty for its default (shown in grey). Daily budgets start again at midnight UTC, and 0 turns that kind of spending off.</p>
-      {claudeOn && money("agent_budget_usd", "Spend cap per agent run, Claude Code chat", BUDGET_DEFAULTS.agentRun)}
+      {claudeOn && money("agent_budget_usd", "Spend cap per agent run, Claude Code chat", BUDGET_DEFAULTS.agentRun, 0.01)}
       {money("automation_daily_usd", "Automations per day", BUDGET_DEFAULTS.automationsDaily)}
       <p className="muted small">Sessions and workflows that automations start. A run starts only when its own budget (set on each automation) fits in what is left today. A workflow is checked for one session's budget and can spend up to that much per task.</p>
       {money("learning_daily_usd", "Learning and executive per day", BUDGET_DEFAULTS.learningDaily)}
       <p className="muted small">The session reviewer, the Executive page's briefings, drafts and capture, and the commit reviews and briefings that automations ask for.</p>
       <details>
         <summary>Per-call limits</summary>
-        <p className="muted small">The most one call may spend. A limit above its daily budget is lowered to that budget. 0 or empty uses the default.</p>
-        {money("review_call_usd", "Session review", BUDGET_DEFAULTS.review)}
+        <p className="muted small">The most one call may spend, in whole cents. A limit above its daily budget is lowered to that budget. Empty uses the default.</p>
+        {money("review_call_usd", "Session review", BUDGET_DEFAULTS.review, 0.01)}
         {EXECUTIVE_CALLS.map((call) => (
           <label key={call.id} className="field">
             <span>Executive: {call.label}</span>
-            <input type="number" min="0" step="any" value={value.executive_call_usd?.[call.id] ?? ""} placeholder={String(call.usd)}
+            <input type="number" min="0.01" step="any" value={value.executive_call_usd?.[call.id] ?? ""} placeholder={String(call.usd)}
               onChange={(e) => setValue({ ...value, executive_call_usd: withCallLimit(value.executive_call_usd, call.id, amount(e.target.value)) })} />
           </label>
         ))}

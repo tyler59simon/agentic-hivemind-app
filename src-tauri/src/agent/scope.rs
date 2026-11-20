@@ -323,10 +323,10 @@ pub fn profile_policy(profile: Profile, cwd: &Path, attended: bool, commands: &[
 /// get back. A rule matches the words anywhere in the command line, so a quoted mention is refused too (the safe side).
 const DESTRUCTIVE_GIT: [&str; 5] = ["git push", "git reset --hard", "git clean", "git branch -D", "git branch --delete"];
 
-/// Git options that turn a reading command (READ_GIT) into one that writes a file (`--output`) or runs a program the
-/// repository names (`--ext-diff`, `--textconv`). Refused with any git command; `--no-ext-diff` and `--no-textconv` do not
-/// contain them.
-const UNSAFE_GIT_OPTIONS: [&str; 3] = ["--output", "--ext-diff", "--textconv"];
+/// Git options that turn a reading command (READ_GIT) into one that writes a file (`--output=<file>` or `--output <file>`)
+/// or runs a program the repository names (`--ext-diff`, `--textconv`). Refused with any git command; `--no-ext-diff`,
+/// `--no-textconv` and the read-only `--output-indicator-*` options do not contain them.
+const UNSAFE_GIT_OPTIONS: [&str; 4] = ["--output=", "--output ", "--ext-diff", "--textconv"];
 
 /// Every rule a session is denied: Living Memory's governed commands, the destructive git commands and the unsafe git
 /// options.
@@ -341,12 +341,15 @@ pub fn deny_rules() -> Vec<String> {
 
 /// Give a session an extra folder it may read but not edit. The folder's files are denied to every editing tool (an `Edit`
 /// rule covers them all), and deny wins over allow, so a broad allow rule of the user's own, such as `Edit(**)`, cannot
-/// open it. An attended editing session accepts edits in every folder it was given, so it gets no extra folder.
+/// open it. An attended editing session accepts edits in every folder it was given, so it gets no extra folder. Nor does a
+/// folder whose path has a pattern character (`*?[]{}`): the rule is a gitignore-style pattern and might not match the
+/// folder, so the session goes without it rather than risk it being writable.
 pub fn read_only_folder(scope: &mut Scope, folder: &Path) {
-    if matches!(scope.policy, Policy::AcceptEdits { .. }) {
+    let path = folder.display().to_string();
+    if matches!(scope.policy, Policy::AcceptEdits { .. }) || path.contains(['*', '?', '[', ']', '{', '}']) {
         return;
     }
-    scope.deny.push(format!("Edit({}/**)", rule_path(&folder.display().to_string())));
+    scope.deny.push(format!("Edit({}/**)", rule_path(&path)));
     scope.add_dirs.push(folder.to_path_buf());
 }
 
@@ -922,13 +925,17 @@ mod tests {
     fn reading_git_commands_may_not_write_files_or_run_programs() {
         let rules = deny_rules();
         for tool in ["Bash", "PowerShell"] {
-            for option in ["--output", "--ext-diff", "--textconv"] {
+            for option in ["--output=", "--output ", "--ext-diff", "--textconv"] {
                 let rule = format!("{tool}(*git *{option}*)");
                 assert!(rules.contains(&rule), "{rule}");
             }
         }
-        // The safe spellings Hivemind itself uses are not matched by the pattern's fixed text.
-        for safe in ["git log -p --no-ext-diff --no-textconv", "git diff --no-color"] {
+        // Both spellings of --output are refused.
+        for unsafe_line in ["git diff --output=x", "git log -p --output x"] {
+            assert!(UNSAFE_GIT_OPTIONS.iter().any(|option| unsafe_line.contains(option)), "{unsafe_line}");
+        }
+        // The safe spellings Hivemind itself uses, and read-only options that start alike, are not matched (Codex review S-2).
+        for safe in ["git log -p --no-ext-diff --no-textconv", "git diff --no-color", "git diff --output-indicator-new=+"] {
             assert!(!UNSAFE_GIT_OPTIONS.iter().any(|option| safe.contains(option)), "{safe}");
         }
     }
@@ -971,5 +978,12 @@ mod tests {
         read_only_folder(&mut edits, folder);
         assert!(edits.add_dirs.is_empty());
         assert_eq!(edits.deny, deny_rules());
+        // Nor is a folder whose name the deny pattern might not match (Codex review S-1).
+        for odd in [r"C:\arch\billing [v2]", r"C:\arch\b*", r"C:\arch\{x}"] {
+            let mut scope = work_as(tree("2b3c4d5e"), Profile::ReadOnly, false, &[], "Review").unwrap();
+            read_only_folder(&mut scope, Path::new(odd));
+            assert!(scope.add_dirs.is_empty(), "{odd}");
+            assert_eq!(scope.deny, deny_rules(), "{odd}");
+        }
     }
 }

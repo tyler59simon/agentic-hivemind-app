@@ -141,7 +141,8 @@ pub fn create_at(worktrees: &Path, repo: &Path, branch: Option<&str>, start: Opt
     }
     let (base_branch, base_sha) = match (branch, start) {
         (_, Some(sha)) => {
-            let found = Some(sha).filter(|sha| crate::git::is_sha(sha)).and_then(|sha| resolve(repo, sha));
+            // The commit itself: an id that names another object (an annotated tag) peels to a different commit.
+            let found = Some(sha).filter(|sha| crate::git::is_sha(sha)).and_then(|sha| resolve(repo, sha)).filter(|commit| commit.eq_ignore_ascii_case(sha));
             (branch.unwrap_or("HEAD").to_string(), found.ok_or_else(|| format!("Unknown commit: {sha}"))?)
         }
         (Some(name), None) => {
@@ -467,8 +468,12 @@ mod tests {
         let tree = create_at(&rig.worktrees, &rig.repo, Some("feature/x"), Some(&checkpoint), "0123456789abcdef").unwrap();
         assert_eq!((tree.base_branch.as_str(), tree.base_sha.as_str()), ("feature/x", checkpoint.as_str()));
         assert_eq!(sh(Path::new(&tree.path), &["rev-parse", "HEAD"]).trim(), checkpoint);
-        // Only a full sha the repository has is taken.
-        for bad in ["feature/x", &checkpoint[..7], &"0".repeat(40), "--upload-pack=x"] {
+        // Only a full sha of a commit the repository has is taken; an annotated tag's id names the tag, not the commit
+        // (Codex review F7-2).
+        sh(&rig.repo, &["tag", "-a", "v1", "-m", "release", &checkpoint]);
+        let tag = sh(&rig.repo, &["rev-parse", "v1"]).trim().to_string();
+        assert_ne!(tag, checkpoint);
+        for bad in ["feature/x", &checkpoint[..7], &"0".repeat(40), "--upload-pack=x", &tag] {
             assert_eq!(create_at(&rig.worktrees, &rig.repo, Some("feature/x"), Some(bad), "fedcba9876543210"), Err(format!("Unknown commit: {bad}")));
         }
     }

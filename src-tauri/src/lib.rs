@@ -582,7 +582,8 @@ impl automations::Doer for AppDoer {
         let saved = settings::load(&state.settings_path);
         // The budget the session gets: the run's own, never above the settings' cap per agent run (agent::start_task).
         let need = budget_usd.filter(|b| b.is_finite() && *b > 0.0).map_or(saved.agent_budget_usd(), |b| b.min(saved.agent_budget_usd()));
-        state.automation_spend.used(agent::now_ms()) + need <= saved.automation_daily_usd() + 1e-9
+        let cap = saved.automation_daily_usd();
+        cap > 0.0 && state.automation_spend.used(agent::now_ms()) + need <= cap + 1e-9
     }
     fn charge(&self, usd: f64) {
         let id = format!("charge-{}", uuid::Uuid::new_v4().simple());

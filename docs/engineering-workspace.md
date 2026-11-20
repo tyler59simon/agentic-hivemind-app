@@ -44,7 +44,7 @@ When a chat work session ends in a way worth learning from, Hivemind asks a sepa
 
 - **When it runs:** after the user approves a session's edits (notes and skills), after the user dismisses them (notes only), and after a session without edits that made at least 15 tool calls (notes only). Each session is reviewed once; a failed review can be run again from the session's rail.
 - **What it produces:** note drafts staged with Living Memory's `propose` (the user saves or rejects them in Review, Learned tab), and at most one skill proposal. "Nothing" is a normal answer.
-- **Daily cap:** Settings sets the most the reviewer and paid automations may spend per UTC day (default $1). Each call reserves $0.25 first and settles at its real cost; a crash leaves the reservation counted.
+- **Daily cap:** Settings, Budgets, sets the most the reviewer, the executive calls, and the commit reviews and briefings automations ask for may spend per UTC day (default $1). Each review reserves its limit per call ($0.25 by default) first and settles at its real cost; a crash leaves the reservation counted. Sessions and workflows started by automations have their own daily budget (default $5).
 
 ## Skills
 

@@ -339,7 +339,8 @@ pub struct Automations {
 /// Sessions and workflows being started for runs, and the reports that came before their run saved the child's id.
 #[derive(Default)]
 struct Pending {
-    starting: usize,
+    /// The automation of each start under way, once per start.
+    starting: Vec<String>,
     early: Vec<Ended>,
 }
 
@@ -555,7 +556,10 @@ impl Automations {
             }
             return None;
         }
-        if self.runs(id).iter().any(|r| matches!(r.state, RunState::Waiting | RunState::Running)) {
+        // A run cancelled while its session or workflow starts still occupies the automation until that start is cleaned up.
+        let open = self.runs(id).iter().any(|r| matches!(r.state, RunState::Waiting | RunState::Running))
+            || self.pending.lock().unwrap().starting.iter().any(|s| s == id);
+        if open {
             // The occurrence is used up, so the scheduler does not come back for it before the next one.
             if scheduled {
                 self.skip_due(id, now);
@@ -668,7 +672,7 @@ impl Automations {
         self.cancels.lock().unwrap().insert(row.id.clone(), cancel.clone());
         let starts = matches!(a.action, Action::Role { .. } | Action::Workflow { .. });
         if starts {
-            self.pending.lock().unwrap().starting += 1;
+            self.pending.lock().unwrap().starting.push(a.id.clone());
         }
         drop(admit);
         let repo = a.repo.clone().unwrap_or_default();
@@ -690,7 +694,7 @@ impl Automations {
             let _admit = self.admit.lock().unwrap();
             if let Some(cancelled) = self.find_run(&row.id).filter(|r| r.state == RunState::Cancelled) {
                 self.cancels.lock().unwrap().remove(&row.id);
-                self.start_done();
+                self.start_done(&a.id);
                 return cancelled;
             }
         }
@@ -727,20 +731,21 @@ impl Automations {
         if let Some(cancelled) = self.find_run(&row.id).filter(|r| r.state == RunState::Cancelled) {
             let Some(child) = child else {
                 if starts {
-                    self.start_done();
+                    self.start_done(&a.id);
                 }
                 return cancelled;
             };
             // The cancel came while the child started, so nobody stopped it: the cancelled run keeps the child's id, so
-            // its cost is still counted when it ends, and the child is stopped.
+            // its cost is still counted when it ends, and the child is stopped, even when it reported already (a turn's
+            // end leaves a session's process running). Until it is, the automation counts as busy, so no new run of it
+            // starts beside it.
             let kept = RunRow { session: row.session, workflow: row.workflow, ..cancelled };
             let _ = self.put_run(&kept);
-            let (kept, ended) = self.take_early(kept, doer);
-            self.start_done();
+            let kept = self.take_early(kept, doer).0;
             drop(admit);
-            if !ended {
-                doer.stop(&child);
-            }
+            doer.stop(&child);
+            let _admit = self.admit.lock().unwrap();
+            self.start_done(&a.id);
             return kept;
         }
         if seen.is_some() && row.state != RunState::Failed {
@@ -749,7 +754,7 @@ impl Automations {
         let _ = self.put_run(&row);
         if starts {
             row = self.take_early(row, doer).0;
-            self.start_done();
+            self.start_done(&a.id);
         }
         drop(admit);
         if row.ended_at.is_some() {
@@ -759,10 +764,12 @@ impl Automations {
     }
 
     /// A start is over. With none left under way, a report still waiting belongs to no run. Call with `admit` held.
-    fn start_done(&self) {
+    fn start_done(&self, automation: &str) {
         let mut pending = self.pending.lock().unwrap();
-        pending.starting -= 1;
-        if pending.starting == 0 {
+        if let Some(at) = pending.starting.iter().position(|s| s == automation) {
+            pending.starting.remove(at);
+        }
+        if pending.starting.is_empty() {
             pending.early.clear();
         }
     }
@@ -818,7 +825,7 @@ impl Automations {
         });
         let Some(row) = found else {
             let mut pending = self.pending.lock().unwrap();
-            if pending.starting > 0 && !pending.early.iter().any(|e| e.session == ended.session && e.workflow == ended.workflow) {
+            if !pending.starting.is_empty() && !pending.early.iter().any(|e| e.session == ended.session && e.workflow == ended.workflow) {
                 pending.early.push(ended);
             }
             return None;
@@ -1431,7 +1438,7 @@ mod tests {
             fired.join().unwrap().unwrap()
         });
         assert_eq!((row.state, row.session.as_deref()), (RunState::Running, Some("s1")));
-        assert_eq!(autos.pending.lock().unwrap().starting, 0);
+        assert!(autos.pending.lock().unwrap().starting.is_empty());
         let ended = autos.finished(Some("s1"), None, true, "done".into(), Some(0.2), &doer).unwrap();
         assert_eq!((ended.state, ended.cost_usd), (RunState::Succeeded, Some(0.2)));
         assert_eq!(*doer.charged.lock().unwrap(), [0.2]);
@@ -1459,7 +1466,7 @@ mod tests {
         assert_eq!(*doer.charged.lock().unwrap(), [0.4], "counted once");
         assert!(doer.notes.lock().unwrap().iter().any(|n| n.contains("It failed")), "the failure is reported");
         let pending = autos.pending.lock().unwrap();
-        assert_eq!((pending.starting, pending.early.len()), (0, 0));
+        assert!(pending.starting.is_empty() && pending.early.is_empty());
         drop(pending);
         // With no start under way, a report for no run is not kept.
         assert!(autos.finished(Some("s9"), None, true, "x".into(), None, &doer).is_none());
@@ -1478,6 +1485,8 @@ mod tests {
             wait_until("the start", || doer.inside.load(Ordering::SeqCst));
             let cancelled = autos.cancel(&autos.runs(&role.id)[0].id).unwrap();
             assert_eq!((cancelled.state, cancelled.session.as_deref()), (RunState::Cancelled, None), "nothing to stop yet");
+            // The cancelled run still occupies the automation while its session starts (Codex review F15-1).
+            assert!(autos.fire(&role.id, "manual", None, &doer).is_none());
             doer.hold.store(false, Ordering::SeqCst);
             fired.join().unwrap().unwrap()
         });
@@ -1487,7 +1496,29 @@ mod tests {
         let ended = autos.finished(Some("s1"), None, false, "stopped".into(), Some(0.1), &doer).unwrap();
         assert_eq!((ended.state, ended.cost_usd), (RunState::Cancelled, Some(0.1)));
         assert_eq!(*doer.charged.lock().unwrap(), [0.1]);
-        assert_eq!(autos.pending.lock().unwrap().starting, 0);
+        assert!(autos.pending.lock().unwrap().starting.is_empty());
+        assert_eq!(autos.fire(&role.id, "manual", None, &Fake { session: true, ..Default::default() }).unwrap().state, RunState::Running, "free again");
+        let _ = std::fs::remove_dir_all(&store.0);
+    }
+
+    #[test]
+    fn a_cancelled_session_that_reported_its_turn_early_is_still_stopped() {   // Codex review F15-5
+        let store = store();
+        let (role, _) = starting(&store);
+        let autos = &store.1;
+        let doer = Fake { session: true, hold: AtomicBool::new(true), ..Default::default() };
+        let row = std::thread::scope(|s| {
+            let fired = s.spawn(|| autos.fire(&role.id, "manual", None, &doer));
+            wait_until("the start", || doer.inside.load(Ordering::SeqCst));
+            // The first turn ends (the session stays open) before the run knows its session, then the user cancels.
+            assert!(autos.finished(Some("s1"), None, true, "turn done".into(), Some(0.2), &doer).is_none());
+            autos.cancel(&autos.runs(&role.id)[0].id).unwrap();
+            doer.hold.store(false, Ordering::SeqCst);
+            fired.join().unwrap().unwrap()
+        });
+        assert_eq!((row.state, row.cost_usd), (RunState::Cancelled, Some(0.2)));
+        assert_eq!(*doer.stopped.lock().unwrap(), [Started::Session("s1".into())]);
+        assert_eq!(*doer.charged.lock().unwrap(), [0.2]);
         let _ = std::fs::remove_dir_all(&store.0);
     }
 
