@@ -805,6 +805,23 @@ impl Automations {
         row
     }
 
+    /// End the run of each workflow an automation started that has ended, with the workflow's outcome and the cost of its
+    /// sessions (`cost_of`). Called after every session report and after the user acts on a workflow: a cancel, or a skip
+    /// of its last open task, ends a workflow with no session report (Codex review F15-3). A run already ended is left as it is.
+    pub fn workflows_ended(&self, runs: Vec<crate::workflow::Run>, cost_of: impl Fn(&str) -> Option<f64>, doer: &dyn Doer) {
+        use crate::workflow::RunState as Flow;
+        for run in runs.into_iter().filter(|r| r.origin.as_deref().is_some_and(|o| o.starts_with("automation:"))) {
+            let outcome = match run.state {
+                Flow::Succeeded => "succeeded",
+                Flow::Failed => "failed",
+                Flow::Cancelled => "was cancelled",
+                _ => continue,
+            };
+            let cost: f64 = run.tasks.iter().filter_map(|t| t.session.as_deref()).filter_map(&cost_of).sum();
+            self.finished(None, Some(&run.id), run.state == Flow::Succeeded, format!("The workflow {outcome}"), Some(cost), doer);
+        }
+    }
+
     fn report(&self, a: &Automation, row: &RunRow, doer: &dyn Doer) {
         let failed = matches!(row.state, RunState::Failed);
         if a.notify == Notify::All || (a.notify == Notify::Failures && failed) {
@@ -1033,6 +1050,8 @@ mod tests {
         log_broken: Mutex<bool>,
         broke: bool,
         session: bool,
+        /// run starts the workflow `w1`.
+        workflow: bool,
         paused: Mutex<bool>,
         /// run waits (up to 10 s) for its cancel flag, then reports whether it saw it.
         slow: bool,
@@ -1073,6 +1092,9 @@ mod tests {
             }
             if self.session {
                 return Ok(Started::Session("s1".into()));
+            }
+            if self.workflow {
+                return Ok(Started::Workflow("w1".into()));
             }
             Ok(Started::Done { detail: "done".into(), cost: Some(0.01) })
         }
@@ -1418,6 +1440,34 @@ mod tests {
             assert!(start.elapsed() < Duration::from_secs(10), "timed out: {what}");
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn a_workflow_that_ends_without_a_session_report_ends_its_run() {   // Codex review F15-3
+        let store = store();
+        let (role, _) = starting(&store);
+        let autos = &store.1;
+        let flow = autos.put(Automation { id: String::new(), action: Action::Workflow { goal: "g".into(), template: "feature".into() }, ..role }, now_ms()).unwrap();
+        let doer = Fake { workflow: true, ..Default::default() };
+        assert_eq!(autos.fire(&flow.id, "manual", None, &doer).unwrap().workflow.as_deref(), Some("w1"));
+        // The user cancels the workflow on the Workflows page while no session runs, so no session report comes.
+        let flows = crate::workflow::Workflows::new(store.0.join("workflows"));
+        let tasks = crate::workflow::templates().into_iter().find(|t| t.id == "feature").unwrap().tasks;
+        let new = crate::workflow::NewRun { goal: "g".into(), project: "p".into(), repo: "r".into(), tasks, ..Default::default() };
+        let mut run = flows.create(new, Some(format!("automation:{}", flow.id))).unwrap();
+        run.id = "w1".into();
+        run.state = crate::workflow::RunState::Cancelled;
+        run.tasks[0].session = Some("s7".into());
+        let user_made = crate::workflow::Run { id: "w2".into(), origin: None, ..run.clone() };
+        let cost = |s: &str| (s == "s7").then_some(0.3);
+        autos.workflows_ended(vec![run.clone(), user_made], cost, &doer);
+        let ended = autos.runs(&flow.id)[0].clone();
+        assert_eq!((ended.state, ended.cost_usd, ended.detail.as_deref()), (RunState::Failed, Some(0.3), Some("The workflow was cancelled")));
+        assert_eq!(*doer.charged.lock().unwrap(), [0.3]);
+        // Asked again (every session report asks), nothing changes.
+        autos.workflows_ended(vec![run], cost, &doer);
+        assert_eq!(*doer.charged.lock().unwrap(), [0.3]);
+        let _ = std::fs::remove_dir_all(&store.0);
     }
 
     #[test]

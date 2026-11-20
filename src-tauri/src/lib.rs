@@ -609,6 +609,13 @@ impl automations::Doer for AppDoer {
     }
 }
 
+/// End the automation runs whose workflows have ended (`Automations::workflows_ended`).
+fn automation_workflows_ended(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let cost_of = |session: &str| state.agents.info(session).ok().and_then(|i| i.cost_usd);
+    state.automations.workflows_ended(state.workflows.list(), cost_of, &AppDoer(app.clone()));
+}
+
 /// Workflows advance and automations finish on session reports; failed and approved sessions the user started fire
 /// event automations. Work that starts sessions runs on its own thread so the conductor never waits on a worktree.
 fn orchestration_reports(app: AppHandle) -> conductor::Handler {
@@ -634,14 +641,7 @@ fn orchestration_reports(app: AppHandle) -> conductor::Handler {
                 let detail = info.summary.clone().or(info.error.clone()).map(|t| agent::events::clip(&t, 300)).unwrap_or_else(|| "Session finished".into());
                 state.automations.finished(Some(&info.id), None, ok, detail, info.cost_usd, &doer);
             }
-            // A workflow an automation started has ended.
-            for run in state.workflows.list().into_iter().filter(|r| r.origin.as_deref().is_some_and(|o| o.starts_with("automation:"))) {
-                if matches!(run.state, workflow::RunState::Succeeded | workflow::RunState::Failed | workflow::RunState::Cancelled) {
-                    let cost: f64 = run.tasks.iter().filter_map(|t| t.session.as_deref()).filter_map(|s| state.agents.info(s).ok()).filter_map(|i| i.cost_usd).sum();
-                    let detail = format!("The workflow {}", match run.state { workflow::RunState::Succeeded => "succeeded", workflow::RunState::Failed => "failed", _ => "was cancelled" });
-                    state.automations.finished(None, Some(&run.id), run.state == workflow::RunState::Succeeded, detail, Some(cost), &doer);
-                }
-            }
+            automation_workflows_ended(&app);
             // Work an automation started never fires event automations (no loops); a workflow the user started does.
             let by_automation = origin.starts_with("automation:")
                 || origin.strip_prefix("workflow:").and_then(|rest| rest.split(':').next()).and_then(|run| state.workflows.get(run).ok())
@@ -749,6 +749,8 @@ async fn workflow_act(app: AppHandle, id: String, action: String, task: Option<S
             "retry" | "skip" => state.workflows.retry_or_skip(&id, task.as_deref().ok_or("Which task?")?, action == "skip", &host),
             _ => Err(format!("Unknown workflow action: {action}")),
         };
+        // A cancel or skip can end an automation's workflow with no session report to say so.
+        automation_workflows_ended(&app);
         let _ = app.emit("workflows-changed", ());
         run
     })
