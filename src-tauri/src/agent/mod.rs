@@ -1672,26 +1672,27 @@ fn check_launch_options(saved: &Settings, mut options: StartOptions) -> Result<S
     Ok(options)
 }
 
+/// The first system `repo` belongs to that has an output folder: its slug, name and folder.
+fn architecture_of(bridge: &Bridge, repo: &std::path::Path) -> Option<(String, String, std::path::PathBuf)> {
+    crate::architecture::systems_for_repo(bridge, repo).into_iter().find(|(_, _, folder)| folder.is_dir())
+}
+
 /// For an architect or reviewer: the architecture briefing of the system the repository belongs to, and its output folder
-/// as an extra (readable) folder. Other sessions are returned unchanged.
+/// as an extra folder it may read but not edit. Other sessions are returned unchanged.
 fn with_architecture(bridge: &Bridge, manager: &Manager, repo: &std::path::Path, options: StartOptions, scope: Result<scope::Scope, String>) -> (StartOptions, Result<scope::Scope, String>) {
     if !matches!(options.role, Some(Role::Architect | Role::Reviewer)) || scope.is_err() {
         return (options, scope);
     }
-    let systems: Vec<_> = crate::architecture::systems_for_repo(bridge, repo).into_iter().filter(|(_, _, folder)| folder.is_dir()).collect();
-    let Some((slug, name, folder)) = systems.into_iter().next() else { return (options, scope) };
+    let Some((slug, name, folder)) = architecture_of(bridge, repo) else { return (options, scope) };
     let behind = crate::architecture::staleness(bridge, &manager.sessions(), &slug).ok().and_then(|s| s.behind);
     let text = crate::archsuite::briefing(&name, &folder, behind);
     let briefing = Some(match options.briefing.as_deref() {
         Some(b) => format!("{b}\n\n{text}"),
         None => text,
     });
-    // An attended editing session accepts edits in every folder it was given, so it only reads the paths in the briefing
-    // (and asks); the read-only and research profiles get the folder itself.
+    // An attended editing session only reads the paths in the briefing (and asks); the others get the folder, read-only.
     let scope = scope.map(|mut s| {
-        if !matches!(s.policy, scope::Policy::AcceptEdits { .. }) {
-            s.add_dirs.push(folder);
-        }
+        scope::read_only_folder(&mut s, &folder);
         s
     });
     (StartOptions { briefing, ..options }, scope)
@@ -1944,8 +1945,15 @@ pub fn send_task(
                 crate::managed::refuse()?;
             }
             let cli = chat_program(engine, saved)?;
+            let mut scope = scope::for_session(bridge, saved, info)?;
+            // A resumed architect or reviewer keeps its architecture folder, read-only as at the start.
+            if let (Some(Role::Architect | Role::Reviewer), AgentTask::Work { repo, .. }) = (info.role, &info.task)
+                && let Some((_, _, folder)) = architecture_of(bridge, std::path::Path::new(repo))
+            {
+                scope::read_only_folder(&mut scope, &folder);
+            }
             Ok(Launch {
-                scope: scope::for_session(bridge, saved, info)?,
+                scope,
                 program: cli.program,
                 program_args: cli.args,
                 budget_usd: saved.agent_budget_usd(),

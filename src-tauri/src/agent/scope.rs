@@ -339,6 +339,17 @@ pub fn deny_rules() -> Vec<String> {
     rules
 }
 
+/// Give a session an extra folder it may read but not edit. The folder's files are denied to every editing tool (an `Edit`
+/// rule covers them all), and deny wins over allow, so a broad allow rule of the user's own, such as `Edit(**)`, cannot
+/// open it. An attended editing session accepts edits in every folder it was given, so it gets no extra folder.
+pub fn read_only_folder(scope: &mut Scope, folder: &Path) {
+    if matches!(scope.policy, Policy::AcceptEdits { .. }) {
+        return;
+    }
+    scope.deny.push(format!("Edit({}/**)", rule_path(&folder.display().to_string())));
+    scope.add_dirs.push(folder.to_path_buf());
+}
+
 /// What a session in a role may touch: its worktree, with the rules of `profile`.
 pub fn work_as(tree: Worktree, profile: Profile, attended: bool, commands: &[String], prompt: &str) -> Result<Scope, String> {
     let cwd = PathBuf::from(&tree.path);
@@ -936,5 +947,29 @@ mod tests {
         assert_eq!((scope.cwd.as_path(), scope.mode, scope.title.as_str()), (Path::new("C:/wt/pay/0f9e8d7c"), Mode::Interactive, "Review the retry"));
         assert_eq!(scope.policy.mode(), PolicyMode::PreApproved);
         assert_eq!((scope.worktree, scope.deny), (Some(tree), deny_rules()));
+    }
+
+    #[test]
+    fn an_architecture_folder_is_readable_but_never_editable() {
+        let tree = |n: &str| Worktree {
+            repo: "C:/demo/pay".into(),
+            path: format!("C:/wt/pay/{n}"),
+            branch: format!("hivemind/{n}"),
+            base_branch: "main".into(),
+            base_sha: "a053c800edb319fae41bc4873e4412b763b9d93b".into(),
+            reviewed_sha: None,
+        };
+        let folder = Path::new(r"C:\arch\billing");
+        for (profile, attended) in [(Profile::ReadOnly, true), (Profile::ReadOnly, false), (Profile::Research, false), (Profile::EditWorktree, false)] {
+            let mut scope = work_as(tree("0f9e8d7c"), profile, attended, &[], "Review").unwrap();
+            read_only_folder(&mut scope, folder);
+            assert_eq!(scope.add_dirs, vec![folder.to_path_buf()], "{profile:?}");
+            assert_eq!(scope.deny, [deny_rules(), vec!["Edit(//c/arch/billing/**)".to_string()]].concat(), "{profile:?}");
+        }
+        // An attended editing session would accept edits in the folder, so it is not given it.
+        let mut edits = work_as(tree("1a2b3c4d"), Profile::EditWorktree, true, &[], "Design").unwrap();
+        read_only_folder(&mut edits, folder);
+        assert!(edits.add_dirs.is_empty());
+        assert_eq!(edits.deny, deny_rules());
     }
 }
