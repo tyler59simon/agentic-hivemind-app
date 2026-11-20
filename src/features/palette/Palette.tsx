@@ -79,7 +79,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       ...EXTRA_COMMANDS.map((c) => ({ ...c, run: () => { close(); c.run(); } })),
       { key: "split", label: "Open the note side by side", detail: "Ctrl+\\", run: () => { ws.split(); close(); } },
       { key: "rail", label: railShown(ws) ? "Hide the note's context rail" : "Show the note's context rail", run: () => { ws.setRail(!railShown(ws)); close(); } },
-      { key: "search", label: "Search notes", detail: "Ctrl+K", run: page({ page: "memory" }) },
+      { key: "search", label: "Search notes", detail: "Ctrl+K", section: "memory", run: page({ page: "memory" }) },
       { key: "active", label: "Show active notes", run: () => { app.setShelf("active"); close(); app.go({ page: "memory" }); } },
       { key: "archive", label: "Show the archive", run: () => { app.setShelf("archived"); close(); app.go({ page: "memory" }); } },
       { key: "back", label: "Back", detail: "Alt+Left", run: () => { close(); app.goBack(); } },

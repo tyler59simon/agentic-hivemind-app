@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BookOpen, BriefcaseBusiness, ChevronDown, Database, GitBranch, House, LayoutDashboard, Network, Wrench, ScrollText, Sparkles, SquareCheck, Terminal, Workflow, type LucideIcon } from "lucide-react";
 import logo from "../assets/logo.png";
 import { ProjectSwitcher } from "../features/projects/ProjectSwitcher";
@@ -47,11 +47,13 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
   const available = useAvailableSections();
   const hidden = useHidden((s) => s.hidden);
   const setShown = useHidden((s) => s.setShown);
-  const [menu, setMenu] = useState<{ page: Page; x: number; y: number } | null>(null);
+  // The right-click menu, and the section button that opened it (focus goes back there on Escape).
+  const [menu, setMenu] = useState<{ page: Page; x: number; y: number; from: HTMLButtonElement } | null>(null);
+  const nav = useRef<HTMLElement>(null);
   useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(null);
-    const key = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") { close(); menu.from.focus(); } };
     window.addEventListener("mousedown", close);
     window.addEventListener("keydown", key);
     return () => { window.removeEventListener("mousedown", close); window.removeEventListener("keydown", key); };
@@ -68,10 +70,10 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
     <aside className="sidebar">
       <div className="brand-block"><img src={logo} alt="" /><span>Hivemind</span></div>
       <ProjectSwitcher />
-      <nav className="nav" aria-label="Sections">
+      <nav className="nav" aria-label="Sections" ref={nav}>
         {available.filter((s) => !hidden.includes(s.page)).map(({ page: p, label, icon: Icon }) => (
           <button key={p} className={`nav-item ${page === p ? "on" : ""}`} aria-current={page === p ? "page" : undefined} onClick={() => go({ page: p })}
-            onContextMenu={(e) => { e.preventDefault(); setMenu(p === "overview" ? null : { page: p, x: e.clientX, y: e.clientY }); }}>
+            onContextMenu={(e) => { e.preventDefault(); setMenu(p === "overview" ? null : { page: p, x: e.clientX, y: e.clientY, from: e.currentTarget }); }}>
             <Icon size="1.35em" aria-hidden /><span className="grow">{label}</span>
             {mark(p) && <span className={`nav-dot ${p === "agents" && waiting ? "waiting" : p === "agents" && attention === "done" ? "done" : p === "memory" ? "unsaved" : ""}`} title={mark(p)!} aria-label={mark(p)!} />}
           </button>
@@ -79,7 +81,11 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
       </nav>
       {menu && (
         <ul className="menu-list context" role="menu" style={{ top: menu.y, left: menu.x }} onMouseDown={(e) => e.stopPropagation()}>
-          <li role="none"><button role="menuitem" autoFocus onClick={() => { setShown(menu.page, false); setMenu(null); }}>
+          <li role="none"><button role="menuitem" autoFocus onClick={() => {
+            setShown(menu.page, false); setMenu(null);
+            // The section that had focus is gone: move it to the current section, or the first one.
+            requestAnimationFrame(() => (nav.current?.querySelector<HTMLElement>(".nav-item.on") ?? nav.current?.querySelector<HTMLElement>(".nav-item"))?.focus());
+          }}>
             <span className="grow">Hide from sidebar</span></button></li>
           <li className="menu-note" role="none">Show it again in Settings</li>
         </ul>
