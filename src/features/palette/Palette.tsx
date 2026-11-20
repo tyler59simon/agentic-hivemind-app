@@ -4,14 +4,16 @@ import { useChangesEnabled, useProjectsEnabled, useSystemsEnabled, useWikiEnable
 import { domains, list } from "../../lib/lm";
 import { refreshStore } from "../../lib/refresh";
 import { fuzzy } from "../../lib/text";
-import { openProject, openSystem, useApp, type Route } from "../../store";
+import { useHidden } from "../../shell/hidden";
+import { openProject, openSystem, useApp, type Page, type Route } from "../../store";
 import { railShown, useWorkspace } from "../../workspace/store";
 import { useChangeIntent } from "../changes/intent";
 import { useProjectIntent } from "../projects/intent";
 import { projectsQuery } from "../projects/useProject";
 import { systemsQuery, useSystemIntent } from "../systems/useSystem";
 
-interface Entry { key: string; label: string; detail?: string; run: () => void }
+/** `section`: the sidebar section this entry goes to; hiding the section drops the entry. */
+interface Entry { key: string; label: string; detail?: string; section?: Page; run: () => void }
 
 /** Extra commands registered by features (new note, graph, activity, tags…). */
 export const EXTRA_COMMANDS: { key: string; label: string; detail?: string; run: () => void }[] = [];
@@ -30,6 +32,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
   const systemsOn = useSystemsEnabled();
   const changesOn = useChangesEnabled();
   const wikiOn = useWikiEnabled();
+  const hidden = useHidden((s) => s.hidden);
   const systems = useQuery({ ...systemsQuery(), enabled: systemsOn && app.palette === "commands" });
   useEffect(() => { setQuery(""); setIndex(0); }, [app.palette]);
 
@@ -42,18 +45,18 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
     }
     const close = () => app.setPalette(null);
     const page = (route: Route) => () => { close(); app.go(route); };
-    return [
+    const all: Entry[] = [
       { key: "go", label: "Go to note…", detail: "Ctrl+O", run: () => app.setPalette("notes") },
       { key: "new", label: "New note", detail: "Ctrl+N", run: () => { close(); ws.openTab({ kind: "new-note" }); } },
       { key: "overview", label: "Overview", run: page({ page: "overview" }) },
-      { key: "memory", label: "Memory library", run: page({ page: "memory" }) },
+      { key: "memory", label: "Memory library", section: "memory" as Page, run: page({ page: "memory" }) },
       { key: "graph", label: "Open the graph", detail: "Ctrl+G", run: page({ page: "memory", view: "graph" }) },
       { key: "activity", label: "Recent activity (who changed what)", detail: "Ctrl+Shift+A", run: page({ page: "memory", view: "activity" }) },
       { key: "tags", label: "Manage tags", run: page({ page: "memory", view: "tags" }) },
       { key: "work", label: "Open work", run: page({ page: "overview", view: "work" }) },
-      { key: "review", label: "Review", run: page({ page: "review" }) },
-      ...(wikiOn ? [{ key: "wiki", label: "Wiki", run: page({ page: "wiki" }) }] : []),
-      { key: "changes", label: "Changes", run: page({ page: "changes" }) },
+      { key: "review", label: "Review", section: "review" as Page, run: page({ page: "review" }) },
+      ...(wikiOn ? [{ key: "wiki", label: "Wiki", section: "wiki" as Page, run: page({ page: "wiki" }) }] : []),
+      { key: "changes", label: "Changes", section: "changes" as Page, run: page({ page: "changes" }) },
       ...(changesOn ? [{ key: "new-change", label: "Start a change…", run: () => { close(); useChangeIntent.getState().open(); } }] : []),
       ...(projectsOn ? [
         { key: "new-project", label: "New project…", run: () => { close(); useProjectIntent.getState().openWizard(); } },
@@ -65,9 +68,9 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
         })),
       ] : []),
       ...(systemsOn ? [
-        { key: "architecture", label: "Architecture", run: page({ page: "architecture" }) },
+        { key: "architecture", label: "Architecture", section: "architecture" as Page, run: page({ page: "architecture" }) },
         { key: "new-system", label: "New system…", run: () => { close(); app.go({ page: "architecture" }); useSystemIntent.getState().openWizard(); } },
-        { key: "sessions", label: "Agent Workspace (sessions)", run: page({ page: "agents" }) },
+        { key: "sessions", label: "Agent Workspace (sessions)", section: "agents" as Page, run: page({ page: "agents" }) },
         ...(systems.data?.systems ?? []).filter((s) => s.status !== "retired").map((s) => ({
           key: "system:" + s.slug, label: `Open system: ${s.name}`, detail: s.tag,
           run: () => { close(); openSystem(s.slug); },
@@ -76,7 +79,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       ...EXTRA_COMMANDS.map((c) => ({ ...c, run: () => { close(); c.run(); } })),
       { key: "split", label: "Open the note side by side", detail: "Ctrl+\\", run: () => { ws.split(); close(); } },
       { key: "rail", label: railShown(ws) ? "Hide the note's context rail" : "Show the note's context rail", run: () => { ws.setRail(!railShown(ws)); close(); } },
-      { key: "search", label: "Search notes", detail: "Ctrl+K", run: page({ page: "memory" }) },
+      { key: "search", label: "Search notes", detail: "Ctrl+K", section: "memory", run: page({ page: "memory" }) },
       { key: "active", label: "Show active notes", run: () => { app.setShelf("active"); close(); app.go({ page: "memory" }); } },
       { key: "archive", label: "Show the archive", run: () => { app.setShelf("archived"); close(); app.go({ page: "memory" }); } },
       { key: "back", label: "Back", detail: "Alt+Left", run: () => { close(); app.goBack(); } },
@@ -88,7 +91,8 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
         run: () => { app.setDomain(d.name); close(); },
       })),
     ];
-  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, changesOn, wikiOn, client, onSettings, onReconnect]);
+    return all.filter((e) => !e.section || !hidden.includes(e.section));
+  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, changesOn, wikiOn, hidden, client, onSettings, onReconnect]);
 
   const shown = useMemo(() => entries
     .map((e) => ({ e, score: fuzzy(query, e.label) }))
