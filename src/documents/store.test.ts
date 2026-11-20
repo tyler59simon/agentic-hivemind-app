@@ -6,7 +6,7 @@ const files = new Map<string, string>();
 const drafts = new Map<string, unknown>();
 const gates = new Map<string, Promise<void>>();
 const calls: string[] = [];
-const flags = { failDrafts: false, readError: new Map<string, string>() };
+const flags = { failDrafts: false, readError: new Map<string, string>(), deleteError: "" };
 function gate(name: string) {
   let open = () => {};
   gates.set(name, new Promise<void>((resolve) => { open = resolve; }));
@@ -49,6 +49,9 @@ vi.mock("@tauri-apps/api/core", () => ({
         files.set(path, a.text as string);
         return { status: "saved", sha256: sha(a.text as string), size: 1, mtimeMs: 2 };
       }
+      case "file_delete":
+        if (flags.deleteError) throw new Error(flags.deleteError);
+        files.delete(path); return `.hivemind/trash/${path}`;
       case "draft_put":
         if (flags.failDrafts) throw new Error("The draft is larger than 32 MB");
         drafts.set(a.key as string, a.value); return null;
@@ -64,6 +67,7 @@ const { useApp } = await import("../store");
 const docs = await import("./store");
 const { retargetAll, startDocumentSync } = await import("./sync");
 const { draftKeyOf } = await import("./keys");
+const { forgetMoved } = await import("../lib/drafts");
 
 const ref = (path: string) => ({ notebook: "nb-1", path });
 const key = (path: string) => docs.keyOf(ref(path));
@@ -73,8 +77,11 @@ let stop = () => {};
 
 describe("documents store", () => {
   beforeEach(() => {
+    // The drafts module caches the drafts this run wrote; in the app the cache and the store always agree, so it forgets
+    // them when the fake store is cleared.
+    for (const d of drafts.values()) forgetMoved("nb-1", (d as { target: { path: string } }).target.path);
     files.clear(); drafts.clear(); gates.clear(); calls.length = 0;
-    flags.failDrafts = false; flags.readError.clear();
+    flags.failDrafts = false; flags.readError.clear(); flags.deleteError = "";
     files.set("A.md", "one");
     useWorkspace.setState({ panes: [{ id: "p0", tabs: [], active: null }], focused: "p0", dirty: {}, reveal: null });
     useApp.setState({ route: { page: "notes" }, back: [] });
@@ -304,6 +311,145 @@ describe("documents store", () => {
     docs.edit(key("Area/Q.md"), "edited");
     expect(docs.unsavedUnder("nb-1", "Area")).toEqual(["Area/Q.md"]);
     expect(docs.unsavedUnder("nb-1", "Area/P.md")).toEqual([]);
+  });
+
+  // Codex re-review of c496e1c.
+
+  it("D2: a merge that keeps the version shown still finds a newer version on disk", async () => {
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    docs.edit(key("A.md"), "mine");
+    files.set("A.md", "theirs 1");
+    await docs.refresh("nb-1", ["A.md"]);
+    const shown = state("A.md").theirs!;
+    files.set("A.md", "theirs 2");
+    await docs.refresh("nb-1", ["A.md"]);
+    await docs.resolveMerge(key("A.md"), "theirs 1", shown);
+    expect(state("A.md")).toMatchObject({ status: "clean", text: "theirs 2", base: { text: "theirs 2" } });
+  });
+
+  it("S1 and S5: a refresh or reload that ends after its page was closed and reopened changes nothing", async () => {
+    const reopen = async () => {
+      ws().closeTab("p0", ws().panes[0].tabs[0].id);
+      expect(state("A.md")).toBeUndefined();
+      await docs.flushDraft(key("A.md"));
+      ws().openTab({ kind: "file", file: ref("A.md") });
+      await docs.open(ref("A.md"));
+    };
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    const lateRefresh = gate("file_read A.md");
+    const refreshing = docs.refresh("nb-1", ["A.md"]);
+    gates.delete("file_read A.md");
+    files.set("A.md", "newer");
+    await reopen();
+    files.set("A.md", "what the late read saw");
+    lateRefresh();
+    await refreshing;
+    expect(state("A.md")).toMatchObject({ status: "clean", text: "newer" });
+    files.set("A.md", "newer");
+
+    docs.edit(key("A.md"), "mine");
+    const lateReload = gate("file_read A.md");
+    const reloading = docs.reload(key("A.md"));
+    gates.delete("file_read A.md");
+    await reopen();
+    expect(state("A.md")).toMatchObject({ status: "dirty", text: "mine" });
+    lateReload();
+    expect(await reloading).toBe(false);
+    expect(state("A.md")).toMatchObject({ status: "dirty", text: "mine" });
+    expect(drafts.has(await draftKeyOf(key("A.md")))).toBe(true);
+  });
+
+  it("N3: edits typed during a rename are kept when the tab closes and the app quits before the rename ends", async () => {
+    const { QueryClient } = await import("@tanstack/react-query");
+    const { movePath } = await import("../features/notes/actions");
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    const slow = gate("file_rename undefined");
+    const moving = movePath(new QueryClient(), "nb-1", "A.md", "B.md");
+    await vi.waitFor(() => expect(calls).toContain("file_rename "));
+    docs.edit(key("A.md"), "typed during the rename");
+    ws().closeTab("p0", ws().panes[0].tabs[0].id);
+    const quitting = docs.flushAllDrafts();
+    slow();
+    await moving;
+    expect(await quitting).toEqual([]);
+    expect(state("B.md")).toBeUndefined();
+    expect((drafts.get(await draftKeyOf(key("B.md"))) as { mine: string }).mine).toBe("typed during the rename");
+    expect(drafts.has(await draftKeyOf(key("A.md")))).toBe(false);
+  });
+
+  it("N4: edits typed while quitting writes drafts are written too", async () => {
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    docs.edit(key("A.md"), "before quitting");
+    const slow = gate("draft_put undefined");
+    const quitting = docs.flushAllDrafts();
+    await vi.waitFor(() => expect(calls).toContain("draft_put "));
+    docs.edit(key("A.md"), "typed while quitting");
+    slow();
+    expect(await quitting).toEqual([]);
+    expect((drafts.get(await draftKeyOf(key("A.md"))) as { mine: string }).mine).toBe("typed while quitting");
+  });
+
+  it("N5: a page opened while its section is renamed opens at the new name", async () => {
+    const { QueryClient } = await import("@tanstack/react-query");
+    const { movePath } = await import("../features/notes/actions");
+    files.set("Area/P.md", "p");
+    const slowMove = gate("file_rename undefined");
+    const moving = movePath(new QueryClient(), "nb-1", "Area", "Zone");
+    await vi.waitFor(() => expect(calls).toContain("file_rename "));
+    const slowRead = gate("file_read Area/P.md");
+    ws().openTab({ kind: "file", file: ref("Area/P.md") });
+    const opening = docs.open(ref("Area/P.md"));
+    slowMove();
+    await moving;
+    slowRead();
+    await opening;
+    expect(ws().panes[0].tabs[0].file).toEqual(ref("Zone/P.md"));
+    await vi.waitFor(() => expect(state("Zone/P.md")).toMatchObject({ status: "clean", text: "p" }));
+  });
+
+  it("D7: a rename waits for a draft write in flight, so the draft is only under the new name", async () => {
+    const { QueryClient } = await import("@tanstack/react-query");
+    const { movePath } = await import("../features/notes/actions");
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    docs.edit(key("A.md"), "draft in flight");
+    const slow = gate("draft_put undefined");
+    const flushing = docs.flushDraft(key("A.md"));
+    await vi.waitFor(() => expect(calls).toContain("draft_put "));
+    const moving = movePath(new QueryClient(), "nb-1", "A.md", "B.md");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(calls).not.toContain("file_rename ");
+    slow();
+    await Promise.all([flushing, moving]);
+    expect((drafts.get(await draftKeyOf(key("B.md"))) as { mine: string }).mine).toBe("draft in flight");
+    expect(drafts.has(await draftKeyOf(key("A.md")))).toBe(false);
+  });
+
+  it("D8: a page's tabs close before its delete settles, and come back with their edits when it fails", async () => {
+    const { QueryClient } = await import("@tanstack/react-query");
+    const { trashPath } = await import("../features/notes/actions");
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    docs.edit(key("A.md"), "edited");
+    flags.deleteError = "Access is denied. (os error 5)";
+    const slow = gate("file_delete A.md");
+    const deleting = trashPath(new QueryClient(), "nb-1", "A.md");
+    expect(ws().panes[0].tabs).toHaveLength(0);
+    slow();
+    await expect(deleting).rejects.toThrow("denied");
+    await docs.flushDraft(key("A.md"));
+    expect(ws().panes[0].tabs.map((t) => t.file)).toEqual([ref("A.md")]);
+    await docs.open(ref("A.md"));
+    expect(state("A.md")).toMatchObject({ status: "dirty", text: "edited" });
+    flags.deleteError = "";
+    await trashPath(new QueryClient(), "nb-1", "A.md");
+    expect(files.has("A.md")).toBe(false);
+    expect(ws().panes[0].tabs).toHaveLength(0);
+    await vi.waitFor(async () => expect(drafts.has(await draftKeyOf(key("A.md")))).toBe(false));
   });
 
   it("U2: renaming a section keeps every dot of the new name", async () => {

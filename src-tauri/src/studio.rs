@@ -12,7 +12,17 @@ use tauri::{AppHandle, Emitter, Manager, State};
 /// the notebook was registered). The folder must still be the one the user picked: a registered folder that was moved
 /// and replaced by a link resolves elsewhere and is refused (Codex review of 32fd236, P4).
 fn root_of(state: &AppState, id: &str) -> Result<(PathBuf, Protected), String> {
-    let notebook = state.notebooks.get(id)?;
+    let root = unmoved(&state.notebooks.get(id)?)?;
+    let protected = Protected::new(store_root(state).as_deref());
+    protected.check_root(&root)?;
+    Ok((root, protected))
+}
+
+/// The notebook's folder, still the one that was registered: no link was put in its place. Spellings are compared
+/// without case. That never mixes up two folders: a case-sensitive folder opens only the exact spelling, and a
+/// case-insensitive one has one folder for every spelling. It also keeps a notebook working after its folder is
+/// renamed by case only (Codex re-review of c496e1c, P4).
+fn unmoved(notebook: &Notebook) -> Result<PathBuf, String> {
     let root = PathBuf::from(&notebook.path);
     let real = std::fs::canonicalize(&root).map_err(|e| format!("The notebook folder {} is missing ({e})", root.display()))?;
     if crate::folders::plain(&real).to_lowercase() != notebook.path.to_lowercase() {
@@ -22,9 +32,7 @@ fn root_of(state: &AppState, id: &str) -> Result<(PathBuf, Protected), String> {
             crate::folders::plain(&real)
         ));
     }
-    let protected = Protected::new(store_root(state).as_deref());
-    protected.check_root(&root)?;
-    Ok((root, protected))
+    Ok(root)
 }
 
 /// `rel` inside the notebook, outside every protected place, and not hidden once links inside the notebook are
@@ -270,6 +278,36 @@ fn dangerous_to_windows(_ext: &str) -> bool {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[test]
+    fn a_notebook_folder_is_found_by_its_own_spelling_and_survives_a_case_only_rename() {
+        let scratch = || {
+            let dir = std::fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("hm-studio-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).unwrap();
+            dir
+        };
+        let register = |dir: &Path| Notebook { id: "nb-00000001".into(), path: crate::folders::plain(&std::fs::canonicalize(dir).unwrap()), title: "Notes".into(), added: String::new() };
+        // A case-sensitive parent with two spellings: the registered one is found, and once it is gone the other
+        // spelling is not taken for it.
+        let sensitive = scratch();
+        let made = std::process::Command::new("fsutil").args(["file", "setCaseSensitiveInfo"]).arg(&sensitive).arg("enable").output().unwrap();
+        assert!(made.status.success(), "fsutil could not make a case-sensitive folder: {}", String::from_utf8_lossy(&made.stdout));
+        std::fs::create_dir(sensitive.join("Notes")).unwrap();
+        std::fs::create_dir(sensitive.join("notes")).unwrap();
+        let notebook = register(&sensitive.join("Notes"));
+        assert_eq!(unmoved(&notebook).unwrap(), PathBuf::from(&notebook.path));
+        std::fs::remove_dir(sensitive.join("Notes")).unwrap();
+        assert!(unmoved(&notebook).is_err(), "the other spelling is another folder");
+        // An ordinary folder renamed by case only is the same notebook.
+        let ordinary = scratch();
+        std::fs::create_dir(ordinary.join("Notes")).unwrap();
+        let notebook = register(&ordinary.join("Notes"));
+        std::fs::rename(ordinary.join("Notes"), ordinary.join("NOTES")).unwrap();
+        assert!(unmoved(&notebook).is_ok());
+        std::fs::remove_dir_all(&sensitive).unwrap();
+        std::fs::remove_dir_all(&ordinary).unwrap();
+    }
+
     #[test]
     fn hidden_parts_are_never_named() {
         assert!(visible("Projects/Page.md").is_ok());
@@ -284,12 +322,11 @@ mod tests {
         let root = std::fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("hm-studio-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join(".obsidian")).unwrap();
         std::fs::write(root.join(".obsidian/app.json"), "{}").unwrap();
-        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(root.join("cfg")).arg(root.join(".obsidian")).output();
-        if made.map(|o| o.status.success()).unwrap_or(false) {
-            let protected = Protected::new(None);
-            assert!(inside(&root, &protected, "cfg/app.json", false).unwrap_err().contains("hidden"), "read through the link");
-            assert!(inside(&root, &protected, "cfg/app.json", true).is_err(), "write through the link");
-        }
+        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(root.join("cfg")).arg(root.join(".obsidian")).output().unwrap();
+        assert!(made.status.success(), "mklink /J needs no admin rights: {}", String::from_utf8_lossy(&made.stderr));
+        let protected = Protected::new(None);
+        assert!(inside(&root, &protected, "cfg/app.json", false).unwrap_err().contains("hidden"), "read through the link");
+        assert!(inside(&root, &protected, "cfg/app.json", true).is_err(), "write through the link");
         std::fs::write(root.join("Page.md"), "x").unwrap();
         assert!(inside(&root, &Protected::new(None), "Page.md", true).is_ok());
         std::fs::remove_dir_all(&root).unwrap();

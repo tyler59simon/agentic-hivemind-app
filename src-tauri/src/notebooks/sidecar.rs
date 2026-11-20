@@ -15,18 +15,24 @@ fn read_object(path: &Path) -> Option<Map<String, Value>> {
     }
 }
 
-/// The settings of the notebook at `root`; `fallback` is its app-data copy. The newer of the two counts: the fallback
-/// is only written when the notebook copy could not be, and a newer notebook copy (from another machine, say) wins
-/// over it (Codex review of 32fd236, P5). An unreadable file reads as empty.
+/// Beside the fallback: the sha256 of the notebook copy the fallback replaced ("none" when there was none).
+fn base_of(fallback: &Path) -> PathBuf {
+    fallback.with_extension("base")
+}
+
+fn sha_of(path: Option<&Path>) -> String {
+    path.and_then(|p| std::fs::read(p).ok()).map(|b| crate::files::sha256(&b)).unwrap_or_else(|| "none".into())
+}
+
+/// The settings of the notebook at `root`; `fallback` is its app-data copy. The fallback counts while the notebook
+/// copy is still the one it replaced; once the notebook copy changes (another machine, a git pull), the notebook copy
+/// counts. Recorded by content, not by modification time, so clock skew cannot pick the wrong one (Codex reviews of
+/// 32fd236 and c496e1c, P5). An unreadable file reads as empty.
 pub fn read(root: &Path, fallback: &Path) -> Value {
     let inside = contain::resolve_inside(root, REL, false).ok();
-    let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
-    let fallback_first = match (inside.as_deref().and_then(modified), modified(fallback)) {
-        (Some(notebook), Some(app)) => app >= notebook,
-        (None, Some(_)) => true,
-        _ => false,
-    };
-    let (first, second) = if fallback_first { (Some(fallback.to_path_buf()), inside) } else { (inside, Some(fallback.to_path_buf())) };
+    let replaced = std::fs::read_to_string(base_of(fallback)).ok();
+    let fallback_counts = fallback.is_file() && replaced.is_some_and(|sha| sha.trim() == sha_of(inside.as_deref()));
+    let (first, second) = if fallback_counts { (Some(fallback.to_path_buf()), inside) } else { (inside, Some(fallback.to_path_buf())) };
     Value::Object(first.and_then(|p| read_object(&p)).or_else(|| second.and_then(|p| read_object(&p))).unwrap_or_default())
 }
 
@@ -69,12 +75,15 @@ pub fn write(root: &Path, fallback: &Path, patch: &Value) -> Result<(Value, Path
         Ok(path) => {
             // The notebook copy is now the newer one.
             let _ = std::fs::remove_file(fallback);
+            let _ = std::fs::remove_file(base_of(fallback));
             Ok((merged, path))
         }
         Err(_) => {
             if let Some(parent) = fallback.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
+            let notebook_copy = contain::resolve_inside(root, REL, false).ok();
+            atomic::replace(&base_of(fallback), sha_of(notebook_copy.as_deref()).as_bytes())?;
             atomic::replace(fallback, &text)?;
             Ok((merged, fallback.to_path_buf()))
         }
@@ -131,6 +140,27 @@ mod tests {
         assert_eq!(path, notebook_copy);
         assert!(!fallback.exists());
         assert_eq!(read(&root, &fallback)["daily"], "YYYY-MM-DD");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_fallback_wins_whatever_the_clocks_say_until_the_notebook_copy_changes() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = scratch();
+        let fallback = root.join("app").join("nb-1.json");
+        write(&root, &fallback, &json!({ "inbox": "Inbox.md" })).unwrap();
+        let notebook_copy = root.join(".hivemind").join("notebook.json");
+        let lock = std::fs::OpenOptions::new().read(true).share_mode(1).open(&notebook_copy).unwrap();
+        write(&root, &fallback, &json!({ "templates": "Templates" })).unwrap();
+        drop(lock);
+        // A synced notebook copy with a timestamp far in the future, but the same content.
+        let future = std::time::SystemTime::now() + std::time::Duration::from_secs(86_400 * 365);
+        std::fs::File::options().write(true).open(&notebook_copy).unwrap().set_modified(future).unwrap();
+        assert_eq!(read(&root, &fallback)["templates"], "Templates");
+        // Another machine changed the notebook copy: it counts again.
+        std::fs::write(&notebook_copy, r#"{"version":1,"inbox":"Elsewhere.md"}"#).unwrap();
+        assert_eq!(read(&root, &fallback), json!({ "version": 1, "inbox": "Elsewhere.md" }));
         std::fs::remove_dir_all(&root).unwrap();
     }
 

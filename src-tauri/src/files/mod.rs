@@ -151,6 +151,21 @@ pub fn encode(text: &str, format: &FileFormat) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+// Tests run code here between a check and the act it guards, to show that nothing slips in between.
+#[cfg(test)]
+thread_local! {
+    static BETWEEN: std::cell::RefCell<Option<Box<dyn Fn()>>> = const { std::cell::RefCell::new(None) };
+}
+
+fn between_check_and_act() {
+    #[cfg(test)]
+    BETWEEN.with(|hook| {
+        if let Some(run) = hook.borrow().as_ref() {
+            run();
+        }
+    });
+}
+
 /// Put back the previous version of `path` when a save stopped between its two renames and left the page missing
 /// (Codex review of 32fd236, W2). The user's newer text is still in its draft. True when something was restored.
 pub fn recover(path: &Path) -> bool {
@@ -326,6 +341,7 @@ pub fn rename(from: &Path, to: &Path) -> Result<(), String> {
     if let Some(parent) = to.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Could not create {}: {e}", parent.display()))?;
     }
+    between_check_and_act();
     // Never replaces: a file that appeared at `to` since the check above stays (Codex review of 32fd236, W1).
     atomic::move_no_replace(from, to).map_err(taken)
 }
@@ -358,6 +374,7 @@ pub fn trash(root: &Path, rel: &str, now: &str, pre: Option<&Stamp>) -> Result<P
     if sha256(&now_bytes) != pre.sha256 {
         return Err(format!("\"{rel}\" changed on disk since it was opened; reopen it before deleting"));
     }
+    between_check_and_act();
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Could not create {}: {e}", parent.display()))?;
     }
@@ -502,6 +519,66 @@ mod tests {
         std::fs::write(dir.join("Projects/Old.md"), "again").unwrap();
         let second = trash(&dir, "Projects/Old.md", "20261120-120000", None).unwrap();
         assert_eq!(second.file_name().unwrap(), "Old.md (2)");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn between(run: impl Fn() + 'static) {
+        BETWEEN.with(|hook| *hook.borrow_mut() = Some(Box::new(run)));
+    }
+
+    fn no_between() {
+        BETWEEN.with(|hook| *hook.borrow_mut() = None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn nothing_changes_the_page_between_trashs_hash_check_and_its_move() {
+        // Codex re-review of c496e1c, T2: another program tries to write the page after the hash matched.
+        let dir = scratch();
+        std::fs::write(dir.join("Page.md"), "checked").unwrap();
+        let seen = read(&dir.join("Page.md")).unwrap().stamp;
+        let page = dir.join("Page.md");
+        let blocked = std::rc::Rc::new(std::cell::Cell::new(false));
+        let flag = blocked.clone();
+        between(move || flag.set(std::fs::write(&page, "slipped in").is_err() && std::fs::remove_file(&page).is_err()));
+        let moved = trash(&dir, "Page.md", "t", Some(&seen)).unwrap();
+        no_between();
+        assert!(blocked.get(), "the held page refused the write and the delete");
+        assert_eq!(std::fs::read_to_string(moved).unwrap(), "checked");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_target_that_appears_during_a_rename_is_never_replaced() {
+        // Codex re-review of c496e1c, T1: the destination is created after the existence check.
+        let dir = scratch();
+        std::fs::write(dir.join("a.md"), "mine").unwrap();
+        let target = dir.join("b.md");
+        let racer = target.clone();
+        between(move || std::fs::write(&racer, "theirs").unwrap());
+        let out = rename(&dir.join("a.md"), &target);
+        no_between();
+        assert!(out.unwrap_err().contains("already exists"));
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "theirs");
+        assert_eq!(std::fs::read_to_string(dir.join("a.md")).unwrap(), "mine");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_case_only_rename_in_a_case_sensitive_folder_keeps_both_files() {
+        let dir = scratch();
+        let made = std::process::Command::new("fsutil").args(["file", "setCaseSensitiveInfo"]).arg(&dir).arg("enable").output().unwrap();
+        assert!(made.status.success(), "fsutil could not make a case-sensitive folder: {}", String::from_utf8_lossy(&made.stdout));
+        std::fs::write(dir.join("note.md"), "lower").unwrap();
+        std::fs::write(dir.join("NOTE.md"), "upper").unwrap();
+        assert!(rename(&dir.join("note.md"), &dir.join("NOTE.md")).unwrap_err().contains("already exists"));
+        assert_eq!(std::fs::read_to_string(dir.join("NOTE.md")).unwrap(), "upper");
+        assert_eq!(std::fs::read_to_string(dir.join("note.md")).unwrap(), "lower");
+        // With only one spelling present, the case change goes ahead.
+        std::fs::remove_file(dir.join("NOTE.md")).unwrap();
+        rename(&dir.join("note.md"), &dir.join("Note.md")).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("Note.md")).unwrap(), "lower");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

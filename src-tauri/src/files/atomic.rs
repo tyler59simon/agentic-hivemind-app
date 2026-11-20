@@ -23,37 +23,50 @@ fn short_name(name: &str) -> String {
         .collect()
 }
 
-/// A hidden file beside `path`: `.<name>.hm-<tag><uuid>.tmp`, in the same folder so renames stay on one volume. Long
-/// names are cut to NAME_KEEP units.
+/// Eight hex digits naming the whole original file name (lowercase, as Windows compares names), so a temp name cut
+/// to NAME_KEEP units still belongs to exactly one file (Codex re-review of c496e1c, N2).
+fn name_tag(name: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(name.to_lowercase().as_bytes()).iter().take(4).map(|b| format!("{b:02x}")).collect()
+}
+
+/// A hidden file beside `path`: `.<name>.hm-<tag><name hash><uuid>.tmp`, in the same folder so renames stay on one
+/// volume. Long names are cut to NAME_KEEP units; the name hash keeps them apart.
 pub fn beside(path: &Path, tag: &str) -> Result<PathBuf, String> {
-    let name = path.file_name().ok_or_else(|| format!("{} has no file name", path.display()))?;
-    let temp = format!(".{}{TEMP_MARK}{tag}{}{TEMP_END}", short_name(&name.to_string_lossy()), uuid::Uuid::new_v4().simple());
+    let name = path.file_name().ok_or_else(|| format!("{} has no file name", path.display()))?.to_string_lossy().into_owned();
+    let temp = format!(".{}{TEMP_MARK}{tag}{}{}{TEMP_END}", short_name(&name), name_tag(&name), uuid::Uuid::new_v4().simple());
     Ok(path.with_file_name(temp))
 }
 
 /// The previous version of `path` that a save left beside it when it stopped between its two renames (the process
-/// was killed or the machine lost power): `path` is missing and exactly one aside of its name is there.
+/// was killed or the machine lost power): `path` is missing and exactly one aside made for this exact name is there,
+/// and it is a plain file, never a link (Codex re-review of c496e1c, N1).
 pub fn orphaned_aside(path: &Path) -> Option<PathBuf> {
     if std::fs::symlink_metadata(path).is_ok() {
         return None;
     }
-    let prefix = format!(".{}{TEMP_MARK}{ASIDE}", short_name(&path.file_name()?.to_string_lossy()));
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    let prefix = format!(".{}{TEMP_MARK}{ASIDE}{}", short_name(&name), name_tag(&name));
     let dir = path.parent()?;
     let mut found = std::fs::read_dir(dir)
         .ok()?
         .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file() && !t.is_symlink()))
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .filter(|n| n.len() == prefix.len() + 32 + TEMP_END.len() && n.starts_with(&prefix) && n.ends_with(TEMP_END));
     let first = found.next()?;
     found.next().is_none().then(|| dir.join(first))
 }
 
-/// The file an aside named `name` belongs to, when its name was kept whole.
+/// The file an aside named `name` belongs to, when its name was kept whole. A cut name has at least NAME_KEEP - 1
+/// units (the cut can stop one short before a two-unit character), so only shorter names count as whole, and the name
+/// hash must match.
 pub fn aside_target(dir: &Path, name: &str) -> Option<PathBuf> {
     let (kept, tail) = name.strip_prefix('.')?.strip_suffix(TEMP_END)?.rsplit_once(TEMP_MARK)?;
-    let id = tail.strip_prefix(ASIDE)?;
-    let whole = kept.encode_utf16().count() < NAME_KEEP;
-    (whole && id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())).then(|| dir.join(kept))
+    let rest = tail.strip_prefix(ASIDE)?;
+    let whole = kept.encode_utf16().count() < NAME_KEEP - 1;
+    let ours = rest.len() == 40 && rest.bytes().all(|b| b.is_ascii_hexdigit()) && rest[..8] == name_tag(kept);
+    (whole && ours).then(|| dir.join(kept))
 }
 
 /// True for a temp file this module writes; the watcher and the tree skip these.
@@ -217,12 +230,14 @@ fn named_streams(path: &Path) -> std::io::Result<Vec<(String, u64)>> {
         }
         // SAFETY: `find` is the open search handle and `data` is the struct it fills.
         if unsafe { FindNextStreamW(find, &mut data as *mut _ as *mut _) } == 0 {
-            break;
+            let e = std::io::Error::last_os_error();
+            // SAFETY: `find` came from FindFirstStreamW and is closed once.
+            unsafe { FindClose(find) };
+            // Only the end of the list (ERROR_HANDLE_EOF) is success; a partial list would drop streams (Codex
+            // re-review of c496e1c, W3).
+            return if e.raw_os_error() == Some(38) { Ok(found) } else { Err(e) };
         }
     }
-    // SAFETY: `find` came from FindFirstStreamW and is closed once.
-    unsafe { FindClose(find) };
-    Ok(found)
 }
 
 #[cfg(windows)]
@@ -412,6 +427,34 @@ mod tests {
         let temp = beside(&page, ASIDE).unwrap();
         assert!(temp.file_name().unwrap().to_string_lossy().encode_utf16().count() < 255);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn asides_of_long_names_sharing_a_prefix_stay_apart() {
+        let dir = scratch();
+        let long_a = dir.join(format!("{}A.md", "n".repeat(120)));
+        let long_b = dir.join(format!("{}B.md", "n".repeat(120)));
+        std::fs::write(beside(&long_b, ASIDE).unwrap(), "b's previous").unwrap();
+        assert_eq!(orphaned_aside(&long_a), None, "B's aside is not A's");
+        assert!(orphaned_aside(&long_b).is_some());
+        // A name cut at 99 units (an emoji did not fit) is not mistaken for a whole name.
+        let cut = dir.join(format!("{}\u{1F600}tail.md", "x".repeat(99)));
+        let aside = beside(&cut, ASIDE).unwrap();
+        assert_eq!(aside_target(&dir, &aside.file_name().unwrap().to_string_lossy()), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_aside_that_is_a_link_is_not_restored() {
+        let dir = scratch();
+        let outside = scratch();
+        let page = dir.join("Page.md");
+        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(beside(&page, ASIDE).unwrap()).arg(&outside).output().unwrap();
+        assert!(made.status.success(), "mklink /J needs no admin rights: {}", String::from_utf8_lossy(&made.stderr));
+        assert_eq!(orphaned_aside(&page), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&outside).unwrap();
     }
 
     #[test]

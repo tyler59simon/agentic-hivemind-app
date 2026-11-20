@@ -58,3 +58,47 @@ Codex (`gpt-6.2-sol`, effort high, read-only) reviewed commit `32fd236`, the NS-
 | U3 | Tree drag had no `pointercancel` handler and no pointer id | The drag remembers its pointer and a cancelled gesture drops it | Checked by reading; WebView2 does not cancel synthetic pointers |
 | C1 | (Claude) A single click on a program or script in the tree ran it with the system | `file_reveal(open)` refuses executable kinds (a fixed list plus `AssocIsDangerous`) and says to use Show in Explorer | `studio::tests::programs_and_scripts_are_not_opened`; UI |
 | C2 | (Claude) The in-memory draft cache kept a moved page's draft under its old key, so a new page at that path restored it | `forgetMoved` drops cached drafts of moved pages and cached deletions after a move | `store.test.ts` S2 and D7 |
+
+## Round 2: re-review of c496e1c
+
+Codex (same model and effort, read-only) re-reviewed `c496e1c` against the 30 entries above. It reported 19 findings: 7 on fixes that were incomplete, 6 new defects and 6 tests that would pass with the old code. Claude accepted 18 and disputed the first half of P4 (the row says why). All are handled in the commit after `c496e1c` and tracked on the same Living Memory note with the prefix `R2-`.
+
+Each regression test below was run against the code it guards with the fix taken out, or for T1, T2 and T5 with the guarded behavior broken on purpose, and failed. The component tests in `src/features/notes/FileTab.test.tsx` mount React and CodeMirror in jsdom (a new dev dependency, `jsdom` 31.0.1, used only by files marked `@vitest-environment jsdom`).
+
+### Fixes that were incomplete
+
+| ID | Finding | Fix | Test |
+| --- | --- | --- | --- |
+| P4 | `root_of` compared paths in lowercase, which could take one folder for another in a case-sensitive folder; a swap between the check and the operation was followed | Disputed in part. A case-sensitive folder opens only the exact spelling, and a case-insensitive one has one folder for every spelling, so the lowercase comparison never mixes up two folders; it also keeps a notebook working after its folder is renamed by case only. The check moved to `unmoved()` with that reasoning. A swap between the check and the operation needs a same-user process that can already write the files, which the trust model leaves out | `studio::tests::a_notebook_folder_is_found_by_its_own_spelling_and_survives_a_case_only_rename` |
+| D8 | Typing into a page while its delete was pending was lost | The page's tabs close before the file moves and open again, with their drafts, when the delete fails. The delete dialog (`DeleteConfirm`) reads the unsaved pages again whenever a document changes | `store.test.ts` "D8: a page's tabs close before its delete settles" |
+| D2 | A merge whose result equals the version shown marked the page clean even when a newer version had come in | A clean merge result reads the file again, and the page follows a newer version | `store.test.ts` "D2: a merge that keeps the version shown" |
+| S1, S5 | A refresh or reload that ended after the page was closed and reopened applied to the new session | Every document session has a generation number; reads and saves apply only to the session that started them | `store.test.ts` "S1 and S5" |
+| P3 | The managed-vault scan skipped folders, entries and file types it could not read | Anything the scan cannot read refuses the move | `guard::tests::a_folder_hivemind_cannot_list_is_not_moved_unchecked` |
+| P5 | The sidecar fallback relied on modification times, so a synced copy with a future time won | Writing the fallback also writes `<id>.base` with the sha256 of the notebook copy it replaced; the fallback counts while the notebook copy still has that hash | `sidecar::tests::the_fallback_wins_whatever_the_clocks_say_until_the_notebook_copy_changes` |
+| W3 | Any `FindNextStreamW` failure ended stream copying as if the list were complete | Only `ERROR_HANDLE_EOF` ends the list; any other error stops the save | Checked by reading; a test cannot make the call fail |
+
+### New defects
+
+| ID | Finding | Fix | Test |
+| --- | --- | --- | --- |
+| N1 | An aside that is a link could be restored into place and then followed | Only plain files count as asides | `atomic::tests::an_aside_that_is_a_link_is_not_restored` |
+| N2 | Long names with the same first 100 units shared asides, and a name cut at 99 units (before a two-unit character) looked whole | Temp names carry 8 hex digits of the sha256 of the whole lowercased name, recovery matches that hash, and only names under 99 units count as whole | `atomic::tests::asides_of_long_names_sharing_a_prefix_stay_apart` |
+| N3 | A draft deferred during a move was lost when its tab closed or the app quit before the move ended | A document whose tab closes during a move is let go only after the move; quitting waits for moves | `store.test.ts` N3 |
+| N4 | Quitting missed edits typed while it wrote drafts | `flushAllDrafts` writes until every unsaved page's text is the text its stored draft holds (at most three rounds) and names the pages where that failed | `store.test.ts` N4 |
+| N5 | A page opened during a section rename stayed on "Opening" | Moves hold pages by path, so a page opened during a move is held too, and a page still opening when it moves reads again at its new path | `store.test.ts` N5 |
+| N6 | A second pointer could end the first pointer's drag and drop the wrong row | A press during a gesture is ignored, and only the gesture's own pointer ends it | `FileTab.test.tsx` N6 |
+
+### Tests that would pass with the old code
+
+| ID | Finding | Fix | Test |
+| --- | --- | --- | --- |
+| T1 | The case-only rename test created one file, so a replacing rename also passed | One test creates the destination between the existence check and the move (a test-only hook); another renames between two spellings in a case-sensitive folder | `files::tests::a_target_that_appears_during_a_rename_is_never_replaced`, `files::tests::a_case_only_rename_in_a_case_sensitive_folder_keeps_both_files` |
+| T2 | The stamped trash test changed the file before trash started | The hook runs between the hash check and the move; the held page refuses another program's write and delete there | `files::tests::nothing_changes_the_page_between_trashs_hash_check_and_its_move` |
+| T3 | The Try again test called `open` instead of the button | The test mounts the failed page and clicks Try again | `FileTab.test.tsx` T3 |
+| T4 | The two-pane test checked `followSpec` alone, not the editor wiring | The test mounts two file tabs of one page, types in both and saves | `FileTab.test.tsx` T4 |
+| T5 | The move test held only the save, not the draft write | A test holds the draft write and checks that the rename waits for it | `store.test.ts` "D7: a rename waits for a draft write in flight" |
+| T6 | The junction test passed silently when `mklink` failed | `mklink /J` must succeed; it needs no admin rights | `studio::tests::a_link_to_a_hidden_folder_is_hidden_too` |
+
+### Stopping point
+
+Claude set the stopping point at one more Codex pass over the round-two commit. From that pass, confirmed high-severity findings (data loss or escape from a notebook) are fixed in NS-1A; the rest go to the backlog note for the phase that touches the code next.

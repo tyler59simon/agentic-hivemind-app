@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ellipsis, Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { edit, keyOf, open, reload, resolveMerge, save, unsavedUnder, useDocuments } from "../../documents/store";
+import { edit, keyOf, open, reload, resolveMerge, save, useDocuments } from "../../documents/store";
 import { isUnsaved, mergeable, type DocState } from "../../documents/session";
 import { classify } from "../../lib/errors";
 import { createFile, fileName, folderOf, isMarkdown, notebooksQuery, pageTitle, revealFile, treeQuery, type Notebook } from "../../lib/notebooks";
@@ -14,6 +14,7 @@ import { CodeEditor } from "../editor/CodeEditor";
 import { PageMergeDialog } from "../editor/MergeDialog";
 import { resolvePage } from "../links/resolve";
 import { movePath, openPage, renamed, trashPath } from "./actions";
+import { DeleteConfirm } from "./DeleteConfirm";
 import { PageView } from "./PageView";
 
 const MODES: { id: Mode; label: string }[] = [{ id: "reading", label: "Reading" }, { id: "live", label: "Live" }, { id: "source", label: "Source" }];
@@ -174,13 +175,8 @@ export function FileTab({ tab }: { tab: Tab }) {
     if (!d) return;
     createFile(ref.notebook, ref.path, d.text).then(() => reloadPage(key), (e) => toast(classify(e).message, "error"));
   };
-  const lost = unsavedUnder(ref.notebook, ref.path).length > 0;
   const remove = () => setDialog(
-    <Confirm title="Delete this page?" danger action={lost ? "Delete and lose my edits" : "Move to trash"}
-      message={<>
-        <p><code>{ref.path}</code> moves to the notebook's <code>.hivemind/trash</code> folder, where you can get it back.</p>
-        {lost && <p className="error">Your unsaved edits to this page are not in the file. They are lost when it is deleted; save first to keep them in the trash copy.</p>}
-      </>}
+    <DeleteConfirm notebook={ref.notebook} path={ref.path} section={false}
       onAnswer={(yes) => {
         setDialog(null);
         if (yes) trashPath(client, ref.notebook, ref.path).catch((e) => toast(classify(e).message, "error"));

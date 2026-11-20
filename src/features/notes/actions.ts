@@ -79,18 +79,27 @@ export function renamed(path: string, name: string, section = false) {
   return join(folderOf(path), withExt);
 }
 
-/** Move a page or section to the notebook's trash and close its tabs; their drafts go too. */
+/** Move a page or section to the notebook's trash; their drafts go too. Its tabs close before the file moves, so
+ *  nothing can be typed into a page while it is being deleted, and they open again if the delete fails (Codex
+ *  re-review of c496e1c, D8). */
 export async function trashPath(client: QueryClient, notebook: string, path: string) {
   const doc = useDocuments.getState().docs[keyOf({ notebook, path })];
-  await deleteFile(notebook, path, doc?.base?.stamp);
   const ws = useWorkspace.getState();
+  const closed = new Map<string, FileRef>();
   for (const pane of ws.panes) {
     for (const tab of pane.tabs) {
       if (tab.kind !== "file" || tab.file?.notebook !== notebook || movedPath(tab.file.path, path, path) === null) continue;
-      discard(keyOf(tab.file));
+      closed.set(keyOf(tab.file), tab.file);
       ws.closeTab(pane.id, tab.id);
     }
   }
+  try {
+    await deleteFile(notebook, path, doc?.base?.stamp);
+  } catch (e) {
+    for (const ref of closed.values()) openPage(ref);
+    throw e;
+  }
+  for (const key of closed.keys()) discard(key);
   client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
 }
 

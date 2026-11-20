@@ -53,21 +53,24 @@ fn marked_vault(path: &Path) -> bool {
 }
 
 /// Refuse moving or deleting `dir` while a vault Living Memory manages is anywhere inside it (Codex review of
-/// 32fd236, P3). Links are not followed.
+/// 32fd236, P3). Links are not followed. A folder that cannot be read refuses too, since it was not checked (Codex
+/// re-review of c496e1c, P3).
 pub fn check_no_vault_inside(dir: &Path) -> Result<(), String> {
+    let unreadable = |p: &Path, e: std::io::Error| format!("Hivemind could not check {} for a managed vault before moving or deleting it: {e}", p.display());
     let mut stack = vec![dir.to_path_buf()];
     let mut seen = 0usize;
     while let Some(next) = stack.pop() {
         if is_marked_vault(&next) {
             return Err("This folder holds an Obsidian vault that Living Memory manages, so Hivemind does not move or delete it".into());
         }
-        let Ok(list) = std::fs::read_dir(&next) else { continue };
-        for entry in list.flatten() {
+        for entry in std::fs::read_dir(&next).map_err(|e| unreadable(&next, e))? {
+            let entry = entry.map_err(|e| unreadable(&next, e))?;
             seen += 1;
             if seen > MAX_SCAN {
                 return Err("This folder is too large for Hivemind to check before moving or deleting it".into());
             }
-            if entry.file_type().is_ok_and(|t| t.is_dir() && !t.is_symlink()) {
+            let kind = entry.file_type().map_err(|e| unreadable(&entry.path(), e))?;
+            if kind.is_dir() && !kind.is_symlink() {
                 stack.push(entry.path());
             }
         }
@@ -171,6 +174,22 @@ mod tests {
         std::fs::write(base.join("Area/Deep/Vault/.living-memory/copies.json"), "{}").unwrap();
         assert!(check_no_vault_inside(&base.join("Area")).is_err());
         assert!(check_no_vault_inside(&base.join("Plain")).is_ok());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_folder_hivemind_cannot_list_is_not_moved_unchecked() {
+        // Codex re-review of c496e1c, P3: the user denies themselves listing one subfolder (no admin rights needed).
+        let base = std::env::temp_dir().join(format!("hm-guard-closed-{}", uuid::Uuid::new_v4()));
+        let closed = base.join("Area/Closed");
+        std::fs::create_dir_all(&closed).unwrap();
+        let user = std::env::var("USERNAME").unwrap();
+        let icacls = |args: &[&str]| std::process::Command::new("icacls").arg(&closed).args(args).output().unwrap();
+        assert!(icacls(&["/deny", &format!("{user}:(RD)")]).status.success());
+        let checked = check_no_vault_inside(&base.join("Area"));
+        icacls(&["/remove:d", &user]);
+        assert!(checked.unwrap_err().contains("could not check"));
         std::fs::remove_dir_all(&base).unwrap();
     }
 }
