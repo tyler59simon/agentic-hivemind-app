@@ -34,9 +34,19 @@ export const isFileDraft = (d: Draft): d is FileDraft => (d as FileDraft).kind =
 // still on its way (an editor that unmounts and mounts again at once, when moving between the Notes and Memory pages).
 const recent = new Map<string, Draft | null>();
 
+/** A write that fails puts back what the cache held before, so a draft that never reached the disk is never read
+ *  as kept (Codex re-review of b82e9ab, N4). */
 export function putDraft(draft: Draft): Promise<void> {
+  const before = recent.has(draft.key) ? recent.get(draft.key) : undefined;
+  const had = recent.has(draft.key);
   recent.set(draft.key, draft);
-  return invoke<void>("draft_put", { key: draft.key, value: draft });
+  return invoke<void>("draft_put", { key: draft.key, value: draft }).catch((e) => {
+    if (recent.get(draft.key) === draft) {
+      if (had) recent.set(draft.key, before ?? null);
+      else recent.delete(draft.key);
+    }
+    throw e;
+  });
 }
 
 async function readDraft(key: string): Promise<Draft | null> {

@@ -7,33 +7,64 @@ use std::path::{Path, PathBuf};
 pub const REL: &str = ".hivemind/notebook.json";
 const MAX_BYTES: usize = 1024 * 1024;
 
-fn read_object(path: &Path) -> Option<Map<String, Value>> {
-    let bytes = std::fs::read(path).ok()?;
-    match serde_json::from_slice(&bytes).ok()? {
+/// In the fallback only: the sha256 of the notebook copy it replaced ("none" when there was none). Kept inside the
+/// fallback's own JSON, so the two are always written together (Codex re-review of b82e9ab, P5b).
+const BASE_KEY: &str = "hivemindReplaced";
+
+fn parse_object(bytes: &[u8]) -> Option<Map<String, Value>> {
+    match serde_json::from_slice(bytes).ok()? {
         Value::Object(map) => Some(map),
         _ => None,
     }
 }
 
-/// Beside the fallback: the sha256 of the notebook copy the fallback replaced ("none" when there was none).
-fn base_of(fallback: &Path) -> PathBuf {
+/// Where b82e9ab kept the base hash, beside the fallback. Read for fallbacks it wrote, removed on the next write.
+fn old_base_of(fallback: &Path) -> PathBuf {
     fallback.with_extension("base")
 }
 
-fn sha_of(path: Option<&Path>) -> String {
-    path.and_then(|p| std::fs::read(p).ok()).map(|b| crate::files::sha256(&b)).unwrap_or_else(|| "none".into())
+fn sha_of(bytes: Option<&[u8]>) -> String {
+    bytes.map(crate::files::sha256).unwrap_or_else(|| "none".into())
 }
 
-/// The settings of the notebook at `root`; `fallback` is its app-data copy. The fallback counts while the notebook
-/// copy is still the one it replaced; once the notebook copy changes (another machine, a git pull), the notebook copy
-/// counts. Recorded by content, not by modification time, so clock skew cannot pick the wrong one (Codex reviews of
-/// 32fd236 and c496e1c, P5). An unreadable file reads as empty.
+/// The notebook copy as read now: its path and bytes.
+fn notebook_copy(root: &Path) -> (Option<PathBuf>, Option<Vec<u8>>) {
+    let path = contain::resolve_inside(root, REL, false).ok();
+    let bytes = path.as_deref().and_then(|p| std::fs::read(p).ok());
+    (path, bytes)
+}
+
+/// The settings that count, given the notebook copy's bytes. The fallback counts while the notebook copy is still the
+/// one it replaced; once the notebook copy changes (another machine, a git pull), the notebook copy counts. Recorded
+/// by content, not by modification time, so clock skew cannot pick the wrong one (Codex reviews of 32fd236 and
+/// c496e1c, P5). A fallback from before the hash (c496e1c) keeps its old rule: it counts when it is at least as new as
+/// the notebook copy (Codex re-review of b82e9ab, P5a).
+fn current(copy: (Option<&Path>, Option<&[u8]>), fallback: &Path) -> Map<String, Value> {
+    let (copy_path, copy_bytes) = copy;
+    let notebook = copy_bytes.and_then(parse_object);
+    let Some(mut saved) = std::fs::read(fallback).ok().and_then(|b| parse_object(&b)) else { return notebook.unwrap_or_default() };
+    let replaced = match saved.remove(BASE_KEY) {
+        Some(Value::String(sha)) => Some(sha),
+        _ => std::fs::read_to_string(old_base_of(fallback)).ok().map(|s| s.trim().to_string()),
+    };
+    let counts = match replaced {
+        Some(sha) => sha == sha_of(copy_bytes),
+        None => {
+            let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+            match (copy_path.and_then(modified), modified(fallback)) {
+                (Some(notebook), Some(app)) => app >= notebook,
+                _ => true,
+            }
+        }
+    };
+    if counts { saved } else { notebook.unwrap_or(saved) }
+}
+
+/// The settings of the notebook at `root`; `fallback` is its app-data copy (see `current`). An unreadable file reads
+/// as empty.
 pub fn read(root: &Path, fallback: &Path) -> Value {
-    let inside = contain::resolve_inside(root, REL, false).ok();
-    let replaced = std::fs::read_to_string(base_of(fallback)).ok();
-    let fallback_counts = fallback.is_file() && replaced.is_some_and(|sha| sha.trim() == sha_of(inside.as_deref()));
-    let (first, second) = if fallback_counts { (Some(fallback.to_path_buf()), inside) } else { (inside, Some(fallback.to_path_buf())) };
-    Value::Object(first.and_then(|p| read_object(&p)).or_else(|| second.and_then(|p| read_object(&p))).unwrap_or_default())
+    let (path, bytes) = notebook_copy(root);
+    Value::Object(current((path.as_deref(), bytes.as_deref()), fallback))
 }
 
 /// Merge `patch` (an object) into the settings: a key set to null is removed, every other key replaces the old
@@ -61,7 +92,9 @@ pub fn merge(current: Value, patch: &Value) -> Result<Value, String> {
 /// Write the merged settings: into the notebook when possible, else into `fallback`. Returns the settings and where
 /// they went.
 pub fn write(root: &Path, fallback: &Path, patch: &Value) -> Result<(Value, PathBuf), String> {
-    let merged = merge(read(root, fallback), patch)?;
+    // One read of the notebook copy decides both what is merged and which copy the fallback replaces.
+    let (copy_path, copy_bytes) = notebook_copy(root);
+    let merged = merge(Value::Object(current((copy_path.as_deref(), copy_bytes.as_deref()), fallback)), patch)?;
     let mut text = serde_json::to_vec_pretty(&merged).map_err(|e| e.to_string())?;
     text.push(b'\n');
     if text.len() > MAX_BYTES {
@@ -75,16 +108,21 @@ pub fn write(root: &Path, fallback: &Path, patch: &Value) -> Result<(Value, Path
         Ok(path) => {
             // The notebook copy is now the newer one.
             let _ = std::fs::remove_file(fallback);
-            let _ = std::fs::remove_file(base_of(fallback));
+            let _ = std::fs::remove_file(old_base_of(fallback));
             Ok((merged, path))
         }
         Err(_) => {
             if let Some(parent) = fallback.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
-            let notebook_copy = contain::resolve_inside(root, REL, false).ok();
-            atomic::replace(&base_of(fallback), sha_of(notebook_copy.as_deref()).as_bytes())?;
+            let mut record = merged.clone();
+            if let Value::Object(map) = &mut record {
+                map.insert(BASE_KEY.into(), Value::from(sha_of(copy_bytes.as_deref())));
+            }
+            let mut text = serde_json::to_vec_pretty(&record).map_err(|e| e.to_string())?;
+            text.push(b'\n');
             atomic::replace(fallback, &text)?;
+            let _ = std::fs::remove_file(old_base_of(fallback));
             Ok((merged, fallback.to_path_buf()))
         }
     }
@@ -99,6 +137,34 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hm-sidecar-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn the_fallback_keeps_its_base_inside_and_a_fallback_from_before_the_hash_keeps_the_old_rule() {
+        let root = scratch();
+        let fallback = root.join("app").join("nb-1.json");
+        std::fs::create_dir_all(root.join(".hivemind")).unwrap();
+        std::fs::create_dir_all(root.join("app")).unwrap();
+        // c496e1c wrote a plain fallback, newer than the notebook copy, and its reader chose it.
+        std::fs::write(root.join(".hivemind/notebook.json"), r#"{"version":1,"inbox":"Old.md"}"#).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&fallback, r#"{"version":1,"inbox":"Kept.md","daily":"YYYY"}"#).unwrap();
+        assert_eq!(read(&root, &fallback), json!({ "version": 1, "inbox": "Kept.md", "daily": "YYYY" }));
+        // A patch while the folder cannot be written starts from it and records the base inside the same file.
+        let notebook_copy = root.join(".hivemind").join("notebook.json");
+        #[cfg(windows)]
+        let lock = {
+            use std::os::windows::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new().read(true).share_mode(1).open(&notebook_copy).unwrap()
+        };
+        write(&root, &fallback, &json!({ "templates": "T" })).unwrap();
+        #[cfg(windows)]
+        drop(lock);
+        let saved: Value = serde_json::from_slice(&std::fs::read(&fallback).unwrap()).unwrap();
+        assert_eq!(saved[BASE_KEY], crate::files::sha256(&std::fs::read(&notebook_copy).unwrap()));
+        assert!(!old_base_of(&fallback).exists());
+        assert_eq!(read(&root, &fallback), json!({ "version": 1, "inbox": "Kept.md", "daily": "YYYY", "templates": "T" }));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

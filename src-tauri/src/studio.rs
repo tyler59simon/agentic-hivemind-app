@@ -18,14 +18,15 @@ fn root_of(state: &AppState, id: &str) -> Result<(PathBuf, Protected), String> {
     Ok((root, protected))
 }
 
-/// The notebook's folder, still the one that was registered: no link was put in its place. Spellings are compared
-/// without case. That never mixes up two folders: a case-sensitive folder opens only the exact spelling, and a
-/// case-insensitive one has one folder for every spelling. It also keeps a notebook working after its folder is
-/// renamed by case only (Codex re-review of c496e1c, P4).
+/// The notebook's folder, still the one that was registered. The registered path is canonical, so no folder on it was
+/// a link then; one that is a link now (a junction put in its place, perhaps to a sibling spelled with other case) is
+/// refused. With no link on the path, the canonical path differs from the registered one only by a case-only rename,
+/// which keeps the notebook (Codex re-reviews of c496e1c and b82e9ab, P4).
 fn unmoved(notebook: &Notebook) -> Result<PathBuf, String> {
     let root = PathBuf::from(&notebook.path);
     let real = std::fs::canonicalize(&root).map_err(|e| format!("The notebook folder {} is missing ({e})", root.display()))?;
-    if crate::folders::plain(&real).to_lowercase() != notebook.path.to_lowercase() {
+    let linked = root.ancestors().any(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()));
+    if linked || crate::folders::plain(&real).to_lowercase() != notebook.path.to_lowercase() {
         return Err(format!(
             "The folder of \"{}\" now leads to {}; it was moved or replaced by a link. Remove the notebook and add its folder again",
             notebook.title,
@@ -298,6 +299,10 @@ mod tests {
         assert_eq!(unmoved(&notebook).unwrap(), PathBuf::from(&notebook.path));
         std::fs::remove_dir(sensitive.join("Notes")).unwrap();
         assert!(unmoved(&notebook).is_err(), "the other spelling is another folder");
+        // A junction put in its place that leads to the other spelling is refused too.
+        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(sensitive.join("Notes")).arg(sensitive.join("notes")).output().unwrap();
+        assert!(made.status.success(), "mklink /J needs no admin rights: {}", String::from_utf8_lossy(&made.stderr));
+        assert!(unmoved(&notebook).unwrap_err().contains("link"));
         // An ordinary folder renamed by case only is the same notebook.
         let ordinary = scratch();
         std::fs::create_dir(ordinary.join("Notes")).unwrap();

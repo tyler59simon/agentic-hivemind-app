@@ -24,7 +24,7 @@ import { openReview, openSession, useApp } from "./store";
 import { toast, Toasts } from "./ui/toast";
 import { useWorkspace } from "./workspace/store";
 import { onFilesChanged, startDocumentSync } from "./documents/sync";
-import { flushAllDrafts } from "./documents/store";
+import { draftsPending, flushAllDrafts, onDraftLost } from "./documents/store";
 import { newPageHere } from "./features/notes/actions";
 import type { FilesChanged } from "./lib/notebooks";
 
@@ -93,7 +93,10 @@ function useCloseGuard() {
       }
       const status = await captureStatus().catch(() => null);
       if (status?.close_to_tray) { e.preventDefault(); await win.hide(); return; }
-      if (Object.values(useWorkspace.getState().dirty).some(Boolean)) { e.preventDefault(); setAsking(true); }
+      if (Object.values(useWorkspace.getState().dirty).some(Boolean)) { e.preventDefault(); setAsking(true); return; }
+      // No unsaved tab, but a closed page's draft may still be on its way, or have failed: write or report it first
+      // (Codex re-review of b82e9ab, N3).
+      if (draftsPending()) { e.preventDefault(); void keepDrafts(() => { void getCurrentWindow().destroy(); }); }
     });
     return () => { stop.then((unlisten) => unlisten()); };
   }, []);
@@ -181,6 +184,7 @@ export default function App() {
   const closeGuard = useCloseGuard();
   const quitDialog = useQuitRequest();
   useEffect(() => startDocumentSync(), []);
+  useEffect(() => onDraftLost((line) => toast(`Unsaved edits could not be kept as a draft: ${line}`, "error")), []);
   useEffect(() => { if (link.data) useConnection.getState().set(link.data.version); }, [link.data]);
 
   // Start on the largest bound domain once domains are known.

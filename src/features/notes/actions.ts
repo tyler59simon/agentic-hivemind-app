@@ -2,7 +2,7 @@
 // a Rust command; open tabs, documents and drafts follow renames, and tabs of a deleted page close.
 import type { QueryClient } from "@tanstack/react-query";
 import { movedPath, type FileRef } from "../../documents/keys";
-import { beforeMove, discard, keyOf, useDocuments } from "../../documents/store";
+import { beforeMove, discard, hold, keyOf, useDocuments } from "../../documents/store";
 import { retargetAll } from "../../documents/sync";
 import { classify } from "../../lib/errors";
 import { forgetMoved } from "../../lib/drafts";
@@ -79,11 +79,8 @@ export function renamed(path: string, name: string, section = false) {
   return join(folderOf(path), withExt);
 }
 
-/** Move a page or section to the notebook's trash; their drafts go too. Its tabs close before the file moves, so
- *  nothing can be typed into a page while it is being deleted, and they open again if the delete fails (Codex
- *  re-review of c496e1c, D8). */
-export async function trashPath(client: QueryClient, notebook: string, path: string) {
-  const doc = useDocuments.getState().docs[keyOf({ notebook, path })];
+/** Close every tab showing `path` or a page under it; returns the pages they showed. */
+function closeTabsUnder(notebook: string, path: string) {
   const ws = useWorkspace.getState();
   const closed = new Map<string, FileRef>();
   for (const pane of ws.panes) {
@@ -93,13 +90,30 @@ export async function trashPath(client: QueryClient, notebook: string, path: str
       ws.closeTab(pane.id, tab.id);
     }
   }
+  return closed;
+}
+
+/** Move a page or section to the notebook's trash; their drafts go too. Its tabs close before the file moves, and its
+ *  pages are held: one opened from the tree meanwhile shows the delete instead of an editor, and a failed delete
+ *  gives every page back with its edits (Codex re-reviews of c496e1c and b82e9ab, D8). */
+export async function trashPath(client: QueryClient, notebook: string, path: string) {
+  const done = await hold(notebook, path, "delete");
   try {
-    await deleteFile(notebook, path, doc?.base?.stamp);
-  } catch (e) {
-    for (const ref of closed.values()) openPage(ref);
-    throw e;
+    const doc = useDocuments.getState().docs[keyOf({ notebook, path })];
+    const closed = closeTabsUnder(notebook, path);
+    try {
+      await deleteFile(notebook, path, doc?.base?.stamp);
+    } catch (e) {
+      for (const ref of closed.values()) openPage(ref);
+      throw e;
+    }
+    closeTabsUnder(notebook, path);
+    for (const [key, ref] of Object.entries(useDocuments.getState().refs)) {
+      if (ref.notebook === notebook && movedPath(ref.path, path, path) !== null) discard(key);
+    }
+  } finally {
+    done();
   }
-  for (const key of closed.keys()) discard(key);
   client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
 }
 

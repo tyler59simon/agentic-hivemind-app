@@ -438,6 +438,7 @@ describe("documents store", () => {
     flags.deleteError = "Access is denied. (os error 5)";
     const slow = gate("file_delete A.md");
     const deleting = trashPath(new QueryClient(), "nb-1", "A.md");
+    await vi.waitFor(() => expect(calls).toContain("file_delete A.md"));
     expect(ws().panes[0].tabs).toHaveLength(0);
     slow();
     await expect(deleting).rejects.toThrow("denied");
@@ -450,6 +451,93 @@ describe("documents store", () => {
     expect(files.has("A.md")).toBe(false);
     expect(ws().panes[0].tabs).toHaveLength(0);
     await vi.waitFor(async () => expect(drafts.has(await draftKeyOf(key("A.md")))).toBe(false));
+  });
+
+  // Codex re-review of b82e9ab.
+
+  it("D8 (round 3): a failed delete gives back edits no draft could keep, and a page reopened during a delete goes with it", async () => {
+    const { QueryClient } = await import("@tanstack/react-query");
+    const { trashPath } = await import("../features/notes/actions");
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    flags.failDrafts = true;
+    docs.edit(key("A.md"), "edits no draft could keep");
+    flags.deleteError = "Access is denied. (os error 5)";
+    const slow = gate("file_delete A.md");
+    const failing = trashPath(new QueryClient(), "nb-1", "A.md");
+    await vi.waitFor(() => expect(calls).toContain("file_delete A.md"));
+    expect(docs.isDeleting(docs.useDocuments.getState().held, ref("A.md"))).toBe(true);
+    slow();
+    await expect(failing).rejects.toThrow("denied");
+    expect(state("A.md")).toMatchObject({ status: "dirty", text: "edits no draft could keep" });
+    expect(ws().panes[0].tabs.map((tab) => tab.file)).toEqual([ref("A.md")]);
+    flags.failDrafts = false;
+    flags.deleteError = "";
+
+    const slowAgain = gate("file_delete A.md");
+    const deleting = trashPath(new QueryClient(), "nb-1", "A.md");
+    await vi.waitFor(() => expect(calls.filter((c) => c === "file_delete A.md")).toHaveLength(2));
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    const reads = calls.filter((c) => c === "file_read A.md").length;
+    const reopening = docs.open(ref("A.md"));
+    slowAgain();
+    await deleting;
+    await reopening;
+    expect(calls.filter((c) => c === "file_read A.md")).toHaveLength(reads);
+    expect(ws().panes[0].tabs).toHaveLength(0);
+    expect(state("A.md")).toBeUndefined();
+    expect(files.has("A.md")).toBe(false);
+  });
+
+  it("N5 (round 3): a page opened during a move reads nothing until the move ends, then finds its moved draft", async () => {
+    const { QueryClient } = await import("@tanstack/react-query");
+    const { movePath } = await import("../features/notes/actions");
+    files.set("Area/P.md", "p");
+    const draftKey = await draftKeyOf(key("Area/P.md"));
+    drafts.set(draftKey, {
+      key: draftKey, kind: "file", target: ref("Area/P.md"), precondition: { sha256: sha("p"), size: 1, mtimeMs: 1 },
+      format: { encoding: "UTF-8", bom: false, eol: "lf" }, base: "p", mine: "p and a draft", savedAt: "t",
+    });
+    const slowMove = gate("file_rename undefined");
+    const moving = movePath(new QueryClient(), "nb-1", "Area", "Zone");
+    await vi.waitFor(() => expect(calls).toContain("file_rename "));
+    ws().openTab({ kind: "file", file: ref("Area/P.md") });
+    const opening = docs.open(ref("Area/P.md"));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(calls).not.toContain("file_read Area/P.md");
+    slowMove();
+    await moving;
+    await opening;
+    expect(state("Zone/P.md")).toMatchObject({ status: "dirty", text: "p and a draft" });
+  });
+
+  it("N3 (round 3): a closed page whose last draft failed is reported, and the window waits for drafts in flight", async () => {
+    const lost: string[] = [];
+    docs.onDraftLost((line) => lost.push(line));
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    docs.edit(key("A.md"), "typed, then the tab closed");
+    expect(docs.draftsPending()).toBe(true);
+    flags.failDrafts = true;
+    ws().closeTab("p0", ws().panes[0].tabs[0].id);
+    await vi.waitFor(() => expect(lost).toHaveLength(1));
+    expect(lost[0]).toContain("A.md");
+    expect(docs.draftsPending()).toBe(true);
+    expect(await docs.flushAllDrafts()).toEqual([expect.stringContaining("A.md")]);
+    docs.onDraftLost(() => {});
+    docs.discard(key("A.md"));
+    expect(docs.draftsPending()).toBe(false);
+  });
+
+  it("N4 (round 3): a draft whose write failed is never read back from the cache", async () => {
+    const { putDraft, getFileDraft } = await import("../lib/drafts");
+    const draftKey = await draftKeyOf(key("A.md"));
+    flags.failDrafts = true;
+    await expect(putDraft({
+      key: draftKey, kind: "file", target: ref("A.md"), precondition: { sha256: sha("one"), size: 1, mtimeMs: 1 },
+      format: { encoding: "UTF-8", bom: false, eol: "lf" }, mine: "never stored", savedAt: "t",
+    })).rejects.toThrow();
+    expect(await getFileDraft(draftKey)).toBeNull();
   });
 
   it("U2: renaming a section keeps every dot of the new name", async () => {

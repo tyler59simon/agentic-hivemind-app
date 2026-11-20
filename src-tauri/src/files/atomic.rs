@@ -23,11 +23,12 @@ fn short_name(name: &str) -> String {
         .collect()
 }
 
-/// Eight hex digits naming the whole original file name (lowercase, as Windows compares names), so a temp name cut
-/// to NAME_KEEP units still belongs to exactly one file (Codex re-review of c496e1c, N2).
+/// Eight hex digits naming the whole original file name, exactly as spelled (a case-sensitive folder can hold names
+/// that differ only in case), so a temp name cut to NAME_KEEP units still belongs to exactly one file (Codex
+/// re-reviews of c496e1c and b82e9ab, N2).
 fn name_tag(name: &str) -> String {
     use sha2::{Digest, Sha256};
-    Sha256::digest(name.to_lowercase().as_bytes()).iter().take(4).map(|b| format!("{b:02x}")).collect()
+    Sha256::digest(name.as_bytes()).iter().take(4).map(|b| format!("{b:02x}")).collect()
 }
 
 /// A hidden file beside `path`: `.<name>.hm-<tag><name hash><uuid>.tmp`, in the same folder so renames stay on one
@@ -58,15 +59,13 @@ pub fn orphaned_aside(path: &Path) -> Option<PathBuf> {
     found.next().is_none().then(|| dir.join(first))
 }
 
-/// The file an aside named `name` belongs to, when its name was kept whole. A cut name has at least NAME_KEEP - 1
-/// units (the cut can stop one short before a two-unit character), so only shorter names count as whole, and the name
-/// hash must match.
+/// The file an aside named `name` belongs to, when its name was kept whole: the name hash of the kept part matches.
+/// A cut name carries the hash of the longer name, so it never matches (Codex re-review of b82e9ab, N2a).
 pub fn aside_target(dir: &Path, name: &str) -> Option<PathBuf> {
     let (kept, tail) = name.strip_prefix('.')?.strip_suffix(TEMP_END)?.rsplit_once(TEMP_MARK)?;
     let rest = tail.strip_prefix(ASIDE)?;
-    let whole = kept.encode_utf16().count() < NAME_KEEP - 1;
     let ours = rest.len() == 40 && rest.bytes().all(|b| b.is_ascii_hexdigit()) && rest[..8] == name_tag(kept);
-    (whole && ours).then(|| dir.join(kept))
+    ours.then(|| dir.join(kept))
 }
 
 /// True for a temp file this module writes; the watcher and the tree skip these.
@@ -437,6 +436,15 @@ mod tests {
         std::fs::write(beside(&long_b, ASIDE).unwrap(), "b's previous").unwrap();
         assert_eq!(orphaned_aside(&long_a), None, "B's aside is not A's");
         assert!(orphaned_aside(&long_b).is_some());
+        // Names that differ only in case after the kept part (a case-sensitive folder can hold both).
+        let lower_b = dir.join(format!("{}b.md", "n".repeat(120)));
+        assert_eq!(orphaned_aside(&lower_b), None, "B's aside is not b's");
+        // Whole names of 99 and 100 units are recognised from the aside alone.
+        for units in [99, 100] {
+            let whole = dir.join(format!("{}.md", "w".repeat(units - 3)));
+            let aside = beside(&whole, ASIDE).unwrap();
+            assert_eq!(aside_target(&dir, &aside.file_name().unwrap().to_string_lossy()), Some(whole), "{units} units");
+        }
         // A name cut at 99 units (an emoji did not fit) is not mistaken for a whole name.
         let cut = dir.join(format!("{}\u{1F600}tail.md", "x".repeat(99)));
         let aside = beside(&cut, ASIDE).unwrap();

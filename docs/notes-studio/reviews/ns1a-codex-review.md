@@ -102,3 +102,23 @@ Each regression test below was run against the code it guards with the fix taken
 ### Stopping point
 
 Claude set the stopping point at one more Codex pass over the round-two commit. From that pass, confirmed high-severity findings (data loss or escape from a notebook) are fixed in NS-1A; the rest go to the backlog note for the phase that touches the code next.
+
+## Round 3: the last pass, over b82e9ab
+
+Codex (same model and effort, read-only) reviewed `b82e9ab`, the round-two fixes. It reported eight high-severity findings, two medium and one low. By the stopping point above, Claude fixed every confirmed high-severity finding in the commit after `b82e9ab`, plus two cheap ones (TEST-1 and part of N2a); the rest are on the backlog note with the prefix `R3-`. Each regression test fails on `b82e9ab`, or with the fix taken out.
+
+Codex was right about P4: the round-two dispute missed a junction already in place. The lowercase comparison stays for case-only renames, and a link anywhere on the registered path is now refused.
+
+| ID | Severity | Finding | Fix | Test |
+| --- | --- | --- | --- | --- |
+| P4 | High | A junction put in place of the notebook folder, leading to a sibling spelled with other case, passed the lowercase check | `unmoved()` refuses a registered path with a link on it; the canonical path may differ only by case | `studio::tests::a_notebook_folder_is_found_by_its_own_spelling_and_survives_a_case_only_rename` (junction case added) |
+| D8 | High | A page opened again from the tree while its delete ran could be edited and then discarded; a failed delete lost edits too large for a draft | A delete holds its pages like a move: they do not load, a reopened tab shows "Moving to the trash", the documents stay in memory until the delete settles, and tabs opened meanwhile close with it | `store.test.ts` "D8 (round 3)" |
+| N2 | High | In a case-sensitive folder, two long names differing only in case after the kept part shared an aside hash | The name hash covers the exact spelling | `atomic::tests::asides_of_long_names_sharing_a_prefix_stay_apart` |
+| N3 | High | Closing the window skipped the draft flush when no tab was unsaved, and a closed page whose last draft write failed was never reported | The close guard flushes whenever `draftsPending()`; failed drafts of closed pages are reported at once (a toast) and at quit | `store.test.ts` "N3 (round 3)"; the close guard checked by reading |
+| N4 | High | The drafts cache kept a draft whose write failed, and loading counted it as kept | A failed `putDraft` puts back what the cache held; `kept` is set only after a write succeeds | `store.test.ts` "N4 (round 3)" |
+| N5 | High | A page opened during a move could read its file before the rename and its draft after it | Pages under a move or delete in progress load only when it ends, at the path they end up at | `store.test.ts` "N5 (round 3)" |
+| P5a | High | A sidecar fallback written before the base hash lost to the notebook copy | Without a hash, the old rule applies: the fallback counts when it is at least as new | `sidecar::tests::the_fallback_keeps_its_base_inside_and_a_fallback_from_before_the_hash_keeps_the_old_rule` |
+| P5b | High | The base hash and the fallback were two writes, and the hash was read apart from the notebook copy that was merged | The hash is a key inside the fallback JSON (`hivemindReplaced`), computed from the same read of the notebook copy as the merge | same test |
+| N2a | Medium | Whole names of 99 or 100 units were not recognised from their aside, and asides in the `c496e1c` format are not recovered | Names are recognised by their hash at any kept length. The old format stays unrecovered: no build that wrote it was installed | `atomic::tests::asides_of_long_names_sharing_a_prefix_stay_apart`; old format on the backlog |
+| TEST-1 | Medium | jsdom 31 supports a narrower Node range than vitest | jsdom 28.0.0, whose dependencies accept vitest's whole range | none needed |
+| P3 | Low | `is_marked_vault` treats a metadata error as no marker | On the backlog | |

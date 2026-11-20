@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ellipsis, Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { edit, keyOf, open, reload, resolveMerge, save, useDocuments } from "../../documents/store";
+import { edit, isDeleting, keyOf, open, reload, resolveMerge, save, useDocuments } from "../../documents/store";
 import { isUnsaved, mergeable, type DocState } from "../../documents/session";
 import { classify } from "../../lib/errors";
 import { createFile, fileName, folderOf, isMarkdown, notebooksQuery, pageTitle, revealFile, treeQuery, type Notebook } from "../../lib/notebooks";
@@ -146,6 +146,7 @@ export function FileTab({ tab }: { tab: Tab }) {
   const ref = tab.file!;
   const key = keyOf(ref);
   const doc = useDocuments((s) => s.docs[key]);
+  const deleting = useDocuments((s) => isDeleting(s.held, ref));
   const updateTab = useWorkspace((s) => s.updateTab);
   const reveal = useWorkspace((s) => (s.reveal?.tabId === tab.id ? s.reveal : null));
   const client = useQueryClient();
@@ -183,6 +184,7 @@ export function FileTab({ tab }: { tab: Tab }) {
       }} />,
   );
 
+  if (deleting) return <div className="center muted">Moving {fileName(ref.path)} to the trash…</div>;
   if (!doc || doc.status === "loading") return <div className="center muted">Opening {fileName(ref.path)}…</div>;
   if (doc.status === "error") {
     return (

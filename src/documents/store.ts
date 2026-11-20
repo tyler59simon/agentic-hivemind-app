@@ -7,9 +7,14 @@ import { mergeBody } from "../features/editor/merge";
 import { docKey, draftKeyOf, movedPath, type FileRef } from "./keys";
 import { initial, isUnsaved, reduce, type DocEvent, type DocState, type Loaded } from "./session";
 
+/** A move or delete in progress over a page or folder (`hold`). */
+export interface Held { notebook: string; from: string; kind: "move" | "delete" }
+
 interface DocumentsState {
   docs: Record<string, DocState>;
   refs: Record<string, FileRef>;
+  /** Moves and deletes in progress, for the pages to show it. */
+  held: Held[];
   /** Apply an event to an open document. A document no tab holds any more is left alone, so a read or save that ends
    *  after its tab closed cannot bring it back (Codex review of 32fd236, S1). */
   dispatch: (key: string, event: DocEvent) => void;
@@ -18,6 +23,7 @@ interface DocumentsState {
 export const useDocuments = create<DocumentsState>()((set) => ({
   docs: {},
   refs: {},
+  held: [],
   dispatch: (key, event) => set((s) => (s.docs[key] ? { docs: { ...s.docs, [key]: reduce(s.docs[key], event) } } : s)),
 }));
 
@@ -61,25 +67,44 @@ const writing = new Map<string, Promise<void>>();
  *  ends applies only to the session that started it (Codex re-review of c496e1c, S1 and S5). */
 const generations = new Map<string, number>();
 let generationCount = 0;
-/** The text the stored draft of each document holds, so quitting can tell which edits are not kept yet (N4). */
+/** The text each document's stored draft holds, set only once a write succeeded, so quitting can tell which edits are
+ *  not kept yet (Codex re-reviews of c496e1c and b82e9ab, N4). */
 const kept = new Map<string, string>();
+/** Pages no tab shows any more whose last draft could not be written, with the reason: reported at quit (N3). */
+const unkept = new Map<string, string>();
+let draftLost: (line: string) => void = () => {};
+/** Called when a page no tab shows any more could not keep its last edits as a draft. */
+export function onDraftLost(listener: (line: string) => void) { draftLost = listener; }
 
-/** Moves in progress. A page under one, including one opened after the move began, neither saves nor writes drafts
- *  until the move ends, and its tab closing lets it go only then (Codex re-review of c496e1c, N3 and N5). */
-const moves = new Set<{ notebook: string; from: string; done: Promise<void> }>();
-function isMoving(key: string) {
+/** Moves and deletes in progress. A page under one, including one opened after it began, does not load, save or write
+ *  drafts until it ends, and its tab closing lets it go only then (Codex re-reviews of c496e1c and b82e9ab, D8, N3 and
+ *  N5). */
+const holds = new Set<{ entry: Held; done: Promise<void> }>();
+function isHeld(key: string) {
   const ref = useDocuments.getState().refs[key];
-  return !!ref && [...moves].some((m) => m.notebook === ref.notebook && movedPath(ref.path, m.from, m.from) !== null);
+  return !!ref && [...holds].some(({ entry: h }) => h.notebook === ref.notebook && movedPath(ref.path, h.from, h.from) !== null);
+}
+
+/** Whether `ref` lies under a delete in progress, so its page shows that instead of an editor. */
+export const isDeleting = (held: Held[], ref: FileRef) =>
+  held.some((h) => h.kind === "delete" && h.notebook === ref.notebook && movedPath(ref.path, h.from, h.from) !== null);
+
+/** Resolves once no move or delete is in progress and the loads they let start have run. */
+function afterHolds(): Promise<void> {
+  return Promise.all([...holds].map((h) => h.done)).then(() => (holds.size ? afterHolds() : Promise.all([...loads.values()]).then(() => {})));
 }
 
 /** Load a page once (later tabs share the same load). A draft left by an earlier run comes back as unsaved edits.
- *  Opening a page whose load failed tries again; its draft is never touched (Codex review of 32fd236, D6). */
+ *  Opening a page whose load failed tries again; its draft is never touched (Codex review of 32fd236, D6). A page
+ *  under a move or delete in progress loads once that ends, at the path it ends up at, so it never reads the file and
+ *  its draft halfway through (Codex re-review of b82e9ab, N5 and D8). */
 export function open(ref: FileRef): Promise<void> {
   const key = keyOf(ref);
   useDocuments.setState((s) => ({ refs: { ...s.refs, [key]: ref } }));
   const doc = get(key);
-  if (doc && doc.status !== "error") return loads.get(key) ?? Promise.resolve();
+  if (doc && doc.status !== "error") return loads.get(key) ?? (isHeld(key) ? afterHolds() : Promise.resolve());
   useDocuments.setState((s) => ({ docs: { ...s.docs, [key]: initial } }));
+  if (isHeld(key)) return afterHolds();
   return startLoad(key, ref);
 }
 
@@ -100,7 +125,6 @@ async function load(key: string, ref: FileRef, attempt: number) {
     const loaded = toLoaded(await readFile(ref.notebook, ref.path));
     const draft = await getFileDraft(await draftKeyOf(key)).catch(() => null);
     if (!current(key, attempt)) return;
-    if (draft) kept.set(key, draft.mine);
     if (!draft || loaded.readOnly || loaded.binary) { dispatch(key, { type: "loaded", loaded }); return; }
     if (draft.precondition.sha256 === loaded.stamp.sha256) {
       dispatch(key, { type: "loaded", loaded, draft: { text: draft.mine, at: draft.savedAt } });
@@ -137,9 +161,9 @@ function scheduleDraft(key: string) {
  *  one after another, so the last one written is the newest (Codex review of 32fd236, D7). */
 function writeDraft(key: string): Promise<void> {
   const s = get(key), ref = useDocuments.getState().refs[key];
-  if (isMoving(key)) {
+  if (isHeld(key)) {
     // Moving: the draft is written under its new key once the move is done (`retarget` carries the timer over, and
-    // quitting waits for the move).
+    // quitting waits for the move). Deleting: it goes with the page, or is written once a failed delete ends.
     if (s && isUnsaved(s)) scheduleDraft(key);
     return writing.get(key) ?? Promise.resolve();
   }
@@ -149,19 +173,30 @@ function writeDraft(key: string): Promise<void> {
   return run;
 }
 
+/** Record how a draft write ended. A page still open shows a failure as a banner; a page no tab shows any more is
+ *  reported now and again at quit (Codex re-review of b82e9ab, N3). */
+function drafted(key: string, ref: FileRef, error: string | null) {
+  if (get(key)) dispatch(key, { type: "draft", error });
+  if (error === null) { unkept.delete(key); return; }
+  if (get(key)) return;
+  const line = `${ref.path}: ${error}`;
+  unkept.set(key, line);
+  draftLost(line);
+}
+
 async function keepDraft(key: string, s: DocState | undefined, ref: FileRef | undefined) {
   if (!s?.base || !ref) return;
   const draftKey = await draftKeyOf(key);
   if (!isUnsaved(s)) {
     await deleteDraft(draftKey).catch(() => {});
     kept.delete(key);
-    dispatch(key, { type: "draft", error: null });
+    drafted(key, ref, null);
     return;
   }
   // Measured in bytes, and every failure is shown, so the user knows when edits exist only in the window (Codex review
   // of 32fd236, D9).
   if (utf8Bytes(s.text) > DRAFT_LIMIT) {
-    dispatch(key, { type: "draft", error: "the page is too large to keep a draft of (over 12 MB)" });
+    drafted(key, ref, "the page is too large to keep a draft of (over 12 MB)");
     return;
   }
   try {
@@ -170,9 +205,9 @@ async function keepDraft(key: string, s: DocState | undefined, ref: FileRef | un
       base: utf8Bytes(s.base.text) <= BASE_LIMIT ? s.base.text : undefined, mine: s.text, savedAt: new Date().toISOString(),
     });
     kept.set(key, s.text);
-    dispatch(key, { type: "draft", error: null });
+    drafted(key, ref, null);
   } catch (e) {
-    dispatch(key, { type: "draft", error: String(e) });
+    drafted(key, ref, String(e));
   }
 }
 
@@ -190,15 +225,24 @@ export function flushDraft(key: string): Promise<void> {
 export async function flushAllDrafts(): Promise<string[]> {
   const behind = () => Object.entries(useDocuments.getState().docs).filter(([k, d]) => isUnsaved(d) && kept.get(k) !== d.text);
   for (let round = 0; round < 3; round++) {
-    await Promise.all([...moves].map((m) => m.done));
+    await Promise.all([...holds].map((h) => h.done));
     const keys = new Set([...timers.keys(), ...behind().filter(([, d]) => !d.draftError).map(([k]) => k)]);
     for (const key of keys) { clearTimeout(timers.get(key)); timers.delete(key); }
     const runs = [...[...keys].map(writeDraft), ...writing.values()];
-    if (!runs.length && !moves.size) break;
+    if (!runs.length && !holds.size) break;
     await Promise.all(runs);
   }
   const { refs } = useDocuments.getState();
-  return behind().map(([k, d]) => `${refs[k]?.path ?? k}: ${d.draftError ?? "the latest edits were made while quitting"}`);
+  const open = behind().map(([k, d]) => `${refs[k]?.path ?? k}: ${d.draftError ?? "the latest edits were made while quitting"}`);
+  return [...open, ...unkept.values()];
+}
+
+/** Whether a draft is still to be written, or a failure still to be reported, so the window must not close before
+ *  `flushAllDrafts` (Codex re-review of b82e9ab, N3). */
+export function draftsPending(): boolean {
+  const { docs } = useDocuments.getState();
+  return timers.size > 0 || writing.size > 0 || holds.size > 0 || unkept.size > 0
+    || Object.entries(docs).some(([k, d]) => isUnsaved(d) && kept.get(k) !== d.text);
 }
 
 export function edit(key: string, text: string) {
@@ -209,7 +253,7 @@ export function edit(key: string, text: string) {
 /** Save the document. Returns the state after the attempt. */
 export async function save(key: string) {
   const s = get(key), ref = useDocuments.getState().refs[key];
-  if (!s?.base || !ref || s.status !== "dirty" || isMoving(key)) return get(key);
+  if (!s?.base || !ref || s.status !== "dirty" || isHeld(key)) return get(key);
   dispatch(key, { type: "saveStarted" });
   const text = get(key).saving!;
   const generation = generations.get(key);
@@ -289,29 +333,37 @@ export async function refresh(notebook: string, paths: string[]) {
   for (const key of Object.keys(useDocuments.getState().refs)) if (wanted.has(key)) await recheck(key);
 }
 
-/** Before a page or folder moves: write pending drafts, let loads, saves and draft writes finish, and hold new ones
- *  until the move is done (Codex review of 32fd236, S2 and D7). Returns the function that ends the hold. */
-export async function beforeMove(notebook: string, from: string): Promise<() => void> {
+/** Before a page or folder moves or is deleted: write pending drafts, let loads, saves and draft writes finish, and
+ *  hold new ones until it is done (Codex review of 32fd236, S2 and D7). Returns the function that ends the hold. */
+export async function hold(notebook: string, from: string, kind: Held["kind"]): Promise<() => void> {
   const keys = Object.entries(useDocuments.getState().refs)
     .filter(([, ref]) => ref.notebook === notebook && movedPath(ref.path, from, from) !== null)
     .map(([key]) => key);
   for (const key of keys) void flushDraft(key);
   let end = () => {};
-  const move = { notebook, from, done: new Promise<void>((resolve) => { end = resolve; }) };
-  moves.add(move);
+  const entry: Held = { notebook, from, kind };
+  const h = { entry, done: new Promise<void>((resolve) => { end = resolve; }) };
+  holds.add(h);
+  useDocuments.setState((s) => ({ held: [...s.held, entry] }));
   await Promise.all(keys.flatMap((key) => [loads.get(key), saves.get(key), writing.get(key)]));
   return () => {
-    moves.delete(move);
+    holds.delete(h);
     end();
-    // Tabs closed during the move let their documents go now (the sync releases what no tab shows).
-    useDocuments.setState({});
+    // Tabs closed meanwhile let their documents go now (the sync releases what no tab shows).
+    useDocuments.setState((s) => ({ held: s.held.filter((x) => x !== entry) }));
+    // Pages opened meanwhile load now, at the path they ended up at.
+    const { docs, refs } = useDocuments.getState();
+    for (const [key, doc] of Object.entries(docs)) {
+      if (doc.status === "loading" && !loads.has(key) && refs[key] && !isHeld(key)) void startLoad(key, refs[key]);
+    }
   };
 }
 
-/** A page or folder moved: its documents follow under their new keys (Rust has already moved the drafts). A page
- *  still opening starts its read again at the new path (Codex re-review of c496e1c, N5). */
+export const beforeMove = (notebook: string, from: string) => hold(notebook, from, "move");
+
+/** A page or folder moved: its documents follow under their new keys (Rust has already moved the drafts). A page opened
+ *  during the move has not read anything yet; it loads at the new path when the move ends. */
 export function retarget(notebook: string, from: string, to: string) {
-  const reopen: [string, FileRef][] = [];
   useDocuments.setState((s) => {
     const docs = { ...s.docs }, refs = { ...s.refs };
     for (const [key, ref] of Object.entries(s.refs)) {
@@ -326,19 +378,18 @@ export function retarget(notebook: string, from: string, to: string) {
       generations.delete(key);
       generations.set(next, ++generationCount);
       if (kept.has(key)) { kept.set(next, kept.get(key)!); kept.delete(key); }
-      if (doc?.status === "loading") reopen.push([next, { notebook, path }]);
       const timer = timers.get(key);
       if (timer) { clearTimeout(timer); timers.delete(key); scheduleDraft(next); }
     }
     return { docs, refs };
   });
-  for (const [key, ref] of reopen) void startLoad(key, ref);
 }
 
-/** Forget a document no tab shows any more; a dirty one keeps its draft for next time. During a move it stays until
- *  the move ends, so edits typed meanwhile are written under the new name (Codex re-review of c496e1c, N3). */
+/** Forget a document no tab shows any more; a dirty one keeps its draft for next time. During a move or delete it stays
+ *  until that ends: a move writes edits typed meanwhile under the new name, and a failed delete gives the page back
+ *  with its edits, even ones too large for a draft (Codex re-reviews of c496e1c and b82e9ab, N3 and D8). */
 export function release(key: string) {
-  if (isMoving(key)) return;
+  if (isHeld(key)) return;
   void flushDraft(key);
   generations.delete(key);
   useDocuments.setState((s) => {
@@ -354,6 +405,7 @@ export function discard(key: string) {
   timers.delete(key);
   generations.delete(key);
   kept.delete(key);
+  unkept.delete(key);
   useDocuments.setState((s) => {
     const docs = { ...s.docs }, refs = { ...s.refs };
     delete docs[key]; delete refs[key];
