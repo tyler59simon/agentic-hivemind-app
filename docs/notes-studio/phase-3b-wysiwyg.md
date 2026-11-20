@@ -2,6 +2,13 @@
 
 Read [README.md](README.md) and the S3 spike verdict first. This phase adds a fourth mode to Markdown pages, **Rich**, where no Markdown syntax is visible. The file stays Markdown: blocks the user did not touch are written back byte for byte, and only edited blocks are re-serialised.
 
+## Changes from the NS-0 review
+
+These rules come from the Codex review of the design ([reviews/ns0-codex-review.md](reviews/ns0-codex-review.md)). Where the text below says otherwise, these win.
+
+- Block ownership: at parse, every top-level block gets a `srcId` attribute (its index in the original document), set when the document is built, never by an `appendTransaction`. On save, a block emits its original source slice only if it is the first block carrying its `srcId` and `node.eq(original[srcId])`; the original gap before it is emitted only when the previous emitted block is `srcId - 1`. Copies, moves, inserts and undo therefore never reuse a slice they do not own; everything else goes through the serializer. This replaces the identity WeakMap and the `node.eq` fallback (C5).
+- Files with mixed line endings are read-only (NS-1A), so Rich mode never edits them; it works on the file service's LF text and file-level format. Round-trip tests run through the file adapter and `file_save` (BOM, CRLF, no final newline), not on source slices alone (C4). Tests also cover equal blocks with different spellings and gaps, copy, move, delete and undo (C5).
+
 ## 1. What the user sees
 
 - Mode tabs on a Markdown page: Reading, Live, Rich, Source. The choice is remembered per tab.
@@ -13,7 +20,7 @@ Read [README.md](README.md) and the S3 spike verdict first. This phase adds a fo
 
 - Parse with `unified` + `remark-parse` + `remark-gfm` + `remark-frontmatter` + `remark-math` + small micromark extensions for `[[...]]`, `![[...]]`, `==...==`, `%%...%%` and `^block-id`; turn `> [!type]` quotes into callout nodes. Every mdast node keeps its position.
 - Map mdast to a ProseMirror schema (`src/features/rich/schema.ts`) shared with `.hmdoc` (NS-3C) where node types overlap.
-- **Preservation:** at load, record a `WeakMap<PMNode, { start, end }>` for each top-level block, plus the exact gap text between blocks and after the last. ProseMirror keeps the identity of untouched nodes through transactions, so "in the map" means "untouched". Undo is the exception (spike S3): a block that was edited and then undone is equal to the original but is a new object. So a node missing from the map is compared with `node.eq` against the original block at the same index, then against a map of original blocks keyed by a content hash; an equal block counts as untouched. Serialising walks the new document: untouched nodes emit their gap and original slice; changed or new nodes go through `mdast-util-to-markdown` with options detected from the file (bullet marker, emphasis marker, fence style, rule style, list indent).
+- **Preservation:** at load, record each top-level block's source slice `{ start, end }` and the exact gap text between blocks and after the last, and give each block a `srcId` attribute (see the review changes above for the ownership rule). Serialising walks the new document: blocks that still own their original emit their gap and original slice; changed or new nodes go through `mdast-util-to-markdown` with options detected from the file (bullet marker, emphasis marker, fence style, rule style, list indent).
 - Never install extensions that rewrite every node (Tiptap `UniqueID`, normalising `appendTransaction` plugins); a test fails if any node loses identity after a no-op transaction.
 - `rawBlock` and `rawInline` atoms hold exact source for anything the schema cannot model.
 - CRLF: original slices keep their bytes; new blocks are written with `\n` and the file service converts line endings (NS-1B), so a CRLF file stays CRLF.

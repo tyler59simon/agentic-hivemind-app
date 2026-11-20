@@ -2,6 +2,13 @@
 
 Read [README.md](README.md) and the S4 spike verdict first. This phase adds Hivemind's own derived index for folder notebooks and opened files, the full link resolver across notebooks and memory, backlinks, tags and one search box over every origin.
 
+## Changes from the NS-0 review
+
+These rules come from the Codex review of the design ([reviews/ns0-codex-review.md](reviews/ns0-codex-review.md)). Where the text below says otherwise, these win.
+
+- The index covers notebook pages only. Loose files opened from disk are not indexed; recent files find them (U12).
+- Living Memory pages are searched through `search`'s `pages` array (both origins, README 5.8), gated on `docs.search`; before NS-2B ships, the Living Memory group is absent (C1).
+
 ## 1. What the user sees
 
 - On the Notes page, Ctrl+K and Ctrl+Shift+F focus a search box over pages. Results are grouped: **This notebook**, **Other notebooks**, **Living Memory pages**, **Memory notes**. Filters: notebook, folder, tag, file kind, modified date. Snippets highlight matches; Enter opens, Ctrl+Enter opens in a split.

@@ -2,6 +2,14 @@
 
 Read [README.md](README.md) first. This phase keeps a version of every page and opened file on each save, shows a timeline that also includes git commits for notebooks in a repository, and restores or compares any version. Living Memory pages show Living Memory's own history.
 
+## Changes from the NS-0 review
+
+These rules come from the Codex review of the design ([reviews/ns0-codex-review.md](reviews/ns0-codex-review.md)). Where the text below says otherwise, these win.
+
+- History follows renames: the snapshot index maps a page key to its snapshots, and a rename or move (NS-1A) appends the old key to the new one, so a page's history is continuous; case-only renames keep the key (U9).
+- Commit stages and commits exactly one file: `git commit --only -m MESSAGE -- ":(literal)<repo-relative path>"`, which leaves any other staged change staged. Tests: another file already staged, and a file name with pathspec characters (`*`, `?`, `[`, `:`) (S12).
+- Restoring a version runs `files::guard` on the target (S2).
+
 ## 1. What the user sees
 
 - A **History** mode on file and page tabs (as notes have) and a **History** section in the page rail with the last few versions.

@@ -2,6 +2,12 @@
 
 Read [README.md](README.md) and [phase-2c-lm-notebooks.md](phase-2c-lm-notebooks.md) first.
 
+## Changes from the NS-0 review
+
+These rules come from the Codex review of the design ([reviews/ns0-codex-review.md](reviews/ns0-codex-review.md)). Where the text below says otherwise, these win.
+
+- Daily folder, date format, template and inbox page of a Living Memory notebook are stored in its `notebook.json` `settings` object through `doc notebook update --settings-file` (U7).
+
 ## 1. What the user sees
 
 - **Today** (palette, and a button on each notebook): opens today's daily page, creating it from the daily template if needed. Settings per notebook: folder, date format (Moment-style tokens `YYYY`, `MM`, `DD`, `ddd`, `ww`, as Obsidian uses), template. Previous and next day buttons on a daily page; a small calendar in the rail marks days that have a page.

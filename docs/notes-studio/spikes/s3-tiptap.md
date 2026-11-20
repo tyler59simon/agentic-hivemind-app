@@ -21,7 +21,7 @@ The test used a real Tiptap editor under jsdom with all of the extensions above,
 - Bolding text in one block and appending a block left 38 of 40 as the same objects.
 - After three undos the document equalled the original (`doc.eq`), but the two blocks that had been edited were new objects.
 
-**Change to NS-3B.** When a block is missing from the identity map, the serializer compares it with `node.eq` against the original block at the same index, and failing that against a map of original blocks keyed by a content hash. An equal block emits its original source slice. Without this, undoing an edit would re-serialise those blocks in the detected style.
+**Change to NS-3B.** When a block is missing from the identity map, the serializer compares it with `node.eq` against the original block at the same index, and failing that against a map of original blocks keyed by a content hash. An equal block emits its original source slice. Without this, undoing an edit would re-serialise those blocks in the detected style. The NS-0 review (C5) showed that an equality fallback can hand an original slice to a copied or moved block, so NS-3B tracks ownership with a `srcId` attribute instead (see the phase document).
 
 ## Source slices
 

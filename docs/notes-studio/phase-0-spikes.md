@@ -27,7 +27,7 @@ Order: S4, S5 and S7 need no app changes and run first. S3 needs only npm in a s
 
 | Spike | Verdict |
 | --- | --- |
-| S3 Tiptap | Adopt. All packages MIT; 193 KB gzipped with the remark pipeline; undo breaks node identity, so NS-3B adds a `node.eq` fallback; remark slices reproduced 480 file variants exactly. Block drag checked at the start of NS-3B |
+| S3 Tiptap | Adopt. All packages MIT; 193 KB gzipped with the remark pipeline; undo breaks node identity, so NS-3B tracks block ownership with a `srcId` attribute (after the review); remark slices reproduced 480 file variants exactly. Block drag checked at the start of NS-3B |
 | S4 rusqlite | Adopt. 22 s clean build, about 1.7 MB exe, FTS5 with the porter tokenizer |
 | S5 model2vec | Adopt. Identical token ids on 26 of 26 texts, worst cosine 0.9999999884 |
 | S6 Codex | Partial. Flags confirmed offline; the live call waits for the user's approval at the start of NS-8A |

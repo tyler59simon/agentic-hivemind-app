@@ -2,6 +2,13 @@
 
 Read [README.md](README.md) first. This phase grows the CodeMirror live preview for pages (not memory notes) into an Obsidian-style editor: the Markdown text is always the file, and rich blocks render in place until the cursor enters them. Re-check anchors against the code before starting.
 
+## Changes from the NS-0 review
+
+These rules come from the Codex review of the design ([reviews/ns0-codex-review.md](reviews/ns0-codex-review.md)). Where the text below says otherwise, these win.
+
+- Embeds of Living Memory pages and attachments need NS-2C; before it ships they render as plain links (C1).
+- An embed (`![[Page]]`) of a page from a private notebook renders inside Hivemind but marks the embedding page as carrying private content, which NS-8A reads (S10).
+
 ## 1. What the user sees
 
 In Live mode on a page:

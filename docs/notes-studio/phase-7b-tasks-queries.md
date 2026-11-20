@@ -2,6 +2,12 @@
 
 Read [phase-4a-index-search.md](phase-4a-index-search.md) first; tasks and properties come from the index.
 
+## Changes from the NS-0 review
+
+These rules come from the Codex review of the design ([reviews/ns0-codex-review.md](reviews/ns0-codex-review.md)). Where the text below says otherwise, these win.
+
+- Living Memory tasks and properties come from `doc tasks` and `doc query` (NS-2B), not from Hivemind's index; ticking a task or editing a property of a Living Memory page writes it with `doc write --expected-revision` (U7).
+
 ## 1. What the user sees
 
 - A **Tasks** view (Notes page sub-view, palette entry): every `- [ ]` and `- [x]` from folder notebooks and Living Memory pages, plus open action items from Living Memory work notes (`alm open`). Columns: task, page or note, notebook or domain, due, priority. Filters: notebook, due (overdue, today, this week, none), done, text. Grouping by page, due date or notebook.

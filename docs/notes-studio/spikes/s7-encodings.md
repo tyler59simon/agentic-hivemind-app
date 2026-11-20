@@ -16,4 +16,5 @@ Measured on 2026-11-20 in a scratch crate with `encoding_rs` 0.8.44 ((Apache-2.0
 - Editable: UTF-8 with or without BOM, UTF-16 LE and BE with or without BOM, and every other encoding listed above.
 - ISO-2022-JP stays read-only, as `phase-1b-open-any-file.md` says. Its round trip passed only for text that `encoding_rs` itself encoded; a file from another encoder can choose different escape sequences (for example `ESC ( J` against `ESC ( B`), so saving it would change bytes the user did not touch.
 - A file that decodes with errors opens read-only, with "Reopen with encoding" and "Convert to UTF-8" offered.
+- After the review (U10): a legacy file is editable only if decoding its actual bytes and encoding the result gives the same bytes. The samples above were written by `encoding_rs` itself; files from other encoders can use a second byte form for the same character (Shift_JIS IBM and NEC extensions), which would change untouched lines on save.
 - Saves always use the `_without_replacement` API. On an unmappable character the save is refused and the dialog offers converting the file to UTF-8.

@@ -2,6 +2,13 @@
 
 Read [README.md](README.md) section 5.9 and the S6 spike verdict first. This phase adds the Notes AI engine (Claude or Codex per action, with its own budget) and selection and page actions that return a diff the user accepts, edits or rejects.
 
+## Changes from the NS-0 review
+
+These rules come from the Codex review of the design ([reviews/ns0-codex-review.md](reviews/ns0-codex-review.md)). Where the text below says otherwise, these win.
+
+- One apply rule (README section 3): a selection result applies when its anchor text is still in the page and is saved through the session save against the latest base; a whole-page result applies only if the page still has the captured hash or revision (C6).
+- Rust checks the origin of every input at dispatch, not the webview: the page and its notebook must not be private, embeds are expanded in Rust and each embedded source is checked the same way, and the check runs again right before the model is called, so a notebook made private while work is queued is refused (S10).
+
 ## 1. What the user sees
 
 - Select text and press Ctrl+J (editor-local) or use the selection menu: **Rewrite**, **Shorten**, **Expand**, **Fix grammar**, **Translate to…**, **Change tone…**, **Turn into tasks**, **Explain**, **Custom instruction…**. Without a selection, page actions: **Summarise**, **Outline**, **Continue writing**, **Suggest headings**, **Find gaps**.

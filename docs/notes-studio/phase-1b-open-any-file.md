@@ -2,6 +2,17 @@
 
 Read [README.md](README.md) and [phase-1a-workspace.md](phase-1a-workspace.md) first. This phase makes Hivemind the user's editor for any text file: open from a dialog, from Explorer ("Open with Hivemind" or a double-click on an associated type), by dragging onto the window, or from a recent list. It also adds encoding and line-ending preservation for every file, and the `hmfile` scheme so pages show local images. Spike findings S1, S2 and S7 in [spikes/](spikes/) decide the details marked "per spike".
 
+## Changes from the NS-0 review
+
+These rules come from the Codex review of the design ([reviews/ns0-codex-review.md](reviews/ns0-codex-review.md)). Where the text below says otherwise, these win.
+
+- Folder identity is the canonical path converted with `folders::plain` (public) and compared in lowercase; `folders.rs normal()` is private and is not used (W1). `ReplaceFileW` comes from a direct `windows-sys` dependency (W2).
+- Instance protocol v2 follows README 5.6: a request `id`, the reply only after the paths are queued (deduplicated by `id`), a 5 s wait in the starting process, and the frontend subscribing to `open-requested` before it drains `open_pending()`. Tests: delayed startup, a lost acknowledgement resent with the same id, an old instance receiving a v2 knock, and a new instance receiving a token-only knock (U2).
+- Grants follow README 5.5: exact Origin check, revocation when a notebook is removed or a recent entry is forgotten or evicted, one percent-decode before `resolve_inside`, and `files::guard` on every resolved target. Tests: a request from the capture window, a forgotten grant, `%2e%2e`, `%5c`, a nested page path, and a junction inside the grant root (S3).
+- `hmfile` answers CORS for the app's exact origins and exposes `Content-Range`, `Accept-Ranges` and `Content-Length`; spike S1 checks pdf.js Range fetches from both the dev and production origins (U11).
+- A legacy-encoded file is editable only if decoding its actual bytes and encoding the result gives back the same bytes; otherwise it opens read-only with Convert to UTF-8. This covers encodings with two byte forms for one character (Shift_JIS IBM and NEC extensions). Test with files written by other encoders, not only by `encoding_rs` (U10).
+- Every loose-file operation (open, save, Save as, recent list) runs `files::guard`, so a loose file inside the store or a managed vault opens read-only (S2). A loose file that lies inside a registered notebook becomes a notebook page, and its tabs and drafts move to the notebook key (U9).
+
 ## 1. What the user sees
 
 - Ctrl+O (the quick switcher) lists notes, pages and **recent files**, and ends with **Open file from disk…** (native dialog, any file). The palette has **Open file…** and **New text file**.

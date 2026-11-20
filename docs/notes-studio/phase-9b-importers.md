@@ -2,6 +2,13 @@
 
 Read [phase-9a-obsidian-export.md](phase-9a-obsidian-export.md) first. Importers convert other apps' exports into a new or existing folder notebook. They never change the source files, and each ends with a report of what it could not carry over.
 
+## Changes from the NS-0 review
+
+These rules come from the Codex review of the design ([reviews/ns0-codex-review.md](reviews/ns0-codex-review.md)). Where the text below says otherwise, these win.
+
+- Limits are cumulative across nested archives: 2 GB expanded in all, at most two levels of nesting, 20,000 pages. Link members and names that collide after normalisation (case, Unicode, trailing dots) are refused. Undo deletes only files whose hash still matches the import receipt and lists the rest (S13).
+- Import targets run `files::guard` (S2). Notion database CSVs need NS-7B saved queries; before then they import as pages only (C1).
+
 ## 1. Sources
 
 | Source | Input | Output |

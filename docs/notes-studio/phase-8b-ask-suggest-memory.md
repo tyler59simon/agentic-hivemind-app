@@ -2,6 +2,12 @@
 
 Read [phase-8a-ai-actions.md](phase-8a-ai-actions.md) and [phase-4b-semantic.md](phase-4b-semantic.md) first.
 
+## Changes from the NS-0 review
+
+These rules come from the Codex review of the design ([reviews/ns0-codex-review.md](reviews/ns0-codex-review.md)). Where the text below says otherwise, these win.
+
+- Ask and suggestions retrieve without `--include-private` and without private notebooks from Hivemind's index, whatever notebook the user picked; Save to memory checks the source page's notebook in Rust before it calls Executive Capture (S10).
+
 ## 1. What the user sees
 
 - **Ask** panel on the Notes page: a chat scoped to the current notebook by default, with chips to add other notebooks and Living Memory (domains). Answers cite sources as numbered chips; clicking one opens the page and highlights the exact paragraph. "I could not find this in the notebook" is a valid answer. Private notebooks cannot be added.

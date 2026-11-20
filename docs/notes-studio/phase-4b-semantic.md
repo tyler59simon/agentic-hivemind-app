@@ -2,6 +2,12 @@
 
 Read [phase-4a-index-search.md](phase-4a-index-search.md) and the S5 spike verdict first. This phase adds find-by-meaning over folder notebooks by reading the static model2vec model Living Memory already installs, so Hivemind ships no model and no ONNX runtime.
 
+## Changes from the NS-0 review
+
+These rules come from the Codex review of the design ([reviews/ns0-codex-review.md](reviews/ns0-codex-review.md)). Where the text below says otherwise, these win.
+
+- Windows tests follow Living Memory's real behaviour: `semantic install` while Hivemind reads the model, and `semantic remove` that reports `leftover` when a file cannot be deleted yet. Units follow `core/units.py`, which keeps a single paragraph over 360 words whole; the parity fixtures include one (W6).
+
 ## 1. What the user sees
 
 - A **Meaning** toggle in Notes search: results ranked by semantic similarity, fused with lexical results by reciprocal rank (k = 60, as Living Memory does), still grouped by origin.

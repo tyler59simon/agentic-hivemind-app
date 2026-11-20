@@ -51,7 +51,7 @@ flowchart LR
   HM -->|grant and containment checks| FS
   RS -->|serve --stdio bridge| LM[Living Memory]
   LM --> DOCS[(domains/D/notebooks)]
-  LM -->|sources, visibility from the sidecar| FS
+  LM -->|sources, visibility from its registry and the sidecar| FS
   RS --> IDX[(app data: index, history, drafts)]
   Agents[Claude and Codex CLIs] -->|search, ask, doc propose| LM
 ```
@@ -60,10 +60,11 @@ Principles:
 - Living Memory is the only writer of its store. Hivemind never writes under the store root.
 - The webview never touches the disk. Every file access is a Rust command that checks a registered notebook or a grant, or the `hmfile` scheme handler.
 - Files are the source of truth. Anything Hivemind derives (index, snapshots, drafts) can be rebuilt or dropped without losing a page.
-- AI and agent output is a proposal, applied only if the page still has the hash or revision captured with it.
+- AI and agent output is a proposal. A whole-page result applies only if the page still has the hash or revision captured with it. A selection result applies if its anchor text is still in the page; it is then saved through the normal session save against the latest base, so an outside change is merged, never overwritten.
 
 ## 4. Conventions that differ from `../plans/README.md`
 
+- **Trust model.** Hivemind protects against its own mistakes, against links and junctions planted inside a notebook, and against agents that Living Memory governs through its hooks. It does not try to stop another process of the same Windows user that can already write the files. Living Memory's `--actor` flag is self-declared, so it is never a security boundary: agents are told apart only by Living Memory's PreToolUse hook and by `HIVEMIND_SESSION` inside Hivemind terminals. Private notebooks follow from this: Living Memory never offers their content to agents, but an agent can still read files it can reach (decision table, Privacy).
 - **Git:** work on `main`. Per phase: commit (each commit builds and passes tests), run a read-only Codex review of the new commits, fix what holds in its own commit with regression tests, then push. Record the shipped commits in the phase document's "Shipped" section.
 - **Gates:** every phase that depends on a Living Memory feature checks it through `src/lib/connection.ts` (a `version` capability or a command name), so an older Living Memory still runs the app.
 - **Memory must not change.** `src/workspace/store.test.ts` passes without edits in every phase, and each phase ends with a `scripts/drive_ui.py` pass over the Memory library: open a note, edit, save, force a merge, split, open the rail.
@@ -73,13 +74,13 @@ Principles:
 
 | Phase | New dependencies | Measured or estimated cost |
 | --- | --- | --- |
-| 1B | `encoding_rs`, `chardetng` | Licences checked in S7; about 0.3 to 0.5 MB exe (estimate) |
+| 1B | `encoding_rs`, `chardetng`; `windows-sys` (direct, features `Win32_Storage_FileSystem` for `ReplaceFileW`) | Licences checked in S7; about 0.3 to 0.5 MB exe (estimate) |
 | 3A | `katex` | Lazy; about 0.6 MB with fonts (estimate) |
 | 3B | `@tiptap/core`, `pm`, `react`, `starter-kit`, `extension-table`, `extension-list`, `extension-image`, `extension-highlight`, `extension-text-style`, `extension-placeholder`, `extension-drag-handle`; `unified`, `remark-parse`, `remark-gfm`, `remark-frontmatter`, `remark-math`, `mdast-util-to-markdown` | Lazy; 193 KB gzipped measured in S3 |
 | 3D | `pdfjs-dist`, `@excalidraw/excalidraw`, `perfect-freehand` | Lazy; several MB (estimate) |
 | 4A | `rusqlite` with `bundled` | About 1.7 MB exe and a 22 s clean build, measured in S4 |
 | 4B | `unicode-normalization`, `unicode-general-category` | Measured in S5 |
-| 5, 6B | `flate2` (already transitive), `ignore` | About 0.2 MB (estimate) |
+| 5, 6B | `flate2` (already transitive), `ignore`; `regex` (direct, NS-6B search and replace) | About 0.2 MB (estimate) |
 | 7B | `yaml` | About 100 KB (estimate) |
 | 9A | `dompurify`, `turndown`, `turndown-plugin-gfm`, `docx`, `webview2-com` pinned to the version Tauri resolves | Lazy |
 | 9B | `mammoth`, `zip`, `quick-xml` (transitive) | Lazy; about 0.3 MB exe (estimate) |
@@ -119,16 +120,19 @@ Drafts: keys `file-<sha256(docKey)>` and `doc-<sha256(docKey)>` (hashed, so path
 
 ### 5.3 File service (NS-1A, encodings in NS-1B)
 
-- One containment helper, `resolve_inside(root, rel)` in `src-tauri/src/files/contain.rs`: every component `Component::Normal`, no `:` (alternate data streams), no Windows device names (`CON`, `NUL`, `COM1`...), no trailing dot or space; the canonical result must start with the canonical root. For a write, canonicalise the parent and refuse a target that is a reparse point. It replaces the ad hoc checks pattern of `archsuite.rs` (`fn inside`) and `review.rs` (`fn canonical`) for new code; those files are not changed.
+- One containment helper, `resolve_inside(root, rel, for_write)` in `src-tauri/src/files/contain.rs`: a forward-slash relative path whose every part is a plain name (no empty part, `.` or `..`, no `:` for alternate data streams, no `\`, no Windows device name such as `CON`, `con.txt` or `COM1`, no trailing dot or space, at most 240 characters); the canonical form of the deepest existing part must start with the canonical root. For a write, no part below the root may be a symbolic link or junction (a name-surrogate reparse point; other reparse points such as OneDrive placeholders are ordinary files, so notebooks in OneDrive stay writable). It replaces the ad hoc pattern of `archsuite.rs` (`fn inside`) and `review.rs` (`fn canonical`) for new code; those files are not changed.
+- Checks happen at use: every command validates the notebook id, resolves the path and checks it inside the same blocking call that then acts, never earlier.
+- **Protected targets** (`files::guard`, NS-1A, used by every path-bearing operation in every later phase, including loose files, grants, attachments, history restore, git, import, export, folder replace and session apply): after resolution, refuse the Living Memory store root and everything under it, every Obsidian vault Living Memory manages (from each domain's `sync-state.json`, or a `.living-memory/vault.json` or `copies.json` marker in the folder or an ancestor), and the reserved names `.git`, `.obsidian` and `.hivemind` (the file service itself writes only the sidecar and the trash there).
 - Reads: refuse above 64 MB (larger files go to the large-file viewer in NS-6B); NUL in the first 8000 bytes means binary. Return `{ text, sha256, size, mtimeMs, format: { encoding, bom, eol }, readOnly?: reason }`.
-- Saves: lock per path; re-hash the file on disk; refuse with `Stale { sha256 }` if it differs from the precondition; write a hidden temp file beside the target (`.<name>.hm-<uuid>.tmp`), `sync_all`, rename over the target. Loose files outside notebooks use `ReplaceFileW` so the file keeps its ACLs and attributes. A read-only file is refused and "Save as" is offered. Encoding, BOM and line endings come back in `format` and are applied on save (NS-1B). The temp-file pattern is ignored by the watcher and the indexer.
+- Saves: lock per path inside Hivemind; open the target for reading with sharing for read and delete but **not write**, and keep that handle until the rename, so no other program can write it between the check and the replace; hash through that handle and refuse with `Stale { sha256 }` if it differs from the precondition; write a hidden temp file beside the target (`.<name>.hm-<uuid>.tmp`), `sync_all`, rename over the target. A sharing violation (another program has the file open for writing) fails the save with "<name> is in use by another program; try again" and keeps the editor dirty. Guarantee: Hivemind never replaces bytes other than the ones its precondition names, except for a write by a program that opened the file before the check and writes after it, which Windows gives no way to detect. Loose files outside notebooks use `ReplaceFileW` so the file keeps its ACLs and attributes. A read-only file is refused and "Save as" is offered. Encoding, BOM and line endings come back in `format` and are applied on save (NS-1B). The temp-file pattern is ignored by the watcher and the indexer.
 - Echo suppression: the watcher drops an event whose file now hashes to the last hash Hivemind wrote there.
 - Delete moves to `.hivemind/trash/<timestamp>/<path>` inside the notebook; loose files go to the Windows Recycle Bin.
 
 ### 5.4 Notebooks (NS-1A)
 
-- Registry: `app_data/notebooks.json`, `{ "version": 1, "notebooks": [{ "id": "nb-<8 hex>", "path": "<plain absolute>", "title": "...", "added": "<iso>" }] }`. Only the native folder dialog adds an entry (the `folders.rs folder_pick` pattern). It is not part of `settings.json`, so `save_settings` cannot change it. Living Memory notebooks are not registered here; Hivemind lists them from Living Memory (NS-2C).
-- Refusals at registration: the Living Memory store root or anything inside it; the folder of an Obsidian vault that Living Memory manages (its `sync-state.json` names the vault); a folder inside or containing an already registered notebook.
+- Registry: `app_data/notebooks.json`, `{ "version": 1, "notebooks": [{ "id": "nb-<8 hex>", "path": "<plain absolute>", "title": "...", "added": "<iso>" }] }`. Only the native folder dialog adds an entry (the pattern of `folder_pick` in `src-tauri/src/lib.rs`). Folder identity is the canonical path converted with `folders::plain` and compared in lowercase. It is not part of `settings.json`, so `save_settings` cannot change it. Living Memory notebooks are not registered here; Hivemind lists them from Living Memory (NS-2C).
+- Refusals at registration: the Living Memory store root, anything inside it, or any folder that holds it; a folder that is, holds or lies inside an Obsidian vault that Living Memory manages (`files::guard`); a folder inside or containing an already registered notebook. Every command checks the notebook again against the current store root, so switching Hivemind to another store blocks a notebook that now overlaps it.
+- On registration (and from NS-2B on every change of reach), Hivemind records the notebook's reach in Living Memory's folder policy registry (`doc folder set`, NS-2C), so Private and Hidden take effect even when the sidecar cannot be written.
 - Sidecar `.hivemind/notebook.json` (version 1). Unknown keys are kept on write. Read-only folders keep the same JSON in `app_data/notebook-meta/<id>.json`.
 
 ```json
@@ -152,11 +156,11 @@ Drafts: keys `file-<sha256(docKey)>` and `doc-<sha256(docKey)>` (hashed, so path
 
 ### 5.5 The `hmfile` scheme (NS-1B)
 
-`src-tauri/src/assets.rs` registers an asynchronous URI scheme `hmfile`, served on Windows as `http://hmfile.localhost/<grant>/<percent-encoded relative path>`. A grant is an opaque id Rust creates for a folder notebook root, a Living Memory notebook's `assets` folder, or the folder of an opened loose file. The handler is the only gate (capabilities do not cover scheme handlers): webview label `main`, GET or HEAD, known grant, `resolve_inside`, not under `.git` or `.obsidian`, extension in png, jpg, jpeg, gif, webp, avif, bmp, ico, svg, pdf, size cap 50 MB. It answers Range requests (pdf.js), sets `Content-Type` from the extension, `X-Content-Type-Options: nosniff` and an ETag; SVG also gets `Content-Security-Policy: default-src 'none'` and is only shown through `<img>`. The CSP in `tauri.conf.json` gains `http://hmfile.localhost` in `img-src` and `connect-src`, and `worker-src 'self'`.
+`src-tauri/src/assets.rs` registers an asynchronous URI scheme `hmfile`, served on Windows as `http://hmfile.localhost/<grant>/<percent-encoded relative path>`. A grant is an opaque id Rust creates for a folder notebook root, a Living Memory notebook's `assets` folder, or the folder of an opened loose file. The handler is the only gate (capabilities do not cover scheme handlers): webview label `main`; an `Origin` (when sent) equal to one of the app's exact origins (`http://tauri.localhost` in production, the dev server origin in `tauri dev`); GET or HEAD; a known, unrevoked grant; the path percent-decoded once and then checked with `resolve_inside` and `files::guard`; extension in png, jpg, jpeg, gif, webp, avif, bmp, ico, svg, pdf; size cap 50 MB. Grants are revoked when their notebook is removed or their recent-file entry is forgotten or evicted. It answers Range requests (pdf.js) and CORS for the app's exact origins (`Access-Control-Allow-Origin` with that origin, `Access-Control-Expose-Headers: Content-Range, Accept-Ranges, Content-Length`), sets `Content-Type` from the extension, `X-Content-Type-Options: nosniff` and an ETag; SVG also gets `Content-Security-Policy: default-src 'none'` and is only shown through `<img>`. The CSP in `tauri.conf.json` gains `http://hmfile.localhost` in `img-src` and `connect-src`, and `worker-src 'self'`.
 
 ### 5.6 Opening files from outside (NS-1B)
 
-`instance.rs` protocol version 2: the knock is the token, a newline, then JSON `{ "v": 1, "open": ["<absolute path>"], "cwd": "<dir>" }`, at most 64 KiB. A token-only knock still only raises the window, so old and new builds interoperate. Paths go to an `OpenQueue` in `AppState`; the frontend pulls them with `open_pending()` on mount and when the `open-requested` event fires. Every opened or dropped path becomes a grant in `src-tauri/src/opens.rs` (`app_data/open-files.json`, the 200 most recent). A grant id is the first 16 hex characters of the sha256 of the normalised path, so reopening a file gives the same key. `tauri.conf.json` associates `.md`, `.markdown`, `.hmdoc` and `.canvas`; an NSIS installer hook registers "Open with" for any file with `MultiSelectModel=Player`.
+`instance.rs` protocol version 2: the knock is the token, a newline, then JSON `{ "v": 1, "id": "<uuid>", "open": ["<absolute path>"], "cwd": "<dir>" }`, at most 64 KiB, ended by closing the write side as today. A token-only knock still only raises the window, so old and new builds interoperate. The running instance answers only after the paths are in the `OpenQueue` (deduplicated by `id`, so a resent knock never opens twice); the starting process waits up to 5 s, as the current waiter does at startup, then falls back to raising the window. The frontend subscribes to `open-requested` before it drains with `open_pending()`, so nothing arrives between the two. Every opened or dropped path becomes a grant in `src-tauri/src/opens.rs` (`app_data/open-files.json`, the 200 most recent). A grant id is the first 16 hex characters of the sha256 of the normalised path, so reopening a file gives the same key. `tauri.conf.json` associates `.md`, `.markdown`, `.hmdoc` and `.canvas`; an NSIS installer hook registers "Open with" for any file with `MultiSelectModel=Player`.
 
 ### 5.7 Tauri commands and events
 
@@ -164,7 +168,7 @@ Names are fixed here; signatures are set by the phase that adds them.
 
 | Phase | Commands | Events |
 | --- | --- | --- |
-| NS-1A | `notebooks_list`, `notebook_add`, `notebook_remove`, `notebook_tree`, `notebook_meta_get`, `notebook_meta_set`, `file_read`, `file_save`, `file_create`, `file_mkdir`, `file_rename`, `file_delete` | `files-changed { notebook, paths }` |
+| NS-1A | `notebooks_list`, `notebook_add`, `notebook_remove`, `notebook_rename`, `notebook_tree`, `notebook_meta_get`, `notebook_meta_set`, `file_read`, `file_save`, `file_create`, `file_mkdir`, `file_rename`, `file_delete`, `file_reveal` | `files-changed { notebook, paths }` |
 | NS-1B | `open_dialog`, `open_pending`, `open_recent`, `open_forget` | `open-requested` |
 | NS-2C | (Living Memory `doc` commands go through `lm`) | `docs-changed { domain, notebook }` |
 | NS-4A | `index_search`, `index_links`, `index_status`, `index_rebuild` | `index-progress` |
@@ -176,9 +180,11 @@ Names are fixed here; signatures are set by the phase that adds them.
 
 The full contract is in `agentic-living-memory/docs/notebooks-design.md`. What Hivemind relies on:
 - `doc` commands with JSON output; a page's revision is the sha256 of its bytes; `doc write --expected-revision R` fails with code `stale` (exit 6) like `update`.
-- `version` reports `capabilities.docs = { version, max_page_bytes, max_asset_bytes }`; Hivemind gates on it (`useDocsEnabled`).
+- Bodies over 512 KiB never travel inside a bridge frame (`serve` refuses frames over 2 MiB and payloads over 1 MiB): Hivemind writes them to `app_data/lm-staging/<uuid>.md`, passes `--body-file`, and deletes the file after the reply.
+- Private notebooks need `--include-private` on every read, search and history command; Hivemind's bridge passes it, Living Memory's hook refuses it to agents.
+- `version` reports `capabilities.docs = { version, max_page_bytes, max_asset_bytes }` from NS-2A and `docs.search: true`, `docs.folder_policy: true` from NS-2B; Hivemind gates on them (`useDocsEnabled`, `useDocsSearch`).
 - `domains` reports `kind: "notebook"` for notebook-only domains; Memory's domain pickers skip them.
-- `search` and `ask` return pages in a separate `pages` array; `results` is unchanged.
+- `search` and `ask` return notebook paragraphs of both kinds in a separate `pages` array with `origin: "lm" | "folder"`; `results`, `notes` and `sources` keep their meaning, and folder notebook excerpts no longer appear in `sources`.
 
 ### 5.9 AI settings and ledger (NS-8A)
 
@@ -197,26 +203,26 @@ Taken today: Ctrl+P, Ctrl+O (Shift ignored), Ctrl+N, Ctrl+G, Ctrl+Shift+A, Ctrl+
 | NS-1B Open any file | Hivemind | [phase-1b-open-any-file.md](phase-1b-open-any-file.md) | NS-1A |
 | NS-2A Living Memory doc records | Living Memory | `agentic-living-memory/docs/notebooks-design.md` | NS-0 |
 | NS-2B Page search, agent reach, sync | Living Memory | `agentic-living-memory/docs/notebooks-design.md` | NS-2A |
-| NS-2C Living Memory notebooks in Hivemind | Hivemind | [phase-2c-lm-notebooks.md](phase-2c-lm-notebooks.md) | NS-1A, NS-2A (NS-2B for the reach settings) |
-| NS-3A Rich live preview | Hivemind | [phase-3a-live-preview.md](phase-3a-live-preview.md) | NS-1B |
+| NS-2C Living Memory notebooks in Hivemind | Hivemind | [phase-2c-lm-notebooks.md](phase-2c-lm-notebooks.md) | NS-1B (asset grants), NS-2A; NS-2B for the reach settings |
+| NS-3A Rich live preview | Hivemind | [phase-3a-live-preview.md](phase-3a-live-preview.md) | NS-1B, NS-2C (Living Memory page embeds and attachments) |
 | NS-3B WYSIWYG mode | Hivemind | [phase-3b-wysiwyg.md](phase-3b-wysiwyg.md) | NS-3A |
 | NS-3C `.hmdoc` core | Hivemind | [phase-3c-hmdoc.md](phase-3c-hmdoc.md) | NS-3B |
 | NS-3D `.hmdoc` embeds and drawing | Hivemind | [phase-3d-embeds-drawing.md](phase-3d-embeds-drawing.md) | NS-3C |
-| NS-4A Index, links, search | Hivemind | [phase-4a-index-search.md](phase-4a-index-search.md) | NS-3C |
+| NS-4A Index, links, search | Hivemind | [phase-4a-index-search.md](phase-4a-index-search.md) | NS-3C; NS-2B for Living Memory pages (gated on the `docs.search` capability) |
 | NS-4B Semantic search | Hivemind | [phase-4b-semantic.md](phase-4b-semantic.md) | NS-4A |
-| NS-5 History | Hivemind | [phase-5-history.md](phase-5-history.md) | NS-1A |
+| NS-5 History | Hivemind | [phase-5-history.md](phase-5-history.md) | NS-1B (loose files), NS-2C (Living Memory pages) |
 | NS-6A Power editing | Hivemind | [phase-6a-power-editing.md](phase-6a-power-editing.md) | NS-1B |
 | NS-6B Large files, replace in files | Hivemind | [phase-6b-large-files-replace.md](phase-6b-large-files-replace.md) | NS-5 |
 | NS-7A Daily notes, templates, capture | Hivemind | [phase-7a-daily-capture.md](phase-7a-daily-capture.md) | NS-2C |
 | NS-7B Tasks, properties, queries | Hivemind | [phase-7b-tasks-queries.md](phase-7b-tasks-queries.md) | NS-4A |
 | NS-7C Canvas boards | Hivemind | [phase-7c-canvas.md](phase-7c-canvas.md) | NS-4A |
-| NS-8A AI engine and actions | Hivemind | [phase-8a-ai-actions.md](phase-8a-ai-actions.md) | NS-5 |
+| NS-8A AI engine and actions | Hivemind | [phase-8a-ai-actions.md](phase-8a-ai-actions.md) | NS-5, NS-2C (Private for both notebook kinds) |
 | NS-8B Ask, suggestions, save to memory | Hivemind | [phase-8b-ask-suggest-memory.md](phase-8b-ask-suggest-memory.md) | NS-4B, NS-8A |
-| NS-8C Agent sessions on notebooks | Hivemind | [phase-8c-agent-sessions.md](phase-8c-agent-sessions.md) | NS-5 |
+| NS-8C Agent sessions on notebooks | Hivemind | [phase-8c-agent-sessions.md](phase-8c-agent-sessions.md) | NS-5, NS-2C |
 | NS-9A Obsidian vaults, paste, export | Hivemind | [phase-9a-obsidian-export.md](phase-9a-obsidian-export.md) | NS-3D |
-| NS-9B Importers | Hivemind | [phase-9b-importers.md](phase-9b-importers.md) | NS-9A |
+| NS-9B Importers | Hivemind | [phase-9b-importers.md](phase-9b-importers.md) | NS-9A, NS-7B (saved queries for Notion databases) |
 
-Three items run earlier than the user's order because later work needs them: a minimal link resolver (NS-1A), encoding preservation (NS-1B, needed to save opened files safely), and the `.obsidian` and Living Memory vault protections (NS-1A).
+A phase may start when its dependencies have shipped; a feature that needs a phase not listed is gated off and its exit criterion moves to that phase. Three items run earlier than the user's order because later work needs them: a minimal link resolver (NS-1A), encoding preservation (NS-1B, needed to save opened files safely), and the `.obsidian` and Living Memory vault protections (NS-1A).
 
 ## 7. Running and verifying
 

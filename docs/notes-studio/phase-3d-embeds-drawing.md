@@ -2,6 +2,13 @@
 
 Read [phase-3c-hmdoc.md](phase-3c-hmdoc.md) first. This phase adds typed live embeds, an Excalidraw block, freehand ink and OneNote-style free-positioned blocks to `.hmdoc` pages. No embed is ever an iframe.
 
+## Changes from the NS-0 review
+
+These rules come from the Codex review of the design ([reviews/ns0-codex-review.md](reviews/ns0-codex-review.md)). Where the text below says otherwise, these win.
+
+- An architecture diagram embed stores the system slug and the manifest-relative diagram path, as `system_diagram` requires both; a diagram missing from the manifest renders a placeholder naming it (W3).
+- Embeds carry their origin: an embed of private content marks the page, and NS-8A expands embeds itself before sending anything to a model (S10).
+
 ## 1. Embed kinds
 
 | Kind | Stored attributes | Renders | Source |

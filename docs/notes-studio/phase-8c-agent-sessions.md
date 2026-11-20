@@ -2,6 +2,13 @@
 
 Read [README.md](README.md), [phase-5-history.md](phase-5-history.md) and `../plans/phase-6-terminal-parity.md` (sessions in a checkout or folder) first.
 
+## Changes from the NS-0 review
+
+These rules come from the Codex review of the design ([reviews/ns0-codex-review.md](reviews/ns0-codex-review.md)). Where the text below says otherwise, these win.
+
+- Notebook sessions use one fixed access mode on both engines and both interfaces: Claude Code in its default permission mode with Hivemind's scope rules (never `bypassPermissions`), Codex with the `workspace-write` sandbox rooted at the copy (never `danger-full-access`); the user's access settings for code sessions do not apply. The copy leaves out every dot-folder (`.claude`, `.codex`, `.vscode`, `.git`, `.hivemind`, ...) and `.mcp.json`, so no tool configuration or hook from the notebook runs. Privacy and containment are checked again at start, resume, review and apply (S11).
+- Apply runs `files::guard` on every target (S2).
+
 ## 1. What the user sees
 
 - On a folder notebook: **Start agent session** (Claude Code or Codex, chat or terminal as on the Start screen) with a task such as "tidy the meeting notes from last week into one summary page".

@@ -2,6 +2,12 @@
 
 Read [README.md](README.md) and [phase-5-history.md](phase-5-history.md) first. This phase opens files too big for the editor (and binary files) in a fast viewer, follows growing logs, shows a hex view, and adds find and replace across a folder or notebook with a preview of every change.
 
+## Changes from the NS-0 review
+
+These rules come from the Codex review of the design ([reviews/ns0-codex-review.md](reviews/ns0-codex-review.md)). Where the text below says otherwise, these win.
+
+- `regex` is a direct dependency (W2). Folder replace runs `files::guard` on every file it writes and skips protected ones (S2).
+
 ## 1. What the user sees
 
 - Files over about 8 MB open read-only in the editor up to 64 MB; above 64 MB, and binary files, open in the **large file viewer**: line numbers, jump to line, regex search with next and previous, copy lines, word wrap off. It opens instantly and indexes in the background with a progress bar.
