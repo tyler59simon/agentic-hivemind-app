@@ -79,7 +79,9 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
         ))}
       </nav>
       {menu && (
-        <ul className="menu-list context" role="menu" style={{ top: menu.y, left: menu.x }} onMouseDown={(e) => e.stopPropagation()}
+        <ul className="menu-list context" role="menu" style={{ top: menu.y, left: menu.x }} onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
+          // preventDefault keeps focus in the menu on a click: WebKit (macOS) does not focus a clicked button, so the blur
+          // below would close the menu before the click runs.
           onKeyDown={(e) => { if (e.key === "Escape") { setMenu(null); menu.from.focus(); } }}
           onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setMenu(null); }}>
           <li role="none"><button role="menuitem" autoFocus onClick={() => {
