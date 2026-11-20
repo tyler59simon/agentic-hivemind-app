@@ -185,20 +185,25 @@ fn pick(env: Option<String>, saved: &Option<String>) -> Option<String> {
         .or_else(|| saved.clone().filter(|v| !v.trim().is_empty()))
 }
 
+/// The Python that Living Memory's installer ran under, from the ownership record it writes beside the script.
+/// Its hooks run that Python too, so Hivemind and the hooks use the same one.
+fn recorded_python(script: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(script.parent()?.join(".core-ownership-v1.json")).ok()?;
+    let record: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let python = record.get("interpreter")?.as_str()?.trim();
+    (!python.is_empty() && Path::new(python).is_file()).then(|| python.to_string())
+}
+
 pub fn resolve(saved: &Settings, env: impl Fn(&str) -> Option<String>) -> Launch {
-    let (program, args) = match pick(env("HIVEMIND_PYTHON"), &saved.python) {
+    let script = pick(env("HIVEMIND_LM_SCRIPT"), &saved.script)
+        .map(PathBuf::from)
+        .unwrap_or_else(default_script);
+    let (program, args) = match pick(env("HIVEMIND_PYTHON"), &saved.python).or_else(|| recorded_python(&script)) {
         Some(python) => (python, vec![]),
         None if cfg!(windows) => ("py".into(), vec!["-3".into()]),
         None => ("python3".into(), vec![]),
     };
-    Launch {
-        program,
-        args,
-        script: pick(env("HIVEMIND_LM_SCRIPT"), &saved.script)
-            .map(PathBuf::from)
-            .unwrap_or_else(default_script),
-        root: pick(env("HIVEMIND_LM_ROOT"), &saved.root).map(PathBuf::from),
-    }
+    Launch { program, args, script, root: pick(env("HIVEMIND_LM_ROOT"), &saved.root).map(PathBuf::from) }
 }
 
 #[cfg(test)]
@@ -213,6 +218,33 @@ mod tests {
         assert!(launch.args.is_empty());
         assert_eq!(launch.script, PathBuf::from("env.py"));
         assert_eq!(launch.root, None);
+    }
+
+    #[test]
+    fn the_python_living_memory_recorded_comes_after_env_and_saved() {   // REG-4
+        let dir = std::env::temp_dir().join(format!("hivemind-recorded-python-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let python = dir.join("python.exe");
+        std::fs::write(&python, b"").unwrap();
+        let script = dir.join("living_memory.py").to_string_lossy().into_owned();
+        let record = |value: &str| std::fs::write(dir.join(".core-ownership-v1.json"), value).unwrap();
+        let saved = Settings { script: Some(script.clone()), ..Default::default() };
+        let fallback = if cfg!(windows) { "py" } else { "python3" };
+
+        record(&serde_json::json!({ "interpreter": python }).to_string());
+        assert_eq!(resolve(&saved, |_| None).program, python.to_string_lossy());
+        assert!(resolve(&saved, |_| None).args.is_empty());
+        let mine = Settings { python: Some("C:/mine.exe".into()), ..saved.clone() };
+        assert_eq!(resolve(&mine, |_| None).program, "C:/mine.exe");
+        assert_eq!(resolve(&saved, |k| (k == "HIVEMIND_PYTHON").then(|| "env.exe".to_string())).program, "env.exe");
+
+        record(&serde_json::json!({ "interpreter": dir.join("gone.exe") }).to_string());
+        assert_eq!(resolve(&saved, |_| None).program, fallback, "a recorded Python that no longer exists");
+        record(r#"{"schema": "living-memory-core-ownership-v1"}"#);
+        assert_eq!(resolve(&saved, |_| None).program, fallback, "a record from before the field");
+        record("not json");
+        assert_eq!(resolve(&saved, |_| None).program, fallback);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

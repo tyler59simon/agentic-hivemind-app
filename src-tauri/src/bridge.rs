@@ -3,13 +3,17 @@
 use crate::settings::Launch;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 /// Oldest `serve` API this app speaks (Living Memory's `version` reports it).
 pub const MIN_API: u64 = 1;
 const REQUIRED: [&str; 4] = ["serve", "list", "domains", "version"];
+/// How much of the server's stderr is kept to explain why it exited.
+const STDERR_TAIL: usize = 4096;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Reply {
@@ -23,6 +27,21 @@ struct Proc {
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     next: u64,
+    /// The last STDERR_TAIL bytes the server wrote to stderr, read on a thread so a full pipe never blocks it.
+    stderr: Arc<Mutex<Vec<u8>>>,
+    drain: JoinHandle<()>,
+}
+
+impl Proc {
+    /// Why the server stopped: its stderr once it has closed (waiting up to a second), else `fallback`.
+    fn stopped(&self, fallback: String) -> String {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !self.drain.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let tail = String::from_utf8_lossy(&self.stderr.lock().unwrap()).trim().to_string();
+        if tail.is_empty() { fallback } else { format!("Living Memory exited: {tail}") }
+    }
 }
 
 impl Drop for Proc {
@@ -53,6 +72,12 @@ impl Bridge {
     }
 
     fn spawn(launch: &Launch) -> Result<Proc, String> {
+        if !launch.script.is_file() {
+            return Err(format!(
+                "Living Memory is not installed at {}. Install it with install.py from the agentic-living-memory repo, or set its script in Settings.",
+                launch.script.display()
+            ));
+        }
         let mut command = Command::new(&launch.program);
         command.args(&launch.args).arg(&launch.script);
         if let Some(root) = &launch.root {
@@ -69,7 +94,7 @@ impl Bridge {
             .env_remove("HIVEMIND_SESSION")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+            .stderr(Stdio::piped());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -81,7 +106,19 @@ impl Bridge {
             .map_err(|e| format!("Could not start {} {}: {e}", launch.program, launch.script.display()))?;
         let stdin = child.stdin.take().ok_or("no stdin")?;
         let stdout = BufReader::new(child.stdout.take().ok_or("no stdout")?);
-        Ok(Proc { child, stdin, stdout, next: 1 })
+        let mut pipe = child.stderr.take().ok_or("no stderr")?;
+        let stderr = Arc::new(Mutex::new(Vec::new()));
+        let sink = stderr.clone();
+        let drain = std::thread::spawn(move || {
+            let mut chunk = [0u8; 4096];
+            while let Ok(n @ 1..) = pipe.read(&mut chunk) {
+                let mut tail = sink.lock().unwrap();
+                tail.extend_from_slice(&chunk[..n]);
+                let over = tail.len().saturating_sub(STDERR_TAIL);
+                tail.drain(..over);
+            }
+        });
+        Ok(Proc { child, stdin, stdout, next: 1, stderr, drain })
     }
 
     fn exchange(proc: &mut Proc, argv: &[String], stdin: Option<&str>) -> Result<Reply, String> {
@@ -93,12 +130,13 @@ impl Bridge {
         }
         let mut line = serde_json::to_string(&request).map_err(|e| e.to_string())?;
         line.push('\n');
-        proc.stdin.write_all(line.as_bytes()).map_err(|e| format!("Living Memory stopped: {e}"))?;
-        proc.stdin.flush().map_err(|e| format!("Living Memory stopped: {e}"))?;
+        if let Err(e) = proc.stdin.write_all(line.as_bytes()).and_then(|_| proc.stdin.flush()) {
+            return Err(proc.stopped(format!("Living Memory stopped: {e}")));
+        }
         let mut answer = String::new();
-        let read = proc.stdout.read_line(&mut answer).map_err(|e| format!("Living Memory stopped: {e}"))?;
+        let read = proc.stdout.read_line(&mut answer).map_err(|e| proc.stopped(format!("Living Memory stopped: {e}")))?;
         if read == 0 {
-            return Err("Living Memory exited. If it is older than the app bridge, update it (needs `serve --stdio`).".into());
+            return Err(proc.stopped("Living Memory exited. If it is older than the app bridge, update it (needs `serve --stdio`).".into()));
         }
         let value: Value = serde_json::from_str(&answer).map_err(|e| format!("Unreadable reply from Living Memory: {e}"))?;
         if value.get("id").and_then(Value::as_u64) != Some(id) {
@@ -157,6 +195,40 @@ mod tests {
     fn version_check_accepts_current_api() {
         let ok = reply(json!({"api": 1, "commands": ["serve", "list", "domains", "version", "read"]}));
         assert!(check_version(&ok).is_ok());
+    }
+
+    fn python() -> Option<(String, Vec<String>)> {
+        let (program, args) = match std::env::var("HIVEMIND_TEST_PYTHON") {
+            Ok(p) => (p, vec![]),
+            Err(_) if cfg!(windows) => ("py".to_string(), vec!["-3".to_string()]),
+            Err(_) => ("python3".to_string(), vec![]),
+        };
+        let works = Command::new(&program).args(&args).arg("--version").output().is_ok_and(|o| o.status.success());
+        works.then_some((program, args))
+    }
+
+    #[test]
+    fn a_missing_script_says_living_memory_is_not_installed() {   // REG-6
+        let script = std::env::temp_dir().join("hivemind-no-such-dir").join("living_memory.py");
+        let bridge = Bridge::new(Launch { program: "py".into(), args: vec![], script: script.clone(), root: None });
+        let error = bridge.call(&["list".into()], None).unwrap_err();
+        assert!(error.starts_with(&format!("Living Memory is not installed at {}", script.display())), "{error}");
+    }
+
+    #[test]
+    fn a_script_that_fails_shows_its_stderr() {   // REG-6
+        let Some((program, args)) = python() else { return };
+        let dir = std::env::temp_dir().join(format!("hivemind-bridge-fail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("living_memory.py");
+        std::fs::write(&script, "import sys\nsys.stderr.write('x' * 9000)\nraise SystemExit('boom: no module named core')\n").unwrap();
+        let bridge = Bridge::new(Launch { program, args, script, root: None });
+        let error = bridge.call(&["list".into()], None).unwrap_err();
+        assert!(error.starts_with("Living Memory exited: "), "{error}");
+        assert!(error.ends_with("boom: no module named core"), "{error}");
+        assert!(error.len() <= "Living Memory exited: ".len() + STDERR_TAIL, "only the tail is kept");
+        drop(bridge);
+        std::fs::remove_dir_all(dir).ok();
     }
 
     /// End to end against a real Living Memory in a temporary store. Runs only when

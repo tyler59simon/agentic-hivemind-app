@@ -61,7 +61,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
       saveSettings(value).then(() => captureStatus().then(setStatus)).then(onSaved).catch((err) => setError(String(err)));
     }}>
       <h3>Living Memory</h3>
-      {field("python", "Python", "default: py -3 on Windows, python3 elsewhere")}
+      {field("python", "Python", "default: the Python Living Memory was installed with, else py -3 on Windows and python3 elsewhere")}
       {field("script", "living_memory.py", "default: the installed Living Memory copy")}
       {field("root", "Store root", "default: the store Living Memory is configured for")}
       <p className="muted small">Environment variables HIVEMIND_PYTHON, HIVEMIND_LM_SCRIPT and HIVEMIND_LM_ROOT override these.</p>
