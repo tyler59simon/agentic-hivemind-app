@@ -47,16 +47,15 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
   const available = useAvailableSections();
   const hidden = useHidden((s) => s.hidden);
   const setShown = useHidden((s) => s.setShown);
-  // The right-click menu, and the section button that opened it (focus goes back there on Escape).
+  // The right-click menu, and the section button that opened it (focus goes back there on Escape). It closes on a click
+  // elsewhere, on Escape inside it, or when focus leaves it.
   const [menu, setMenu] = useState<{ page: Page; x: number; y: number; from: HTMLButtonElement } | null>(null);
   const nav = useRef<HTMLElement>(null);
   useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(null);
-    const key = (e: KeyboardEvent) => { if (e.key === "Escape") { close(); menu.from.focus(); } };
     window.addEventListener("mousedown", close);
-    window.addEventListener("keydown", key);
-    return () => { window.removeEventListener("mousedown", close); window.removeEventListener("keydown", key); };
+    return () => window.removeEventListener("mousedown", close);
   }, [menu]);
   const sessions = useQuery({ ...sessionsQuery(), enabled: systemsOn });
   const attention = useAttention((s) => dotOf(Object.values(s.byId)));
@@ -80,7 +79,9 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
         ))}
       </nav>
       {menu && (
-        <ul className="menu-list context" role="menu" style={{ top: menu.y, left: menu.x }} onMouseDown={(e) => e.stopPropagation()}>
+        <ul className="menu-list context" role="menu" style={{ top: menu.y, left: menu.x }} onMouseDown={(e) => e.stopPropagation()}
+          onKeyDown={(e) => { if (e.key === "Escape") { setMenu(null); menu.from.focus(); } }}
+          onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setMenu(null); }}>
           <li role="none"><button role="menuitem" autoFocus onClick={() => {
             setShown(menu.page, false); setMenu(null);
             // The section that had focus is gone: move it to the current section, or the first one.
