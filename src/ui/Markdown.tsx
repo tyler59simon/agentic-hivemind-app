@@ -1,6 +1,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { MermaidPre } from "./Mermaid";
 
 /** Markdown for summaries and agent text. A link never navigates the app window: web links open in the system
  *  browser, and only links within the text itself (footnotes) are followed in place. */
@@ -15,6 +16,7 @@ export function Markdown({ children }: { children: string }) {
           if (href && /^https?:/i.test(href)) openUrl(href).catch(() => undefined);
         }}>{label}</a>
       ),
+      pre: MermaidPre,
     }}>
       {children}
     </ReactMarkdown>

@@ -9,6 +9,7 @@ import { check, read, type Note } from "../../lib/lm";
 import { ACTION_TYPES, actionItems } from "../../lib/note";
 import { recordOperation } from "../../lib/oplog";
 import { shortDate } from "../../lib/text";
+import { MermaidPre } from "../../ui/Mermaid";
 import { toast } from "../../ui/toast";
 import { openProject, openSystem } from "../../store";
 import { useWorkspace } from "../../workspace/store";
@@ -134,6 +135,7 @@ export function NoteView({ refId, tabId }: { refId: string; tabId: string }) {
         );
       },
       h1: heading("h1"), h2: heading("h2"), h3: heading("h3"), h4: heading("h4"), h5: heading("h5"), h6: heading("h6"),
+      pre: MermaidPre,
     };
   }, [n, links, tabId]);
 
