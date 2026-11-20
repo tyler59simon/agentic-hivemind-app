@@ -124,6 +124,8 @@ pub fn folder_for(worktrees: &Path, repo: &Path) -> PathBuf {
     worktrees.join(format!("{name}-{hash:08x}"))
 }
 
+/// `create_at` from the branch's tip, or from HEAD without a branch. The app always goes through `create_at`.
+#[cfg(test)]
 pub fn create(worktrees: &Path, repo: &Path, branch: Option<&str>, session_id: &str) -> Result<Worktree, String> {
     create_at(worktrees, repo, branch, None, session_id)
 }
