@@ -3,7 +3,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
-import { Compartment, EditorState, type Extension } from "@codemirror/state";
+import { Annotation, Compartment, EditorState, Transaction, type Extension, type TransactionSpec } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, keymap, lineNumbers, placeholder } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
 import { useEffect, useRef, type MutableRefObject } from "react";
@@ -56,6 +56,8 @@ function wikilinkSource(titles: () => string[]) {
 export interface CodeEditorProps {
   doc: string;
   docVersion: number;               // bump to replace the document (after save, merge or an outside change)
+  /** Take every change of `doc` made elsewhere, not only version bumps: another pane editing the same page. */
+  follow?: boolean;
   language: "markdown" | "text";
   live: boolean;
   readOnly: boolean;
@@ -70,6 +72,25 @@ export interface CodeEditorProps {
 
 /** The pieces a caller can switch after the editor exists. */
 export interface Switches { preview: Compartment; readOnly: Compartment; gutter: Compartment }
+
+/** Marks a change that came from the document store (another pane), so it is not reported back as an edit. */
+const fromStore = Annotation.define<boolean>();
+
+/** The change that turns the editor's `current` text into `next`, the text another pane of the same document typed.
+ *  Only the part that differs is replaced, so this editor's cursor and its own undo history stay where they were (Codex
+ *  review of 32fd236, D1). */
+export function followSpec(current: string, next: string): TransactionSpec | null {
+  if (current === next) return null;
+  let from = 0;
+  const max = Math.min(current.length, next.length);
+  while (from < max && current.charCodeAt(from) === next.charCodeAt(from)) from++;
+  let a = current.length, b = next.length;
+  while (a > from && b > from && current.charCodeAt(a - 1) === next.charCodeAt(b - 1)) { a--; b--; }
+  return { changes: { from, to: a, insert: next.slice(from, b) }, annotations: [fromStore.of(true), Transaction.addToHistory.of(false)] };
+}
+
+/** Whether a transaction is the user's own edit, to report through `onChange`. */
+export const isOwnEdit = (tr: Transaction) => tr.docChanged && !tr.annotation(fromStore);
 
 const readOnlyExt = (on: boolean): Extension => (on ? [EditorState.readOnly.of(true)] : []);
 const gutterExt = (on: boolean): Extension => (on ? [lineNumbers(), highlightActiveLine()] : []);
@@ -99,7 +120,7 @@ export function editorExtensions(props: CodeEditorProps, latest: MutableRefObjec
     theme,
     sw.readOnly.of(readOnlyExt(props.readOnly)),
     sw.gutter.of(gutterExt(props.lineNumbers)),
-    EditorView.updateListener.of((u) => { if (u.docChanged) latest.current.onChange(u.state.doc.toString()); }),
+    EditorView.updateListener.of((u) => { if (u.transactions.some(isOwnEdit)) latest.current.onChange(u.state.doc.toString()); }),
     EditorView.domEventHandlers({
       mousedown: (e) => {
         const el = (e.target as HTMLElement).closest<HTMLElement>("[data-wikilink]");
@@ -142,12 +163,20 @@ export function CodeEditor(props: CodeEditorProps) {
     view.current?.dispatch({ effects: sw.current.gutter.reconfigure(gutterExt(props.lineNumbers)) });
   }, [props.lineNumbers]);
 
+  const shownVersion = useRef(props.docVersion);
   useEffect(() => {
     const v = view.current;
+    const replace = shownVersion.current !== props.docVersion;
+    shownVersion.current = props.docVersion;
     if (!v || v.state.doc.toString() === props.doc) return;
-    const head = Math.min(v.state.selection.main.head, props.doc.length);
-    v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: props.doc }, selection: { anchor: head } });
-  }, [props.docVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (replace) {
+      const head = Math.min(v.state.selection.main.head, props.doc.length);
+      v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: props.doc }, selection: { anchor: head } });
+    } else if (props.follow) {
+      const spec = followSpec(v.state.doc.toString(), props.doc);
+      if (spec) v.dispatch(spec);
+    }
+  }, [props.docVersion, props.follow ? props.doc : null]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const v = view.current;

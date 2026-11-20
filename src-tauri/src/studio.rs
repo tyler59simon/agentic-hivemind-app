@@ -9,27 +9,42 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 /// The notebook folder for `id`, checked against the current store and vaults (the store may have changed since
-/// the notebook was registered).
+/// the notebook was registered). The folder must still be the one the user picked: a registered folder that was moved
+/// and replaced by a link resolves elsewhere and is refused (Codex review of 32fd236, P4).
 fn root_of(state: &AppState, id: &str) -> Result<(PathBuf, Protected), String> {
-    let root = PathBuf::from(state.notebooks.get(id)?.path);
+    let notebook = state.notebooks.get(id)?;
+    let root = PathBuf::from(&notebook.path);
+    let real = std::fs::canonicalize(&root).map_err(|e| format!("The notebook folder {} is missing ({e})", root.display()))?;
+    if crate::folders::plain(&real).to_lowercase() != notebook.path.to_lowercase() {
+        return Err(format!(
+            "The folder of \"{}\" now leads to {}; it was moved or replaced by a link. Remove the notebook and add its folder again",
+            notebook.title,
+            crate::folders::plain(&real)
+        ));
+    }
     let protected = Protected::new(store_root(state).as_deref());
     protected.check_root(&root)?;
     Ok((root, protected))
 }
 
-/// `rel` inside the notebook, outside every protected place.
+/// `rel` inside the notebook, outside every protected place, and not hidden once links inside the notebook are
+/// followed (a link to `.obsidian` is as hidden as `.obsidian`; Codex review of 32fd236, P2).
 fn inside(root: &Path, protected: &Protected, rel: &str, for_write: bool) -> Result<PathBuf, String> {
+    visible(rel)?;
     let full = contain::resolve_inside(root, rel, for_write)?;
     protected.check(&full)?;
+    if contain::resolved_rel(root, &full).is_some_and(|real| real.split('/').any(|p| p.starts_with('.'))) {
+        return Err(format!("\"{rel}\" leads to a hidden file or folder, which Hivemind does not open or change"));
+    }
     Ok(full)
 }
 
-/// A path the user may create, change, move or delete: no part may be hidden, which keeps `.git`, `.obsidian` and
-/// `.hivemind` out of reach of every file command (the sidecar is written by `notebook_meta_set` only).
-fn writable(rel: &str) -> Result<(), String> {
+/// A path any file command may name: no part may be hidden, which keeps `.git`, `.obsidian` and `.hivemind` out of
+/// reach (the sidecar is read and written by `notebook_meta_get` and `notebook_meta_set` only).
+fn visible(rel: &str) -> Result<(), String> {
     let parts = contain::check_rel(rel)?;
     if parts.iter().any(|p| p.starts_with('.')) {
-        return Err(format!("\"{rel}\" is a hidden file or folder, which Hivemind does not change"));
+        return Err(format!("\"{rel}\" is a hidden file or folder, which Hivemind does not open or change"));
     }
     Ok(())
 }
@@ -138,21 +153,18 @@ pub async fn file_read(state: State<'_, AppState>, notebook: String, path: Strin
 
 #[tauri::command]
 pub async fn file_save(state: State<'_, AppState>, notebook: String, path: String, text: String, pre: Stamp, format: FileFormat) -> Result<SaveOutcome, String> {
-    writable(&path)?;
     let (root, protected) = root_of(&state, &notebook)?;
     blocking(move || files::save(&inside(&root, &protected, &path, true)?, &text, &pre, &format)).await
 }
 
 #[tauri::command]
 pub async fn file_create(state: State<'_, AppState>, notebook: String, path: String, text: String) -> Result<Stamp, String> {
-    writable(&path)?;
     let (root, protected) = root_of(&state, &notebook)?;
     blocking(move || files::create(&inside(&root, &protected, &path, true)?, &text)).await
 }
 
 #[tauri::command]
 pub async fn file_mkdir(state: State<'_, AppState>, notebook: String, path: String) -> Result<(), String> {
-    writable(&path)?;
     let (root, protected) = root_of(&state, &notebook)?;
     blocking(move || {
         let full = inside(&root, &protected, &path, true)?;
@@ -166,18 +178,16 @@ pub async fn file_mkdir(state: State<'_, AppState>, notebook: String, path: Stri
 
 #[tauri::command]
 pub async fn file_rename(state: State<'_, AppState>, notebook: String, from: String, to: String) -> Result<(), String> {
-    writable(&from)?;
-    writable(&to)?;
     if to.to_lowercase().starts_with(&format!("{}/", from.to_lowercase())) {
         return Err("A folder cannot move into itself".into());
     }
     let (root, protected) = root_of(&state, &notebook)?;
     let drafts_dir = state.drafts_dir.clone();
     blocking(move || {
-        let source = inside(&root, &protected, &from, false)?;
-        // Moving a folder: its own path must not be a link either.
-        if std::fs::symlink_metadata(&source).map(|m| m.file_type().is_symlink()).unwrap_or(false) {
-            return Err(format!("\"{from}\" is a link or junction, which Hivemind does not move"));
+        // Resolved as a write, so neither end goes through a link (Codex review of 32fd236, P2).
+        let source = inside(&root, &protected, &from, true)?;
+        if source.is_dir() {
+            crate::files::guard::check_no_vault_inside(&source)?;
         }
         files::rename(&source, &inside(&root, &protected, &to, true)?)?;
         crate::drafts::retarget(&drafts_dir, &notebook, &from, &to);
@@ -189,17 +199,13 @@ pub async fn file_rename(state: State<'_, AppState>, notebook: String, from: Str
 /// Move a page or folder to the notebook's trash. With `pre`, a page is only trashed while it still holds those bytes.
 #[tauri::command]
 pub async fn file_delete(state: State<'_, AppState>, notebook: String, path: String, pre: Option<Stamp>) -> Result<String, String> {
-    writable(&path)?;
     let (root, protected) = root_of(&state, &notebook)?;
     blocking(move || {
-        let full = inside(&root, &protected, &path, false)?;
-        if let Some(pre) = pre {
-            let now = std::fs::read(&full).map_err(|e| format!("Could not read {}: {e}", full.display()))?;
-            if files::sha256(&now) != pre.sha256 {
-                return Err(format!("\"{path}\" changed on disk since it was opened; reopen it before deleting"));
-            }
+        let full = inside(&root, &protected, &path, true)?;
+        if full.is_dir() {
+            crate::files::guard::check_no_vault_inside(&full)?;
         }
-        let moved = files::trash(&root, &path, &chrono::Local::now().format("%Y%m%d-%H%M%S").to_string())?;
+        let moved = files::trash(&root, &path, &chrono::Local::now().format("%Y%m%d-%H%M%S").to_string(), pre.as_ref())?;
         Ok(contain::relative(&root, &moved).unwrap_or_default())
     })
     .await
@@ -215,10 +221,49 @@ pub async fn file_reveal(app: AppHandle, notebook: String, path: Option<String>,
         None => root,
     };
     if open {
+        if let Some(why) = refuse_to_run(&full) {
+            return Err(why);
+        }
         app.opener().open_path(full.display().to_string(), None::<&str>).map_err(|e| e.to_string())
     } else {
         app.opener().reveal_item_in_dir(&full).map_err(|e| e.to_string())
     }
+}
+
+/// Kinds of file that run code when Windows opens them. Opening one from a notebook would run whatever a synced or
+/// downloaded folder put there, so Hivemind shows it in Explorer instead (Claude's review of 32fd236, C1).
+const RUNS_CODE: &[&str] = &[
+    "exe", "com", "scr", "pif", "cpl", "msi", "msp", "msix", "msixbundle", "appx", "appxbundle", "appinstaller", "application", "appref-ms", "bat", "cmd",
+    "ps1", "psm1", "psd1", "ps1xml", "psc1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "ws", "hta", "jar", "lnk", "url", "website", "reg", "inf", "scf",
+    "msc", "gadget", "chm", "settingcontent-ms", "library-ms", "search-ms", "searchconnector-ms", "diagcab", "xll", "iqy", "slk", "py", "pyw", "sh",
+];
+
+/// Why Hivemind will not open `path` with its associated program, or None.
+fn refuse_to_run(path: &Path) -> Option<String> {
+    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    if path.is_dir() {
+        return None;
+    }
+    if RUNS_CODE.contains(&ext.as_str()) || dangerous_to_windows(&ext) {
+        return Some(format!("{} is a program or script, so Hivemind does not open it; use Show in Explorer", path.file_name().unwrap_or_default().to_string_lossy()));
+    }
+    None
+}
+
+/// What Windows itself counts as dangerous to open (the list behind its download warnings).
+#[cfg(windows)]
+fn dangerous_to_windows(ext: &str) -> bool {
+    if ext.is_empty() {
+        return false;
+    }
+    let wide: Vec<u16> = format!(".{ext}").encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: a NUL-terminated wide string that lives until the call returns.
+    unsafe { windows_sys::Win32::UI::Shell::AssocIsDangerous(wide.as_ptr()) != 0 }
+}
+
+#[cfg(not(windows))]
+fn dangerous_to_windows(_ext: &str) -> bool {
+    false
 }
 
 #[cfg(test)]
@@ -226,10 +271,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hidden_parts_are_not_writable() {
-        assert!(writable("Projects/Page.md").is_ok());
+    fn hidden_parts_are_never_named() {
+        assert!(visible("Projects/Page.md").is_ok());
         for bad in [".obsidian/app.json", ".git/config", ".hivemind/notebook.json", "a/.hidden/b.md", "../x.md", ""] {
-            assert!(writable(bad).is_err(), "{bad}");
+            assert!(visible(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_link_to_a_hidden_folder_is_hidden_too() {
+        let root = std::fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("hm-studio-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join(".obsidian")).unwrap();
+        std::fs::write(root.join(".obsidian/app.json"), "{}").unwrap();
+        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(root.join("cfg")).arg(root.join(".obsidian")).output();
+        if made.map(|o| o.status.success()).unwrap_or(false) {
+            let protected = Protected::new(None);
+            assert!(inside(&root, &protected, "cfg/app.json", false).unwrap_err().contains("hidden"), "read through the link");
+            assert!(inside(&root, &protected, "cfg/app.json", true).is_err(), "write through the link");
+        }
+        std::fs::write(root.join("Page.md"), "x").unwrap();
+        assert!(inside(&root, &Protected::new(None), "Page.md", true).is_ok());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn programs_and_scripts_are_not_opened() {
+        for name in ["setup.exe", "run.CMD", "x.ps1", "Shortcut.lnk", "page.url", "tool.msi", "a.hta"] {
+            assert!(refuse_to_run(Path::new(name)).is_some(), "{name}");
+        }
+        for name in ["report.pdf", "photo.png", "sheet.xlsx", "notes.docx", "README"] {
+            assert!(refuse_to_run(Path::new(name)).is_none(), "{name}");
         }
     }
 }

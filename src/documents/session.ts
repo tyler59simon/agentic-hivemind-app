@@ -1,5 +1,5 @@
 // The life of one open document (a notebook page), as a pure reducer. Side effects (reading, saving, drafts) live in
-// controller.ts; this file only decides what the state becomes.
+// store.ts; this file only decides what the state becomes.
 import type { FileFormat, Stamp } from "../lib/notebooks";
 
 /** A file as read from disk. */
@@ -26,6 +26,8 @@ export interface DocState {
   theirs?: Loaded;
   /** The text a save in flight is writing. */
   saving?: string;
+  /** Why the latest unsaved edits could not be kept as a draft; cleared when a draft write succeeds. */
+  draftError?: string;
 }
 
 export type DocEvent =
@@ -39,6 +41,7 @@ export type DocEvent =
   | { type: "merged"; text: string; theirs: Loaded }
   | { type: "reloaded"; theirs: Loaded }
   | { type: "failed"; error: string }
+  | { type: "draft"; error: string | null }
   | { type: "dismiss" };
 
 export const initial: DocState = { status: "loading", base: null, text: "", version: 0 };
@@ -67,8 +70,12 @@ export function reduce(s: DocState, e: DocEvent): DocState {
     }
     case "stale":
       return { ...s, status: "stale", saving: undefined, theirs: e.theirs };
-    case "gone":
-      return { ...s, status: s.text ? "dirty" : s.status, saving: undefined, banner: { kind: "gone" } };
+    case "gone": {
+      // Text that is only in the editor now counts as unsaved, and so does a save that found the file gone, even of an
+      // empty page (Codex review of 32fd236, S3). A read-only view stays read-only.
+      if (s.status === "readOnly" || s.status === "loading" || s.status === "error") return { ...s, saving: undefined, banner: { kind: "gone" } };
+      return { ...s, status: s.text || s.status !== "clean" ? "dirty" : "clean", saving: undefined, banner: { kind: "gone" } };
+    }
     case "outsideChange": {
       if (!s.base || e.theirs.stamp.sha256 === s.base.stamp.sha256) return s;
       // A save in flight finds out for itself, and a merge in progress already has a newer version to look at.
@@ -84,10 +91,15 @@ export function reduce(s: DocState, e: DocEvent): DocState {
       return reduce({ ...s, banner: undefined, theirs: undefined, saving: undefined }, { type: "loaded", loaded: e.theirs });
     case "failed":
       return s.base ? { ...s, status: s.status === "saving" ? "dirty" : s.status, saving: undefined, error: e.error } : { ...s, status: "error", error: e.error };
+    case "draft":
+      return e.error === (s.draftError ?? null) ? s : { ...s, draftError: e.error ?? undefined };
     case "dismiss":
       return { ...s, banner: undefined, error: undefined };
   }
 }
+
+/** Whether a version read from disk can be merged into: text Hivemind can edit, not binary or undecodable. */
+export const mergeable = (l: Loaded | undefined) => !!l && !l.binary && !l.readOnly;
 
 /** Whether the document holds edits that are not on disk. */
 export const isUnsaved = (s: DocState | undefined) => !!s && (s.status === "dirty" || s.status === "saving" || s.status === "stale");

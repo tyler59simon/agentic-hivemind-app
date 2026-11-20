@@ -63,7 +63,9 @@ export function NotesPage() {
   if (notebooks.isLoading) return <div className="center muted">Loading notebooks…</div>;
   if (notebooks.error) return <div className="center error">{classify(notebooks.error).message}</div>;
   const list = notebooks.data ?? [];
-  if (!list.length) return <Empty onAdd={add} />;
+  // Open tabs (a Memory note opened with Ctrl+O, pages of a notebook just removed) stay visible without notebooks
+  // (Codex review of 32fd236, M1).
+  if (!list.length && !open) return <Empty onAdd={add} />;
   return (
     <div className="notes-page">
       <nav className="notebooks" aria-label="Notebooks">

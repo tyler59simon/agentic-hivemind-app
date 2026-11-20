@@ -1,8 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ellipsis, Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { discard, edit, keyOf, open, reload, resolveMerge, save, useDocuments } from "../../documents/store";
-import type { DocState } from "../../documents/session";
+import { edit, keyOf, open, reload, resolveMerge, save, unsavedUnder, useDocuments } from "../../documents/store";
+import { isUnsaved, mergeable, type DocState } from "../../documents/session";
 import { classify } from "../../lib/errors";
 import { createFile, fileName, folderOf, isMarkdown, notebooksQuery, pageTitle, revealFile, treeQuery, type Notebook } from "../../lib/notebooks";
 import { Menu } from "../../ui/Menu";
@@ -54,6 +54,17 @@ function useFollow(tab: Tab, pages: string[], ask: (node: ReactNode) => void) {
   }, [from, pages, ask, client]);
 }
 
+/** Save a page and say when it needs a merge first; Ctrl+S in any mode of a page tab comes here. */
+export async function saveFileTab(key: string) {
+  const after = await save(key);
+  if (after?.status === "stale") toast("This page changed on disk. Merge your edits to save them.", "warn");
+}
+
+/** Drop unsaved edits and show the file; typing while it reads keeps the edits instead. */
+function reloadPage(key: string) {
+  void reload(key).then((done) => { if (!done && useDocuments.getState().docs[key]?.status !== "error") toast("Reload stopped: you typed while the file was read, so your edits stay.", "warn"); });
+}
+
 function Banners({ doc, docKey, onMerge, onRecreate }: { doc: DocState; docKey: string; onMerge: () => void; onRecreate: () => void }) {
   const dismiss = () => useDocuments.getState().dispatch(docKey, { type: "dismiss" });
   useEffect(() => {
@@ -65,18 +76,30 @@ function Banners({ doc, docKey, onMerge, onRecreate }: { doc: DocState; docKey: 
   if (doc.status === "readOnly" && doc.base) {
     out.push(<div key="ro" className="banner note-banner">{doc.base.binary ? "This is not a text file, so it opens read-only." : `Read-only: ${doc.base.readOnly}.`}</div>);
   }
-  if (doc.status === "stale" || doc.banner?.kind === "changed") {
+  if ((doc.status === "stale" || doc.banner?.kind === "changed") && !mergeable(doc.theirs)) {
+    // Nothing to merge into: the file is no longer text Hivemind can edit (Codex review of 32fd236, D3).
+    const why = doc.theirs?.binary ? "is no longer a text file" : `can no longer be edited here (${doc.theirs?.readOnly ?? "unknown reason"})`;
+    out.push(
+      <div key="changed" className="banner warn note-banner">
+        This page changed on disk and {why}, so your edits cannot be merged into it. They are kept here and as a draft; copy them out, or reload to see the file.
+        <div className="actions"><button onClick={() => reloadPage(docKey)}>Reload (drop my edits)</button></div>
+      </div>,
+    );
+  } else if (doc.status === "stale" || doc.banner?.kind === "changed") {
     out.push(
       <div key="changed" className="banner warn note-banner">
         {doc.status === "stale" ? "Not saved: this page changed on disk after you opened it." : "This page changed on disk while you were editing."}
-        <div className="actions"><button className="primary" onClick={onMerge}>Merge</button><button onClick={() => reload(docKey)}>Reload (drop my edits)</button></div>
+        <div className="actions"><button className="primary" onClick={onMerge}>Merge</button><button onClick={() => reloadPage(docKey)}>Reload (drop my edits)</button></div>
       </div>,
     );
+  }
+  if (doc.draftError && isUnsaved(doc)) {
+    out.push(<div key="draft" className="banner error note-banner">Your unsaved edits are not backed up as a draft ({doc.draftError}). Save the page to keep them.</div>);
   }
   if (doc.banner?.kind === "restored") {
     out.push(
       <div key="restored" className="banner note-banner">Restored unsaved edits from a draft (kept {new Date(doc.banner.at).toLocaleString()}).
-        <div className="actions"><button onClick={dismiss}>Keep</button><button onClick={() => reload(docKey)}>Discard them</button></div>
+        <div className="actions"><button onClick={dismiss}>Keep</button><button onClick={() => reloadPage(docKey)}>Discard them</button></div>
       </div>,
     );
   }
@@ -137,24 +160,27 @@ export function FileTab({ tab }: { tab: Tab }) {
   useEffect(() => { void open(ref); }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { updateTab(tab.id, { title: pageTitle(ref.path) }); }, [ref.path, tab.id, updateTab]);
 
-  const doSave = useCallback(async () => {
-    const after = await save(key);
-    if (after?.status === "stale") toast("This page changed on disk. Merge your edits to save them.", "warn");
-  }, [key]);
+  const doSave = useCallback(() => saveFileTab(key), [key]);
   const merge = () => {
     const d = useDocuments.getState().docs[key];
-    if (!d?.base || !d.theirs) return;
-    setDialog(<PageMergeDialog base={d.base.text} mine={d.text} theirs={d.theirs.text}
-      onCancel={() => setDialog(null)} onResolve={(text) => { setDialog(null); void resolveMerge(key, text); }} />);
+    if (!d?.base || !d.theirs || !mergeable(d.theirs)) return;
+    // The version shown is the one the result is saved against, whatever arrives while the dialog is open.
+    const shown = d.theirs;
+    setDialog(<PageMergeDialog base={d.base.text} mine={d.text} theirs={shown.text}
+      onCancel={() => setDialog(null)} onResolve={(text) => { setDialog(null); void resolveMerge(key, text, shown); }} />);
   };
   const recreate = () => {
     const d = useDocuments.getState().docs[key];
     if (!d) return;
-    createFile(ref.notebook, ref.path, d.text).then(() => reload(key), (e) => toast(classify(e).message, "error"));
+    createFile(ref.notebook, ref.path, d.text).then(() => reloadPage(key), (e) => toast(classify(e).message, "error"));
   };
+  const lost = unsavedUnder(ref.notebook, ref.path).length > 0;
   const remove = () => setDialog(
-    <Confirm title="Delete this page?" danger action="Move to trash"
-      message={<p><code>{ref.path}</code> moves to the notebook's <code>.hivemind/trash</code> folder, where you can get it back.</p>}
+    <Confirm title="Delete this page?" danger action={lost ? "Delete and lose my edits" : "Move to trash"}
+      message={<>
+        <p><code>{ref.path}</code> moves to the notebook's <code>.hivemind/trash</code> folder, where you can get it back.</p>
+        {lost && <p className="error">Your unsaved edits to this page are not in the file. They are lost when it is deleted; save first to keep them in the trash copy.</p>}
+      </>}
       onAnswer={(yes) => {
         setDialog(null);
         if (yes) trashPath(client, ref.notebook, ref.path).catch((e) => toast(classify(e).message, "error"));
@@ -168,7 +194,7 @@ export function FileTab({ tab }: { tab: Tab }) {
         <div className="card">
           <p className="error">{doc.error}</p>
           <div className="actions">
-            <button onClick={() => { discard(key); void open(ref); }}>Try again</button>
+            <button onClick={() => void open(ref)}>Try again</button>
           </div>
         </div>
       </div>
@@ -210,7 +236,7 @@ export function FileTab({ tab }: { tab: Tab }) {
         ? <PageView text={doc.text} tabId={tab.id} onLink={follow} />
         : (
           <div className="note file-editor">
-            <CodeEditor key={key} doc={doc.text} docVersion={doc.version} language={markdown ? "markdown" : "text"} live={mode === "live"}
+            <CodeEditor key={key} doc={doc.text} docVersion={doc.version} follow language={markdown ? "markdown" : "text"} live={mode === "live"}
               readOnly={doc.status === "readOnly"} lineNumbers={!markdown} onChange={(text) => edit(key, text)} onSave={doSave}
               titles={titles} onOpenLink={follow} reveal={reveal} placeholder={markdown ? "Start writing…" : undefined} />
           </div>

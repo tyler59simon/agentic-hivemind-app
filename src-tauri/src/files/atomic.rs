@@ -5,12 +5,55 @@ use std::path::{Path, PathBuf};
 
 const TEMP_MARK: &str = ".hm-";
 const TEMP_END: &str = ".tmp";
+/// The tag of the previous version a save moves aside.
+const ASIDE: &str = "old-";
+/// The most of the original name a temp name keeps, in UTF-16 units, so it stays under the 255-unit NTFS limit
+/// (Codex review of 32fd236, W4).
+const NAME_KEEP: usize = 100;
+/// The most extra data streams a save carries over to the new file.
+const MAX_STREAMS: u64 = 16 * 1024 * 1024;
 
-/// A hidden file beside `path`: `.<name>.hm-<tag><uuid>.tmp`, in the same folder so renames stay on one volume.
-fn beside(path: &Path, tag: &str) -> Result<PathBuf, String> {
+fn short_name(name: &str) -> String {
+    let mut units = 0;
+    name.chars()
+        .take_while(|c| {
+            units += c.len_utf16();
+            units <= NAME_KEEP
+        })
+        .collect()
+}
+
+/// A hidden file beside `path`: `.<name>.hm-<tag><uuid>.tmp`, in the same folder so renames stay on one volume. Long
+/// names are cut to NAME_KEEP units.
+pub fn beside(path: &Path, tag: &str) -> Result<PathBuf, String> {
     let name = path.file_name().ok_or_else(|| format!("{} has no file name", path.display()))?;
-    let temp = format!(".{}{TEMP_MARK}{tag}{}{TEMP_END}", name.to_string_lossy(), uuid::Uuid::new_v4().simple());
+    let temp = format!(".{}{TEMP_MARK}{tag}{}{TEMP_END}", short_name(&name.to_string_lossy()), uuid::Uuid::new_v4().simple());
     Ok(path.with_file_name(temp))
+}
+
+/// The previous version of `path` that a save left beside it when it stopped between its two renames (the process
+/// was killed or the machine lost power): `path` is missing and exactly one aside of its name is there.
+pub fn orphaned_aside(path: &Path) -> Option<PathBuf> {
+    if std::fs::symlink_metadata(path).is_ok() {
+        return None;
+    }
+    let prefix = format!(".{}{TEMP_MARK}{ASIDE}", short_name(&path.file_name()?.to_string_lossy()));
+    let dir = path.parent()?;
+    let mut found = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.len() == prefix.len() + 32 + TEMP_END.len() && n.starts_with(&prefix) && n.ends_with(TEMP_END));
+    let first = found.next()?;
+    found.next().is_none().then(|| dir.join(first))
+}
+
+/// The file an aside named `name` belongs to, when its name was kept whole.
+pub fn aside_target(dir: &Path, name: &str) -> Option<PathBuf> {
+    let (kept, tail) = name.strip_prefix('.')?.strip_suffix(TEMP_END)?.rsplit_once(TEMP_MARK)?;
+    let id = tail.strip_prefix(ASIDE)?;
+    let whole = kept.encode_utf16().count() < NAME_KEEP;
+    (whole && id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())).then(|| dir.join(kept))
 }
 
 /// True for a temp file this module writes; the watcher and the tree skip these.
@@ -83,10 +126,21 @@ fn open_held(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
 
+/// `path` as a NUL-terminated wide string for a Win32 call. A long absolute path gets the `\\?\` form, which std
+/// adds by itself but raw calls do not, so names near the 255-unit limit still work.
 #[cfg(windows)]
 fn wide(path: &Path) -> Vec<u16> {
     use std::os::windows::ffi::OsStrExt;
-    path.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+    let units: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let text = String::from_utf16_lossy(&units);
+    let prefix: &[u16] = if units.len() < 240 || text.starts_with(r"\\?\") || !path.is_absolute() {
+        &[]
+    } else if text.starts_with(r"\\") {
+        return r"\\?\UNC\".encode_utf16().chain(units[2..].iter().copied()).chain(std::iter::once(0)).collect();
+    } else {
+        &[92, 92, 63, 92] // \\?\
+    };
+    prefix.iter().copied().chain(units).chain(std::iter::once(0)).collect()
 }
 
 /// Rename the held file to `to` through its own handle; fails if `to` exists.
@@ -112,9 +166,9 @@ fn rename_held(file: &std::fs::File, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Move `from` to `to`, failing if `to` exists.
+/// Move `from` (a file or a folder) to `to` on the same volume, failing if `to` exists.
 #[cfg(windows)]
-fn move_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+pub fn move_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
     use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
     // SAFETY: both arguments are NUL-terminated wide strings that live until the call returns.
     if unsafe { MoveFileExW(wide(from).as_ptr(), wide(to).as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
@@ -123,7 +177,96 @@ fn move_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+#[cfg(not(windows))]
+pub fn move_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    if std::fs::symlink_metadata(to).is_ok() {
+        return Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists));
+    }
+    std::fs::rename(from, to)
+}
+
+/// Whether an error from `move_no_replace` means the target exists.
+pub fn exists_error(e: &std::io::Error) -> bool {
+    // ERROR_FILE_EXISTS and ERROR_ALREADY_EXISTS.
+    e.kind() == std::io::ErrorKind::AlreadyExists || matches!(e.raw_os_error(), Some(80) | Some(183))
+}
+
+/// The extra data streams of `path` (NTFS alternate data streams such as `Zone.Identifier`), by name and size.
+#[cfg(windows)]
+fn named_streams(path: &Path) -> std::io::Result<Vec<(String, u64)>> {
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Storage::FileSystem::{FindClose, FindFirstStreamW, FindNextStreamW, FindStreamInfoStandard, WIN32_FIND_STREAM_DATA};
+    let mut data = WIN32_FIND_STREAM_DATA::default();
+    // SAFETY: the path is a NUL-terminated wide string and `data` is the struct FindStreamInfoStandard fills.
+    let find = unsafe { FindFirstStreamW(wide(path).as_ptr(), FindStreamInfoStandard, &mut data as *mut _ as *mut _, 0) };
+    if find == INVALID_HANDLE_VALUE {
+        let e = std::io::Error::last_os_error();
+        // No stream at all (ERROR_HANDLE_EOF), or a file system without streams (FAT, exFAT, some shares).
+        return match e.raw_os_error() {
+            Some(38) | Some(1) | Some(50) | Some(87) => Ok(vec![]),
+            _ => Err(e),
+        };
+    }
+    let mut found = Vec::new();
+    loop {
+        let len = data.cStreamName.iter().position(|c| *c == 0).unwrap_or(data.cStreamName.len());
+        let full = String::from_utf16_lossy(&data.cStreamName[..len]);
+        // "::$DATA" is the file's own content; the others read ":<name>:$DATA".
+        if let Some(name) = full.strip_prefix(':').and_then(|s| s.strip_suffix(":$DATA")).filter(|n| !n.is_empty()) {
+            found.push((name.to_string(), data.StreamSize.max(0) as u64));
+        }
+        // SAFETY: `find` is the open search handle and `data` is the struct it fills.
+        if unsafe { FindNextStreamW(find, &mut data as *mut _ as *mut _) } == 0 {
+            break;
+        }
+    }
+    // SAFETY: `find` came from FindFirstStreamW and is closed once.
+    unsafe { FindClose(find) };
+    Ok(found)
+}
+
+#[cfg(windows)]
+fn stream_path(path: &Path, name: &str) -> PathBuf {
+    let mut full = path.as_os_str().to_os_string();
+    full.push(":");
+    full.push(name);
+    PathBuf::from(full)
+}
+
+/// Copy the extra data streams of `from` onto `to`, so a save keeps what other programs stored beside the content
+/// (Codex review of 32fd236, W3).
+#[cfg(windows)]
+fn copy_streams(from: &Path, to: &Path) -> Result<(), String> {
+    let streams = named_streams(from).map_err(|e| format!("Could not list the data streams of {}: {e}", from.display()))?;
+    if streams.iter().map(|(_, size)| size).sum::<u64>() > MAX_STREAMS {
+        return Err(format!("{} carries more than 16 MB of extra data streams, which Hivemind would not keep; it does not save it", from.display()));
+    }
+    for (name, _) in streams {
+        let copied = (|| -> std::io::Result<()> {
+            let bytes = std::fs::read(stream_path(from, &name))?;
+            let mut out = std::fs::OpenOptions::new().write(true).create_new(true).open(stream_path(to, &name))?;
+            out.write_all(&bytes)?;
+            out.sync_all()
+        })();
+        copied.map_err(|e| format!("Could not keep the data stream {name} of {}: {e}", from.display()))?;
+    }
+    Ok(())
+}
+
 impl Held {
+    /// Move the held file to `to` through its own handle, failing if `to` exists. What moves is exactly what the
+    /// caller read (Codex review of 32fd236, W5).
+    #[cfg(windows)]
+    pub fn move_to(self, to: &Path) -> std::io::Result<()> {
+        rename_held(&self.file, to)
+    }
+
+    #[cfg(not(windows))]
+    pub fn move_to(self, to: &Path) -> std::io::Result<()> {
+        drop(self.file);
+        move_no_replace(&self.path, to)
+    }
+
     /// Replace the held file with `bytes`. The held file is moved aside through its own handle, so what is replaced
     /// is exactly what the caller read; the new file then takes its name without overwriting anything that appeared
     /// meanwhile, and the old one is deleted.
@@ -131,7 +274,11 @@ impl Held {
     pub fn replace(self, bytes: &[u8]) -> Result<(), String> {
         let shown = self.path.display().to_string();
         let temp = write_temp(&self.path, bytes)?;
-        let aside = beside(&self.path, "old-")?;
+        if let Err(e) = copy_streams(&self.path, &temp) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(e);
+        }
+        let aside = beside(&self.path, ASIDE)?;
         if let Err(e) = rename_held(&self.file, &aside) {
             let _ = std::fs::remove_file(&temp);
             return Err(format!("Could not save {shown}: {e}"));
@@ -233,6 +380,70 @@ mod tests {
         assert!(in_use(&hold(&page).err().unwrap()));
         drop(writer);
         assert!(hold(&page).is_ok());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_save_keeps_the_files_extra_data_streams() {
+        let dir = scratch();
+        let page = dir.join("Downloaded.md");
+        std::fs::write(&page, "old").unwrap();
+        std::fs::write(stream_path(&page, "Zone.Identifier"), "[ZoneTransfer]\r\nZoneId=3\r\n").unwrap();
+        std::fs::write(stream_path(&page, "app.data"), "kept").unwrap();
+        hold(&page).unwrap().replace(b"new").unwrap();
+        assert_eq!(std::fs::read_to_string(&page).unwrap(), "new");
+        assert_eq!(std::fs::read_to_string(stream_path(&page, "Zone.Identifier")).unwrap(), "[ZoneTransfer]\r\nZoneId=3\r\n");
+        assert_eq!(std::fs::read_to_string(stream_path(&page, "app.data")).unwrap(), "kept");
+        let mut names: Vec<String> = named_streams(&page).unwrap().into_iter().map(|(n, _)| n).collect();
+        names.sort();
+        assert_eq!(names, ["Zone.Identifier", "app.data"]);
+        assert!(leftovers(&dir).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_long_name_gets_a_temp_name_windows_accepts() {
+        let dir = scratch();
+        let page = dir.join(format!("{}.md", "n".repeat(220)));
+        std::fs::write(&page, "old").unwrap();
+        hold(&page).unwrap().replace(b"new").unwrap();
+        assert_eq!(std::fs::read_to_string(&page).unwrap(), "new");
+        let temp = beside(&page, ASIDE).unwrap();
+        assert!(temp.file_name().unwrap().to_string_lossy().encode_utf16().count() < 255);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_interrupted_save_leaves_an_aside_that_is_found() {
+        let dir = scratch();
+        let page = dir.join("Page.md");
+        let aside = beside(&page, ASIDE).unwrap();
+        std::fs::write(&aside, "previous").unwrap();
+        std::fs::write(beside(&page, "").unwrap(), "new").unwrap();
+        assert_eq!(orphaned_aside(&page), Some(aside.clone()));
+        let name = aside.file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(aside_target(&dir, &name), Some(page.clone()));
+        assert_eq!(aside_target(&dir, ".Page.md.hm-0123.tmp"), None, "a new-version temp is not an aside");
+        std::fs::write(&page, "x").unwrap();
+        assert_eq!(orphaned_aside(&page), None, "the page is there");
+        std::fs::remove_file(&page).unwrap();
+        std::fs::write(beside(&page, ASIDE).unwrap(), "another").unwrap();
+        assert_eq!(orphaned_aside(&page), None, "two asides: not guessed");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn move_no_replace_refuses_an_existing_target() {
+        let dir = scratch();
+        std::fs::write(dir.join("a.md"), "a").unwrap();
+        std::fs::write(dir.join("b.md"), "b").unwrap();
+        let e = move_no_replace(&dir.join("a.md"), &dir.join("b.md")).unwrap_err();
+        assert!(exists_error(&e), "{e}");
+        assert_eq!(std::fs::read_to_string(dir.join("b.md")).unwrap(), "b");
+        std::fs::create_dir_all(dir.join("folder")).unwrap();
+        move_no_replace(&dir.join("folder"), &dir.join("moved")).unwrap();
+        assert!(dir.join("moved").is_dir());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

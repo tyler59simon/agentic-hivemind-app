@@ -1,7 +1,7 @@
 // Unsaved edits, stored by the Rust side in the app's data folder (never in the Living Memory store).
 import { invoke } from "@tauri-apps/api/core";
 import type { Fields } from "../features/editor/save";
-import type { FileRef } from "../documents/keys";
+import { movedPath, type FileRef } from "../documents/keys";
 import type { FileFormat, Stamp } from "./notebooks";
 
 /** A note's draft (no `kind`, the shape drafts always had). */
@@ -59,6 +59,14 @@ export const getFileDraft = async (key: string): Promise<FileDraft | null> => {
 export function deleteDraft(key: string): Promise<void> {
   recent.set(key, null);
   return invoke<void>("draft_delete", { key });
+}
+
+/** Pages under `from` moved and Rust moved their drafts: forget what this run cached for them, and every cached
+ *  deletion (one may be for the key a moved draft now has), so the next read asks Rust (Claude's review of 32fd236, C2). */
+export function forgetMoved(notebook: string, from: string) {
+  for (const [key, d] of recent) {
+    if (!d || (isFileDraft(d) && d.target.notebook === notebook && movedPath(d.target.path, from, from) !== null)) recent.delete(key);
+  }
 }
 
 export const listDrafts = () => invoke<Draft[]>("draft_list");

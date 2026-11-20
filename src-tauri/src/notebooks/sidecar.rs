@@ -15,10 +15,19 @@ fn read_object(path: &Path) -> Option<Map<String, Value>> {
     }
 }
 
-/// The settings of the notebook at `root`; `fallback` is its app-data copy. An unreadable file reads as empty.
+/// The settings of the notebook at `root`; `fallback` is its app-data copy. The newer of the two counts: the fallback
+/// is only written when the notebook copy could not be, and a newer notebook copy (from another machine, say) wins
+/// over it (Codex review of 32fd236, P5). An unreadable file reads as empty.
 pub fn read(root: &Path, fallback: &Path) -> Value {
-    let inside = contain::resolve_inside(root, REL, false).ok().and_then(|p| read_object(&p));
-    Value::Object(inside.or_else(|| read_object(fallback)).unwrap_or_default())
+    let inside = contain::resolve_inside(root, REL, false).ok();
+    let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    let fallback_first = match (inside.as_deref().and_then(modified), modified(fallback)) {
+        (Some(notebook), Some(app)) => app >= notebook,
+        (None, Some(_)) => true,
+        _ => false,
+    };
+    let (first, second) = if fallback_first { (Some(fallback.to_path_buf()), inside) } else { (inside, Some(fallback.to_path_buf())) };
+    Value::Object(first.and_then(|p| read_object(&p)).or_else(|| second.and_then(|p| read_object(&p))).unwrap_or_default())
 }
 
 /// Merge `patch` (an object) into the settings: a key set to null is removed, every other key replaces the old
@@ -99,6 +108,29 @@ mod tests {
         assert_eq!(path, root.join(".hivemind").join("notebook.json"));
         assert_eq!(read(&root, &fallback), merged);
         assert!(!fallback.exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_fallback_written_beside_a_readable_notebook_copy_is_the_one_read() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = scratch();
+        let fallback = root.join("app").join("nb-1.json");
+        write(&root, &fallback, &json!({ "inbox": "Inbox.md" })).unwrap();
+        // Another program has the notebook copy open without letting anyone replace it.
+        let notebook_copy = root.join(".hivemind").join("notebook.json");
+        let lock = std::fs::OpenOptions::new().read(true).share_mode(1).open(&notebook_copy).unwrap();
+        let (_, path) = write(&root, &fallback, &json!({ "templates": "Templates" })).unwrap();
+        assert_eq!(path, fallback);
+        assert_eq!(read(&root, &fallback), json!({ "version": 1, "inbox": "Inbox.md", "templates": "Templates" }), "the setting does not revert");
+        let (merged, _) = write(&root, &fallback, &json!({ "daily": "YYYY-MM-DD" })).unwrap();
+        assert_eq!(merged["templates"], "Templates", "the next patch starts from the fallback");
+        drop(lock);
+        let (_, path) = write(&root, &fallback, &json!({ "pinned": ["A.md"] })).unwrap();
+        assert_eq!(path, notebook_copy);
+        assert!(!fallback.exists());
+        assert_eq!(read(&root, &fallback)["daily"], "YYYY-MM-DD");
         std::fs::remove_dir_all(&root).unwrap();
     }
 

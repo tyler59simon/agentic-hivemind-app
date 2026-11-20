@@ -6,6 +6,7 @@ import { metaQuery, revealFile, treeQuery, type Notebook } from "../../lib/noteb
 import { Menu } from "../../ui/Menu";
 import { toast } from "../../ui/toast";
 import { activeTab, useWorkspace } from "../../workspace/store";
+import { unsavedUnder } from "../../documents/store";
 import { movePath, newPage, newSection, openPage, renamed, trashPath } from "./actions";
 import { ancestors, buildTree, dropTarget, loadOpen, saveOpen, visibleRows, type Node } from "./tree";
 import { Confirm } from "../../ui/Modal";
@@ -18,19 +19,27 @@ const label = (node: Node) => (node.kind === "page" ? node.name.replace(PAGE, ""
  *  row's path, "" for the notebook's empty space (its top level), or null outside the tree (the drop is cancelled). */
 function useRowDrag(root: string, onDrop: (from: string, target: Node | null) => void, nodes: Map<string, Node>) {
   const [drag, setDrag] = useState<{ path: string; over: string | null } | null>(null);
-  const start = useRef<{ path: string; x: number; y: number } | null>(null);
+  const start = useRef<{ path: string; x: number; y: number; pointer: number } | null>(null);
   const dragged = useRef(false);
   useEffect(() => {
+    // Only the pointer that pressed the row moves it, and a cancelled gesture (the browser took over scrolling) drops
+    // the drag (Codex review of 32fd236, U3).
     const move = (e: PointerEvent) => {
       const s = start.current;
-      if (!s) return;
+      if (!s || e.pointerId !== s.pointer) return;
       if (!drag && Math.hypot(e.clientX - s.x, e.clientY - s.y) < 5) return;
       const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
       const row = el?.closest<HTMLElement>("[data-tree-path]");
       const inside = el?.closest<HTMLElement>("[data-tree-root]")?.dataset.treeRoot === root;
       setDrag({ path: s.path, over: row && inside ? row.dataset.treePath! : inside ? "" : null });
     };
-    const up = () => {
+    const cancel = (e: PointerEvent) => {
+      if (start.current && e.pointerId !== start.current.pointer) return;
+      start.current = null;
+      setDrag(null);
+    };
+    const up = (e: PointerEvent) => {
+      if (start.current && e.pointerId !== start.current.pointer) return;
       start.current = null;
       if (!drag) return;
       dragged.current = true;
@@ -40,13 +49,18 @@ function useRowDrag(root: string, onDrop: (from: string, target: Node | null) =>
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
-    return () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointercancel", cancel);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+    };
   }, [drag, nodes, onDrop, root]);
   return {
     drag,
     /** True right after a drop, so the click that ends a drag does not also open the row. */
     justDragged: () => dragged.current,
-    down: (path: string, e: React.PointerEvent) => { if (e.button === 0) start.current = { path, x: e.clientX, y: e.clientY }; },
+    down: (path: string, e: React.PointerEvent) => { if (e.button === 0) start.current = { path, x: e.clientX, y: e.clientY, pointer: e.pointerId }; },
   };
 }
 
@@ -109,7 +123,7 @@ export function NotebookTree({ notebook, onSettings }: { notebook: Notebook; onS
     const r = renaming;
     setRenaming(null);
     if (!r || !r.value.trim() || r.value.trim() === label(byPath.get(low(r.path))!)) return;
-    movePath(client, notebook.id, r.path, renamed(r.path, r.value)).catch(fail);
+    movePath(client, notebook.id, r.path, renamed(r.path, r.value, byPath.get(low(r.path))?.kind === "dir")).catch(fail);
   };
   const commitSection = () => {
     const n = naming;
@@ -117,11 +131,20 @@ export function NotebookTree({ notebook, onSettings }: { notebook: Notebook; onS
     if (!n?.value.trim()) return;
     newSection(client, notebook.id, n.folder, n.value).then((path) => { if (n.folder) toggle(n.folder, true); toggle(path, true); }, fail);
   };
-  const remove = (node: Node) => setDialog(
-    <Confirm title={node.kind === "dir" ? "Delete this section?" : "Delete this page?"} danger action="Move to trash"
-      message={<p><code>{node.path}</code>{node.kind === "dir" ? " and everything in it" : ""} moves to the notebook's <code>.hivemind/trash</code> folder.</p>}
-      onAnswer={(yes) => { setDialog(null); if (yes) trashPath(client, notebook.id, node.path).catch(fail); }} />,
-  );
+  const remove = (node: Node) => {
+    // Unsaved edits are not in the files that go to the trash: say so, and name the pages (Codex review of 32fd236, D8).
+    const lost = unsavedUnder(notebook.id, node.path);
+    setDialog(
+      <Confirm title={node.kind === "dir" ? "Delete this section?" : "Delete this page?"} danger action={lost.length ? "Delete and lose my edits" : "Move to trash"}
+        message={<>
+          <p><code>{node.path}</code>{node.kind === "dir" ? " and everything in it" : ""} moves to the notebook's <code>.hivemind/trash</code> folder.</p>
+          {lost.length > 0 && (
+            <p className="error">Unsaved edits are lost when {lost.length === 1 ? "this page is" : "these pages are"} deleted: {lost.map((p) => <code key={p}>{p}</code>)}. Save first to keep them in the trash copy.</p>
+          )}
+        </>}
+        onAnswer={(yes) => { setDialog(null); if (yes) trashPath(client, notebook.id, node.path).catch(fail); }} />,
+    );
+  };
 
   return (
     <section className="notebook">

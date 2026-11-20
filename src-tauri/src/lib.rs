@@ -1688,6 +1688,7 @@ pub fn run() {
             }
             let shown = app.handle().clone();
             owner.serve(move || capture::show_main(&shown));
+            files::guard::set_app_dirs(vec![app.path().app_data_dir()?, app.path().app_config_dir()?, app.path().app_local_data_dir()?]);
             let settings_path = app.path().app_config_dir()?.join("settings.json");
             let drafts_dir = app.path().app_data_dir()?.join("drafts");
             let sessions_dir = app.path().app_data_dir()?.join("agent-sessions");

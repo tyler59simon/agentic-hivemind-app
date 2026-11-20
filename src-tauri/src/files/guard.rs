@@ -1,11 +1,24 @@
 //! Places no file command may touch, whatever path led there: the Living Memory store (only Living Memory writes
-//! it) and the Obsidian vaults Living Memory manages (it rewrites their files).
+//! it), the Obsidian vaults Living Memory manages (it rewrites their files), and Hivemind's own data folders (the
+//! notebook registry decides which folders the webview may reach).
 use crate::folders::plain;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+/// Folders checked before deciding a folder holds no managed vault.
+const MAX_SCAN: usize = 200_000;
 
 pub struct Protected {
     store: Option<PathBuf>,
     vaults: Vec<PathBuf>,
+    app: Vec<PathBuf>,
+}
+
+static APP_DIRS: OnceLock<Vec<PathBuf>> = OnceLock::new();
+
+/// Hivemind's own data, config and webview folders, set once at startup (Codex review of 32fd236, P1).
+pub fn set_app_dirs(dirs: Vec<PathBuf>) {
+    let _ = APP_DIRS.set(dirs);
 }
 
 /// A comparable spelling: canonical where the path exists (else its deepest existing ancestor plus the rest),
@@ -29,21 +42,60 @@ fn key(path: &Path) -> PathBuf {
     PathBuf::from(plain(&full).to_lowercase())
 }
 
-/// A folder (or an ancestor) carrying the markers Living Memory writes into a vault it manages.
+/// A folder carrying the markers Living Memory writes into a vault it manages.
+pub fn is_marked_vault(dir: &Path) -> bool {
+    ["vault.json", "copies.json"].iter().any(|m| dir.join(".living-memory").join(m).is_file())
+}
+
+/// A folder (or an ancestor) that is a marked vault.
 fn marked_vault(path: &Path) -> bool {
-    path.ancestors().any(|dir| ["vault.json", "copies.json"].iter().any(|m| dir.join(".living-memory").join(m).is_file()))
+    path.ancestors().any(is_marked_vault)
+}
+
+/// Refuse moving or deleting `dir` while a vault Living Memory manages is anywhere inside it (Codex review of
+/// 32fd236, P3). Links are not followed.
+pub fn check_no_vault_inside(dir: &Path) -> Result<(), String> {
+    let mut stack = vec![dir.to_path_buf()];
+    let mut seen = 0usize;
+    while let Some(next) = stack.pop() {
+        if is_marked_vault(&next) {
+            return Err("This folder holds an Obsidian vault that Living Memory manages, so Hivemind does not move or delete it".into());
+        }
+        let Ok(list) = std::fs::read_dir(&next) else { continue };
+        for entry in list.flatten() {
+            seen += 1;
+            if seen > MAX_SCAN {
+                return Err("This folder is too large for Hivemind to check before moving or deleting it".into());
+            }
+            if entry.file_type().is_ok_and(|t| t.is_dir() && !t.is_symlink()) {
+                stack.push(entry.path());
+            }
+        }
+    }
+    Ok(())
 }
 
 impl Protected {
     /// The protected places for the store at `store` (None when Hivemind does not know it).
     pub fn new(store: Option<&Path>) -> Self {
         let vaults = store.map(crate::notebooks::managed_vaults).unwrap_or_default().iter().map(|v| key(v)).collect();
-        Protected { store: store.map(key), vaults }
+        let app = APP_DIRS.get().map(|dirs| dirs.iter().map(|d| key(d)).collect()).unwrap_or_default();
+        Protected { store: store.map(key), vaults, app }
     }
 
-    /// Refuse a path inside the store or a managed vault.
+    /// Also protect `dir` as one of Hivemind's own folders.
+    #[cfg(test)]
+    pub fn with_app(mut self, dir: &Path) -> Self {
+        self.app.push(key(dir));
+        self
+    }
+
+    /// Refuse a path inside the store, a managed vault or Hivemind's own data.
     pub fn check(&self, path: &Path) -> Result<(), String> {
         let path = key(path);
+        if self.app.iter().any(|app| path.starts_with(app)) {
+            return Err("This is inside Hivemind's own data folder, which notebooks cannot reach".into());
+        }
         if self.store.as_ref().is_some_and(|store| path.starts_with(store)) {
             return Err("This is inside the Living Memory store, which only Living Memory changes".into());
         }
@@ -62,6 +114,9 @@ impl Protected {
         }
         if self.vaults.iter().any(|v| v.starts_with(&root)) {
             return Err("This folder holds an Obsidian vault that Living Memory manages".into());
+        }
+        if self.app.iter().any(|app| app.starts_with(&root)) {
+            return Err("This folder holds Hivemind's own data, so it cannot be a notebook".into());
         }
         Ok(())
     }
@@ -91,6 +146,31 @@ mod tests {
         assert!(protected.check_root(&notes).is_ok());
         assert!(protected.check_root(&base).is_err(), "a folder holding the store");
         assert!(Protected::new(None).check(&store.join("x.md")).is_ok(), "nothing is known without a store");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn hiveminds_own_data_cannot_be_a_notebook_or_reached_from_one() {
+        let base = std::fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("hm-guard-app-{}", uuid::Uuid::new_v4()));
+        let app = base.join("Roaming").join("dev.hivemind.app");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::write(app.join("notebooks.json"), "{}").unwrap();
+        let protected = Protected::new(None).with_app(&app);
+        assert!(protected.check_root(&app).is_err(), "the data folder itself");
+        assert!(protected.check_root(&base.join("Roaming")).unwrap_err().contains("own data"), "a folder holding it");
+        assert!(protected.check(&app.join("notebooks.json")).is_err());
+        assert!(protected.check_root(&base.join("Notes")).is_ok());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_folder_holding_a_marked_vault_cannot_move() {
+        let base = std::env::temp_dir().join(format!("hm-guard-tree-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(base.join("Area/Deep/Vault/.living-memory")).unwrap();
+        std::fs::create_dir_all(base.join("Plain/Sub")).unwrap();
+        std::fs::write(base.join("Area/Deep/Vault/.living-memory/copies.json"), "{}").unwrap();
+        assert!(check_no_vault_inside(&base.join("Area")).is_err());
+        assert!(check_no_vault_inside(&base.join("Plain")).is_ok());
         std::fs::remove_dir_all(&base).unwrap();
     }
 }

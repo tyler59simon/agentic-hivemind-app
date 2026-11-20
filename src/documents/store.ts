@@ -10,13 +10,15 @@ import { initial, isUnsaved, reduce, type DocEvent, type DocState, type Loaded }
 interface DocumentsState {
   docs: Record<string, DocState>;
   refs: Record<string, FileRef>;
+  /** Apply an event to an open document. A document no tab holds any more is left alone, so a read or save that ends
+   *  after its tab closed cannot bring it back (Codex review of 32fd236, S1). */
   dispatch: (key: string, event: DocEvent) => void;
 }
 
 export const useDocuments = create<DocumentsState>()((set) => ({
   docs: {},
   refs: {},
-  dispatch: (key, event) => set((s) => ({ docs: { ...s.docs, [key]: reduce(s.docs[key] ?? initial, event) } })),
+  dispatch: (key, event) => set((s) => (s.docs[key] ? { docs: { ...s.docs, [key]: reduce(s.docs[key], event) } } : s)),
 }));
 
 const toLoaded = (raw: RawLoaded): Loaded => ({
@@ -30,34 +32,77 @@ const toLoaded = (raw: RawLoaded): Loaded => ({
 export const keyOf = (ref: FileRef) => docKey({ kind: "file", file: ref });
 const get = (key: string) => useDocuments.getState().docs[key];
 const dispatch = (key: string, event: DocEvent) => useDocuments.getState().dispatch(key, event);
+/** Limits in UTF-8 bytes, under Rust's 32 MiB for a whole serialized draft. */
 const BASE_LIMIT = 2 * 1024 * 1024;
-const DRAFT_LIMIT = 16 * 1024 * 1024;
+const DRAFT_LIMIT = 12 * 1024 * 1024;
 
-/** Load a page once (later tabs share it). A draft left by an earlier run comes back as unsaved edits. */
-export async function open(ref: FileRef) {
+/** A file read failed because the file is not there (deleted or moved), not for some other reason. */
+export const isMissing = (e: unknown) => /does not exist|not found|os error [23]\b/i.test(String(e));
+
+/** UTF-8 size of `text`, counted without copying it. */
+export function utf8Bytes(text: string) {
+  let n = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c < 0x80) n += 1;
+    else if (c < 0x800) n += 2;
+    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < text.length) { n += 4; i++; }
+    else n += 3;
+  }
+  return n;
+}
+
+// Work in flight per document key: loads (one per document, shared by every tab), saves and draft writes. A move waits
+// for all of them before Rust moves the files and drafts, and documents being moved neither save nor write drafts.
+const loads = new Map<string, Promise<void>>();
+const saves = new Map<string, Promise<void>>();
+const writing = new Map<string, Promise<void>>();
+const attempts = new Map<string, number>();
+const moving = new Set<string>();
+let attemptCount = 0;
+
+/** Load a page once (later tabs share the same load). A draft left by an earlier run comes back as unsaved edits.
+ *  Opening a page whose load failed tries again; its draft is never touched (Codex review of 32fd236, D6). */
+export function open(ref: FileRef): Promise<void> {
   const key = keyOf(ref);
   useDocuments.setState((s) => ({ refs: { ...s.refs, [key]: ref } }));
-  if (get(key) && get(key).status !== "error") return;
+  const doc = get(key);
+  if (doc && doc.status !== "error") return loads.get(key) ?? Promise.resolve();
+  const attempt = ++attemptCount;
+  attempts.set(key, attempt);
+  useDocuments.setState((s) => ({ docs: { ...s.docs, [key]: initial } }));
+  const run = load(key, ref, attempt).finally(() => { if (loads.get(key) === run) loads.delete(key); });
+  loads.set(key, run);
+  return run;
+}
+
+/** Whether `attempt` is still the load of the document at `key` (it was not closed, reopened or moved meanwhile). */
+const current = (key: string, attempt: number) => attempts.get(key) === attempt && !!get(key);
+
+async function load(key: string, ref: FileRef, attempt: number) {
   try {
     const loaded = toLoaded(await readFile(ref.notebook, ref.path));
     const draft = await getFileDraft(await draftKeyOf(key)).catch(() => null);
+    if (!current(key, attempt)) return;
     if (!draft || loaded.readOnly || loaded.binary) { dispatch(key, { type: "loaded", loaded }); return; }
     if (draft.precondition.sha256 === loaded.stamp.sha256) {
       dispatch(key, { type: "loaded", loaded, draft: { text: draft.mine, at: draft.savedAt } });
       return;
     }
     // The file changed after the draft was written: merge the draft into the current file when it can be done cleanly,
-    // otherwise show the draft against the file in the merge dialog.
+    // otherwise show the draft against the file in the merge dialog. A draft without its base (the page was too large
+    // to keep one) never merges by itself: an empty base makes every difference a conflict the user resolves (Codex
+    // review of 32fd236, D4).
     const base = draft.base;
     const merged = base !== undefined ? mergeBody(base, draft.mine, loaded.text) : null;
     if (merged && merged.conflicts === 0) dispatch(key, { type: "loaded", loaded, draft: { text: merged.text, at: draft.savedAt } });
     else {
-      const original: Loaded = { ...loaded, text: base ?? loaded.text, stamp: draft.precondition };
+      const original: Loaded = { ...loaded, text: base ?? "", stamp: draft.precondition };
       dispatch(key, { type: "loaded", loaded: original, draft: { text: draft.mine, at: draft.savedAt } });
       dispatch(key, { type: "stale", theirs: loaded });
     }
   } catch (e) {
-    dispatch(key, { type: "failed", error: String(e) });
+    if (current(key, attempt)) dispatch(key, { type: "failed", error: String(e) });
   }
 }
 
@@ -71,24 +116,57 @@ function scheduleDraft(key: string) {
   timers.set(key, setTimeout(() => { timers.delete(key); void writeDraft(key); }, wait));
 }
 
-async function writeDraft(key: string) {
+/** Write the draft of `key` as the document is now (or delete it when nothing is unsaved). Writes of one document run
+ *  one after another, so the last one written is the newest (Codex review of 32fd236, D7). */
+function writeDraft(key: string): Promise<void> {
   const s = get(key), ref = useDocuments.getState().refs[key];
+  if (moving.has(key)) {
+    // Moving: the draft is written under its new key once the move is done (`retarget` carries the timer over).
+    if (s && isUnsaved(s)) scheduleDraft(key);
+    return writing.get(key) ?? Promise.resolve();
+  }
+  const run = (writing.get(key) ?? Promise.resolve()).then(() => keepDraft(key, s, ref));
+  writing.set(key, run);
+  void run.finally(() => { if (writing.get(key) === run) writing.delete(key); });
+  return run;
+}
+
+async function keepDraft(key: string, s: DocState | undefined, ref: FileRef | undefined) {
   if (!s?.base || !ref) return;
   const draftKey = await draftKeyOf(key);
-  if (!isUnsaved(s)) { await deleteDraft(draftKey).catch(() => {}); return; }
-  if (s.text.length > DRAFT_LIMIT) return;
-  await putDraft({
-    key: draftKey, kind: "file", target: ref, precondition: s.base.stamp, format: s.base.format,
-    base: s.base.text.length <= BASE_LIMIT ? s.base.text : undefined, mine: s.text, savedAt: new Date().toISOString(),
-  }).catch(() => {});
+  if (!isUnsaved(s)) { await deleteDraft(draftKey).catch(() => {}); dispatch(key, { type: "draft", error: null }); return; }
+  // Measured in bytes, and every failure is shown, so the user knows when edits exist only in the window (Codex review
+  // of 32fd236, D9).
+  if (utf8Bytes(s.text) > DRAFT_LIMIT) {
+    dispatch(key, { type: "draft", error: "the page is too large to keep a draft of (over 12 MB)" });
+    return;
+  }
+  try {
+    await putDraft({
+      key: draftKey, kind: "file", target: ref, precondition: s.base.stamp, format: s.base.format,
+      base: utf8Bytes(s.base.text) <= BASE_LIMIT ? s.base.text : undefined, mine: s.text, savedAt: new Date().toISOString(),
+    });
+    dispatch(key, { type: "draft", error: null });
+  } catch (e) {
+    dispatch(key, { type: "draft", error: String(e) });
+  }
 }
 
 /** Write any pending draft now (a tab closing, the app leaving the page). */
-export function flushDraft(key: string) {
-  if (!timers.has(key)) return;
+export function flushDraft(key: string): Promise<void> {
+  if (!timers.has(key)) return writing.get(key) ?? Promise.resolve();
   clearTimeout(timers.get(key));
   timers.delete(key);
-  void writeDraft(key);
+  return writeDraft(key);
+}
+
+/** Before the app quits: write every pending draft and wait for writes in flight. Returns the pages whose unsaved
+ *  edits could not be kept, with the reason (Codex review of 32fd236, D5). */
+export async function flushAllDrafts(): Promise<string[]> {
+  for (const key of [...timers.keys()]) void flushDraft(key);
+  await Promise.all([...writing.values()]);
+  const { docs, refs } = useDocuments.getState();
+  return Object.entries(docs).filter(([, d]) => isUnsaved(d) && d.draftError).map(([k, d]) => `${refs[k]?.path ?? k}: ${d.draftError}`);
 }
 
 export function edit(key: string, text: string) {
@@ -99,48 +177,62 @@ export function edit(key: string, text: string) {
 /** Save the document. Returns the state after the attempt. */
 export async function save(key: string) {
   const s = get(key), ref = useDocuments.getState().refs[key];
-  if (!s?.base || !ref || s.status !== "dirty") return get(key);
+  if (!s?.base || !ref || s.status !== "dirty" || moving.has(key)) return get(key);
   dispatch(key, { type: "saveStarted" });
   const text = get(key).saving!;
-  try {
-    const out = await saveFile(ref.notebook, ref.path, text, s.base.stamp, s.base.format);
-    if (out.status === "saved") {
-      dispatch(key, { type: "saved", stamp: { sha256: out.sha256, size: out.size, mtimeMs: out.mtimeMs } });
-      if (!isUnsaved(get(key))) { clearTimeout(timers.get(key)); timers.delete(key); await deleteDraft(await draftKeyOf(key)).catch(() => {}); }
-    } else if (out.status === "stale") {
-      dispatch(key, { type: "stale", theirs: toLoaded(await readFile(ref.notebook, ref.path)) });
-    } else {
-      dispatch(key, { type: "gone" });
+  const run = (async () => {
+    try {
+      const out = await saveFile(ref.notebook, ref.path, text, s.base!.stamp, s.base!.format);
+      if (out.status === "saved") {
+        dispatch(key, { type: "saved", stamp: { sha256: out.sha256, size: out.size, mtimeMs: out.mtimeMs } });
+        if (!isUnsaved(get(key))) { clearTimeout(timers.get(key)); timers.delete(key); await writeDraft(key); }
+      } else if (out.status === "stale") {
+        dispatch(key, { type: "stale", theirs: toLoaded(await readFile(ref.notebook, ref.path)) });
+      } else {
+        dispatch(key, { type: "gone" });
+      }
+    } catch (e) {
+      dispatch(key, { type: "failed", error: String(e) });
     }
-  } catch (e) {
-    dispatch(key, { type: "failed", error: String(e) });
-  }
+  })();
+  saves.set(key, run);
+  await run;
+  if (saves.get(key) === run) saves.delete(key);
   return get(key);
 }
 
-/** The user resolved a merge: the result becomes the unsaved text, based on the newer version, and is saved. */
-export async function resolveMerge(key: string, text: string) {
-  const theirs = get(key)?.theirs;
-  if (!theirs) return;
+/** The user resolved a merge against `theirs`, the version the dialog showed. The result becomes the unsaved text based
+ *  on that version and is saved against it, so a newer outside save made while the dialog was open is never
+ *  overwritten: the save finds it and asks for another merge (Codex review of 32fd236, D2). */
+export async function resolveMerge(key: string, text: string, theirs: Loaded) {
+  if (!get(key)) return;
   dispatch(key, { type: "merged", text, theirs });
   scheduleDraft(key);
   await save(key);
 }
 
-/** Drop unsaved edits and show what is on disk. */
-export async function reload(key: string) {
+/** Drop unsaved edits and show what is on disk. Edits typed while the file is read cancel the reload (Codex review of
+ *  32fd236, S5). Returns whether it happened. */
+export async function reload(key: string): Promise<boolean> {
   const ref = useDocuments.getState().refs[key];
-  if (!ref) return;
+  const before = get(key);
+  if (!ref || !before) return false;
   try {
-    dispatch(key, { type: "reloaded", theirs: toLoaded(await readFile(ref.notebook, ref.path)) });
-    await deleteDraft(await draftKeyOf(key)).catch(() => {});
+    const theirs = toLoaded(await readFile(ref.notebook, ref.path));
+    if (get(key)?.text !== before.text) return false;
+    clearTimeout(timers.get(key)); timers.delete(key);
+    dispatch(key, { type: "reloaded", theirs });
+    await writeDraft(key);
+    return true;
   } catch (e) {
-    dispatch(key, { type: "gone" });
+    if (isMissing(e)) dispatch(key, { type: "gone" });
     dispatch(key, { type: "failed", error: String(e) });
+    return false;
   }
 }
 
-/** Another program changed a file: an open document follows it or warns. */
+/** Another program changed a file: an open document follows it or warns. A read that fails for another reason than
+ *  the file being gone (a lock, a scanner) changes nothing (Codex review of 32fd236, S3). */
 export async function refresh(notebook: string, paths: string[]) {
   const { refs } = useDocuments.getState();
   const wanted = new Set(paths.map((p) => keyOf({ notebook, path: p })));
@@ -148,10 +240,22 @@ export async function refresh(notebook: string, paths: string[]) {
     if (!wanted.has(key) || !get(key) || get(key).status === "loading") continue;
     try {
       dispatch(key, { type: "outsideChange", theirs: toLoaded(await readFile(ref.notebook, ref.path)) });
-    } catch {
-      if (get(key)?.base) dispatch(key, { type: "gone" });
+    } catch (e) {
+      if (get(key)?.base && isMissing(e)) dispatch(key, { type: "gone" });
     }
   }
+}
+
+/** Before a page or folder moves: write pending drafts, let loads, saves and draft writes finish, and hold new ones
+ *  until the move is done (Codex review of 32fd236, S2 and D7). Returns the function that ends the hold. */
+export async function beforeMove(notebook: string, from: string): Promise<() => void> {
+  const keys = Object.entries(useDocuments.getState().refs)
+    .filter(([, ref]) => ref.notebook === notebook && movedPath(ref.path, from, from) !== null)
+    .map(([key]) => key);
+  for (const key of keys) void flushDraft(key);
+  keys.forEach((key) => moving.add(key));
+  await Promise.all(keys.flatMap((key) => [loads.get(key), saves.get(key), writing.get(key)]));
+  return () => keys.forEach((key) => moving.delete(key));
 }
 
 /** A page or folder moved: its documents follow under their new keys (Rust has already moved the drafts). */
@@ -167,6 +271,7 @@ export function retarget(notebook: string, from: string, to: string) {
       delete docs[key]; delete refs[key];
       if (doc) docs[next] = doc;
       refs[next] = { notebook, path };
+      attempts.delete(key);
       const timer = timers.get(key);
       if (timer) { clearTimeout(timer); timers.delete(key); scheduleDraft(next); }
     }
@@ -176,7 +281,8 @@ export function retarget(notebook: string, from: string, to: string) {
 
 /** Forget a document no tab shows any more; a dirty one keeps its draft for next time. */
 export function release(key: string) {
-  flushDraft(key);
+  void flushDraft(key);
+  attempts.delete(key);
   useDocuments.setState((s) => {
     const docs = { ...s.docs }, refs = { ...s.refs };
     delete docs[key]; delete refs[key];
@@ -188,10 +294,19 @@ export function release(key: string) {
 export function discard(key: string) {
   clearTimeout(timers.get(key));
   timers.delete(key);
+  attempts.delete(key);
   useDocuments.setState((s) => {
     const docs = { ...s.docs }, refs = { ...s.refs };
     delete docs[key]; delete refs[key];
     return { docs, refs };
   });
-  void draftKeyOf(key).then(deleteDraft).catch(() => {});
+  void (writing.get(key) ?? Promise.resolve()).then(() => draftKeyOf(key)).then(deleteDraft).catch(() => {});
+}
+
+/** The pages under `path` (a page, or a section and everything in it) that hold unsaved edits. */
+export function unsavedUnder(notebook: string, path: string): string[] {
+  const { docs, refs } = useDocuments.getState();
+  return Object.entries(refs)
+    .filter(([key, ref]) => ref.notebook === notebook && movedPath(ref.path, path, path) !== null && isUnsaved(docs[key]))
+    .map(([, ref]) => ref.path);
 }

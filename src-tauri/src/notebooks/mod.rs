@@ -3,7 +3,7 @@
 pub mod sidecar;
 
 use crate::files::atomic;
-use crate::files::guard::Protected;
+use crate::files::guard::{self, Protected};
 use crate::folders::plain;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -113,6 +113,12 @@ pub fn walk(root: &Path) -> Tree {
     while let Some((dir, rel, depth)) = queue.pop_front() {
         let Ok(read) = std::fs::read_dir(&dir) else { continue };
         let mut children: Vec<_> = read.flatten().collect();
+        // A page an interrupted save left aside comes back before the folder is listed (Codex review of 32fd236, W2).
+        let restored = children.iter().filter_map(|c| atomic::aside_target(&dir, &c.file_name().to_string_lossy())).filter(|page| crate::files::recover(page)).count();
+        if restored > 0 {
+            let Ok(again) = std::fs::read_dir(&dir) else { continue };
+            children = again.flatten().collect();
+        }
         children.sort_by_key(|e| e.file_name().to_string_lossy().to_lowercase());
         for child in children {
             let name = child.file_name().to_string_lossy().into_owned();
@@ -121,6 +127,10 @@ pub fn walk(root: &Path) -> Tree {
             }
             let Ok(meta) = std::fs::symlink_metadata(child.path()) else { continue };
             if meta.file_type().is_symlink() {
+                continue;
+            }
+            // A vault Living Memory manages inside the notebook is not shown (Codex review of 32fd236, P3).
+            if meta.is_dir() && guard::is_marked_vault(&child.path()) {
                 continue;
             }
             if entries.len() >= MAX_ENTRIES {
@@ -144,6 +154,11 @@ pub fn walk(root: &Path) -> Tree {
     Tree { entries, truncated }
 }
 
+/// `nb-` and eight lowercase hex digits, as `Registry::add` makes them.
+fn valid_id(id: &str) -> bool {
+    id.len() == 11 && id.starts_with("nb-") && id[3..].bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 impl Registry {
     pub fn new(path: PathBuf) -> Self {
         Registry { path, lock: Mutex::new(()) }
@@ -161,8 +176,10 @@ impl Registry {
         atomic::replace(&self.path, &text)
     }
 
+    /// The registered notebooks. An entry whose id is not one Hivemind makes is ignored, since ids name files in app
+    /// data (Codex review of 32fd236, P1).
     pub fn list(&self) -> Vec<Notebook> {
-        self.load().notebooks
+        self.load().notebooks.into_iter().filter(|nb| valid_id(&nb.id)).collect()
     }
 
     pub fn get(&self, id: &str) -> Result<Notebook, String> {
@@ -286,5 +303,29 @@ mod tests {
         );
         assert!(!tree.truncated);
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_tree_leaves_out_marked_vaults_and_brings_back_interrupted_saves() {
+        let root = scratch("tree2");
+        std::fs::create_dir_all(root.join("Area/Vault/.living-memory")).unwrap();
+        std::fs::write(root.join("Area/Vault/.living-memory/vault.json"), "{}").unwrap();
+        std::fs::write(root.join("Area/Vault/Managed.md"), "x").unwrap();
+        std::fs::write(atomic::beside(&root.join("Area/Lost.md"), "old-").unwrap(), "previous").unwrap();
+        let shown: Vec<String> = walk(&root).entries.into_iter().map(|e| e.path).collect();
+        assert_eq!(shown, ["Area", "Area/Lost.md"]);
+        assert_eq!(std::fs::read_to_string(root.join("Area/Lost.md")).unwrap(), "previous");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn ids_hivemind_did_not_make_are_ignored() {
+        let base = scratch("ids");
+        let path = base.join("notebooks.json");
+        let nb = |id: &str| serde_json::json!({ "id": id, "path": "C:\\x", "title": "x", "added": "t" });
+        std::fs::write(&path, serde_json::json!({ "version": 1, "notebooks": [nb("nb-0123abcd"), nb("..\\..\\evil"), nb("nb-XYZ")] }).to_string()).unwrap();
+        let ids: Vec<String> = Registry::new(path).list().into_iter().map(|n| n.id).collect();
+        assert_eq!(ids, ["nb-0123abcd"]);
+        std::fs::remove_dir_all(&base).unwrap();
     }
 }

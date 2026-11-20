@@ -2,7 +2,7 @@ import { language } from "@codemirror/language";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
-import { editorExtensions, type CodeEditorProps } from "./CodeEditor";
+import { editorExtensions, followSpec, isOwnEdit, type CodeEditorProps } from "./CodeEditor";
 
 const props = (over: Partial<CodeEditorProps> = {}): CodeEditorProps => ({
   doc: "# Title", docVersion: 0, language: "markdown", live: false, readOnly: false, lineNumbers: false,
@@ -27,5 +27,24 @@ describe("editor configuration", () => {
     expect(s.facet(language)).toBeNull();
     expect(wraps(s)).toBe(false);
     expect(s.readOnly).toBe(true);
+  });
+});
+
+describe("two panes of one page", () => {
+  it("the second pane takes the first pane's edits without reporting them back or moving its own cursor", () => {
+    let paneB = EditorState.create({ doc: "alpha\nbeta\ngamma\n", selection: { anchor: 14 } });
+    // Pane A typed " one" after "alpha" (the store now holds its text).
+    const spec = followSpec(paneB.doc.toString(), "alpha one\nbeta\ngamma\n")!;
+    expect(spec.changes).toEqual({ from: 5, to: 5, insert: " one" });
+    const tr = paneB.update(spec);
+    expect(isOwnEdit(tr)).toBe(false);
+    paneB = tr.state;
+    expect(paneB.doc.toString()).toBe("alpha one\nbeta\ngamma\n");
+    expect(paneB.selection.main.head).toBe(18);
+    // Pane B's own typing is reported, so it reaches the store with pane A's edit included.
+    const typed = paneB.update({ changes: { from: 18, insert: "!" } });
+    expect(isOwnEdit(typed)).toBe(true);
+    expect(typed.state.doc.toString()).toBe("alpha one\nbeta\ngam!ma\n");
+    expect(followSpec("same", "same")).toBeNull();
   });
 });

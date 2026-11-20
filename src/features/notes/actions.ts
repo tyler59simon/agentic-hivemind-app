@@ -2,9 +2,10 @@
 // a Rust command; open tabs, documents and drafts follow renames, and tabs of a deleted page close.
 import type { QueryClient } from "@tanstack/react-query";
 import { movedPath, type FileRef } from "../../documents/keys";
-import { discard, keyOf, useDocuments } from "../../documents/store";
+import { beforeMove, discard, keyOf, useDocuments } from "../../documents/store";
 import { retargetAll } from "../../documents/sync";
 import { classify } from "../../lib/errors";
+import { forgetMoved } from "../../lib/drafts";
 import { createFile, deleteFile, fileName, folderOf, isMarkdown, makeFolder, notebooksQuery, pageTitle, renameFile } from "../../lib/notebooks";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
@@ -53,17 +54,26 @@ export async function newSection(client: QueryClient, notebook: string, folder: 
   return path;
 }
 
-/** Rename or move a page or section. A page keeps its extension when the new name has none. */
+/** Rename or move a page or section. Drafts, saves and loads of its open pages settle first and wait until the move is
+ *  done, so nothing lands under the old name (Codex review of 32fd236, S2 and D7). */
 export async function movePath(client: QueryClient, notebook: string, from: string, to: string) {
   if (from === to) return;
-  await renameFile(notebook, from, to);
-  retargetAll(notebook, from, to);
+  const done = await beforeMove(notebook, from);
+  try {
+    await renameFile(notebook, from, to);
+    forgetMoved(notebook, from);
+    retargetAll(notebook, from, to);
+  } finally {
+    done();
+  }
   client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
 }
 
-/** The path after renaming `path` to `name` in place. */
-export function renamed(path: string, name: string) {
+/** The path after renaming `path` to `name` in place. A page keeps its extension when the new name has none; a section
+ *  takes the name as typed, dots included (Codex review of 32fd236, U2). */
+export function renamed(path: string, name: string, section = false) {
   const clean = name.trim();
+  if (section) return join(folderOf(path), clean);
   const ext = fileName(path).match(/\.[^.]+$/)?.[0] ?? "";
   const withExt = ext && !/\.[^.]+$/.test(clean) ? `${clean}${ext}` : clean;
   return join(folderOf(path), withExt);

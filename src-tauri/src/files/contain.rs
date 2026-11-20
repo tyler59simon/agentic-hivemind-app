@@ -76,6 +76,24 @@ pub fn resolve_inside(root: &Path, rel: &str, for_write: bool) -> Result<PathBuf
     Ok(full)
 }
 
+/// `full` (a path below `root`) as the file system resolves it, relative to the canonical root: the canonical form of
+/// its deepest existing part plus the rest. A link inside the notebook shows here as the place it leads to. None when
+/// it does not lead below the root.
+pub fn resolved_rel(root: &Path, full: &Path) -> Option<String> {
+    let real_root = std::fs::canonicalize(root).ok()?;
+    let mut existing = full.to_path_buf();
+    let mut rest = Vec::new();
+    while std::fs::canonicalize(&existing).is_err() {
+        rest.push(existing.file_name()?.to_os_string());
+        existing = existing.parent()?.to_path_buf();
+    }
+    let mut real = std::fs::canonicalize(&existing).ok()?;
+    for part in rest.into_iter().rev() {
+        real.push(part);
+    }
+    relative(&real_root, &real)
+}
+
 /// The path of `full` relative to `root`, with forward slashes; None when it is not below `root`.
 pub fn relative(root: &Path, full: &Path) -> Option<String> {
     let rest = full.strip_prefix(root).ok()?;

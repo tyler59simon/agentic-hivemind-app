@@ -112,3 +112,12 @@ Landed on 2026-11-20 (commit history of `docs/notes-studio/phase-1a-workspace.md
 - `NoteEditor.tsx` already wrote its draft on unmount; only `NewNote.tsx` changed (it now does too, unless the note was saved).
 - Not done here: an Attachments heading in the tree (the attachments folder shows as an ordinary section until NS-1B shows images), and drag to reorder within a folder (drag moves between folders; an order in the sidecar is honoured).
 
+
+**Code review.** Codex reviewed `32fd236` and reported 28 findings; Claude added two. All 30 are fixed in the next commit, with the verdicts, fixes and regression tests in `docs/notes-studio/reviews/ns1a-codex-review.md`. What changed in the contract:
+- A save refuses to replace bytes that are not editable text, keeps the file's NTFS named streams, and a page an interrupted save left aside is put back when it is read, saved or listed.
+- Renames and moves never replace a destination; trash holds a checked file from the hash to the move.
+- Hivemind's own data folders are protected places, every file command checks hidden names after links resolve, and marked vaults inside a notebook are hidden and cannot be moved.
+- The document store shares one load per document, saves a merge against the version the dialog showed, writes drafts in order, and holds saves and drafts while a move runs. Draft sizes are UTF-8 bytes, failed draft writes show a banner, and both quit paths write pending drafts first.
+- File tabs pass `follow` to `CodeEditor`, so two panes of one page stay in step.
+
+Checks after the fixes: `npm test` (81 files, 590 tests), `npx tsc --noEmit`, `npm run build`, `cargo test` (527), `cargo clippy --all-targets` (the same older warning). The real app, over CDP: two panes typing into one page and saving both lines; Ctrl+S in Reading mode; renaming the section `Release.2026` to `Archive`; the delete dialog naming unsaved edits; a click on `run.cmd` refused; a Memory note opened with Ctrl+O on Notes with no notebooks.

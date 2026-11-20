@@ -24,6 +24,7 @@ import { openReview, openSession, useApp } from "./store";
 import { toast, Toasts } from "./ui/toast";
 import { useWorkspace } from "./workspace/store";
 import { onFilesChanged, startDocumentSync } from "./documents/sync";
+import { flushAllDrafts } from "./documents/store";
 import { newPageHere } from "./features/notes/actions";
 import type { FilesChanged } from "./lib/notebooks";
 
@@ -58,10 +59,28 @@ async function running(): Promise<string[]> {
   return runningSummary(lists?.[0] ?? [], lists?.[1] ?? [], useWikiBuild.getState().running);
 }
 
+/** Before any quit: write every pending notebook page draft and wait for it. Edits that cannot be kept are named, and
+ *  the user decides (Codex review of 32fd236, D5). */
+function useKeepDrafts() {
+  const [lost, setLost] = useState<{ lines: string[]; quit: () => void } | null>(null);
+  const run = useCallback(async (quit: () => void) => {
+    const failed = await flushAllDrafts();
+    if (failed.length) setLost({ lines: failed, quit });
+    else quit();
+  }, []);
+  const dialog = lost && (
+    <Confirm title="Some unsaved edits cannot be kept" danger action="Quit anyway"
+      message={<><p>These pages have edits that are not saved and could not be kept as drafts:</p><ul>{lost.lines.map((l) => <li key={l}>{l}</li>)}</ul><p>Save them first to keep them.</p></>}
+      onAnswer={(yes) => { setLost(null); if (yes) lost.quit(); }} />
+  );
+  return [run, dialog] as const;
+}
+
 /** Closing the window hides it to the tray while anything runs, or when that is on (the quick-capture hotkey keeps working);
  *  otherwise, with unsaved edits, it asks first (the drafts survive either way). */
 function useCloseGuard() {
   const [asking, setAsking] = useState(false);
+  const [keepDrafts, draftDialog] = useKeepDrafts();
   useEffect(() => {
     const win = getCurrentWindow();
     const stop = win.onCloseRequested(async (e) => {
@@ -78,26 +97,38 @@ function useCloseGuard() {
     });
     return () => { stop.then((unlisten) => unlisten()); };
   }, []);
-  return asking && (
-    <Confirm title="Quit with unsaved changes?" danger action="Quit"
-      message="Some tabs have edits that are not saved to Living Memory. They are kept as drafts and come back when you reopen those notes."
-      onAnswer={(yes) => { setAsking(false); if (yes) getCurrentWindow().destroy(); }} />
+  return (
+    <>
+      {asking && (
+        <Confirm title="Quit with unsaved changes?" danger action="Quit"
+          message="Some tabs have edits that are not saved. They are kept as drafts and come back when you reopen those notes and pages."
+          onAnswer={(yes) => { setAsking(false); if (yes) void keepDrafts(() => { void getCurrentWindow().destroy(); }); }} />
+      )}
+      {draftDialog}
+    </>
   );
 }
 
 /** Tray Quit: the backend shows the window and asks; nothing running quits at once, otherwise the dialog names what stops. */
 function useQuitRequest() {
   const [lines, setLines] = useState<string[] | null>(null);
+  const [keepDrafts, draftDialog] = useKeepDrafts();
+  const quit = useCallback(() => keepDrafts(() => { appQuit().catch((e) => toast(String(e), "error")); }), [keepDrafts]);
   useEffect(() => {
     const stop = listen("quit-requested", async () => {
       quitAck().catch(() => undefined);
       const now = await running();
-      if (now.length === 0) appQuit().catch((e) => toast(String(e), "error"));
+      if (now.length === 0) void quit();
       else setLines(now);
     });
     return () => { stop.then((unlisten) => unlisten()); };
-  }, []);
-  return lines && <QuitDialog lines={lines} onKeep={() => setLines(null)} onQuit={() => appQuit().catch((e) => toast(String(e), "error"))} />;
+  }, [quit]);
+  return (
+    <>
+      {lines && <QuitDialog lines={lines} onKeep={() => setLines(null)} onQuit={() => { setLines(null); void quit(); }} />}
+      {draftDialog}
+    </>
+  );
 }
 
 /** Refresh lists and open notes when the store's note files change (agents write while you read).

@@ -151,9 +151,24 @@ pub fn encode(text: &str, format: &FileFormat) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+/// Put back the previous version of `path` when a save stopped between its two renames and left the page missing
+/// (Codex review of 32fd236, W2). The user's newer text is still in its draft. True when something was restored.
+pub fn recover(path: &Path) -> bool {
+    let lock = lock_for(path);
+    let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+    match atomic::orphaned_aside(path) {
+        Some(aside) => atomic::move_no_replace(&aside, path).is_ok(),
+        None => false,
+    }
+}
+
 /// Read a file for the editor.
 pub fn read(path: &Path) -> Result<Loaded, String> {
-    let meta = std::fs::metadata(path).map_err(|e| format!("Could not open {}: {e}", path.display()))?;
+    let meta = match std::fs::metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && recover(path) => std::fs::metadata(path),
+        other => other,
+    };
+    let meta = meta.map_err(|e| format!("Could not open {}: {e}", path.display()))?;
     if meta.is_dir() {
         return Err(format!("{} is a folder", path.display()));
     }
@@ -195,13 +210,29 @@ fn remember_written(path: &Path, sha: &str) {
     }
 }
 
-/// True when `path` now holds exactly what Hivemind last wrote there.
+/// True when `path` now holds exactly what Hivemind last wrote there. Once the file is seen holding anything else,
+/// the write is forgotten, so a later outside restore of the same bytes is not mistaken for an echo (Codex review of
+/// 32fd236, S4).
 pub fn is_own_write(path: &Path) -> bool {
     let key = path.to_string_lossy().to_lowercase();
     let Some(expected) = written().lock().unwrap_or_else(|e| e.into_inner()).iter().rev().find(|(p, _)| *p == key).map(|(_, s)| s.clone()) else {
         return false;
     };
-    std::fs::read(path).map(|bytes| sha256(&bytes) == expected).unwrap_or(false)
+    let own = std::fs::read(path).map(|bytes| sha256(&bytes) == expected).unwrap_or(false);
+    if !own {
+        written().lock().unwrap_or_else(|e| e.into_inner()).retain(|(p, _)| *p != key);
+    }
+    own
+}
+
+/// Why bytes on disk must not be replaced by editor text: they are not text Hivemind can edit, so the text the user
+/// merged against was not their real content (Codex review of 32fd236, D3).
+fn not_editable(bytes: &[u8]) -> Option<String> {
+    let (_, _, read_only, binary) = decode(bytes);
+    if binary {
+        return Some("The file on disk is no longer a text file. Your edits are kept as a draft".into());
+    }
+    read_only.map(|why| format!("The file on disk changed to something Hivemind cannot save over ({why}). Your edits are kept as a draft"))
 }
 
 /// Save editor text over a file that still holds the bytes the editor loaded.
@@ -210,7 +241,16 @@ pub fn save(path: &Path, text: &str, pre: &Stamp, format: &FileFormat) -> Result
     let lock = lock_for(path);
     let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
     // Held from the check to the replace: no other program can write, rename or delete it in between.
-    let mut held = match atomic::hold(path) {
+    let held = match atomic::hold(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && atomic::orphaned_aside(path).is_some() => {
+            if let Some(aside) = atomic::orphaned_aside(path) {
+                let _ = atomic::move_no_replace(&aside, path);
+            }
+            atomic::hold(path)
+        }
+        other => other,
+    };
+    let mut held = match held {
         Ok(held) => held,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(SaveOutcome::Gone),
         Err(e) if atomic::in_use(&e) => return Err(format!("{} is in use by another program; try again", path.display())),
@@ -221,6 +261,9 @@ pub fn save(path: &Path, text: &str, pre: &Stamp, format: &FileFormat) -> Result
     let sha = sha256(&current);
     if sha != pre.sha256 {
         return Ok(SaveOutcome::Stale { sha256: sha });
+    }
+    if let Some(why) = not_editable(&current) {
+        return Err(why);
     }
     if held.file.metadata().map(|m| m.permissions().readonly()).unwrap_or(false) {
         return Err(format!("{} is read-only on disk", path.display()));
@@ -257,16 +300,24 @@ pub fn rename(from: &Path, to: &Path) -> Result<(), String> {
     if std::fs::symlink_metadata(from).is_err() {
         return Err(format!("{} no longer exists", from.display()));
     }
+    let taken = |e: std::io::Error| if atomic::exists_error(&e) { format!("{} already exists", to.display()) } else { format!("Could not move {}: {e}", from.display()) };
     let same_but_case = from.to_string_lossy().to_lowercase() == to.to_string_lossy().to_lowercase();
     if same_but_case {
         if from == to {
             return Ok(());
         }
-        let step = from.with_file_name(format!(".{}.hm-rename-{}", from.file_name().unwrap_or_default().to_string_lossy(), uuid::Uuid::new_v4().simple()));
-        std::fs::rename(from, &step).map_err(|e| format!("Could not rename {}: {e}", from.display()))?;
-        return std::fs::rename(&step, to).map_err(|e| {
-            let _ = std::fs::rename(&step, from);
-            format!("Could not rename {}: {e}", from.display())
+        // In a case-sensitive folder the new spelling can be a different file; it is never replaced (Codex review of
+        // 32fd236, W1).
+        let name = to.file_name().unwrap_or_default();
+        let entries = to.parent().and_then(|dir| std::fs::read_dir(dir).ok());
+        if entries.is_some_and(|mut list| list.any(|e| e.is_ok_and(|e| e.file_name() == name))) {
+            return Err(format!("{} already exists", to.display()));
+        }
+        let step = atomic::beside(from, "rename-")?;
+        atomic::move_no_replace(from, &step).map_err(|e| format!("Could not rename {}: {e}", from.display()))?;
+        return atomic::move_no_replace(&step, to).map_err(|e| {
+            let _ = atomic::move_no_replace(&step, from);
+            taken(e)
         });
     }
     if std::fs::symlink_metadata(to).is_ok() {
@@ -275,12 +326,14 @@ pub fn rename(from: &Path, to: &Path) -> Result<(), String> {
     if let Some(parent) = to.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Could not create {}: {e}", parent.display()))?;
     }
-    std::fs::rename(from, to).map_err(|e| format!("Could not move {}: {e}", from.display()))
+    // Never replaces: a file that appeared at `to` since the check above stays (Codex review of 32fd236, W1).
+    atomic::move_no_replace(from, to).map_err(taken)
 }
 
 /// Move `rel` (a file or folder of the notebook at `root`) to `.hivemind/trash/<stamp>/<rel>`; returns the trash path.
-pub fn trash(root: &Path, rel: &str, now: &str) -> Result<PathBuf, String> {
-    let from = contain::resolve_inside(root, rel, false)?;
+/// With `pre`, the file is held from the hash check to the move, so only those bytes go (Codex review of 32fd236, W5).
+pub fn trash(root: &Path, rel: &str, now: &str, pre: Option<&Stamp>) -> Result<PathBuf, String> {
+    let from = contain::resolve_inside(root, rel, true)?;
     // Resolved as a write, so a `.hivemind` link cannot carry the file out of the notebook.
     let to = contain::resolve_inside(root, &format!(".hivemind/trash/{now}/{rel}"), true)?;
     let mut target = to.clone();
@@ -289,7 +342,26 @@ pub fn trash(root: &Path, rel: &str, now: &str) -> Result<PathBuf, String> {
         n += 1;
         target = to.with_file_name(format!("{} ({n})", to.file_name().unwrap_or_default().to_string_lossy()));
     }
-    rename(&from, &target)?;
+    let Some(pre) = pre else {
+        rename(&from, &target)?;
+        return Ok(target);
+    };
+    let lock = lock_for(&from);
+    let _locked = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let mut held = match atomic::hold(&from) {
+        Ok(held) => held,
+        Err(e) if atomic::in_use(&e) => return Err(format!("{} is in use by another program; try again", from.display())),
+        Err(e) => return Err(format!("Could not read {}: {e}", from.display())),
+    };
+    let mut now_bytes = Vec::new();
+    std::io::Read::read_to_end(&mut held.file, &mut now_bytes).map_err(|e| format!("Could not read {}: {e}", from.display()))?;
+    if sha256(&now_bytes) != pre.sha256 {
+        return Err(format!("\"{rel}\" changed on disk since it was opened; reopen it before deleting"));
+    }
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Could not create {}: {e}", parent.display()))?;
+    }
+    held.move_to(&target).map_err(|e| format!("Could not move {} to the trash: {e}", from.display()))?;
     Ok(target)
 }
 
@@ -424,12 +496,82 @@ mod tests {
         let dir = scratch();
         std::fs::create_dir_all(dir.join("Projects")).unwrap();
         std::fs::write(dir.join("Projects/Old.md"), "o").unwrap();
-        let moved = trash(&dir, "Projects/Old.md", "20261120-120000").unwrap();
+        let moved = trash(&dir, "Projects/Old.md", "20261120-120000", None).unwrap();
         assert_eq!(moved, dir.join(".hivemind/trash/20261120-120000/Projects/Old.md"));
         assert!(moved.is_file() && !dir.join("Projects/Old.md").exists());
         std::fs::write(dir.join("Projects/Old.md"), "again").unwrap();
-        let second = trash(&dir, "Projects/Old.md", "20261120-120000").unwrap();
+        let second = trash(&dir, "Projects/Old.md", "20261120-120000", None).unwrap();
         assert_eq!(second.file_name().unwrap(), "Old.md (2)");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn trash_with_a_stamp_moves_only_those_bytes() {
+        let dir = scratch();
+        std::fs::write(dir.join("Page.md"), "seen").unwrap();
+        let seen = read(&dir.join("Page.md")).unwrap().stamp;
+        std::fs::write(dir.join("Page.md"), "newer").unwrap();
+        assert!(trash(&dir, "Page.md", "t1", Some(&seen)).unwrap_err().contains("changed on disk"));
+        assert_eq!(std::fs::read_to_string(dir.join("Page.md")).unwrap(), "newer");
+        let now = read(&dir.join("Page.md")).unwrap().stamp;
+        let moved = trash(&dir, "Page.md", "t2", Some(&now)).unwrap();
+        assert_eq!(std::fs::read_to_string(moved).unwrap(), "newer");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_outside_restore_of_hiveminds_last_bytes_is_not_an_echo() {
+        let dir = scratch();
+        let page = dir.join("Restore.md");
+        create(&page, "A").unwrap();
+        assert!(is_own_write(&page), "the echo of Hivemind's own write");
+        std::fs::write(&page, "B").unwrap();
+        assert!(!is_own_write(&page));
+        std::fs::write(&page, "A").unwrap();
+        assert!(!is_own_write(&page), "A again, written by someone else");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_save_never_replaces_a_file_that_became_binary_or_undecodable() {
+        let dir = scratch();
+        let page = dir.join("Turned.md");
+        let format = FileFormat { encoding: "UTF-8".into(), bom: false, eol: Eol::Lf };
+        for bytes in [&b"PK\x03\x04\x00\x00"[..], &b"caf\xe9\n"[..]] {
+            std::fs::write(&page, bytes).unwrap();
+            // The stamp of the bytes now on disk, as a merge against them would carry.
+            let stamp = Stamp { sha256: sha256(bytes), size: bytes.len() as u64, mtime_ms: 0 };
+            assert!(save(&page, "merged text\n", &stamp, &format).unwrap_err().contains("draft"));
+            assert_eq!(std::fs::read(&page).unwrap(), bytes);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_page_left_aside_by_an_interrupted_save_comes_back() {
+        let dir = scratch();
+        let page = dir.join("Crash.md");
+        std::fs::write(atomic::beside(&page, "old-").unwrap(), "previous\n").unwrap();
+        std::fs::write(atomic::beside(&page, "").unwrap(), "unfinished\n").unwrap();
+        let loaded = read(&page).unwrap();
+        assert_eq!(loaded.text, "previous\n");
+        assert_eq!(std::fs::read_to_string(&page).unwrap(), "previous\n");
+        std::fs::remove_file(&page).unwrap();
+        std::fs::write(atomic::beside(&page, "old-").unwrap(), "previous\n").unwrap();
+        assert!(matches!(save(&page, "next\n", &loaded.stamp, &loaded.format).unwrap(), SaveOutcome::Saved(_)));
+        assert_eq!(std::fs::read_to_string(&page).unwrap(), "next\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_case_only_rename_never_takes_a_different_file() {
+        let dir = scratch();
+        std::fs::write(dir.join("note.md"), "n").unwrap();
+        // A folder whose entries keep their case apart is rare on Windows; the listing check covers it, and here the
+        // same entry is found in a case-insensitive folder, so the rename goes ahead.
+        rename(&dir.join("note.md"), &dir.join("NOTE.md")).unwrap();
+        let names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, ["NOTE.md"]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

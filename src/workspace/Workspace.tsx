@@ -3,7 +3,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NewNote } from "../features/editor/NewNote";
 import { NoteTab } from "../features/editor/NoteTab";
-import { FileTab } from "../features/notes/FileTab";
+import { FileTab, saveFileTab } from "../features/notes/FileTab";
+import { keyOf } from "../documents/store";
 import { newPageHere } from "../features/notes/actions";
 import { fileName, isMarkdown, pageTitle } from "../lib/notebooks";
 import { useApp } from "../store";
@@ -140,6 +141,11 @@ export function Workspace() {
       const ws = useWorkspace.getState();
       const pane = ws.panes.find((p) => p.id === ws.focused) ?? ws.panes[0];
       if (e.key.toLowerCase() === "w") { if (pane?.active) close.request(pane.id, pane.active); }
+      else if (e.key.toLowerCase() === "s" && !e.defaultPrevented) {
+        // The editor saves on its own; this covers a page in Reading mode, which has no editor (Codex review of 32fd236, U1).
+        const tab = pane?.tabs.find((t) => t.id === pane.active);
+        if (tab?.kind === "file" && tab.file) { e.preventDefault(); void saveFileTab(keyOf(tab.file)); }
+      }
       else if (e.key === "Tab") { e.preventDefault(); ws.cycle(e.shiftKey ? -1 : 1); }
       else if (e.key === "\\") { e.preventDefault(); ws.split(); }
       else if (e.key.toLowerCase() === "e") {
