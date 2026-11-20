@@ -5,6 +5,8 @@ import { useProjectsEnabled } from "../../lib/connection";
 import { captureStatus, getSettings, saveSettings, type CaptureStatus, type Settings } from "../../lib/lm";
 import { prefs } from "../../lib/prefs";
 import { applyTheme, THEMES, useTheme, type Theme } from "../../lib/theme";
+import { useHidden } from "../../shell/hidden";
+import { useAvailableSections } from "../../shell/Sidebar";
 import type { Mode } from "../../workspace/store";
 import { projectsQuery } from "../projects/useProject";
 import { amount, BUDGET_DEFAULTS, EXECUTIVE_CALLS, withCallLimit } from "./budgets";
@@ -20,6 +22,9 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
   const [mode, setMode] = useState<Mode>(prefs.defaultMode());
   const [error, setError] = useState<string | null>(null);
   const theme = useTheme();
+  const sections = useAvailableSections().filter((s) => s.page !== "overview");
+  const hidden = useHidden((s) => s.hidden);
+  const setShown = useHidden((s) => s.setShown);
   const projectsOn = useProjectsEnabled();
   const projects = useQuery({ ...projectsQuery(), enabled: projectsOn, retry: false });
   const live = (projects.data?.projects ?? []).filter((p) => p.status !== "archived");
@@ -147,6 +152,13 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
         </select>
       </label>
       <p className="muted small">The theme changes at once and is kept on this computer; it does not need Save.</p>
+
+      <h3>Sidebar</h3>
+      {sections.map((s) => (
+        <label className="check" key={s.page}><input type="checkbox" checked={!hidden.includes(s.page)}
+          onChange={(e) => setShown(s.page, e.target.checked)} /> Show {s.label}</label>
+      ))}
+      <p className="muted small">Hide the sections you don't use. You can also right-click a section in the sidebar. A hidden section still opens from links and stays open if you are on it. This changes at once and is kept on this computer; it does not need Save.</p>
       {error && <p className="error">{error}</p>}
       <button type="submit" className="primary">Save</button>
     </form>
