@@ -488,22 +488,16 @@ Review these commits for knowledge worth keeping.
                 return run;
             }
         };
-        let mut problems = vec![];
-        let stage = |run: &mut Run, problems: &mut Vec<String>| -> Result<(), String> {
-            self.stage_memory(deps, subject, &answer.memory, run, problems);
-            if allow_skill && answer.skill.action != "none" {
-                self.stage_skill(deps, subject, answer.skill, run, problems);
-            }
-            Ok(())
-        };
         // Staging is the run's commit: a cancel before it keeps no drafts, and one after it is refused (Codex review F15-6).
-        let staged = match deps.cancel {
-            Some(cancel) => cancel.commit(|| stage(&mut run, &mut problems)),
-            None => stage(&mut run, &mut problems),
-        };
-        if let Err(e) = staged {
+        // The commit is claimed before staging, not held through it, so a cancel never waits on Living Memory's calls.
+        if let Some(Err(e)) = deps.cancel.map(|cancel| cancel.commit(|| Ok(()))) {
             run.error = Some(e);
             return run;
+        }
+        let mut problems = vec![];
+        self.stage_memory(deps, subject, &answer.memory, &mut run, &mut problems);
+        if allow_skill && answer.skill.action != "none" {
+            self.stage_skill(deps, subject, answer.skill, &mut run, &mut problems);
         }
         run.state = if run.memory.is_empty() && run.skill.is_none() { if problems.is_empty() { "nothing" } else { "failed" } } else { "staged" }.into();
         run.error = (!problems.is_empty()).then(|| problems.join("; "));
