@@ -689,12 +689,14 @@ impl Automations {
             head: head.clone(),
             batch: batch.map(|(commits, _)| commits),
         };
-        // A run cancelled during the reads starts nothing.
-        if starts {
+        // A run cancelled during the reads does nothing: no session, no workflow and no paid call (Codex review F15-6).
+        {
             let _admit = self.admit.lock().unwrap();
             if let Some(cancelled) = self.find_run(&row.id).filter(|r| r.state == RunState::Cancelled) {
                 self.cancels.lock().unwrap().remove(&row.id);
-                self.start_done(&a.id);
+                if starts {
+                    self.start_done(&a.id);
+                }
                 return cancelled;
             }
         }
@@ -1062,6 +1064,8 @@ mod tests {
         /// run waits (up to 10 s) while this is set, with `inside` set, as a session start that takes a while.
         hold: AtomicBool,
         inside: AtomicBool,
+        /// log waits (up to 10 s) while this is set, with `inside` set, as slow git reads.
+        hold_reads: AtomicBool,
         charged: Mutex<Vec<f64>>,
         stopped: Mutex<Vec<Started>>,
         /// What is left of today's automation budget; None is plenty.
@@ -1102,6 +1106,13 @@ mod tests {
             self.head.lock().unwrap().clone()
         }
         fn log(&self, _repo: &str, since: Option<&str>) -> Result<String, String> {
+            if self.hold_reads.load(Ordering::SeqCst) {
+                self.inside.store(true, Ordering::SeqCst);
+                let start = std::time::Instant::now();
+                while self.hold_reads.load(Ordering::SeqCst) && start.elapsed() < Duration::from_secs(10) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
             if *self.log_broken.lock().unwrap() {
                 return Err("bad config".into());
             }
@@ -1239,6 +1250,26 @@ mod tests {
         // A new automation never takes the caller's reviewed commits.
         let def = Automation { id: String::new(), enabled: true, project: Some("p".into()), repo: Some("r".into()), last_seen: Some("--output=x".into()), ..templates().into_iter().find(|t| t.id == "commit-capture").unwrap() };
         assert_eq!(autos.put(def, now_ms()).unwrap().last_seen, None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_commit_capture_cancelled_while_it_reads_git_makes_no_call() {   // Codex review F15-6
+        let (dir, autos) = store();
+        let def = Automation { id: String::new(), enabled: true, project: Some("p".into()), repo: Some("r".into()), ..templates().into_iter().find(|t| t.id == "commit-capture").unwrap() };
+        let a = autos.put(def, now_ms()).unwrap();
+        let doer = Fake { hold_reads: AtomicBool::new(true), ..Default::default() };
+        *doer.head.lock().unwrap() = Some("bbb".into());
+        let row = std::thread::scope(|s| {
+            let fired = s.spawn(|| autos.fire(&a.id, "manual", None, &doer));
+            wait_until("the git reads", || doer.inside.load(Ordering::SeqCst));
+            autos.cancel(&autos.runs(&a.id)[0].id).unwrap();
+            doer.hold_reads.store(false, Ordering::SeqCst);
+            fired.join().unwrap().unwrap()
+        });
+        assert_eq!(row.state, RunState::Cancelled);
+        assert!(doer.ran.lock().unwrap().is_empty(), "no review call");
+        assert_eq!(autos.list()[0].last_seen, None, "the commits are still to be reviewed");
         let _ = std::fs::remove_dir_all(dir);
     }
 

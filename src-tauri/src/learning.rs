@@ -381,6 +381,8 @@ pub struct Deps<'a> {
     /// The most one review may spend (`Settings::review_call_usd`).
     pub review_usd: f64,
     pub auto_patch: bool,
+    /// The cancel switch of the automation run that asked for this review; None for the app's own reviews.
+    pub cancel: Option<&'a crate::oneshot::Cancel>,
 }
 
 pub struct Learning {
@@ -476,7 +478,7 @@ Review these commits for knowledge worth keeping.
             memory: vec![], skill: None, skill_name: None, skill_applied: false, cost_usd: None, error: None,
         };
         let reservation = format!("review-{}-{}", subject.key, run.at);
-        let (value, cost) = crate::oneshot::run(&deps.claude, &self.dir, &self.ledger, deps.daily_usd, &reservation, &reviewer(deps.review_usd), input, TIMEOUT, None);
+        let (value, cost) = crate::oneshot::run(&deps.claude, &self.dir, &self.ledger, deps.daily_usd, &reservation, &reviewer(deps.review_usd), input, TIMEOUT, deps.cancel.map(crate::oneshot::Cancel::flag));
         let answer = answer_of(value);
         run.cost_usd = cost;
         let answer = match answer {
@@ -487,9 +489,21 @@ Review these commits for knowledge worth keeping.
             }
         };
         let mut problems = vec![];
-        self.stage_memory(deps, subject, &answer.memory, &mut run, &mut problems);
-        if allow_skill && answer.skill.action != "none" {
-            self.stage_skill(deps, subject, answer.skill, &mut run, &mut problems);
+        let stage = |run: &mut Run, problems: &mut Vec<String>| -> Result<(), String> {
+            self.stage_memory(deps, subject, &answer.memory, run, problems);
+            if allow_skill && answer.skill.action != "none" {
+                self.stage_skill(deps, subject, answer.skill, run, problems);
+            }
+            Ok(())
+        };
+        // Staging is the run's commit: a cancel before it keeps no drafts, and one after it is refused (Codex review F15-6).
+        let staged = match deps.cancel {
+            Some(cancel) => cancel.commit(|| stage(&mut run, &mut problems)),
+            None => stage(&mut run, &mut problems),
+        };
+        if let Err(e) = staged {
+            run.error = Some(e);
+            return run;
         }
         run.state = if run.memory.is_empty() && run.skill.is_none() { if problems.is_empty() { "nothing" } else { "failed" } } else { "staged" }.into();
         run.error = (!problems.is_empty()).then(|| problems.join("; "));
@@ -880,12 +894,29 @@ mod tests {
     }
 
     #[test]
+    fn a_cancelled_commit_review_makes_no_call_and_reserves_nothing() {   // Codex review F15-6
+        let dir = scratch("cancelled");
+        let learning = Learning::new(dir.clone());
+        let bridge = crate::bridge::Bridge::new(crate::settings::Launch { program: "missing".into(), args: vec![], script: PathBuf::new(), root: None });
+        let skills = Skills::new(dir.join("skills"), vec![]);
+        let cancel = crate::oneshot::Cancel::default();
+        assert!(cancel.cancel(|| Ok(())).unwrap());
+        let deps = Deps { bridge: &bridge, skills: &skills, claude: "missing-claude".into(), daily_usd: 1.0, review_usd: 0.25, auto_patch: false, cancel: Some(&cancel) };
+        let run = learning.review_commits(&deps, "a1b2c3d4-e5f6a7b8", "Nightly commits", "p", "r", "commit e5f6a7b8
+
+    Add retries");
+        assert_eq!((run.state.as_str(), run.error.as_deref(), run.memory.len()), ("failed", Some(crate::oneshot::CANCELLED), 0));
+        assert_eq!(learning.ledger.used(now_ms()), 0.0, "nothing reserved");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn a_review_that_cannot_reserve_is_recorded_as_failed_and_can_be_retried() {
         let dir = scratch("runs");
         let learning = Learning::new(dir.clone());
         let bridge = crate::bridge::Bridge::new(crate::settings::Launch { program: "missing".into(), args: vec![], script: PathBuf::new(), root: None });
         let skills = Skills::new(dir.join("skills"), vec![]);
-        let deps = Deps { bridge: &bridge, skills: &skills, claude: "missing-claude".into(), daily_usd: 0.0, review_usd: 0.25, auto_patch: false };
+        let deps = Deps { bridge: &bridge, skills: &skills, claude: "missing-claude".into(), daily_usd: 0.0, review_usd: 0.25, auto_patch: false, cancel: None };
         let mut s = info();
         s.files_changed = Some(Totals { files: 1, added: 1, removed: 0 });
         assert!(learning.review(&deps, &s, &[], Trigger::Finished).is_none(), "waits for the decision");

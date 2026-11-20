@@ -288,6 +288,7 @@ fn run_review(app: &AppHandle, id: &str, trigger: learning::Trigger) {
     };
     let deps = learning::Deps {
         bridge: &state.bridge, skills: &state.skills, claude, daily_usd: saved.learning_daily_usd(), review_usd: saved.review_call_usd(), auto_patch: saved.skills_auto_patch(),
+        cancel: None,
     };
     if let Some(run) = state.learning.review(&deps, &log.info, &log.events, trigger) {
         let _ = app.emit("learning-changed", &run);
@@ -529,6 +530,7 @@ impl automations::Doer for AppDoer {
                 let claude = agent::claude::available(&saved)?;
                 let deps = learning::Deps {
                     bridge: &state.bridge, skills: &state.skills, claude, daily_usd: saved.learning_daily_usd(), review_usd: saved.review_call_usd(), auto_patch: false,
+                    cancel: Some(cancel),
                 };
                 // One key per batch: two batches of one backlog share HEAD, not their last commit.
                 let last = vars.batch.as_ref().and_then(|b| b.last()).or(vars.head.as_ref()).cloned().unwrap_or_default();
