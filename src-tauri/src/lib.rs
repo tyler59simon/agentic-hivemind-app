@@ -43,6 +43,8 @@ struct AppState {
     agents: agent::Manager,
     terminals: term::Manager,
     learning: learning::Learning,
+    /// Today's spending by the sessions and workflows automations start, against `Settings::automation_daily_usd`.
+    automation_spend: learning::Ledger,
     skills: skills::Skills,
     workflows: Arc<workflow::Workflows>,
     automations: Arc<automations::Automations>,
@@ -249,7 +251,7 @@ fn learning_status(state: State<'_, AppState>) -> LearningStatus {
         enabled: saved.learning_reviewer() && saved.shows(agent::Engine::Claude),
         daily_usd: saved.learning_daily_usd(),
         spent_today: state.learning.spent_today(),
-        review_usd: learning::REVIEW_USD,
+        review_usd: saved.review_call_usd(),
         auto_patch: saved.skills_auto_patch(),
         runs,
     }
@@ -284,7 +286,9 @@ fn run_review(app: &AppHandle, id: &str, trigger: learning::Trigger) {
             return;
         }
     };
-    let deps = learning::Deps { bridge: &state.bridge, skills: &state.skills, claude, daily_usd: saved.learning_daily_usd(), auto_patch: saved.skills_auto_patch() };
+    let deps = learning::Deps {
+        bridge: &state.bridge, skills: &state.skills, claude, daily_usd: saved.learning_daily_usd(), review_usd: saved.review_call_usd(), auto_patch: saved.skills_auto_patch(),
+    };
     if let Some(run) = state.learning.review(&deps, &log.info, &log.events, trigger) {
         let _ = app.emit("learning-changed", &run);
         let staged = run.memory.len() + usize::from(run.skill.is_some());
@@ -523,7 +527,9 @@ impl automations::Doer for AppDoer {
                     return Ok(Started::Done { detail: "No new commits".into(), cost: None });
                 }
                 let claude = agent::claude::available(&saved)?;
-                let deps = learning::Deps { bridge: &state.bridge, skills: &state.skills, claude, daily_usd: saved.learning_daily_usd(), auto_patch: false };
+                let deps = learning::Deps {
+                    bridge: &state.bridge, skills: &state.skills, claude, daily_usd: saved.learning_daily_usd(), review_usd: saved.review_call_usd(), auto_patch: false,
+                };
                 // One key per batch: two batches of one backlog share HEAD, not their last commit.
                 let last = vars.batch.as_ref().and_then(|b| b.last()).or(vars.head.as_ref()).cloned().unwrap_or_default();
                 let key = format!("{}-{}", &a.id[..8.min(a.id.len())], &last[..8.min(last.len())]);
@@ -571,8 +577,16 @@ impl automations::Doer for AppDoer {
         let state = self.0.state::<AppState>();
         state.learning.has_budget(settings::load(&state.settings_path).learning_daily_usd())
     }
+    fn budget_fits(&self, budget_usd: Option<f64>) -> bool {
+        let state = self.0.state::<AppState>();
+        let saved = settings::load(&state.settings_path);
+        // The budget the session gets: the run's own, never above the settings' cap per agent run (agent::start_task).
+        let need = budget_usd.filter(|b| b.is_finite() && *b > 0.0).map_or(saved.agent_budget_usd(), |b| b.min(saved.agent_budget_usd()));
+        state.automation_spend.used(agent::now_ms()) + need <= saved.automation_daily_usd() + 1e-9
+    }
     fn charge(&self, usd: f64) {
-        self.0.state::<AppState>().learning.charge(usd);
+        let id = format!("charge-{}", uuid::Uuid::new_v4().simple());
+        let _ = self.0.state::<AppState>().automation_spend.settle(&id, Some(usd), agent::now_ms());
     }
     fn stop(&self, started: &automations::Started) {
         let state = self.0.state::<AppState>();
@@ -1360,7 +1374,13 @@ fn exec_deps<'a>(state: &'a AppState, saved: &Settings) -> Result<executive::Dep
     if !saved.shows(agent::Engine::Claude) {
         return Err("Drafting, briefings and capture run on Claude Code, which is hidden in Settings. Show it again to use them.".into());
     }
-    Ok(executive::Deps { claude: agent::claude::available(saved)?, ledger: state.learning.ledger(), cap: saved.learning_daily_usd(), cancel: None })
+    Ok(executive::Deps {
+        claude: agent::claude::available(saved)?,
+        ledger: state.learning.ledger(),
+        cap: saved.learning_daily_usd(),
+        call_usd: saved.executive_calls_usd(),
+        cancel: None,
+    })
 }
 
 #[tauri::command]
@@ -1672,6 +1692,7 @@ pub fn run() {
                 agents,
                 terminals,
                 learning: learning::Learning::new(app.path().app_data_dir()?.join("learning")),
+                automation_spend: learning::Ledger::new(app.path().app_data_dir()?.join("automation-spend.json")),
                 workflows: Arc::new(workflow::Workflows::new(app.path().app_data_dir()?.join("workflows"))),
                 automations: Arc::new(automations::Automations::new(app.path().app_data_dir()?)),
                 skills: skills::Skills::new(app.path().app_data_dir()?.join("skills"), skills::default_targets()),

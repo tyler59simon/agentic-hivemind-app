@@ -377,6 +377,8 @@ pub struct Deps<'a> {
     pub claude: String,
     pub ledger: &'a Ledger,
     pub cap: f64,
+    /// The most each call may spend, by call name (`Settings::executive_calls_usd`); a call left out uses its default.
+    pub call_usd: std::collections::BTreeMap<String, f64>,
     /// The cancel switch of the automation run that asked for this; None for the user's own requests.
     pub cancel: Option<&'a oneshot::Cancel>,
 }
@@ -387,6 +389,12 @@ impl Deps<'_> {
             Some(c) if c.is_set() => Err(oneshot::CANCELLED.into()),
             _ => Ok(()),
         }
+    }
+
+    /// The most the call `name` may spend.
+    fn usd(&self, name: &str) -> f64 {
+        let default = || crate::settings::EXECUTIVE_CALLS.iter().find(|(call, _)| *call == name).map_or(0.25, |(_, usd)| *usd);
+        self.call_usd.get(name).copied().unwrap_or_else(default)
     }
 }
 
@@ -469,8 +477,8 @@ pub fn style_schema() -> Value {
     object(&["preferences"], json!({"preferences": {"type": "array", "maxItems": 3, "items": pref}}))
 }
 
-fn call(deps: &Deps, dir: &std::path::Path, name: &str, policy: &str, schema: Value, budget_usd: f64, input: &str) -> (Result<Value, String>, Option<f64>) {
-    let who = Call { who: "The executive assistant", model: MODEL, policy, schema, budget_usd };
+fn call(deps: &Deps, dir: &std::path::Path, name: &str, policy: &str, schema: Value, input: &str) -> (Result<Value, String>, Option<f64>) {
+    let who = Call { who: "The executive assistant", model: MODEL, policy, schema, budget_usd: deps.usd(name) };
     let id = format!("exec-{name}-{}", uuid::Uuid::new_v4().simple());
     oneshot::run(&deps.claude, dir, deps.ledger, deps.cap, &id, &who, input, TIMEOUT, deps.cancel.map(oneshot::Cancel::flag))
 }
@@ -492,7 +500,7 @@ pub fn brief(lm: &Lm, store: &Store, deps: &Deps, kind: &str, project: Option<&s
     let pack = pack(lm, store, project, days, today)?;
     let scope = project.map_or("all active projects".to_string(), |slug| format!("the project {}", project_name(lm, slug)));
     let input = format!("# Briefing request\nKind: {kind}. Scope: {scope}. Period: the {days} days up to {today} (today).\n\n{}", pack_text(&pack));
-    let (answer, cost) = call(deps, &store.dir, "brief", &format!("{BRIEF}\n\n{GROUNDING}"), brief_schema(), 0.5, &input);
+    let (answer, cost) = call(deps, &store.dir, "brief", &format!("{BRIEF}\n\n{GROUNDING}"), brief_schema(), &input);
     let mut record = answer?;
     let object = record.as_object_mut().ok_or("The briefing is not an object")?;
     object.insert("kind".into(), json!(kind));
@@ -531,7 +539,7 @@ pub fn draft(lm: &Lm, store: &Store, deps: &Deps, request: &DraftRequest, today:
         "# Request\nKind: {}. Audience: {}. Tone: {}. Today: {today}.\nKey points from the user:\n{}\n\n{}",
         request.kind, or_none(&request.audience), or_none(&request.tone), or_none(&request.points), pack_text(&pack)
     );
-    let (answer, cost) = call(deps, &store.dir, "draft", &format!("{DRAFT}\n\n{GROUNDING}"), draft_schema(), 0.25, &input);
+    let (answer, cost) = call(deps, &store.dir, "draft", &format!("{DRAFT}\n\n{GROUNDING}"), draft_schema(), &input);
     let mut out = answer?;
     out["evidence"] = json!(pack.evidence.iter().filter(|e| array(&out, "evidence").any(|id| id.as_str() == Some(e.id.as_str()))).collect::<Vec<_>>());
     out["packGaps"] = json!(pack.gaps);
@@ -550,7 +558,7 @@ pub fn refine(store: &Store, deps: &Deps, subject: &str, body: &str, evidence: &
     }
     let pack = Pack { evidence: evidence.to_vec(), gaps: vec![] };
     let input = format!("# Instruction\n{}\n\n# Draft\nSubject: {subject}\n\n{body}\n\n{}", instruction.trim(), pack_text(&pack));
-    let (answer, cost) = call(deps, &store.dir, "refine", &format!("{REFINE}\n\n{GROUNDING}"), draft_schema(), 0.15, &input);
+    let (answer, cost) = call(deps, &store.dir, "refine", &format!("{REFINE}\n\n{GROUNDING}"), draft_schema(), &input);
     let mut out = answer?;
     out["evidence"] = json!(evidence.iter().filter(|e| array(&out, "evidence").any(|id| id.as_str() == Some(e.id.as_str()))).collect::<Vec<_>>());
     out["costUsd"] = json!(cost);
@@ -657,7 +665,7 @@ pub fn extract(lm: &Lm, store: &Store, deps: &Deps, input: &str, project: Option
         return Err("Paste or type something to capture first".into());
     }
     let framed = extract_input(lm, &clip(input, SOURCE_CHARS), project, &source, today)?;
-    let (answer, cost) = call(deps, &store.dir, "extract", EXTRACT, extract_schema(), 0.25, &framed);
+    let (answer, cost) = call(deps, &store.dir, "extract", EXTRACT, extract_schema(), &framed);
     stage(lm, store, &answer?, source, project, input, cost, crate::agent::now_ms())
 }
 
@@ -679,7 +687,7 @@ pub fn learn_style(lm: &Lm, store: &Store, deps: &Deps, generated: &str, kept: &
         return Ok(None);
     }
     let input = format!("# Generated\n{}\n\n# Kept by the user\n{}", clip(generated, 8000), clip(kept, 8000));
-    let (answer, cost) = call(deps, &store.dir, "style", LEARN_STYLE, style_schema(), 0.1, &input);
+    let (answer, cost) = call(deps, &store.dir, "style", LEARN_STYLE, style_schema(), &input);
     let items: Vec<Value> = array(&answer?, "preferences").map(|p| json!({
         "kind": "preference", "project": "", "title": text(p, "title"), "summary": text(p, "summary"), "details": [format!("Example: {}", text(p, "example"))],
         "owner": "", "due": "", "quote": text(p, "example"), "confidence": "medium",
@@ -819,6 +827,17 @@ impl Drop for Claim<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_call_spends_at_most_its_configured_limit() {
+        let ledger = Ledger::new(temp("limits").join("spend.json"));
+        let mut call_usd = crate::settings::Settings::default().executive_calls_usd();
+        call_usd.insert("brief".into(), 0.9);
+        call_usd.remove("style");
+        let deps = Deps { claude: String::new(), ledger: &ledger, cap: 2.0, call_usd, cancel: None };
+        assert_eq!((deps.usd("brief"), deps.usd("draft"), deps.usd("refine")), (0.9, 0.25, 0.15));
+        assert_eq!(deps.usd("style"), 0.1, "a call left out uses its default");
+    }
 
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("hivemind-exec-{name}-{}", std::process::id()));
@@ -1086,7 +1105,7 @@ mod tests {
         let store = Store::new(base.join("executive"));
         store.put("milestone", json!({"project": "pay", "title": "Public beta", "due": "2026-12-05", "status": "planned", "note": ""}), 1).unwrap();
         let ledger = Ledger::new(base.join("spend.json"));
-        let deps = Deps { claude, ledger: &ledger, cap: 2.0, cancel: None };
+        let deps = Deps { claude, ledger: &ledger, cap: 2.0, call_usd: Default::default(), cancel: None };
         let lm = viewer(&bridge);
         let notes = "Platform sync, 19 Nov.\nWe decided to keep event IDs for 30 days so late redeliveries are still deduplicated.\n\
             Dana will send the Q3 plan to the VP by 25 November.\nRisk: the provider may throttle replays; Sam owns a rate ceiling flag.\nBeta is still on track for 5 December.";

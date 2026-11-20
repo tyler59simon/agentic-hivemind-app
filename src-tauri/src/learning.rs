@@ -15,8 +15,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
-/// The most one review may spend; reserved against the daily cap before the call.
-pub const REVIEW_USD: f64 = 0.25;
 pub const MODEL: &str = "sonnet";
 /// A session that changed no files is reviewed only after this many tool calls.
 pub const MIN_TOOL_CALLS: usize = 15;
@@ -263,14 +261,15 @@ pub fn schema() -> Value {
     })
 }
 
-fn reviewer() -> crate::oneshot::Call<'static> {
-    crate::oneshot::Call { who: "The reviewer", model: MODEL, policy: POLICY, schema: schema(), budget_usd: REVIEW_USD }
+/// The reviewer's call; `usd` is the most one review may spend, reserved against the daily cap before the call.
+fn reviewer(usd: f64) -> crate::oneshot::Call<'static> {
+    crate::oneshot::Call { who: "The reviewer", model: MODEL, policy: POLICY, schema: schema(), budget_usd: usd }
 }
 
 /// The reviewer's command line: print mode, no tools, no plugins, settings, MCP servers or saved session, a cost cap.
 #[cfg(test)]
 pub fn argv() -> Vec<String> {
-    crate::oneshot::argv(&reviewer())
+    crate::oneshot::argv(&reviewer(crate::settings::DEFAULT_REVIEW_CALL_USD))
 }
 
 #[derive(Deserialize, Debug, Default, PartialEq)]
@@ -379,6 +378,8 @@ pub struct Deps<'a> {
     pub skills: &'a Skills,
     pub claude: String,
     pub daily_usd: f64,
+    /// The most one review may spend (`Settings::review_call_usd`).
+    pub review_usd: f64,
     pub auto_patch: bool,
 }
 
@@ -406,11 +407,6 @@ impl Learning {
     /// The daily cap's account, shared with the executive workspace's calls.
     pub fn ledger(&self) -> &Ledger {
         &self.ledger
-    }
-
-    /// Count what an automation's sessions cost against today's budget.
-    pub fn charge(&self, usd: f64) {
-        let _ = self.ledger.settle(&format!("charge-{}", uuid::Uuid::new_v4().simple()), Some(usd), now_ms());
     }
 
     /// Newest first.
@@ -480,7 +476,7 @@ Review these commits for knowledge worth keeping.
             memory: vec![], skill: None, skill_name: None, skill_applied: false, cost_usd: None, error: None,
         };
         let reservation = format!("review-{}-{}", subject.key, run.at);
-        let (value, cost) = crate::oneshot::run(&deps.claude, &self.dir, &self.ledger, deps.daily_usd, &reservation, &reviewer(), input, TIMEOUT, None);
+        let (value, cost) = crate::oneshot::run(&deps.claude, &self.dir, &self.ledger, deps.daily_usd, &reservation, &reviewer(deps.review_usd), input, TIMEOUT, None);
         let answer = answer_of(value);
         run.cost_usd = cost;
         let answer = match answer {
@@ -889,7 +885,7 @@ mod tests {
         let learning = Learning::new(dir.clone());
         let bridge = crate::bridge::Bridge::new(crate::settings::Launch { program: "missing".into(), args: vec![], script: PathBuf::new(), root: None });
         let skills = Skills::new(dir.join("skills"), vec![]);
-        let deps = Deps { bridge: &bridge, skills: &skills, claude: "missing-claude".into(), daily_usd: 0.0, auto_patch: false };
+        let deps = Deps { bridge: &bridge, skills: &skills, claude: "missing-claude".into(), daily_usd: 0.0, review_usd: 0.25, auto_patch: false };
         let mut s = info();
         s.files_changed = Some(Totals { files: 1, added: 1, removed: 0 });
         assert!(learning.review(&deps, &s, &[], Trigger::Finished).is_none(), "waits for the decision");

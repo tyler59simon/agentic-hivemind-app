@@ -173,9 +173,12 @@ pub trait Doer: Send + Sync {
     /// The next commit capture after `reviewed` (the reviewed tips, space-separated, as `last_seen` holds them): the commit
     /// ids to review, oldest first, and the tips to keep once they are (`git::next_batch`). None when git cannot tell.
     fn next_batch(&self, repo: &str, reviewed: &str, limit: usize) -> Option<(Vec<String>, String)>;
-    /// Whether today's learning and automation budget has room.
+    /// Whether today's learning budget has room (commit reviews and briefings; their calls reserve their own share).
     fn budget_left(&self) -> bool;
-    /// Count what a session or workflow a run started cost, once, when it ends.
+    /// Whether a session with this budget (None: the settings' cap per agent run) fits in what is left of today's
+    /// automation budget. A workflow is checked for one session's budget.
+    fn budget_fits(&self, budget_usd: Option<f64>) -> bool;
+    /// Count what a session or workflow a run started cost against today's automation budget, once, when it ends.
     fn charge(&self, usd: f64);
     /// Stop a session or workflow that started for a run the user cancelled meanwhile.
     fn stop(&self, started: &Started);
@@ -367,9 +370,16 @@ fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
-/// Runs that start a session or a workflow, and so spend against the daily budget.
-fn paid(a: &Automation) -> bool {
-    matches!(a.action, Action::Role { .. } | Action::Workflow { .. } | Action::CommitCapture | Action::ExecutiveBriefing { .. })
+/// Why a run that spends money may not start now, or None. A session or workflow must fit, with its whole budget, in what
+/// is left of today's automation budget; commit reviews and briefings draw on the learning budget.
+fn unaffordable(a: &Automation, doer: &dyn Doer) -> Option<String> {
+    match a.action {
+        Action::Role { .. } | Action::Workflow { .. } if !doer.budget_fits(a.budget_usd) => {
+            Some("Today's automation budget has no room left for this run's budget".into())
+        }
+        Action::CommitCapture | Action::ExecutiveBriefing { .. } if !doer.budget_left() => Some("Today's learning budget is used".into()),
+        _ => None,
+    }
 }
 
 impl Automations {
@@ -558,9 +568,9 @@ impl Automations {
         };
         // The schedule moves on whether or not this run goes ahead, so a refused run is not retried every minute.
         self.mark_ran(id, now, None);
-        if paid(&a) && !doer.budget_left() {
+        if let Some(why) = unaffordable(&a, doer) {
             row.state = RunState::Failed;
-            row.detail = Some("Today's learning and automation budget is used".into());
+            row.detail = Some(why);
             row.ended_at = Some(now);
         } else if a.ask_first && cause != "manual" {
             row.state = RunState::Waiting;
@@ -596,8 +606,8 @@ impl Automations {
             self.put_run(&row)?;
             return Err("The automation now points at another project, so this run was cancelled".into());
         }
-        if paid(&a) && !doer.budget_left() {
-            return Err("Today's learning and automation budget is used".into());
+        if let Some(why) = unaffordable(&a, doer) {
+            return Err(why);
         }
         let row = RunRow { state: RunState::Running, ..row };
         self.put_run(&row)?;
@@ -994,7 +1004,8 @@ mod tests {
 
         // A briefing needs no project (none means all active projects) and counts against the budget.
         let mut brief = templates().into_iter().find(|t| t.id == "weekly-briefing").unwrap();
-        assert!(check(&brief).is_ok() && paid(&brief));
+        assert!(check(&brief).is_ok());
+        assert_eq!(unaffordable(&brief, &Fake { broke: true, ..Default::default() }).as_deref(), Some("Today's learning budget is used"));
         brief.action = Action::ExecutiveBriefing { briefing: "gossip".into(), days: 7 };
         assert!(check(&brief).unwrap_err().contains("kind of briefing"));
         brief.action = Action::ExecutiveBriefing { briefing: "risks".into(), days: 0 };
@@ -1027,6 +1038,8 @@ mod tests {
         inside: AtomicBool,
         charged: Mutex<Vec<f64>>,
         stopped: Mutex<Vec<Started>>,
+        /// What is left of today's automation budget; None is plenty.
+        room: Option<f64>,
     }
     impl Doer for Fake {
         fn run(&self, a: &Automation, vars: &Vars, cancel: &Cancel) -> Result<Started, String> {
@@ -1072,6 +1085,9 @@ mod tests {
         }
         fn budget_left(&self) -> bool {
             !self.broke
+        }
+        fn budget_fits(&self, budget_usd: Option<f64>) -> bool {
+            !self.broke && budget_usd.unwrap_or(5.0) <= self.room.unwrap_or(f64::MAX)
         }
         fn charge(&self, usd: f64) {
             self.charged.lock().unwrap().push(usd);
@@ -1234,7 +1250,22 @@ mod tests {
         let broke = Fake { broke: true, ..Default::default() };
         let row = autos.fire(&a.id, "manual", None, &broke).unwrap();
         assert_eq!(row.state, RunState::Failed);
-        assert!(row.detail.unwrap().contains("budget"));
+        assert_eq!(row.detail.as_deref(), Some("Today's learning budget is used"));
+        // A commit review draws on the learning budget only: a full automation budget does not stop it.
+        let automations_spent = Fake { room: Some(0.0), ..Default::default() };
+        *automations_spent.head.lock().unwrap() = Some("ddd".into());
+        assert_eq!(autos.fire(&a.id, "manual", None, &automations_spent).unwrap().state, RunState::Succeeded);
+
+        // A session fires only when its whole budget fits in what is left of today's automation budget (R7).
+        let role = Automation { id: String::new(), enabled: true, project: Some("p".into()), repo: Some("r".into()), budget_usd: Some(2.0),
+            ..templates().into_iter().find(|t| t.id == "failure-investigation").unwrap() };
+        let role = autos.put(role, now_ms()).unwrap();
+        let tight = Fake { session: true, room: Some(1.5), ..Default::default() };
+        let refused = autos.fire(&role.id, "manual", None, &tight).unwrap();
+        assert_eq!((refused.state, refused.detail.as_deref()), (RunState::Failed, Some("Today's automation budget has no room left for this run's budget")));
+        assert!(!tight.ran.lock().unwrap().iter().any(|(id, _)| *id == role.id), "nothing started");
+        let roomy = Fake { session: true, room: Some(2.0), ..Default::default() };
+        assert_eq!(autos.fire(&role.id, "manual", None, &roomy).unwrap().state, RunState::Running);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1471,6 +1502,10 @@ mod tests {
         assert_eq!(row.state, RunState::Waiting);
         let broke = Fake { session: true, broke: true, ..Default::default() };
         assert!(autos.approve(&row.id, &broke).unwrap_err().contains("budget"));
+        // Some of today's budget is left, but not this run's whole $1 (R7).
+        let tight = Fake { session: true, room: Some(0.99), ..Default::default() };
+        assert_eq!(autos.approve(&row.id, &tight).unwrap_err(), "Today's automation budget has no room left for this run's budget");
+        assert_eq!(autos.runs(&a.id)[0].state, RunState::Waiting, "it keeps waiting");
         let row = autos.approve(&row.id, &rich).unwrap();
         assert_eq!(autos.cancel(&row.id).unwrap().state, RunState::Cancelled);
         let ended = autos.finished(Some("s1"), None, false, "stopped".into(), Some(0.3), &rich).unwrap();

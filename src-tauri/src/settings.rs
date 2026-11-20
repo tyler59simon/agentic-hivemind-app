@@ -34,9 +34,20 @@ pub struct Settings {
     /// Whether finished sessions are reviewed for knowledge and skills worth keeping (default on).
     #[serde(default)]
     pub learning_reviewer: Option<bool>,
-    /// The most the reviewer and automations may spend in one day, in US dollars; None means the default.
+    /// The most the reviewer and the executive calls (with the commit reviews and briefings automations ask for) may spend
+    /// in one day, in US dollars; None means the default.
     #[serde(default)]
     pub learning_daily_usd: Option<f64>,
+    /// The most the sessions and workflows automations start may spend in one day, in US dollars; None means the default.
+    #[serde(default)]
+    pub automation_daily_usd: Option<f64>,
+    /// The most one reviewer call may spend, in US dollars; None means the default.
+    #[serde(default)]
+    pub review_call_usd: Option<f64>,
+    /// The most each executive call may spend, in US dollars, by call (the names in EXECUTIVE_CALLS); a call left out uses
+    /// its default.
+    #[serde(default)]
+    pub executive_call_usd: Option<BTreeMap<String, f64>>,
     /// Whether reviewed patches to a well-used skill are published without asking (default off).
     #[serde(default)]
     pub skills_auto_patch: Option<bool>,
@@ -51,6 +62,22 @@ pub struct Settings {
 pub const DEFAULT_CAPTURE_SHORTCUT: &str = "CommandOrControl+Alt+M";
 pub const DEFAULT_AGENT_BUDGET_USD: f64 = 5.0;
 pub const DEFAULT_LEARNING_DAILY_USD: f64 = 1.0;
+pub const DEFAULT_AUTOMATION_DAILY_USD: f64 = 5.0;
+pub const DEFAULT_REVIEW_CALL_USD: f64 = 0.25;
+/// The executive workspace's calls and the most each may spend by default.
+pub const EXECUTIVE_CALLS: [(&str, f64); 5] = [("brief", 0.5), ("draft", 0.25), ("refine", 0.15), ("extract", 0.25), ("style", 0.1)];
+
+/// A daily cap as saved: zero or more; anything else is the default.
+fn daily(saved: Option<f64>, default: f64) -> f64 {
+    saved.filter(|usd| usd.is_finite() && *usd >= 0.0).unwrap_or(default)
+}
+
+/// One call's limit as saved: more than zero (a call with no money cannot run; the daily cap turns calls off), else the
+/// default, and never more than the daily cap it draws from, so a call can always be afforded on a fresh day.
+fn per_call(saved: Option<f64>, default: f64, cap: f64) -> f64 {
+    let usd = saved.filter(|usd| usd.is_finite() && *usd > 0.0).unwrap_or(default);
+    if cap > 0.0 { usd.min(cap) } else { usd }
+}
 
 impl Settings {
     /// The spending limit to give an agent session.
@@ -67,9 +94,25 @@ impl Settings {
         self.learning_reviewer.unwrap_or(true)
     }
 
-    /// The daily cap for the reviewer and automations; zero turns paid work off.
+    /// The daily cap for the reviewer and the executive calls; zero turns them off.
     pub fn learning_daily_usd(&self) -> f64 {
-        self.learning_daily_usd.filter(|usd| usd.is_finite() && *usd >= 0.0).unwrap_or(DEFAULT_LEARNING_DAILY_USD)
+        daily(self.learning_daily_usd, DEFAULT_LEARNING_DAILY_USD)
+    }
+
+    /// The daily cap for the sessions and workflows automations start; zero turns them off.
+    pub fn automation_daily_usd(&self) -> f64 {
+        daily(self.automation_daily_usd, DEFAULT_AUTOMATION_DAILY_USD)
+    }
+
+    /// The most one reviewer call may spend.
+    pub fn review_call_usd(&self) -> f64 {
+        per_call(self.review_call_usd, DEFAULT_REVIEW_CALL_USD, self.learning_daily_usd())
+    }
+
+    /// The most each executive call may spend, for every name in EXECUTIVE_CALLS.
+    pub fn executive_calls_usd(&self) -> BTreeMap<String, f64> {
+        let saved = |name: &str| self.executive_call_usd.as_ref().and_then(|all| all.get(name)).copied();
+        EXECUTIVE_CALLS.iter().map(|(name, default)| (name.to_string(), per_call(saved(name), *default, self.learning_daily_usd()))).collect()
     }
 
     pub fn architecture_rules(&self, system: &str) -> Option<std::path::PathBuf> {
@@ -188,6 +231,40 @@ mod tests {
         assert_eq!(old.codex_path, None);
         assert_eq!((old.allowed_commands, old.learning_reviewer, old.learning_daily_usd, old.skills_auto_patch), (None, None, None, None));
         assert_eq!(old.hidden_engines, None);
+        assert_eq!((old.automation_daily_usd, old.review_call_usd, old.executive_call_usd), (None, None, None));
+    }
+
+    #[test]
+    fn every_budget_has_a_default_and_takes_the_users_value() {
+        let defaults = Settings::default();
+        assert_eq!((defaults.learning_daily_usd(), defaults.automation_daily_usd(), defaults.review_call_usd()), (1.0, 5.0, 0.25));
+        let calls = defaults.executive_calls_usd();
+        assert_eq!(calls.len(), 5);
+        assert_eq!((calls["brief"], calls["draft"], calls["refine"], calls["extract"], calls["style"]), (0.5, 0.25, 0.15, 0.25, 0.1));
+
+        // Daily caps: zero turns spending off; a bad value is the default.
+        let caps = |usd: Option<f64>| {
+            let s = Settings { learning_daily_usd: usd, automation_daily_usd: usd, ..Default::default() };
+            (s.learning_daily_usd(), s.automation_daily_usd())
+        };
+        assert_eq!(caps(Some(0.0)), (0.0, 0.0));
+        assert_eq!(caps(Some(7.5)), (7.5, 7.5));
+        assert_eq!(caps(Some(-1.0)), (1.0, 5.0));
+        assert_eq!(caps(Some(f64::NAN)), (1.0, 5.0));
+
+        // Per-call limits: more than zero, else the default; never above the daily cap they draw from.
+        let mut executive = BTreeMap::new();
+        executive.insert("brief".to_string(), 0.8);
+        executive.insert("draft".to_string(), 0.0);
+        executive.insert("unknown".to_string(), 9.0);
+        let s = Settings { review_call_usd: Some(0.4), executive_call_usd: Some(executive), learning_daily_usd: Some(2.0), ..Default::default() };
+        assert_eq!(s.review_call_usd(), 0.4);
+        let calls = s.executive_calls_usd();
+        assert_eq!((calls["brief"], calls["draft"], calls.len()), (0.8, 0.25, 5), "zero is the default; an unknown call is ignored");
+        let low_cap = Settings { review_call_usd: Some(0.4), learning_daily_usd: Some(0.3), ..s.clone() };
+        assert_eq!((low_cap.review_call_usd(), low_cap.executive_calls_usd()["brief"]), (0.3, 0.3));
+        let off = Settings { learning_daily_usd: Some(0.0), ..s };
+        assert_eq!(off.review_call_usd(), 0.4, "a zero cap turns calls off at the ledger, not here");
     }
 
     #[test]

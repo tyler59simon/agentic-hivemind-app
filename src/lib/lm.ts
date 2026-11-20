@@ -59,8 +59,12 @@ export interface Settings {
   other_folders?: string[] | null;
   /** Commands agent sessions may run without asking, per project slug. Rust checks each one. */
   allowed_commands?: Record<string, string[]> | null;
-  /** Whether finished sessions are reviewed for knowledge and skills (default on), and the daily cap shared with automations. */
+  /** Whether finished sessions are reviewed for knowledge and skills (default on), and the daily cap of the reviewer and the executive calls. */
   learning_reviewer?: boolean | null; learning_daily_usd?: number | null;
+  /** The daily cap of the sessions and workflows automations start. */
+  automation_daily_usd?: number | null;
+  /** The most one reviewer call, and each executive call by name, may spend. */
+  review_call_usd?: number | null; executive_call_usd?: Record<string, number> | null;
   /** Whether reviewed patches to a well-used skill are published without asking (default off). */
   skills_auto_patch?: boolean | null;
   /** An architecture-rules/v1 file per system slug, for the drift check. */

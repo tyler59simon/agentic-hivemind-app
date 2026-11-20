@@ -444,7 +444,7 @@ function AutomationForm({ initial, onDone }: { initial: Automation; onDone: (sav
       </div>
       <label className="check"><input type="checkbox" checked={a.askFirst} onChange={(e) => setA({ ...a, askFirst: e.target.checked })} /> Ask before each run (it waits here until you start it)</label>
       <label className="check"><input type="checkbox" checked={a.enabled} onChange={(e) => setA({ ...a, enabled: e.target.checked })} /> On</label>
-      <p className="muted small">Automations run while Hivemind is open or in the tray. A scheduled run missed while it was closed runs once at the next start. Paid runs count against the daily learning budget in Settings.</p>
+      <p className="muted small">Automations run while Hivemind is open or in the tray. A scheduled run missed while it was closed runs once at the next start. Sessions and workflows count against the daily automation budget in Settings, Budgets, and start only when their budget per session fits in what is left; commit reviews and briefings count against the learning and executive budget.</p>
       <div className="work-actions">
         <button className="primary" disabled={busy || !a.name.trim() || !timeOk} onClick={save}>Save</button>
         <button onClick={() => onDone()}>Cancel</button>
