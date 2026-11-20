@@ -188,6 +188,10 @@ pub trait Doer: Send + Sync {
         None
     }
     fn notify(&self, title: &str, text: &str);
+    /// A problem the user must hear about even while looking at Hivemind (a notice is held back then).
+    fn warn(&self, title: &str, text: &str) {
+        self.notify(title, text);
+    }
     /// Something changed that the UI shows.
     fn changed(&self);
 }
@@ -535,7 +539,7 @@ impl Automations {
     fn keep_run(&self, row: &RunRow, doer: &dyn Doer) {
         if let Err(e) = self.put_run(row) {
             let name = self.list().into_iter().find(|a| a.id == row.automation).map_or_else(|| "Automation".to_string(), |a| a.name);
-            doer.notify(&name, &format!("Hivemind could not save this run ({e}); its history may be wrong until Hivemind restarts"));
+            doer.warn(&name, &format!("Hivemind could not save this run ({e}); its history may be wrong until Hivemind restarts"));
         }
     }
 
@@ -1060,6 +1064,8 @@ mod tests {
         /// What next_batch answers: unset reviews HEAD alone, Some(None) stands for a git failure.
         batch: Mutex<Option<Option<Batch>>>,
         notes: Mutex<Vec<String>>,
+        /// Warnings, which the app shows even while its window is in front.
+        warned: Mutex<Vec<String>>,
         head: Mutex<Option<String>>,
         /// git log fails.
         log_broken: Mutex<bool>,
@@ -1153,6 +1159,9 @@ mod tests {
         }
         fn notify(&self, title: &str, text: &str) {
             self.notes.lock().unwrap().push(format!("{title}: {text}"));
+        }
+        fn warn(&self, title: &str, text: &str) {
+            self.warned.lock().unwrap().push(format!("{title}: {text}"));
         }
         fn changed(&self) {}
     }
@@ -1277,8 +1286,9 @@ mod tests {
         std::fs::create_dir(store.0.join("automation-runs").join(format!("{}.tmp", role.id))).unwrap();
         let ended = autos.finished(Some("s1"), None, true, "done".into(), Some(0.2), &doer).unwrap();
         assert_eq!(ended.state, RunState::Succeeded);
-        let notes = doer.notes.lock().unwrap().clone();
-        assert!(notes.iter().any(|n| n.starts_with(&format!("{}: Hivemind could not save this run", role.name))), "{notes:?}");
+        // A warning, not a notice: the app shows it even while the user looks at the Automations tab (Codex review F15-2).
+        let warned = doer.warned.lock().unwrap().clone();
+        assert!(warned.iter().any(|n| n.starts_with(&format!("{}: Hivemind could not save this run", role.name))), "{warned:?}");
         assert_eq!(*doer.charged.lock().unwrap(), [0.2]);
         let _ = std::fs::remove_dir_all(&store.0);
     }

@@ -50,6 +50,12 @@ pub fn notice(app: &AppHandle, title: &str, text: &str) {
     }
 }
 
+/// A problem the user must hear about, shown even while the window is in front: the page they are looking at may be
+/// wrong because of it (a run or its spend that could not be saved).
+pub fn alert(app: &AppHandle, title: &str, text: &str) {
+    show(app, title, text, None);
+}
+
 /// What a chat session's notification says, or None when the report is not worth one. A turn that was stopped by the user
 /// is not reported, and a session that ended normally after its last turn already had its turn reported.
 pub fn session_text(report: &crate::agent::Lifecycle) -> Option<&'static str> {

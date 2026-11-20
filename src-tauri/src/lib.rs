@@ -590,7 +590,7 @@ impl automations::Doer for AppDoer {
     fn charge(&self, usd: f64) {
         let id = format!("charge-{}", uuid::Uuid::new_v4().simple());
         if let Err(e) = self.0.state::<AppState>().automation_spend.settle(&id, Some(usd), agent::now_ms()) {
-            notify::notice(&self.0, "Automations", &format!("Hivemind could not record ${usd:.2} of automation spending ({e}); today's total may be too low"));
+            notify::alert(&self.0, "Automations", &format!("Hivemind could not record ${usd:.2} of automation spending ({e}); today's total may be too low"));
         }
     }
     fn stop(&self, started: &automations::Started) {
@@ -601,12 +601,17 @@ impl automations::Doer for AppDoer {
             }
             automations::Started::Workflow(id) => {
                 let _ = state.workflows.cancel(id, &AppHost(self.0.clone()));
+                // A workflow with no session running ends with no report to say so (Codex review F15-3).
+                automation_workflows_ended(&self.0);
             }
             automations::Started::Done { .. } => {}
         }
     }
     fn notify(&self, title: &str, text: &str) {
         notify::notice(&self.0, title, text);
+    }
+    fn warn(&self, title: &str, text: &str) {
+        notify::alert(&self.0, title, text);
     }
     fn changed(&self) {
         let _ = self.0.emit("automations-changed", ());
@@ -846,6 +851,7 @@ async fn automation_act(app: AppHandle, action: String, id: String) -> Result<Op
                 }
                 if let Some(w) = &row.workflow {
                     let _ = state.workflows.cancel(w, &AppHost(app.clone()));
+                    automation_workflows_ended(&app);
                 }
                 Ok(Some(row))
             }
