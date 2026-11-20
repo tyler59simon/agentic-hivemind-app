@@ -68,7 +68,7 @@ export function BeforeUninstall({ onOpenReview, onOpenSession }: { onOpenReview?
         const merged = deletable(r);
         return (
           <div key={r.repo}>
-            <h4><code>{r.repo}</code></h4>
+            <h4><code style={{ overflowWrap: "anywhere" }}>{r.repo}</code></h4>
             {r.error && <p className="error">{r.error}</p>}
             {!r.target && !r.error && <p className="muted small">The repository is on a detached commit, so no branch counts as merged.</p>}
             <ul>

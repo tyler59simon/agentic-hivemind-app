@@ -138,14 +138,15 @@ fn branches(repo: &Path, sessions: &[SessionInfo]) -> Repo {
     Repo { repo: spelled, target, branches, error }
 }
 
-/// The repository a folder belongs to, as git spells its top level; None when it is not in one.
+/// The repository a folder belongs to, as the path of its main worktree; None when it is not in one. A session's folder
+/// is often its own worktree, whose top level is the worktree, so the main worktree (listed first by git) names the repository.
 fn toplevel(folder: &str) -> Option<String> {
     let path = Path::new(folder);
     if !path.is_dir() {
         return None;
     }
-    let top = run(path, &["rev-parse", "--show-toplevel"]).ok()?;
-    Some(top.trim().to_string()).filter(|t| !t.is_empty())
+    let main = worktree::list(path).ok()?.into_iter().next()?.path;
+    Some(main).filter(|t| !t.is_empty())
 }
 
 /// Refuse when the worktree has changed files now (tracked or untracked; files git ignores are not counted).
@@ -313,7 +314,9 @@ mod tests {
         let open = worktree::create(&rig.worktrees, &rig.repo, None, "cccccccc").unwrap();
         std::fs::write(Path::new(&open.path).join("a.txt"), "changed\n").unwrap();
 
-        let sessions = [info("cccccccc-1", Some(&open), "ended")];
+        let mut session = info("cccccccc-1", Some(&open), "ended");
+        session.workspace = vec![open.path.clone()];   // a session's folder is its worktree
+        let sessions = [session];
         let saved = Settings { other_folders: Some(vec![rig.repo.display().to_string()]), ..Default::default() };
         let found = inventory(&sessions, &saved).unwrap();
 
