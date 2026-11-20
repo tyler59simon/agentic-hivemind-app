@@ -5,7 +5,7 @@ import { convertToUtf8, edit, isDeleting, keyOf, open, reload, resolveMerge, sav
 import { isUnsaved, mergeable, type DocState } from "../../documents/session";
 import { classify } from "../../lib/errors";
 import { createFile, fileName, folderOf, isMarkdown, notebooksQuery, pageTitle, revealFile, treeQuery, type Notebook } from "../../lib/notebooks";
-import { assetBase, isLoose, recentQuery, recentRef, saveAs } from "../../lib/opens";
+import { assetBase, isLoose, recentQuery, recentRef } from "../../lib/opens";
 import { Menu } from "../../ui/Menu";
 import { Confirm, Modal } from "../../ui/Modal";
 import { Tabs } from "../../ui/Page";
@@ -14,7 +14,7 @@ import { useWorkspace, type Mode, type Tab } from "../../workspace/store";
 import { CodeEditor } from "../editor/CodeEditor";
 import { PageMergeDialog } from "../editor/MergeDialog";
 import { resolvePage } from "../links/resolve";
-import { movePath, openPage, renamed, trashPath } from "./actions";
+import { movePath, openPage, renamed, saveCopy, trashPath } from "./actions";
 import { DeleteConfirm } from "./DeleteConfirm";
 import { forgetRecent } from "./opening";
 import { PageView } from "./PageView";
@@ -72,14 +72,7 @@ function reloadPage(key: string) {
 const openOutside = (ref: { notebook: string; path: string }) => revealFile(ref.notebook, ref.path, true).catch((e) => toast(classify(e).message, "error"));
 
 /** Save the text of a page that cannot be written in place as a new UTF-8 file, and open that file. */
-async function saveCopy(text: string, name: string) {
-  try {
-    const ref = await saveAs(text, name);
-    if (ref) openPage(ref);
-  } catch (e) {
-    toast(classify(e).message, "error");
-  }
-}
+const copyAs = (text: string, name: string) => saveCopy(text, name).catch((e) => toast(classify(e).message, "error"));
 
 function Banners({ doc, docKey, onMerge, onRecreate }: { doc: DocState; docKey: string; onMerge: () => void; onRecreate: () => void }) {
   const ref = useDocuments((s) => s.refs[docKey]);
@@ -94,10 +87,10 @@ function Banners({ doc, docKey, onMerge, onRecreate }: { doc: DocState; docKey: 
     out.push(
       <div key="ro" className="banner note-banner">{doc.base.binary ? "This is not a text file, so it opens read-only." : `Read-only: ${doc.base.readOnly}.`}
         <div className="actions">
-          {doc.base.convertible && <button onClick={() => convertToUtf8(docKey)}>Convert to UTF-8 and edit</button>}
+          {doc.base.convertible && <button onClick={() => void convertToUtf8(docKey)}>Convert to UTF-8 and edit</button>}
           {/* Binary files open in their own program until NS-6B's viewer; text Hivemind may not write can be saved elsewhere. */}
           {doc.base.binary && ref && <button onClick={() => void openOutside(ref)}>Open with default app</button>}
-          {!doc.base.binary && !doc.base.convertible && ref && <button onClick={() => void saveCopy(doc.text, fileName(ref.path))}>Save a copy as…</button>}
+          {!doc.base.binary && !doc.base.convertible && ref && <button onClick={() => void copyAs(doc.text, fileName(ref.path))}>Save a copy as…</button>}
         </div>
       </div>,
     );
@@ -106,7 +99,7 @@ function Banners({ doc, docKey, onMerge, onRecreate }: { doc: DocState; docKey: 
     const lossy = doc.base?.convertible ? " Bytes that did not decode are saved as �." : "";
     out.push(<div key="convert" className="banner note-banner">Saving writes this file as UTF-8.{lossy}</div>);
   }
-  if ((doc.status === "stale" || doc.banner?.kind === "changed") && !mergeable(doc.theirs)) {
+  if ((doc.status === "stale" || doc.banner?.kind === "changed") && !mergeable(doc.theirs, !!doc.convert)) {
     // Nothing to merge into: the file is no longer text Hivemind can edit (Codex review of 32fd236, D3).
     const why = doc.theirs?.binary ? "is no longer a text file" : `can no longer be edited here (${doc.theirs?.readOnly ?? "unknown reason"})`;
     out.push(
@@ -139,7 +132,7 @@ function Banners({ doc, docKey, onMerge, onRecreate }: { doc: DocState; docKey: 
       <div key="gone" className="banner warn note-banner">This page was deleted or moved by another program. Your text is still here.
         <div className="actions">
           {ref && isLoose(ref)
-            ? <button className="primary" onClick={() => void saveCopy(doc.text, fileName(ref.path))}>Save as…</button>
+            ? <button className="primary" onClick={() => void copyAs(doc.text, fileName(ref.path))}>Save as…</button>
             : <button className="primary" onClick={onRecreate}>Save it again here</button>}
         </div>
       </div>,
@@ -151,7 +144,7 @@ function Banners({ doc, docKey, onMerge, onRecreate }: { doc: DocState; docKey: 
     out.push(
       <div key="error" className="banner error note-banner">{doc.error}
         <div className="actions">
-          {unmappable && <button className="primary" onClick={() => convertToUtf8(docKey)}>Convert to UTF-8</button>}
+          {unmappable && <button className="primary" onClick={() => void convertToUtf8(docKey)}>Convert to UTF-8</button>}
           <button onClick={dismiss}>OK</button>
         </div>
       </div>,
@@ -211,7 +204,8 @@ export function FileTab({ tab }: { tab: Tab }) {
   const loose = isLoose(ref);
   const full = useLoosePath(ref);
   // Pictures load from the notebook's root (a page's folder inside it) or a loose file's folder.
-  const pictures = useQuery({ queryKey: ["asset-base", ref.notebook, ref.path], queryFn: () => assetBase(ref.notebook, ref.path), staleTime: Infinity, enabled: markdown });
+  // Asked again on every mount: a grant withdrawn while the tab was closed gets a new id (Codex review of 52051c8, A3).
+  const pictures = useQuery({ queryKey: ["asset-base", ref.notebook, ref.path], queryFn: () => assetBase(ref.notebook, ref.path), enabled: markdown });
   const mode: Mode = markdown ? (tab.mode === "history" ? "reading" : tab.mode ?? "live") : "source";
   const titles = useCallback(() => pages.filter(isMarkdown).map(pageTitle), [pages]);
 
@@ -221,7 +215,7 @@ export function FileTab({ tab }: { tab: Tab }) {
   const doSave = useCallback(() => saveFileTab(key), [key]);
   const merge = () => {
     const d = useDocuments.getState().docs[key];
-    if (!d?.base || !d.theirs || !mergeable(d.theirs)) return;
+    if (!d?.base || !d.theirs || !mergeable(d.theirs, !!d.convert)) return;
     // The version shown is the one the result is saved against, whatever arrives while the dialog is open.
     const shown = d.theirs;
     setDialog(<PageMergeDialog base={d.base.text} mine={d.text} theirs={shown.text}

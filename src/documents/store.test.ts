@@ -6,7 +6,7 @@ const files = new Map<string, string>();
 const drafts = new Map<string, unknown>();
 const gates = new Map<string, Promise<void>>();
 const calls: string[] = [];
-const flags = { failDrafts: false, readError: new Map<string, string>(), deleteError: "", convertible: new Set<string>() };
+const flags = { failDrafts: false, readError: new Map<string, string>(), deleteError: "", convertible: new Set<string>(), legacy: new Set<string>() };
 const converted: string[] = [];
 function gate(name: string) {
   let open = () => {};
@@ -27,6 +27,7 @@ vi.mock("@tauri-apps/api/core", () => ({
         if (flags.convertible.has(path)) {
           return { ...loaded(files.get(path)!), format: { encoding: "windows-1252", bom: false, eol: "lf" }, readOnly: "This file contains bytes that are not valid windows-1252", convertible: true };
         }
+        if (flags.legacy.has(path)) return { ...loaded(files.get(path)!), format: { encoding: "windows-1252", bom: false, eol: "lf" } };
         return loaded(files.get(path)!);
       case "file_rename": {
         const from = a.from as string, to = a.to as string;
@@ -57,6 +58,12 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "file_delete":
         if (flags.deleteError) throw new Error(flags.deleteError);
         files.delete(path); return `.hivemind/trash/${path}`;
+      case "file_save_as": {
+        // The user picked the suggested name, replacing that file.
+        const to = a.suggested as string;
+        files.set(to, a.text as string);
+        return ref(to);
+      }
       case "draft_put":
         if (flags.failDrafts) throw new Error("The draft is larger than 32 MB");
         drafts.set(a.key as string, a.value); return null;
@@ -86,7 +93,7 @@ describe("documents store", () => {
     // them when the fake store is cleared.
     for (const d of drafts.values()) forgetMoved("nb-1", (d as { target: { path: string } }).target.path);
     files.clear(); drafts.clear(); gates.clear(); calls.length = 0;
-    flags.failDrafts = false; flags.readError.clear(); flags.deleteError = ""; flags.convertible.clear(); converted.length = 0;
+    flags.failDrafts = false; flags.readError.clear(); flags.deleteError = ""; flags.convertible.clear(); flags.legacy.clear(); converted.length = 0;
     files.set("A.md", "one");
     useWorkspace.setState({ panes: [{ id: "p0", tabs: [], active: null }], focused: "p0", dirty: {}, reveal: null });
     useApp.setState({ route: { page: "notes" }, back: [] });
@@ -551,7 +558,7 @@ describe("documents store", () => {
     ws().openTab({ kind: "file", file: ref("L.txt") });
     await docs.open(ref("L.txt"));
     expect(state("L.txt")).toMatchObject({ status: "readOnly", base: { convertible: true } });
-    docs.convertToUtf8(key("L.txt"));
+    await docs.convertToUtf8(key("L.txt"));
     docs.edit(key("L.txt"), "café");
     await docs.flushAllDrafts();
     // Closed and reopened (the app restarted): still converted, with the edits.
@@ -563,6 +570,92 @@ describe("documents store", () => {
     await docs.save(key("L.txt"));
     expect(converted).toEqual(["L.txt"]);
     expect(files.get("L.txt")).toBe("café");
+  });
+
+  it("D3: a converted draft comes back converted when the file changed since, and for an editable legacy file", async () => {   // Codex review of 52051c8
+    files.set("L.txt", "line one\nline two\n");
+    flags.convertible.add("L.txt");
+    ws().openTab({ kind: "file", file: ref("L.txt") });
+    await docs.open(ref("L.txt"));
+    await docs.convertToUtf8(key("L.txt"));
+    docs.edit(key("L.txt"), "line one, mine\nline two\n");
+    await docs.flushAllDrafts();
+    ws().closeTab("p0", ws().panes[0].tabs[0].id);
+    docs.release(key("L.txt"));
+    // Someone else changed the file meanwhile; it is still not valid windows-1252.
+    files.set("L.txt", "line one\nline two\nline three\n");
+    ws().openTab({ kind: "file", file: ref("L.txt") });
+    await docs.open(ref("L.txt"));
+    expect(state("L.txt")).toMatchObject({ status: "dirty", convert: true, text: "line one, mine\nline two\nline three\n", base: { format: { encoding: "UTF-8" } } });
+    // An editable windows-1252 file converted because the edits hold characters it cannot store.
+    files.set("W.txt", "plain");
+    flags.legacy.add("W.txt");
+    ws().openTab({ kind: "file", file: ref("W.txt") });
+    await docs.open(ref("W.txt"));
+    docs.edit(key("W.txt"), "plain \u4e2d");
+    await docs.convertToUtf8(key("W.txt"));
+    await docs.flushAllDrafts();
+    ws().closeTab("p0", ws().panes[0].tabs.find((t) => t.file?.path === "W.txt")!.id);
+    docs.release(key("W.txt"));
+    ws().openTab({ kind: "file", file: ref("W.txt") });
+    await docs.open(ref("W.txt"));
+    expect(state("W.txt")).toMatchObject({ status: "dirty", convert: true, text: "plain \u4e2d", base: { format: { encoding: "UTF-8" } } });
+    await docs.save(key("W.txt"));
+    expect(converted).toEqual(["W.txt"]);
+  });
+
+  it("D3: Convert on a page that became undecodable brings back the draft written before, never writes over it", async () => {   // Codex review of 52051c8
+    files.set("P.txt", "line one\nline two\n");
+    ws().openTab({ kind: "file", file: ref("P.txt") });
+    await docs.open(ref("P.txt"));
+    docs.edit(key("P.txt"), "line one, mine\nline two\n");
+    await docs.flushAllDrafts();
+    ws().closeTab("p0", ws().panes[0].tabs[0].id);
+    docs.release(key("P.txt"));
+    // Another program added a line and bytes that do not decode.
+    files.set("P.txt", "line one\nline two\nline three\n");
+    flags.convertible.add("P.txt");
+    ws().openTab({ kind: "file", file: ref("P.txt") });
+    await docs.open(ref("P.txt"));
+    expect(state("P.txt").status).toBe("readOnly");
+    await docs.convertToUtf8(key("P.txt"));
+    expect(state("P.txt")).toMatchObject({ status: "dirty", convert: true, text: "line one, mine\nline two\nline three\n", banner: { kind: "restored" } });
+    await docs.flushAllDrafts();
+    const kept = drafts.get(await draftKeyOf(key("P.txt"))) as { mine: string; convert?: boolean };
+    expect(kept).toMatchObject({ mine: "line one, mine\nline two\nline three\n", convert: true });
+  });
+
+  it("D2: Save as over a file open in a tab shows the new text there", async () => {   // Codex review of 52051c8
+    const { saveCopy } = await import("../features/notes/actions");
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    await saveCopy("replaced from elsewhere", "A.md");
+    expect(state("A.md")).toMatchObject({ status: "clean", text: "replaced from elsewhere" });
+  });
+
+  it("R2: new pages never go to a file opened from outside every notebook", async () => {   // Codex review of 52051c8
+    const { currentNotebook } = await import("../features/notes/actions");
+    ws().openTab({ kind: "file", file: { notebook: "@0123456789abcdef", path: "loose.txt" } });
+    expect(currentNotebook("nb-1")).toEqual({ notebook: "nb-1", folder: "" });
+    ws().openTab({ kind: "file", file: ref("Area/A.md") });
+    expect(currentNotebook("nb-1")).toEqual({ notebook: "nb-1", folder: "Area" });
+  });
+
+  it("F2: a page opened at a rename's destination waits for the rename and its draft", async () => {   // Codex review of 52051c8
+    const { QueryClient } = await import("@tanstack/react-query");
+    const { movePath } = await import("../features/notes/actions");
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    docs.edit(key("A.md"), "one, edited");
+    const slow = gate("file_rename undefined");
+    const moving = movePath(new QueryClient(), "nb-1", "A.md", "B.md");
+    for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+    const opening = docs.open(ref("B.md"));
+    await Promise.resolve();
+    expect(calls).not.toContain("file_read B.md");
+    slow();
+    await Promise.all([moving, opening]);
+    expect(state("B.md")).toMatchObject({ status: "dirty", text: "one, edited" });
   });
 
   it("U2: renaming a section keeps every dot of the new name", async () => {

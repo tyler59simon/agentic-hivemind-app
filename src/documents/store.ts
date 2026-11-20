@@ -109,10 +109,10 @@ export function open(ref: FileRef): Promise<void> {
   return startLoad(key, ref);
 }
 
-function startLoad(key: string, ref: FileRef) {
+function startLoad(key: string, ref: FileRef, convertNow = false) {
   const generation = ++generationCount;
   generations.set(key, generation);
-  const run = load(key, ref, generation).finally(() => { if (loads.get(key) === run) loads.delete(key); });
+  const run = load(key, ref, generation, convertNow).finally(() => { if (loads.get(key) === run) loads.delete(key); });
   loads.set(key, run);
   return run;
 }
@@ -121,21 +121,17 @@ function startLoad(key: string, ref: FileRef) {
 const current = (key: string, generation: number | undefined) =>
   generation !== undefined && generations.get(key) === generation && !!get(key);
 
-async function load(key: string, ref: FileRef, attempt: number) {
+async function load(key: string, ref: FileRef, attempt: number, convertNow = false) {
   try {
     const loaded = toLoaded(await readFile(ref.notebook, ref.path));
     const draft = await getFileDraft(await draftKeyOf(key)).catch(() => null);
     if (!current(key, attempt)) return;
-    // A page the user was converting to UTF-8 comes back converted, with its edits.
-    if (draft?.convert && loaded.convertible && draft.precondition.sha256 === loaded.stamp.sha256) {
-      dispatch(key, { type: "loaded", loaded });
-      dispatch(key, { type: "convert" });
-      dispatch(key, { type: "edited", text: draft.mine });
-      return;
-    }
-    if (!draft || loaded.readOnly || loaded.binary) { dispatch(key, { type: "loaded", loaded }); return; }
+    // A draft written after Convert to UTF-8 comes back converted, whether the file is unchanged, still undecodable
+    // or changed since; the file's own encoding no longer decides (Codex review of 52051c8, D3).
+    const convert = (convertNow || !!draft?.convert) && !loaded.binary && (!loaded.readOnly || !!loaded.convertible);
+    if (!draft || loaded.binary || (loaded.readOnly && !convert)) { dispatch(key, { type: "loaded", loaded }); return; }
     if (draft.precondition.sha256 === loaded.stamp.sha256) {
-      dispatch(key, { type: "loaded", loaded, draft: { text: draft.mine, at: draft.savedAt } });
+      dispatch(key, { type: "loaded", loaded, draft: { text: draft.mine, at: draft.savedAt }, convert });
       return;
     }
     // The file changed after the draft was written: merge the draft into the current file when it can be done cleanly,
@@ -144,10 +140,10 @@ async function load(key: string, ref: FileRef, attempt: number) {
     // review of 32fd236, D4).
     const base = draft.base;
     const merged = base !== undefined ? mergeBody(base, draft.mine, loaded.text) : null;
-    if (merged && merged.conflicts === 0) dispatch(key, { type: "loaded", loaded, draft: { text: merged.text, at: draft.savedAt } });
+    if (merged && merged.conflicts === 0) dispatch(key, { type: "loaded", loaded, draft: { text: merged.text, at: draft.savedAt }, convert });
     else {
       const original: Loaded = { ...loaded, text: base ?? "", stamp: draft.precondition };
-      dispatch(key, { type: "loaded", loaded: original, draft: { text: draft.mine, at: draft.savedAt } });
+      dispatch(key, { type: "loaded", loaded: original, draft: { text: draft.mine, at: draft.savedAt }, convert });
       dispatch(key, { type: "stale", theirs: loaded });
     }
   } catch (e) {
@@ -255,7 +251,15 @@ export function draftsPending(): boolean {
 }
 
 /** Convert to UTF-8: the page becomes editable and the next save writes UTF-8 (NS-1B). */
-export function convertToUtf8(key: string) {
+/** Convert to UTF-8. A read-only page whose draft was written before the file became undecodable converts with that
+ *  draft's edits, merged into the file as it is now, so Convert never writes over them (Codex review of 52051c8, D3). */
+export async function convertToUtf8(key: string) {
+  const ref = useDocuments.getState().refs[key];
+  if (ref && get(key)?.status === "readOnly") {
+    const draft = await getFileDraft(await draftKeyOf(key)).catch(() => null);
+    if (get(key)?.status !== "readOnly") return;
+    if (draft) { await startLoad(key, ref, true); return; }
+  }
   dispatch(key, { type: "convert" });
   scheduleDraft(key);
 }

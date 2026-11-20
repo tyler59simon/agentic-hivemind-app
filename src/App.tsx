@@ -22,7 +22,7 @@ import { refreshStore } from "./lib/refresh";
 import { Shell } from "./shell/Shell";
 import { openReview, openSession, useApp } from "./store";
 import { toast, Toasts } from "./ui/toast";
-import { useWorkspace } from "./workspace/store";
+import { unsavedUntitled, useWorkspace } from "./workspace/store";
 import { onFilesChanged, startDocumentSync } from "./documents/sync";
 import { draftsPending, flushAllDrafts, onDraftLost } from "./documents/store";
 import { useOpenRequests } from "./features/notes/opening";
@@ -98,7 +98,7 @@ function useCloseGuard() {
       const ws = useWorkspace.getState();
       if (Object.values(ws.dirty).some(Boolean)) {
         e.preventDefault();
-        setAsking({ untitled: ws.panes.some((p) => p.tabs.some((t) => t.kind === "new-file" && ws.dirty[t.id])) });
+        setAsking({ untitled: unsavedUntitled(ws) });
         return;
       }
       // No unsaved tab, but a closed page's draft may still be on its way, or have failed: write or report it first
@@ -120,22 +120,30 @@ function useCloseGuard() {
 }
 
 /** Tray Quit: the backend shows the window and asks; nothing running quits at once, otherwise the dialog names what stops. */
-function useQuitRequest() {
+export function useQuitRequest() {
   const [lines, setLines] = useState<string[] | null>(null);
   const [keepDrafts, draftDialog] = useKeepDrafts();
+  const [untitled, setUntitled] = useState(false);
   const quit = useCallback(() => keepDrafts(() => { appQuit().catch((e) => toast(String(e), "error")); }), [keepDrafts]);
+  // Tray Quit asks too when a never-saved text file holds text (Codex review of 52051c8, D1).
+  const finish = useCallback(() => { if (unsavedUntitled(useWorkspace.getState())) setUntitled(true); else void quit(); }, [quit]);
   useEffect(() => {
     const stop = listen("quit-requested", async () => {
       quitAck().catch(() => undefined);
       const now = await running();
-      if (now.length === 0) void quit();
+      if (now.length === 0) finish();
       else setLines(now);
     });
     return () => { stop.then((unlisten) => unlisten()); };
-  }, [quit]);
+  }, [finish]);
   return (
     <>
-      {lines && <QuitDialog lines={lines} onKeep={() => setLines(null)} onQuit={() => { setLines(null); void quit(); }} />}
+      {lines && <QuitDialog lines={lines} onKeep={() => setLines(null)} onQuit={() => { setLines(null); finish(); }} />}
+      {untitled && (
+        <Confirm title="Quit with an unsaved new text file?" danger action="Quit"
+          message="A new text file that was never saved is lost when Hivemind quits."
+          onAnswer={(yes) => { setUntitled(false); if (yes) void quit(); }} />
+      )}
       {draftDialog}
     </>
   );

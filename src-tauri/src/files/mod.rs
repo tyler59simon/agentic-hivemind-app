@@ -177,10 +177,19 @@ pub fn recover(path: &Path) -> bool {
     }
 }
 
-/// Read a file for the editor.
+/// Read a file for the editor, putting back a version an interrupted save left aside.
 pub fn read(path: &Path) -> Result<Loaded, String> {
+    read_inner(path, true)
+}
+
+/// Read a file Hivemind may not write (it lies in a protected place): nothing is put back (Codex review of 52051c8, P1).
+pub fn read_view(path: &Path) -> Result<Loaded, String> {
+    read_inner(path, false)
+}
+
+fn read_inner(path: &Path, may_recover: bool) -> Result<Loaded, String> {
     let meta = match std::fs::metadata(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && recover(path) => std::fs::metadata(path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && may_recover && recover(path) => std::fs::metadata(path),
         other => other,
     };
     let meta = meta.map_err(|e| format!("Could not open {}: {e}", path.display()))?;
@@ -318,6 +327,24 @@ pub fn create(path: &Path, text: &str) -> Result<Stamp, String> {
     Ok(done)
 }
 
+/// Save As, as UTF-8 with LF line breaks. A new file is created only if nothing took its name meanwhile. A file the user
+/// chose to replace is saved over like a page: held from the check to the replace (named streams, times and attributes
+/// kept), against the version on disk now, and never when it is not text (Codex review of 52051c8, D2 and W2).
+pub fn save_as(path: &Path, text: &str) -> Result<(), String> {
+    let lf = text.replace("\r\n", "\n");
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return create(path, &lf).map(|_| ()),
+        Err(e) => return Err(format!("Could not read {}: {e}", path.display())),
+    };
+    let format = FileFormat { encoding: "UTF-8".into(), bom: false, eol: Eol::Lf, confidence: Default::default() };
+    match save(path, &lf, &stamp(&bytes, path), &format, true)? {
+        SaveOutcome::Saved(_) => Ok(()),
+        SaveOutcome::Stale { .. } => Err(format!("{} changed while Hivemind was saving over it; try again", path.display())),
+        SaveOutcome::Gone => create(path, &lf).map(|_| ()),
+    }
+}
+
 /// Rename or move a file or folder. Refuses when the target exists, except a change of letter case only, which
 /// goes through a temporary name.
 pub fn rename(from: &Path, to: &Path) -> Result<(), String> {
@@ -425,7 +452,7 @@ mod tests {
     #[test]
     fn binary_undecodable_and_mixed_files_are_read_only() {
         assert!(decode(b"PK\x03\x04\x00\x00").3);
-        assert!(decode(b"caf\xc3\xa9 \xff").2.unwrap().contains("not valid UTF-8"));
+        assert!(decode(b"caf\xc3\xa9 na\xc3\xafve \xff").2.unwrap().contains("not valid UTF-8"));
         let (_, format, read_only, _) = decode(b"a\r\nb\n");
         assert!(read_only.unwrap().contains("line-ending"));
         assert!(encode("a\nb", &format).is_err());
@@ -576,6 +603,38 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn save_as_over_a_file_keeps_its_streams_and_never_replaces_binary() {   // Codex review of 52051c8, D2 and W2
+        let dir = scratch();
+        // A new file gets LF line breaks; one that appeared at the name meanwhile is not created over.
+        save_as(&dir.join("New.txt"), "one\r\ntwo\n").unwrap();
+        assert_eq!(std::fs::read(dir.join("New.txt")).unwrap(), b"one\ntwo\n");
+        let path = dir.join("Old.txt");
+        std::fs::write(&path, "old\r\n").unwrap();
+        std::fs::write(format!("{}:extra", path.display()), "stream").unwrap();
+        save_as(&path, "new text\r\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new text\n");
+        assert_eq!(std::fs::read_to_string(format!("{}:extra", path.display())).unwrap(), "stream", "the named stream is kept");
+        let picture = dir.join("pic.png");
+        std::fs::write(&picture, b"\x89PNG\r\n\x1a\n\x00\x00").unwrap();
+        assert!(save_as(&picture, "text").is_err());
+        assert_eq!(std::fs::read(&picture).unwrap(), b"\x89PNG\r\n\x1a\n\x00\x00");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_read_of_a_file_hivemind_may_not_write_puts_nothing_back() {   // Codex review of 52051c8, P1
+        let dir = scratch();
+        let path = dir.join("Page.md");
+        let aside = atomic::beside(&path, "old-").unwrap();
+        std::fs::write(&aside, "earlier").unwrap();
+        assert!(read_view(&path).is_err());
+        assert!(aside.exists() && !path.exists(), "the aside stays where it is");
+        assert_eq!(read(&path).unwrap().text, "earlier", "an ordinary read still puts it back");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn a_case_only_rename_in_a_case_sensitive_folder_keeps_both_files() {
         let dir = scratch();
         let made = std::process::Command::new("fsutil").args(["file", "setCaseSensitiveInfo"]).arg(&dir).arg("enable").output().unwrap();
@@ -622,14 +681,14 @@ mod tests {
     fn convert_to_utf8_saves_over_undecodable_text_but_never_binary() {
         let dir = scratch();
         let path = dir.join("Broken.txt");
-        let bytes = b"caf\xc3\xa9 \xff\n".to_vec();
+        let bytes = b"caf\xc3\xa9 na\xc3\xafve \xff\n".to_vec();
         std::fs::write(&path, &bytes).unwrap();
         let loaded = read(&path).unwrap();
         assert!(loaded.read_only.is_some() && loaded.convertible);
         let utf8 = FileFormat { encoding: "UTF-8".into(), bom: false, eol: loaded.format.eol, confidence: Default::default() };
         assert!(save(&path, &loaded.text, &loaded.stamp, &utf8, false).is_err(), "not without Convert");
         assert!(matches!(save(&path, &loaded.text, &loaded.stamp, &utf8, true).unwrap(), SaveOutcome::Saved(_)));
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "café \u{fffd}\n");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "café naïve \u{fffd}\n");
         std::fs::write(&path, b"PK\x03\x04\x00\x00").unwrap();
         let stamp = Stamp { sha256: sha256(b"PK\x03\x04\x00\x00"), size: 6, mtime_ms: 0 };
         assert!(save(&path, "x", &stamp, &utf8, true).is_err());
@@ -669,7 +728,7 @@ mod tests {
         let page = dir.join("Turned.md");
         let format = FileFormat { encoding: "UTF-8".into(), bom: false, eol: Eol::Lf, confidence: Default::default() };
         // Since NS-1B Latin-1 bytes are an editable windows-1252 page; UTF-8 with a bad byte is still not editable.
-        for bytes in [&b"PK\x03\x04\x00\x00"[..], &b"caf\xc3\xa9 \xff\n"[..]] {
+        for bytes in [&b"PK\x03\x04\x00\x00"[..], &b"caf\xc3\xa9 na\xc3\xafve \xff\n"[..]] {
             std::fs::write(&page, bytes).unwrap();
             // The stamp of the bytes now on disk, as a merge against them would carry.
             let stamp = Stamp { sha256: sha256(bytes), size: bytes.len() as u64, mtime_ms: 0 };

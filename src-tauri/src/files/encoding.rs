@@ -45,8 +45,15 @@ pub fn decode(bytes: &[u8]) -> Decoded {
         return decode_with(bytes, UTF_8, false, Confidence::Valid);
     }
     // UTF-8 text with a few bad bytes is still UTF-8: a legacy guess would show its accented letters as two wrong
-    // characters each. Valid multi-byte sequences next to invalid bytes mean that case; it opens read-only.
-    if bytes.utf8_chunks().any(|chunk| !chunk.valid().is_ascii()) {
+    // characters each. It counts as UTF-8 only when its valid multi-byte characters outnumber its runs of invalid
+    // bytes, so a legacy file that happens to hold one UTF-8-looking pair is still guessed as legacy (Codex review of
+    // 52051c8, D5). A file that does not decode opens read-only either way.
+    let (mut multibyte, mut invalid) = (0usize, 0usize);
+    for chunk in bytes.utf8_chunks() {
+        multibyte += chunk.valid().chars().filter(|c| !c.is_ascii()).count();
+        invalid += usize::from(!chunk.invalid().is_empty());
+    }
+    if multibyte > invalid {
         return decode_with(bytes, UTF_8, false, Confidence::Guess);
     }
     let mut detector = chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Allow);
@@ -149,6 +156,12 @@ fn encode_body(text: &str, encoding: &'static Encoding) -> Result<Vec<u8>, Strin
             EncoderResult::Unmappable(_) => unmappable += 1,
         }
     }
+    if unmappable == 0 {
+        // Some encoders write a near match without reporting it: Shift_JIS writes U+00A5 YEN SIGN as 0x5C, which reads
+        // back as a backslash. The bytes must read back as the text (Codex review of 52051c8, D4).
+        let (back, _) = encoding.decode_without_bom_handling(&out);
+        unmappable = back.chars().zip(text.chars()).filter(|(a, b)| a != b).count() + back.chars().count().abs_diff(text.chars().count());
+    }
     match unmappable {
         0 => Ok(out),
         1 => Err(format!("1 character cannot be written in {}", shown(encoding.name()))),
@@ -159,6 +172,24 @@ fn encode_body(text: &str, encoding: &'static Encoding) -> Result<Vec<u8>, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_character_the_encoder_writes_as_another_is_refused() {   // Codex review of 52051c8, D4
+        let err = encode("price \u{a5}100\n", "Shift_JIS", false).unwrap_err();
+        assert!(err.contains("1 character cannot be written in Shift_JIS"), "{err}");
+        assert_eq!(encode("C:\\dir\n", "Shift_JIS", false).unwrap(), b"C:\\dir\n");
+    }
+
+    #[test]
+    fn a_legacy_file_holding_one_utf8_looking_pair_is_guessed_as_legacy() {   // Codex review of 52051c8, D5
+        let legacy = decode(b"Le caf\xe9 co\xfbte 3 \xc2\xa3 au march\xe9 de la ville\n");
+        assert_eq!(legacy.encoding, "windows-1252");
+        assert!(legacy.read_only.is_none() && legacy.text.starts_with("Le caf\u{e9} co\u{fb}te"), "{:?}", legacy.read_only);
+        // UTF-8 with one bad byte among its accented letters stays UTF-8, read-only.
+        let damaged = decode(b"caf\xc3\xa9 na\xc3\xafve \xff\n");
+        assert_eq!(damaged.encoding, "UTF-8");
+        assert!(damaged.read_only.unwrap().contains("not valid UTF-8"));
+    }
 
     const SAMPLES: &[(&str, &str)] = &[
         ("windows-1252", "Café crème, naïve façade; déjà vu. Ça coûte 5 €.\r\n"),

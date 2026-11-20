@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { initial, isUnsaved, reduce, type DocEvent, type DocState, type Loaded } from "./session";
+import { initial, isUnsaved, mergeable, reduce, type DocEvent, type DocState, type Loaded } from "./session";
 
 const fmt = { encoding: "UTF-8", bom: false, eol: "lf" as const };
 const file = (text: string, sha = `sha-${text}`): Loaded => ({ text, stamp: { sha256: sha, size: text.length, mtimeMs: 1 }, format: fmt, readOnly: null, binary: false });
@@ -83,6 +83,31 @@ describe("document session", () => {
     // An unsaved page whose characters its encoding cannot hold converts.
     const legacy = run({ type: "loaded", loaded: { ...file("x"), format: { encoding: "windows-1252", bom: false, eol: "lf" } } }, { type: "edited", text: "x 中" });
     expect(reduce(legacy, { type: "convert" })).toMatchObject({ status: "dirty", convert: true, base: { format: { encoding: "UTF-8" } } });
+  });
+
+  it("a draft written after Convert comes back converted, even with the text unchanged (Codex review of 52051c8, D3)", () => {
+    const legacy = { ...file("caf?"), format: { encoding: "windows-1252", bom: false, eol: "lf" as const }, readOnly: "This file contains bytes that are not valid windows-1252", convertible: true };
+    const back = run({ type: "loaded", loaded: legacy, draft: { text: "caf?", at: "t" }, convert: true });
+    expect(back).toMatchObject({ status: "dirty", convert: true, base: { readOnly: null, format: { encoding: "UTF-8", bom: false } } });
+    // Without the convert mark the draft of a read-only file is not restored, and a binary file never converts.
+    expect(run({ type: "loaded", loaded: legacy, draft: { text: "caf?", at: "t" } }).status).toBe("readOnly");
+    const binary = { ...file(""), binary: true, readOnly: "This is not a text file" };
+    expect(run({ type: "loaded", loaded: binary, draft: { text: "x", at: "t" }, convert: true }).status).toBe("readOnly");
+  });
+
+  it("a merge into a page being converted keeps it UTF-8 (Codex review of 52051c8, R3)", () => {
+    const legacy = (text: string): Loaded => ({ ...file(text), format: { encoding: "windows-1252", bom: false, eol: "lf" }, readOnly: "This file contains bytes that are not valid windows-1252", convertible: true });
+    const s = run({ type: "loaded", loaded: legacy("a") }, { type: "convert" }, { type: "edited", text: "a mine" },
+      { type: "saveStarted" }, { type: "stale", theirs: legacy("a theirs") }, { type: "merged", text: "a mine theirs", theirs: legacy("a theirs") });
+    expect(s).toMatchObject({ status: "dirty", convert: true, base: { readOnly: null, format: { encoding: "UTF-8" }, stamp: { sha256: "sha-a theirs" } } });
+    // Even a merge that takes their text as it is still has the conversion to write.
+    const same = run({ type: "loaded", loaded: legacy("a") }, { type: "convert" }, { type: "merged", text: "a theirs", theirs: legacy("a theirs") });
+    expect(same.status).toBe("dirty");
+    // Their version is mergeable for a page being converted only when its encoding is all that stops it.
+    expect(mergeable(legacy("x"))).toBe(false);
+    expect(mergeable(legacy("x"), true)).toBe(true);
+    expect(mergeable({ ...file(""), binary: true, readOnly: "This is not a text file" }, true)).toBe(false);
+    expect(mergeable({ ...file("x"), readOnly: "This file is read-only on disk" }, true)).toBe(false);
   });
 
   it("read-only files ignore edits", () => {

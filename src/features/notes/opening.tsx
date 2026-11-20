@@ -38,7 +38,7 @@ export function useOpenRequests() {
     let stopped = false;
     const drain = () => openPending().then(
       (refs) => {
-        if (stopped) return;
+        // Rust has handed these over, so they open even if this effect ended meanwhile (Codex review of 52051c8, I1).
         refs.forEach((ref) => openPage(ref));
         if (refs.length) client.invalidateQueries({ queryKey: recentQuery().queryKey });
       },
@@ -48,7 +48,9 @@ export function useOpenRequests() {
       listen("open-requested", () => void drain()),
       listen<{ token: string; name: string }>("folder-dropped", (e) => setOffer(e.payload)),
     ];
-    void Promise.all(stops).then(() => drain());
+    // An effect that ended before its listeners were in place (Strict Mode runs effects twice) leaves the queue to the
+    // one that follows it.
+    void Promise.all(stops).then(() => { if (!stopped) void drain(); });
     return () => { stopped = true; stops.forEach((s) => s.then((unlisten) => unlisten())); };
   }, [client]);
   return offer && (

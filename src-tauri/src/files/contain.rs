@@ -94,6 +94,13 @@ pub fn resolved_rel(root: &Path, full: &Path) -> Option<String> {
     relative(&real_root, &real)
 }
 
+/// Whether `path`, a folder recorded earlier in its canonical plain spelling, still names the same place: no folder on
+/// it is a link or junction now, and it resolves to itself apart from letter case (a case-only rename keeps it).
+pub fn unmoved(path: &Path) -> bool {
+    let linked = path.ancestors().any(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()));
+    !linked && std::fs::canonicalize(path).is_ok_and(|real| crate::folders::plain(&real).to_lowercase() == crate::folders::plain(path).to_lowercase())
+}
+
 /// The path of `full` relative to `root`, with forward slashes; None when it is not below `root`.
 pub fn relative(root: &Path, full: &Path) -> Option<String> {
     let rest = full.strip_prefix(root).ok()?;

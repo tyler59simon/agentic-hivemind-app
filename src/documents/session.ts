@@ -33,7 +33,7 @@ export interface DocState {
 }
 
 export type DocEvent =
-  | { type: "loaded"; loaded: Loaded; draft?: { text: string; at: string } }
+  | { type: "loaded"; loaded: Loaded; draft?: { text: string; at: string }; convert?: boolean }
   | { type: "edited"; text: string }
   | { type: "saveStarted" }
   | { type: "saved"; stamp: Stamp }
@@ -49,16 +49,25 @@ export type DocEvent =
 
 export const initial: DocState = { status: "loading", base: null, text: "", version: 0 };
 
+/** `l` as Convert to UTF-8 makes it: editable, written as UTF-8 without a BOM, with the same line endings. */
+export const converted = (l: Loaded): Loaded => ({ ...l, format: { ...l.format, encoding: "UTF-8", bom: false, confidence: "valid" }, readOnly: null });
+
+/** Whether converting `l` to UTF-8 makes it editable: text whose only problem is its encoding, or editable text. */
+const canConvert = (l: Loaded) => !l.binary && (!l.readOnly || !!l.convertible);
+
 const dirtyOr = (s: DocState, text: string): Status => (s.base && text === s.base.text && !s.convert ? "clean" : "dirty");
 
 export function reduce(s: DocState, e: DocEvent): DocState {
   switch (e.type) {
     case "loaded": {
-      if (e.loaded.readOnly || e.loaded.binary) return { status: "readOnly", base: e.loaded, text: e.loaded.text, version: s.version + 1 };
-      if (e.draft && e.draft.text !== e.loaded.text) {
-        return { status: "dirty", base: e.loaded, text: e.draft.text, version: s.version + 1, banner: { kind: "restored", at: e.draft.at } };
+      // A draft written after Convert to UTF-8 comes back converted (Codex review of 52051c8, D3).
+      const convert = !!e.convert && !!e.draft && canConvert(e.loaded);
+      const loaded = convert ? converted(e.loaded) : e.loaded;
+      if (loaded.readOnly || loaded.binary) return { status: "readOnly", base: loaded, text: loaded.text, version: s.version + 1 };
+      if (e.draft && (e.draft.text !== loaded.text || convert)) {
+        return { status: "dirty", base: loaded, text: e.draft.text, version: s.version + 1, banner: { kind: "restored", at: e.draft.at }, convert: convert || undefined };
       }
-      return { status: "clean", base: e.loaded, text: e.loaded.text, version: s.version + 1 };
+      return { status: "clean", base: loaded, text: loaded.text, version: s.version + 1 };
     }
     case "edited":
       if (s.status === "readOnly" || s.status === "loading" || s.status === "error") return s;
@@ -87,9 +96,12 @@ export function reduce(s: DocState, e: DocEvent): DocState {
       if (e.theirs.readOnly || e.theirs.binary) return { ...s, status: "readOnly", base: e.theirs, text: e.theirs.text, version: s.version + 1 };
       return { ...s, status: "clean", base: e.theirs, text: e.theirs.text, version: s.version + 1, banner: { kind: "followed" }, theirs: undefined };
     }
-    case "merged":
-      // The merged text is unsaved until the user saves it, now against the newer version.
-      return { ...s, status: e.text === e.theirs.text ? "clean" : "dirty", base: e.theirs, text: e.text, version: s.version + 1, banner: undefined, theirs: undefined };
+    case "merged": {
+      // The merged text is unsaved until the user saves it, now against the newer version. A converted page stays
+      // UTF-8 (Codex review of 52051c8, R3).
+      const base = s.convert ? converted(e.theirs) : e.theirs;
+      return { ...s, status: e.text === e.theirs.text && !s.convert ? "clean" : "dirty", base, text: e.text, version: s.version + 1, banner: undefined, theirs: undefined };
+    }
     case "reloaded":
       return reduce({ ...s, banner: undefined, theirs: undefined, saving: undefined }, { type: "loaded", loaded: e.theirs });
     case "failed":
@@ -101,16 +113,16 @@ export function reduce(s: DocState, e: DocEvent): DocState {
       // encoding was the problem, or from an unsaved page whose characters its encoding cannot hold.
       const from = s.status === "readOnly" ? !!s.base?.convertible : s.status === "dirty";
       if (!s.base || s.base.binary || !from) return s;
-      const format = { ...s.base.format, encoding: "UTF-8", bom: false, confidence: "valid" as const };
-      return { ...s, status: "dirty", base: { ...s.base, format, readOnly: null }, convert: true, error: undefined };
+      return { ...s, status: "dirty", base: converted(s.base), convert: true, error: undefined };
     }
     case "dismiss":
       return { ...s, banner: undefined, error: undefined };
   }
 }
 
-/** Whether a version read from disk can be merged into: text Hivemind can edit, not binary or undecodable. */
-export const mergeable = (l: Loaded | undefined) => !!l && !l.binary && !l.readOnly;
+/** Whether a version read from disk can be merged into: text Hivemind can edit, not binary or undecodable. A page
+ *  being converted to UTF-8 can also merge a version whose only problem is its encoding. */
+export const mergeable = (l: Loaded | undefined, convert = false) => !!l && (convert ? canConvert(l) : !l.binary && !l.readOnly);
 
 /** Whether the document holds edits that are not on disk. */
 export const isUnsaved = (s: DocState | undefined) => !!s && (s.status === "dirty" || s.status === "saving" || s.status === "stale");

@@ -36,17 +36,22 @@ export const isFileDraft = (d: Draft): d is FileDraft => (d as FileDraft).kind =
 // still on its way (an editor that unmounts and mounts again at once, when moving between the Notes and Memory pages).
 const recent = new Map<string, Draft | null>();
 
-/** A write that fails puts back what the cache held before, so a draft that never reached the disk is never read
- *  as kept (Codex re-review of b82e9ab, N4). */
+// Writes of one key run one after another, so they reach the disk in the order they were made.
+const queues = new Map<string, Promise<void>>();
+function inOrder(key: string, write: () => Promise<void>): Promise<void> {
+  const run = (queues.get(key) ?? Promise.resolve()).catch(() => {}).then(write);
+  queues.set(key, run);
+  run.catch(() => {}).finally(() => { if (queues.get(key) === run) queues.delete(key); });
+  return run;
+}
+
+/** A write that fails leaves the key to the disk: the cache forgets it, so a draft that never reached the disk is never
+ *  read as kept, and neither is an earlier one that failed too (Codex re-review of b82e9ab, N4; Codex review of
+ *  52051c8, F1). */
 export function putDraft(draft: Draft): Promise<void> {
-  const before = recent.has(draft.key) ? recent.get(draft.key) : undefined;
-  const had = recent.has(draft.key);
   recent.set(draft.key, draft);
-  return invoke<void>("draft_put", { key: draft.key, value: draft }).catch((e) => {
-    if (recent.get(draft.key) === draft) {
-      if (had) recent.set(draft.key, before ?? null);
-      else recent.delete(draft.key);
-    }
+  return inOrder(draft.key, () => invoke<void>("draft_put", { key: draft.key, value: draft })).catch((e) => {
+    if (recent.get(draft.key) === draft) recent.delete(draft.key);
     throw e;
   });
 }
@@ -70,7 +75,10 @@ export const getFileDraft = async (key: string): Promise<FileDraft | null> => {
 
 export function deleteDraft(key: string): Promise<void> {
   recent.set(key, null);
-  return invoke<void>("draft_delete", { key });
+  return inOrder(key, () => invoke<void>("draft_delete", { key })).catch((e) => {
+    if (recent.get(key) === null) recent.delete(key);
+    throw e;
+  });
 }
 
 /** Pages under `from` moved and Rust moved their drafts: forget what this run cached for them, and every cached

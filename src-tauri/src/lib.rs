@@ -1701,7 +1701,7 @@ pub fn run() {
                 };
                 match instance::knock_open(&data_dir, &request, wait) {
                     instance::Delivery::Opened => {}
-                    instance::Delivery::RaisedOnly => tell("The Hivemind that is running is an older version that cannot open files. Restart Hivemind to open them."),
+                    instance::Delivery::RaisedOnly => tell("Hivemind is running but did not take the files. If it is an older version, restart Hivemind to open them."),
                     instance::Delivery::NoAnswer => eprintln!("Hivemind is already running but did not answer; this copy exits."),
                 }
             }
@@ -1734,15 +1734,18 @@ pub fn run() {
             }
             let shown = app.handle().clone();
             owner.serve(move |knock| {
-                // Only existing files, made absolute against the launch's folder, at most 32.
-                let cwd = knock.cwd.as_deref().map(PathBuf::from).unwrap_or_default();
-                let paths = opens::launch_paths(knock.open.iter().map(std::ffi::OsString::from), &cwd);
+                // Queued as given and checked when the webview takes them, and the window comes forward on its own
+                // thread, so the launch gets its answer at once (Codex review of 52051c8, I2).
+                let paths = opens::knock_paths(&knock.open, knock.cwd.as_deref());
                 let any = !paths.is_empty();
                 open_queue.push(knock.id.as_deref(), paths);
-                capture::show_main(&shown);
-                if any {
-                    let _ = shown.emit("open-requested", ());
-                }
+                let shown = shown.clone();
+                std::thread::spawn(move || {
+                    capture::show_main(&shown);
+                    if any {
+                        let _ = shown.emit("open-requested", ());
+                    }
+                });
             });
             files::guard::set_app_dirs(vec![app.path().app_data_dir()?, app.path().app_config_dir()?, app.path().app_local_data_dir()?]);
             let settings_path = app.path().app_config_dir()?.join("settings.json");

@@ -24,6 +24,13 @@ pub fn set_app_dirs(dirs: Vec<PathBuf>) {
 /// A comparable spelling: canonical where the path exists (else its deepest existing ancestor plus the rest),
 /// without the `\\?\` prefix, in lowercase.
 fn key(path: &Path) -> PathBuf {
+    PathBuf::from(real(path).to_string_lossy().to_lowercase())
+}
+
+/// The canonical spelling of `path` (its deepest existing ancestor plus the rest) without the `\\?\` prefix, in the
+/// case the file system has: probes for marker files use it, since a case-sensitive folder would not find them under
+/// the lowercase spelling (Codex review of 52051c8, P3).
+fn real(path: &Path) -> PathBuf {
     let mut existing = path.to_path_buf();
     let mut rest = Vec::new();
     while std::fs::canonicalize(&existing).is_err() {
@@ -39,7 +46,7 @@ fn key(path: &Path) -> PathBuf {
     for part in rest.into_iter().rev() {
         full.push(part);
     }
-    PathBuf::from(plain(&full).to_lowercase())
+    PathBuf::from(plain(&full))
 }
 
 /// A folder carrying the markers Living Memory writes into a vault it manages.
@@ -95,14 +102,15 @@ impl Protected {
 
     /// Refuse a path inside the store, a managed vault or Hivemind's own data.
     pub fn check(&self, path: &Path) -> Result<(), String> {
-        let path = key(path);
+        let real = real(path);
+        let path = PathBuf::from(real.to_string_lossy().to_lowercase());
         if self.app.iter().any(|app| path.starts_with(app)) {
             return Err("This is inside Hivemind's own data folder, which notebooks cannot reach".into());
         }
         if self.store.as_ref().is_some_and(|store| path.starts_with(store)) {
             return Err("This is inside the Living Memory store, which only Living Memory changes".into());
         }
-        if self.vaults.iter().any(|v| path.starts_with(v)) || marked_vault(&path) {
+        if self.vaults.iter().any(|v| path.starts_with(v)) || marked_vault(&real) {
             return Err("This is inside an Obsidian vault that Living Memory manages; edit those notes on the Memory page".into());
         }
         Ok(())
@@ -128,6 +136,21 @@ impl Protected {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn a_marked_vault_in_a_case_sensitive_folder_is_protected() {   // Codex review of 52051c8, P3
+        let base = std::fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("hm-guard-case-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).unwrap();
+        let made = std::process::Command::new("fsutil").args(["file", "setCaseSensitiveInfo"]).arg(&base).arg("enable").output().unwrap();
+        assert!(made.status.success(), "fsutil could not make a case-sensitive folder: {}", String::from_utf8_lossy(&made.stdout));
+        std::fs::create_dir_all(base.join("CaseVault/.living-memory")).unwrap();
+        std::fs::write(base.join("CaseVault/.living-memory/vault.json"), "{}").unwrap();
+        let none = Protected::new(None);
+        assert!(none.check(&base.join("CaseVault/note.md")).unwrap_err().contains("Obsidian vault"));
+        assert!(none.check(&base.join("Other/note.md")).is_ok());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
 
     #[test]
     fn the_store_and_managed_vaults_are_protected() {

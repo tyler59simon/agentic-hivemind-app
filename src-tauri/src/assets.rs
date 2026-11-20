@@ -129,9 +129,17 @@ pub fn serve(request: &Request<Vec<u8>>, label: &str, grants: &AssetGrants, prot
     let path = request.uri().path().trim_start_matches('/');
     let Some((grant, rel)) = path.split_once('/') else { return status(StatusCode::NOT_FOUND) };
     let Some(root) = grants.root(grant) else { return status(StatusCode::NOT_FOUND) };
+    // The granted folder must still be the one granted: a junction put in its place leads elsewhere (Codex review of
+    // 52051c8, A1).
+    if !contain::unmoved(&root) {
+        return status(StatusCode::NOT_FOUND);
+    }
     let Some(rel) = decode(rel) else { return status(StatusCode::BAD_REQUEST) };
     let Ok(full) = contain::resolve_inside(&root, &rel, false) else { return status(StatusCode::FORBIDDEN) };
-    if protected.check(&full).is_err() || contain::check_rel(&rel).map(|parts| parts.iter().any(|p| p.starts_with('.'))).unwrap_or(true) {
+    // Hidden parts are refused in the path asked for and in the path it resolves to, so a visible alias of a hidden
+    // folder serves nothing (Codex review of 52051c8, A2).
+    let hidden = |rel: &str| contain::check_rel(rel).map(|parts| parts.iter().any(|p| p.starts_with('.'))).unwrap_or(true);
+    if protected.check(&full).is_err() || hidden(&rel) || contain::resolved_rel(&root, &full).is_none_or(|r| hidden(&r)) {
         return status(StatusCode::FORBIDDEN);
     }
     let ext = full.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
@@ -155,7 +163,8 @@ pub fn serve(request: &Request<Vec<u8>>, label: &str, grants: &AssetGrants, prot
     if ext == "svg" {
         b = b.header(header::CONTENT_SECURITY_POLICY, "default-src 'none'; style-src 'unsafe-inline'");
     }
-    let wanted = request.headers().get(header::RANGE).and_then(|r| r.to_str().ok());
+    // Range applies to GET only; HEAD describes the whole file (RFC 9110 section 14.2; Codex review of 52051c8, A4).
+    let wanted = (request.method() == Method::GET).then(|| request.headers().get(header::RANGE).and_then(|r| r.to_str().ok())).flatten();
     let (start, end, code) = match wanted {
         Some(value) => match range(value, len) {
             Some((s, e)) => (s, e, StatusCode::PARTIAL_CONTENT),
@@ -231,6 +240,52 @@ mod tests {
         assert_eq!(bad.headers()[header::CONTENT_RANGE], "bytes */10");
         let svg = serve(&get(&format!("{}pic.svg", base_url(&g)), &[]), "main", &grants, &none);
         assert!(svg.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap().starts_with("default-src 'none'"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_moved_root_or_a_visible_alias_of_a_hidden_folder_serves_nothing() {   // Codex review of 52051c8, A1 and A2
+        let junction = |link: &Path, target: &Path| {
+            let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(link).arg(target).output().unwrap();
+            assert!(made.status.success(), "mklink /J needs no admin rights: {}", String::from_utf8_lossy(&made.stderr));
+        };
+        let dir = scratch();
+        std::fs::create_dir_all(dir.join(".private")).unwrap();
+        std::fs::write(dir.join(".private/scan.png"), b"secret").unwrap();
+        junction(&dir.join("pics"), &dir.join(".private"));
+        let grants = AssetGrants::default();
+        let g = grants.grant(&dir);
+        let none = Protected::new(None);
+        let ask = |rel: &str| serve(&get(&format!("{}{rel}", base_url(&g)), &[]), "main", &grants, &none).status();
+        assert_eq!(ask("img/a%20b.png"), StatusCode::OK);
+        assert_eq!(ask("pics/scan.png"), StatusCode::FORBIDDEN, "a visible alias of a hidden folder");
+        // The granted folder moved away and a junction to another folder put in its place.
+        let other = scratch();
+        std::fs::remove_dir(dir.join("pics")).unwrap();
+        let moved = dir.with_file_name(format!("{}-moved", dir.file_name().unwrap().to_string_lossy()));
+        std::fs::rename(&dir, &moved).unwrap();
+        junction(&dir, &other);
+        assert_eq!(ask("img/a%20b.png"), StatusCode::NOT_FOUND, "the grant does not follow the junction");
+        std::fs::remove_dir(&dir).unwrap();
+        for d in [moved, other] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[test]
+    fn head_ignores_range() {   // Codex review of 52051c8, A4
+        let dir = scratch();
+        let grants = AssetGrants::default();
+        let g = grants.grant(&dir);
+        let none = Protected::new(None);
+        for range in ["bytes=0-0", "bytes=20-"] {
+            let req = Request::builder().method(Method::HEAD).uri(format!("{}img/a%20b.png", base_url(&g))).header("Range", range).body(Vec::new()).unwrap();
+            let res = serve(&req, "main", &grants, &none);
+            assert_eq!(res.status(), StatusCode::OK, "{range}");
+            assert_eq!(res.headers()[header::CONTENT_LENGTH], "10");
+            assert!(res.body().is_empty());
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 

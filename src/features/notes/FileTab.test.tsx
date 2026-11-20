@@ -12,6 +12,7 @@ Range.prototype.getBoundingClientRect = function () { return new DOMRect(); };
 
 const files = new Map<string, string>();
 const drafts = new Map<string, unknown>();
+const counts = { assetBase: 0 };
 const sha = (text: string) => `sha-${text}`;
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({
@@ -28,6 +29,7 @@ vi.mock("@tauri-apps/api/core", () => ({
         files.set(path, a.text as string);
         return { status: "saved", sha256: sha(a.text as string), size: 1, mtimeMs: 2 };
       }
+      case "asset_base": counts.assetBase++; return `http://hmfile.localhost/g${counts.assetBase}/`;
       case "draft_put": drafts.set(a.key as string, a.value); return null;
       case "draft_get": return drafts.get(a.key as string) ?? null;
       case "draft_delete": drafts.delete(a.key as string); return null;
@@ -39,6 +41,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 const { EditorView } = await import("@codemirror/view");
 const { FileTab } = await import("./FileTab");
+const { NewFileTab, untitledText } = await import("./NewFileTab");
 const { useRowDrag } = await import("./NotebookTree");
 const { useWorkspace } = await import("../../workspace/store");
 const { useApp } = await import("../../store");
@@ -94,6 +97,40 @@ describe("notebook pages, mounted", () => {
     expect(views[1].state.doc.toString()).toBe("alpha\nleft\nright\n");
     await act(async () => { await docs.save(docs.keyOf(ref("A.md"))); });
     expect(files.get("A.md")).toBe("alpha\nleft\nright\n");
+  });
+
+  it("D1: an untitled file keeps its text when its tab is shown again, and forgets it when the tab closes", async () => {   // Codex review of 52051c8
+    ws().openTab({ kind: "new-file" });
+    const tab = ws().panes[0].tabs[0];
+    let el = await mount(<NewFileTab tab={tab} />);
+    const view = () => EditorView.findFromDOM(el.querySelector<HTMLElement>(".cm-content")!)!;
+    await act(() => { view().dispatch({ changes: { from: 0, insert: "kept text" }, userEvent: "input.type" }); });
+    expect(ws().dirty[tab.id]).toBe(true);
+    // Another tab of the pane is shown, then this one again: the view mounts afresh.
+    await act(async () => root!.unmount());
+    el = await mount(<NewFileTab tab={tab} />);
+    expect(view().state.doc.toString()).toBe("kept text");
+    await act(async () => { ws().closeTab("p0", tab.id); });
+    expect(untitledText(tab.id)).toBe("");
+  });
+
+  it("A3: a page asks for its picture address each time it opens, so a withdrawn grant is never reused", async () => {   // Codex review of 52051c8
+    files.set("Pic.md", "![x](a.png)\n");
+    ws().openTab({ kind: "file", file: ref("Pic.md"), mode: "source" });
+    const client = new QueryClient();
+    const show = async () => {
+      const el = document.createElement("div");
+      document.body.append(el);
+      root = createRoot(el);
+      await act(async () => { root!.render(<QueryClientProvider client={client}><FileTab tab={ws().panes[0].tabs[0]} /></QueryClientProvider>); });
+      await settle();
+    };
+    const before = counts.assetBase;
+    await show();
+    expect(counts.assetBase).toBe(before + 1);
+    await act(async () => root!.unmount());
+    await show();
+    expect(counts.assetBase).toBe(before + 2);
   });
 
   it("T3: Try again on a page that failed to open keeps its draft and shows the edits", async () => {

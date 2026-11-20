@@ -43,24 +43,19 @@ fn loose_in(grants: &crate::opens::Grants, protected: &Protected, id: &str, name
     if full.file_name().map(|n| n.to_string_lossy().to_lowercase()) != Some(name.to_lowercase()) {
         return Err(format!("{name} is not the file Hivemind opened"));
     }
-    let real = match std::fs::canonicalize(&full) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && files::recover(&full) => std::fs::canonicalize(&full),
-        other => other,
-    };
-    let real = match real {
-        Ok(real) => real,
-        // Deleted or moved away: its folder is checked instead, so a save reports the file gone and offers Save as.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => match (full.parent(), full.file_name()) {
-            (Some(folder), Some(file)) => std::fs::canonicalize(folder).map_err(|e| format!("Could not open {}: {e}", folder.display()))?.join(file),
-            _ => return Err(format!("Could not open {}: {e}", full.display())),
-        },
-        Err(e) => return Err(format!("Could not open {}: {e}", full.display())),
-    };
-    let linked = full.ancestors().any(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()));
-    if linked || crate::folders::plain(&real).to_lowercase() != grant.path.to_lowercase() {
+    // Its folder is checked first, before anything there is read or put back: still the folder the user chose, with no
+    // link put in its place (Codex review of 52051c8, P1). The file itself must not be a link either. A file that is
+    // missing passes, so a save reports it gone and offers Save as.
+    let folder = full.parent().ok_or_else(|| format!("{} has no folder", grant.path))?;
+    let linked = std::fs::symlink_metadata(&full).is_ok_and(|m| m.file_type().is_symlink());
+    if linked || !contain::unmoved(folder) {
         return Err(format!("{} was replaced by a link; open the file again", grant.path));
     }
     let locked = protected.check(&full).err();
+    // An interrupted save is put back only where Hivemind may write.
+    if locked.is_none() && std::fs::symlink_metadata(&full).is_err() {
+        files::recover(&full);
+    }
     Ok((full, locked))
 }
 
@@ -248,7 +243,7 @@ pub async fn file_read(state: State<'_, AppState>, notebook: String, path: Strin
     if let Some(id) = loose_id(&notebook) {
         let (full, locked) = loose(&state, id, &path)?;
         return blocking(move || {
-            let mut loaded = files::read(&full)?;
+            let mut loaded = if locked.is_some() { files::read_view(&full)? } else { files::read(&full)? };
             if locked.is_some() {
                 loaded.convertible = false;
                 if loaded.read_only.is_none() {
@@ -388,18 +383,27 @@ pub async fn notebook_add_dropped(app: AppHandle, token: String) -> Result<Noteb
     let handle = app.clone();
     let added = blocking(move || {
         let state = handle.state::<AppState>();
-        let folder = {
-            let mut dropped = state.dropped_folders.lock().unwrap_or_else(|e| e.into_inner());
-            dropped.retain(|(_, _, at)| at.elapsed() < DROP_PATIENCE);
-            let at = dropped.iter().position(|(t, ..)| *t == token).ok_or("That folder was dropped too long ago; drop it again")?;
-            dropped.remove(at).1
-        };
+        let folder = take_dropped(&state.dropped_folders, &token)?;
         let store = store_root(&state);
         state.notebooks.add(&folder, store.as_deref(), &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
     })
     .await?;
     rewatch(&app);
     Ok(added)
+}
+
+/// The folder dropped under `token`, if it was dropped in the last two minutes and is still the folder that was dropped:
+/// a junction put in its place while the user read the question would register another folder (Codex review of
+/// 52051c8, P2).
+fn take_dropped(dropped: &std::sync::Mutex<Vec<(String, PathBuf, std::time::Instant)>>, token: &str) -> Result<PathBuf, String> {
+    let mut dropped = dropped.lock().unwrap_or_else(|e| e.into_inner());
+    dropped.retain(|(_, _, at)| at.elapsed() < DROP_PATIENCE);
+    let at = dropped.iter().position(|(t, ..)| t == token).ok_or("That folder was dropped too long ago; drop it again")?;
+    let folder = dropped.remove(at).1;
+    if !contain::unmoved(&folder) {
+        return Err(format!("{} changed after it was dropped; drop it again", folder.display()));
+    }
+    Ok(folder)
 }
 
 /// Kinds of file that run code when Windows opens them. Opening one from a notebook would run whatever a synced or
@@ -467,6 +471,58 @@ mod tests {
         // A hidden file of a notebook is not a page; the user chose it, so it opens as a loose file.
         assert!(ref_in(&registry, &grants, &base.join("nb/.git/config"), "t").unwrap().notebook.starts_with(LOOSE));
         assert!(ref_in(&registry, &grants, &base.join("nb/Sub"), "t").is_err(), "a folder is not opened");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn nothing_is_put_back_through_a_moved_folder_and_a_dropped_folder_must_stay_put() {   // Codex review of 52051c8, P1 and P2
+        let junction = |link: &Path, target: &Path| {
+            let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(link).arg(target).output().unwrap();
+            assert!(made.status.success(), "mklink /J needs no admin rights: {}", String::from_utf8_lossy(&made.stderr));
+        };
+        let base = temp_dir();
+        std::fs::create_dir_all(base.join("docs")).unwrap();
+        std::fs::write(base.join("docs/a.txt"), "a").unwrap();
+        let grants = crate::opens::Grants::new(base.join("open-files.json"));
+        let grant = grants.add(&base.join("docs/a.txt"), "t").unwrap();
+        // The folder replaced by a junction to one holding an interrupted save of the same name.
+        std::fs::create_dir_all(base.join("elsewhere")).unwrap();
+        let aside = files::atomic::beside(&base.join("elsewhere/a.txt"), "old-").unwrap();
+        std::fs::write(&aside, "theirs").unwrap();
+        std::fs::rename(base.join("docs"), base.join("docs-old")).unwrap();
+        junction(&base.join("docs"), &base.join("elsewhere"));
+        assert!(loose_in(&grants, &Protected::new(None), &grant.id, "a.txt").unwrap_err().contains("link"));
+        assert!(aside.exists() && !base.join("elsewhere/a.txt").exists(), "nothing was put back in the other folder");
+        std::fs::remove_dir(base.join("docs")).unwrap();
+        // A dropped folder that became a junction before the user confirmed.
+        let list = std::sync::Mutex::new(vec![("t1".to_string(), PathBuf::from(crate::folders::plain(&base.join("docs-old"))), std::time::Instant::now())]);
+        std::fs::rename(base.join("docs-old"), base.join("docs-moved")).unwrap();
+        junction(&base.join("docs-old"), &base.join("elsewhere"));
+        assert!(take_dropped(&list, "t1").unwrap_err().contains("changed"));
+        std::fs::remove_dir(base.join("docs-old")).unwrap();
+        let list = std::sync::Mutex::new(vec![("t2".to_string(), PathBuf::from(crate::folders::plain(&base.join("docs-moved"))), std::time::Instant::now())]);
+        assert!(take_dropped(&list, "t2").is_ok());
+        assert!(take_dropped(&list, "t2").is_err(), "a token is taken once");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn two_files_differing_only_in_case_get_their_own_grants() {   // Codex review of 52051c8, W1
+        let base = temp_dir();
+        let made = std::process::Command::new("fsutil").args(["file", "setCaseSensitiveInfo"]).arg(&base).arg("enable").output().unwrap();
+        assert!(made.status.success(), "fsutil could not make a case-sensitive folder: {}", String::from_utf8_lossy(&made.stdout));
+        std::fs::write(base.join("A.txt"), "same").unwrap();
+        std::fs::write(base.join("a.txt"), "same").unwrap();
+        let registry = notebooks::Registry::new(base.join("app/notebooks.json"));
+        let grants = crate::opens::Grants::new(base.join("app/open-files.json"));
+        let upper = ref_in(&registry, &grants, &base.join("A.txt"), "t").unwrap();
+        let lower = ref_in(&registry, &grants, &base.join("a.txt"), "t").unwrap();
+        assert_ne!(upper.notebook, lower.notebook);
+        assert_eq!(grants.list().len(), 2);
+        // Reopening the same file gives the same grant.
+        assert_eq!(ref_in(&registry, &grants, &base.join("A.txt"), "t").unwrap(), upper);
         std::fs::remove_dir_all(&base).unwrap();
     }
 

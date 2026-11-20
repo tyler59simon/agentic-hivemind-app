@@ -2,7 +2,7 @@
 //! webview name a loose file without ever sending an absolute path. A path becomes a grant only when the user chose it:
 //! the open dialog, Explorer ("Open with", a double-click, which arrives as an instance knock or a launch argument), a
 //! drop on the window, or the save dialog of a new file.
-use crate::files::{self, Eol, FileFormat};
+use crate::files;
 use crate::studio::{protected, ref_for, OpenRef};
 use crate::{blocking, AppState};
 use serde::{Deserialize, Serialize};
@@ -63,6 +63,24 @@ pub fn launch_paths(args: impl IntoIterator<Item = std::ffi::OsString>, cwd: &Pa
         .collect()
 }
 
+/// The paths a knock asked to open, as given: flags skipped, made absolute against the launch's folder (a relative path
+/// with no folder is dropped), at most MAX_PATHS. Nothing touches the disk, so the holder answers at once; the paths
+/// are checked when the webview takes them (Codex review of 52051c8, I2).
+pub fn knock_paths(open: &[String], cwd: Option<&str>) -> Vec<PathBuf> {
+    open.iter()
+        .filter(|a| !a.starts_with('-'))
+        .filter_map(|a| {
+            let path = Path::new(a);
+            if path.is_absolute() {
+                Some(path.to_path_buf())
+            } else {
+                cwd.map(|c| Path::new(c).join(path))
+            }
+        })
+        .take(MAX_PATHS)
+        .collect()
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Grant {
     pub id: String,
@@ -70,11 +88,12 @@ pub struct Grant {
     pub opened: String,
 }
 
-/// A grant id: the first 16 hex characters of the sha256 of the path in lowercase with forward slashes, so reopening a
-/// file gives the same id (and the same tab and draft keys).
+/// A grant id: the first 16 hex characters of the sha256 of the canonical path with forward slashes, so reopening a
+/// file gives the same id (and the same tab and draft keys). The path keeps its letter case: canonical paths carry the
+/// case on disk, and in a case-sensitive folder `A.txt` and `a.txt` are two files (Codex review of 52051c8, W1).
 pub fn grant_id(path: &Path) -> String {
     use sha2::{Digest, Sha256};
-    let key = crate::folders::plain(path).replace('\\', "/").to_lowercase();
+    let key = crate::folders::plain(path).replace('\\', "/");
     Sha256::digest(key.as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
@@ -121,7 +140,7 @@ impl Grants {
         let _held = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         let grant = Grant { id: grant_id(path), path: crate::folders::plain(path), opened: now.to_string() };
         let mut grants = self.load();
-        grants.retain(|g| g.id != grant.id);
+        grants.retain(|g| g.id != grant.id && g.path != grant.path);
         grants.insert(0, grant.clone());
         grants.truncate(MAX_GRANTS);
         self.store(&grants)?;
@@ -232,13 +251,7 @@ pub async fn file_save_as(app: AppHandle, text: String, suggested: String) -> Re
         let path = picked.into_path().map_err(|e| e.to_string())?;
         let state = handle.state::<AppState>();
         protected(&state).check(&path)?;
-        let format = FileFormat { encoding: "UTF-8".into(), bom: false, eol: Eol::Lf, confidence: Default::default() };
-        let bytes = files::encode(&text, &format)?;
-        if std::fs::symlink_metadata(&path).is_ok() {
-            files::atomic::replace(&path, &bytes)?;
-        } else {
-            files::create(&path, &String::from_utf8_lossy(&bytes))?;
-        }
+        files::save_as(&path, &text)?;
         ref_for(&state, &path, &now()).map(Some)
     })
     .await
@@ -273,6 +286,15 @@ pub fn dropped(app: &AppHandle, paths: &[PathBuf]) {
 #[cfg(test)]
 mod prune_tests {
     use super::*;
+
+    #[test]
+    fn knock_paths_touch_nothing_and_keep_only_usable_paths() {   // Codex review of 52051c8, I2
+        let open = vec!["--flag".to_string(), "rel.txt".to_string(), r"C:\nowhere\abs.md".to_string()];
+        assert_eq!(knock_paths(&open, Some(r"C:\work")), vec![PathBuf::from(r"C:\work\rel.txt"), PathBuf::from(r"C:\nowhere\abs.md")]);
+        assert_eq!(knock_paths(&open, None), vec![PathBuf::from(r"C:\nowhere\abs.md")], "a relative path needs the launch's folder");
+        let many: Vec<String> = (0..40).map(|i| format!(r"C:\f{i}.txt")).collect();
+        assert_eq!(knock_paths(&many, None).len(), MAX_PATHS);
+    }
 
     #[test]
     fn picture_grants_stay_only_for_notebooks_and_folders_of_recent_files() {
@@ -328,7 +350,9 @@ mod tests {
     fn grants_are_stable_newest_first_capped_and_forgettable() {
         let dir = scratch();
         let grants = Grants::new(dir.join("open-files.json"));
-        assert_eq!(grant_id(Path::new(r"C:\Notes\A.md")), grant_id(Path::new(r"c:/notes/a.md")));
+        // Slashes do not matter; letter case does, since canonical paths carry the case on disk (W1).
+        assert_eq!(grant_id(Path::new(r"C:\Notes\A.md")), grant_id(Path::new(r"C:/Notes/A.md")));
+        assert_ne!(grant_id(Path::new(r"C:\Notes\A.md")), grant_id(Path::new(r"C:\Notes\a.md")));
         let a = grants.add(Path::new(r"C:\Notes\A.md"), "1").unwrap();
         grants.add(Path::new(r"C:\Notes\B.md"), "2").unwrap();
         grants.add(Path::new(r"C:\Notes\A.md"), "3").unwrap();

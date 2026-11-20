@@ -52,6 +52,10 @@ const newId = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${(count
 const firstPane = (): Pane => ({ id: newId("pane"), tabs: [], active: null });
 export const MAX_PANES = 3;
 
+/** Whether a never-saved text file holds text. It has no draft, so closing the window or quitting loses it. */
+export const unsavedUntitled = (s: { panes: Pane[]; dirty: Record<string, boolean> }) =>
+  s.panes.some((p) => p.tabs.some((t) => t.kind === "new-file" && s.dirty[t.id]));
+
 /** A document is open at most once per pane set; a new note is always its own tab. */
 export const sameTab = (a: Omit<Tab, "id">, b: Tab) => sameDoc(a, b);
 
