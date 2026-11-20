@@ -9,6 +9,7 @@ describe("skipReason", () => {
   it("keeps the source of diagrams Mermaid would replace with an error picture or stall on", () => {
     expect(skipReason("flowchart LR\n" + "a".repeat(MAX_SOURCE))).toMatch(/too long/);
     expect(skipReason('flowchart LR\n  a@{ img: "https://example.com/x.png" }')).toMatch(/images/);
+    expect(skipReason('flowchart LR\n  a@{ "img": "https://example.com/x.png" }')).toMatch(/images/);
     expect(skipReason('flowchart LR\n  a["<img src=https://example.com/x.png>"]')).toMatch(/images/);
   });
 });

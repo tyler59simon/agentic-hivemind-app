@@ -18,7 +18,8 @@ export const MAX_SOURCE = 50_000;
  *  Mermaid waits for them inside its one shared render queue, so a slow server would hold up every diagram. */
 export function skipReason(source: string): string | null {
   if (source.length > MAX_SOURCE) return "Diagram is too long to draw.";
-  if (/<img\b|\bimg\s*:/i.test(source)) return "Diagrams with images are not drawn.";
+  // Errs toward showing source: a plain label with "img:" in it is not drawn either.
+  if (/<img\b|\bimg["']?\s*:/i.test(source)) return "Diagrams with images are not drawn.";
   return null;
 }
 
@@ -33,7 +34,8 @@ async function draw(id: string, source: string, dark: boolean): Promise<string> 
     flowchart: { useMaxWidth: false }, sequence: { useMaxWidth: false }, state: { useMaxWidth: false },
   });
   const box = document.createElement("div");
-  box.style.cssText = "position:fixed;left:-10000px;top:0;visibility:hidden";
+  // A real width: Gantt charts lay out their timeline from the container's offsetWidth.
+  box.style.cssText = "position:fixed;left:-10000px;top:0;width:100vw;visibility:hidden";
   document.body.appendChild(box);
   try { return (await mermaid.render(id, source, box)).svg; } finally { box.remove(); }
 }
