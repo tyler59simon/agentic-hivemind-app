@@ -322,7 +322,8 @@ pub fn sha256(text: &str) -> String {
     Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
+/// Write a file whole or not at all: a uniquely named temporary file, renamed over the target. Also used for workflow runs.
+pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }

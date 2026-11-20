@@ -239,6 +239,7 @@ function RunDetail({ run }: { run: WorkflowRun }) {
         {repoName(run.repo)}{run.baseBranch ? ` from ${run.baseBranch}` : ""} · {progressText(run)} · {run.unattended ? "Unattended" : "Sessions ask before acting"}
         {run.budgetUsd ? ` · $${run.budgetUsd.toFixed(2)} per session` : ""} · Created {when(run.createdAt)}{origin ? ` · ${origin}` : ""}
       </p>
+      {run.saveError && <p className="error small" role="alert">{run.saveError}</p>}
       {run.goal.includes("\n") && <div className="markdown"><Markdown>{run.goal}</Markdown></div>}
       <RunSystem repo={run.repo} />
       <div className="work-actions">

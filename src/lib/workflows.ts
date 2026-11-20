@@ -20,6 +20,8 @@ export interface WorkflowRun {
   id: string; goal: string; project: string; repo: string; baseBranch: string | null; template: string | null;
   model: string | null; unattended: boolean; budgetUsd: number | null; origin: string | null;
   state: RunState; tasks: Task[]; createdAt: number; endedAt: number | null;
+  /** Why the last save failed; absent when the run on disk is current. */
+  saveError?: string;
 }
 export interface NewRun {
   goal: string; project: string; repo: string; baseBranch: string | null; template: string | null;

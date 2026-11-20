@@ -110,6 +110,10 @@ pub struct Run {
     pub created_at: u64,
     #[serde(default)]
     pub ended_at: Option<u64>,
+    /// Why the last save failed, when it did: the file is older than the run, and a restart would lose the difference.
+    /// Never on disk, since it is cleared before each save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub save_error: Option<String>,
 }
 
 /// What a new run is made from.
@@ -433,12 +437,20 @@ impl Workflows {
         Workflows { dir, runs: Mutex::new(runs), step: Mutex::new(()) }
     }
 
-    fn save(&self, run: &Run) -> Result<(), String> {
-        std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
-        let path = self.dir.join(format!("{}.json", run.id));
-        let temp = path.with_extension("tmp");
-        std::fs::write(&temp, serde_json::to_string_pretty(run).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-        std::fs::rename(&temp, &path).map_err(|e| e.to_string())
+    /// Write the run, whole or not at all. A save that works clears an earlier failure.
+    fn save(&self, run: &mut Run) -> Result<(), String> {
+        let text = serde_json::to_string_pretty(&Run { save_error: None, ..run.clone() }).map_err(|e| e.to_string())?;
+        crate::skills::write_atomic(&self.dir.join(format!("{}.json", run.id)), &text)?;
+        run.save_error = None;
+        Ok(())
+    }
+
+    /// Save a run whose change is already made in memory (a task started or ended), which a failed save cannot undo. The
+    /// failure stays on the run for the user to see, and the next save tries again.
+    fn keep(&self, run: &mut Run) {
+        if let Err(e) = self.save(run) {
+            run.save_error = Some(format!("Hivemind could not save this workflow ({e}); a restart would lose its latest progress"));
+        }
     }
 
     /// Newest first.
@@ -459,7 +471,7 @@ impl Workflows {
         check(&new.tasks)?;
         check_unattended(&new.tasks, new.unattended)?;
         let goal = new.goal.trim().to_string();
-        let run = Run {
+        let mut run = Run {
             id: uuid::Uuid::new_v4().simple().to_string(),
             tasks: new.tasks.into_iter().map(|mut spec| {
                 spec.prompt = spec.prompt.replace("{goal}", &goal);
@@ -467,8 +479,9 @@ impl Workflows {
             }).collect(),
             goal, project: new.project, repo: new.repo, base_branch: new.base_branch.filter(|b| !b.trim().is_empty()), template: new.template,
             model: new.model.filter(|m| !m.trim().is_empty()), unattended: new.unattended, budget_usd: new.budget_usd, origin, state: RunState::Planned, created_at: now_ms(), ended_at: None,
+            save_error: None,
         };
-        self.save(&run)?;
+        self.save(&mut run)?;
         self.runs.lock().unwrap().insert(run.id.clone(), run.clone());
         Ok(run)
     }
@@ -569,7 +582,7 @@ impl Workflows {
                     t.error = None;
                 }
                 Err(e) if e == crate::agent::LIMIT => {
-                    let _ = self.save(run);
+                    self.keep(run);
                     return;
                 }
                 Err(e) => {
@@ -580,7 +593,7 @@ impl Workflows {
                 }
             }
             run.settle();
-            let _ = self.save(run);
+            self.keep(run);
         }
     }
 
@@ -655,7 +668,7 @@ impl Workflows {
             run.block_after(task_id);
         }
         run.settle();
-        let _ = self.save(run);
+        self.keep(run);
     }
 
     /// Stop the run: running sessions are stopped, open tasks are cancelled.
@@ -827,6 +840,35 @@ mod tests {
         let run = flows.get(&run.id).unwrap();
         assert_eq!(states(&run)[2..], [TaskState::Failed, TaskState::Failed]);
         assert!(run.tasks[2].error.as_deref().unwrap().contains("no longer points at the checkpoint s1-comm"), "{:?}", run.tasks[2].error);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_failed_save_is_shown_on_the_run_and_cleared_by_the_next() {
+        let dir = scratch();
+        let flows = Workflows::new(dir.clone());
+        let host = fake(3);
+        let run = flows.start(&feature(&flows).id, &host).unwrap();
+        // A folder where the run's file goes: the rename over it fails.
+        let file = dir.join(format!("{}.json", run.id));
+        std::fs::remove_file(&file).unwrap();
+        std::fs::create_dir(&file).unwrap();
+        turn(&flows, &host, "s0", true, None);
+        let failed = flows.get(&run.id).unwrap();
+        assert_eq!(states(&failed)[..2], [TaskState::Succeeded, TaskState::Running], "the run goes on in memory");
+        assert!(failed.save_error.as_deref().unwrap().starts_with("Hivemind could not save this workflow"), "{:?}", failed.save_error);
+        assert!(serde_json::to_value(&failed).unwrap()["saveError"].is_string(), "the webview sees it");
+        // No temporary file is left behind.
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+
+        std::fs::remove_dir(&file).unwrap();
+        turn(&flows, &host, "s1", true, None);
+        let saved = flows.get(&run.id).unwrap();
+        assert_eq!(saved.save_error, None);
+        let on_disk: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert!(on_disk.get("saveError").is_none());
+        // The progress missed by the failed save is on disk now: a restart keeps both finished tasks.
+        assert_eq!(states(&Workflows::new(dir.clone()).get(&run.id).unwrap())[..2], [TaskState::Succeeded, TaskState::Succeeded]);
         let _ = std::fs::remove_dir_all(dir);
     }
 
