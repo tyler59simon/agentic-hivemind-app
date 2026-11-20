@@ -571,6 +571,21 @@ impl automations::Doer for AppDoer {
         let state = self.0.state::<AppState>();
         state.learning.has_budget(settings::load(&state.settings_path).learning_daily_usd())
     }
+    fn charge(&self, usd: f64) {
+        self.0.state::<AppState>().learning.charge(usd);
+    }
+    fn stop(&self, started: &automations::Started) {
+        let state = self.0.state::<AppState>();
+        match started {
+            automations::Started::Session(id) => {
+                let _ = state.agents.end(id);
+            }
+            automations::Started::Workflow(id) => {
+                let _ = state.workflows.cancel(id, &AppHost(self.0.clone()));
+            }
+            automations::Started::Done { .. } => {}
+        }
+    }
     fn notify(&self, title: &str, text: &str) {
         notify::notice(&self.0, title, text);
     }
@@ -602,18 +617,14 @@ fn orchestration_reports(app: AppHandle) -> conductor::Handler {
             };
             if let (Some(ok), true) = (ended, origin.starts_with("automation:")) {
                 let detail = info.summary.clone().or(info.error.clone()).map(|t| agent::events::clip(&t, 300)).unwrap_or_else(|| "Session finished".into());
-                if state.automations.finished(Some(&info.id), None, ok, detail, info.cost_usd, &doer).is_some() {
-                    state.learning.charge(info.cost_usd.unwrap_or(0.0));
-                }
+                state.automations.finished(Some(&info.id), None, ok, detail, info.cost_usd, &doer);
             }
             // A workflow an automation started has ended.
             for run in state.workflows.list().into_iter().filter(|r| r.origin.as_deref().is_some_and(|o| o.starts_with("automation:"))) {
                 if matches!(run.state, workflow::RunState::Succeeded | workflow::RunState::Failed | workflow::RunState::Cancelled) {
                     let cost: f64 = run.tasks.iter().filter_map(|t| t.session.as_deref()).filter_map(|s| state.agents.info(s).ok()).filter_map(|i| i.cost_usd).sum();
                     let detail = format!("The workflow {}", match run.state { workflow::RunState::Succeeded => "succeeded", workflow::RunState::Failed => "failed", _ => "was cancelled" });
-                    if state.automations.finished(None, Some(&run.id), run.state == workflow::RunState::Succeeded, detail, Some(cost), &doer).is_some() {
-                        state.learning.charge(cost);
-                    }
+                    state.automations.finished(None, Some(&run.id), run.state == workflow::RunState::Succeeded, detail, Some(cost), &doer);
                 }
             }
             // Work an automation started never fires event automations (no loops); a workflow the user started does.
