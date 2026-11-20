@@ -695,7 +695,9 @@ impl Workflows {
             }
             run.state = RunState::Cancelled;
             run.ended_at = Some(now_ms());
-            self.save(run)?;
+            // The cancel stands even when the file cannot be saved: the sessions are stopped and the run shows the error
+            // (Codex review D4-1).
+            self.keep(run);
             sessions
         };
         for s in sessions {
@@ -880,6 +882,22 @@ mod tests {
         assert!(on_disk.get("saveError").is_none());
         // The progress missed by the failed save is on disk now: a restart keeps both finished tasks.
         assert_eq!(states(&Workflows::new(dir.clone()).get(&run.id).unwrap())[..2], [TaskState::Succeeded, TaskState::Succeeded]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_cancel_that_cannot_be_saved_still_stops_the_sessions() {   // Codex review D4-1
+        let dir = scratch();
+        let flows = Workflows::new(dir.clone());
+        let host = fake(3);
+        let run = flows.start(&feature(&flows).id, &host).unwrap();
+        let file = dir.join(format!("{}.json", run.id));
+        std::fs::remove_file(&file).unwrap();
+        std::fs::create_dir(&file).unwrap();
+        let cancelled = flows.cancel(&run.id, &host).unwrap();
+        assert_eq!(*host.stopped.borrow(), ["s0"]);
+        assert_eq!(cancelled.state, RunState::Cancelled);
+        assert!(cancelled.save_error.is_some());
         let _ = std::fs::remove_dir_all(dir);
     }
 
