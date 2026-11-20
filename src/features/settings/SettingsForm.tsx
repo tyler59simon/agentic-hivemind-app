@@ -113,7 +113,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
       <p className="muted small">Amounts are in US dollars. Leave a field empty for its default (shown in grey). Daily budgets start again at midnight UTC, and 0 turns that kind of spending off.</p>
       {claudeOn && money("agent_budget_usd", "Spend cap per agent run, Claude Code chat", BUDGET_DEFAULTS.agentRun, 0.01)}
       {money("automation_daily_usd", "Automations per day", BUDGET_DEFAULTS.automationsDaily)}
-      <p className="muted small">Sessions and workflows that automations start. A run starts only when its own budget (set on each automation) fits in what is left today. A workflow is checked for one session's budget and can spend up to that much per task.</p>
+      <p className="muted small">Sessions and workflows that automations start. A run starts only when its own budget (set on each automation) fits in what is left today. A workflow is checked for one session's budget and can spend up to that much per task. Only Claude Code sessions are counted: Codex uses your ChatGPT plan. Follow-up messages you send to an automation's session, and tasks you retry in its workflow, count as your own spending.</p>
       {money("learning_daily_usd", "Learning and executive per day", BUDGET_DEFAULTS.learningDaily)}
       <p className="muted small">The session reviewer, the Executive page's briefings, drafts and capture, and the commit reviews and briefings that automations ask for.</p>
       <details>

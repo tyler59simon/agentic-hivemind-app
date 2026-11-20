@@ -375,6 +375,9 @@ fn valid_id(id: &str) -> bool {
 /// is left of today's automation budget; commit reviews and briefings draw on the learning budget.
 fn unaffordable(a: &Automation, doer: &dyn Doer) -> Option<String> {
     match a.action {
+        // Codex bills the user's ChatGPT plan, not dollars, so a Codex session neither needs nor uses the automation
+        // budget (Codex review R7-4). A workflow is checked: its tasks may use Claude.
+        Action::Role { engine: Engine::Codex, .. } => None,
         Action::Role { .. } | Action::Workflow { .. } if !doer.budget_fits(a.budget_usd) => {
             Some("Today's automation budget has no room left for this run's budget".into())
         }
@@ -1352,6 +1355,11 @@ mod tests {
         assert!(!tight.ran.lock().unwrap().iter().any(|(id, _)| *id == role.id), "nothing started");
         let roomy = Fake { session: true, room: Some(2.0), ..Default::default() };
         assert_eq!(autos.fire(&role.id, "manual", None, &roomy).unwrap().state, RunState::Running);
+        // A Codex session is not paid in dollars, so a spent automation budget does not stop it (Codex review R7-4).
+        let Action::Role { role: kind, prompt, .. } = role.action.clone() else { unreachable!() };
+        let codex = autos.put(Automation { id: String::new(), name: "Codex check".into(), action: Action::Role { role: kind, engine: Engine::Codex, prompt }, ..role }, now_ms()).unwrap();
+        let spent = Fake { session: true, room: Some(0.0), ..Default::default() };
+        assert_eq!(autos.fire(&codex.id, "manual", None, &spent).unwrap().state, RunState::Running);
         let _ = std::fs::remove_dir_all(dir);
     }
 
