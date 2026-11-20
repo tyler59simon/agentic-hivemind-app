@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import "./App.css";
 import logo from "./assets/logo.png";
 import { Palette } from "./features/palette/Palette";
+import { BeforeUninstall } from "./features/settings/BeforeUninstall";
 import { SettingsForm } from "./features/settings/SettingsForm";
 import { agentSessions } from "./lib/agent";
 import { captureStatus, connect, domains } from "./lib/lm";
@@ -19,7 +20,7 @@ import { invalidateWiki } from "./features/wiki/useWiki";
 import { needsLmUpdate, useConnection } from "./lib/connection";
 import { refreshStore } from "./lib/refresh";
 import { Shell } from "./shell/Shell";
-import { useApp } from "./store";
+import { openReview, useApp } from "./store";
 import { toast, Toasts } from "./ui/toast";
 import { useWorkspace } from "./workspace/store";
 
@@ -162,6 +163,7 @@ export default function App() {
             {link.error && <p className="error">{String(link.error)}</p>}
             {outdated && <p className="error">This version of Living Memory is too old: Hivemind needs one with direct writes (<code>alm version</code> lists <code>direct_writes</code> under capabilities). Update Living Memory, then reconnect.</p>}
             <SettingsForm onSaved={reconnect} />
+            <BeforeUninstall onOpenReview={link.isSuccess && !outdated ? (id) => { setSettings(false); openReview(id); } : undefined} />
             {link.isSuccess && !outdated && <button className="link" onClick={() => setSettings(false)}>Back</button>}
           </div>
         </main>

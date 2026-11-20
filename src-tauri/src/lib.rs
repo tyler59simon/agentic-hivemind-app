@@ -19,6 +19,7 @@ mod review;
 mod settings;
 mod skills;
 mod term;
+mod uninstall;
 mod watcher;
 mod wiki_build;
 mod workflow;
@@ -938,6 +939,19 @@ async fn agent_remove_worktree(state: State<'_, AppState>, session_id: String) -
     blocking(move || agents.remove_worktree(&session_id)).await
 }
 
+/// What Hivemind leaves in the user's repositories before an uninstall: session worktrees and `hivemind/*` branches (REG-8, REG-9).
+#[tauri::command]
+async fn uninstall_inventory(state: State<'_, AppState>) -> Result<uninstall::Inventory, String> {
+    let (agents, path) = (state.agents.clone(), state.settings_path.clone());
+    blocking(move || Ok(uninstall::inventory(&agents.sessions(), &settings::load(&path)))).await
+}
+
+/// Delete a `hivemind/*` branch already merged into the repository's default branch.
+#[tauri::command]
+async fn uninstall_delete_branch(repo: String, branch: String) -> Result<(), String> {
+    blocking(move || uninstall::delete_branch(std::path::Path::new(&repo), &branch)).await
+}
+
 /// The files a work session changed in its worktree since its review base.
 #[tauri::command]
 async fn review_files(state: State<'_, AppState>, session_id: String) -> Result<Vec<worktree::FileChange>, String> {
@@ -1753,7 +1767,7 @@ pub fn run() {
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_roles, learning_status, learning_review, skills_list, skill_proposals, skill_decide, skill_action, skill_version, skill_history,
             skills_upkeep, skill_from_note, workflow_templates, workflow_list, workflow_create, workflow_edit, workflow_act, workflow_delete, workflow_report,
-            automation_list, automation_put, automation_delete, automation_act, architecture_drift, architecture_rules_set, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, repo_branches,
+            automation_list, automation_put, automation_delete, automation_act, architecture_drift, architecture_rules_set, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, uninstall_inventory, uninstall_delete_branch, repo_branches,
             agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_stop_and_approve, review_request_changes, review_request_terminal_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
             system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export, wiki_agent_build, wiki_agent_cancel
         ])

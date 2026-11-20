@@ -167,6 +167,15 @@ export const agentSetPolicy = (sessionId: string, policy: Policy) => invoke<void
 /** Name a session (trimmed, at most 80 characters); an empty name clears it. */
 export const agentRename = (sessionId: string, name: string) => invoke<void>("agent_rename", { sessionId, name });
 export const agentRemoveWorktree = (sessionId: string) => invoke<void>("agent_remove_worktree", { sessionId });
+/** A session worktree an uninstall would leave behind. `files` is read now; null when git could not read the worktree. */
+export interface UninstallTree { session: string; title: string; status: SessionStatus; repo: string; branch: string; path: string; exists: boolean; files: number | null; review: ReviewState | null }
+/** A `hivemind/*` branch. `merged`: every commit is in the repository's `target` branch. */
+export interface UninstallBranch { name: string; merged: boolean; checkedOut: boolean; session: string | null }
+export interface UninstallRepo { repo: string; target: string | null; branches: UninstallBranch[]; error: string | null }
+export interface UninstallInventory { trees: UninstallTree[]; repos: UninstallRepo[] }
+export const uninstallInventory = () => invoke<UninstallInventory>("uninstall_inventory");
+/** Deletes only a merged `hivemind/*` branch that no worktree has checked out; the backend checks again. */
+export const uninstallDeleteBranch = (repo: string, branch: string) => invoke<void>("uninstall_delete_branch", { repo, branch });
 export const repoBranches = (project: string, repo: string) => invoke<RepoBranches>("repo_branches", { project, repo });
 export const agentCancel = (sessionId: string) => invoke<void>("agent_cancel", { sessionId });
 export const agentSessions = () => invoke<SessionInfo[]>("agent_sessions");
