@@ -23,9 +23,13 @@ import { Shell } from "./shell/Shell";
 import { openReview, openSession, useApp } from "./store";
 import { toast, Toasts } from "./ui/toast";
 import { useWorkspace } from "./workspace/store";
+import { onFilesChanged, startDocumentSync } from "./documents/sync";
+import { newPageHere } from "./features/notes/actions";
+import type { FilesChanged } from "./lib/notebooks";
 
 /** Shortcuts that work on every page. Ctrl+K and Ctrl+Shift+F belong to the top bar's search; tab ones to the open notes. */
 function useShortcuts() {
+  const client = useQueryClient();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const { setPalette, go, goBack } = useApp.getState();
@@ -34,14 +38,18 @@ function useShortcuts() {
       const key = e.key.toLowerCase();
       if (key === "p" && !e.shiftKey) { e.preventDefault(); setPalette("commands"); }
       else if (key === "o") { e.preventDefault(); setPalette("notes"); }
-      else if (key === "n" && !e.shiftKey) { e.preventDefault(); useWorkspace.getState().openTab({ kind: "new-note" }); }
+      else if (key === "n" && !e.shiftKey) {
+        e.preventDefault();
+        if (useApp.getState().route.page === "notes") void newPageHere(client);
+        else useWorkspace.getState().openTab({ kind: "new-note" });
+      }
       else if (key === "g" && !e.shiftKey) { e.preventDefault(); go({ page: "memory", view: "graph" }); }
       else if (key === "a" && e.shiftKey) { e.preventDefault(); go({ page: "memory", view: "activity" }); }
       else if (key === "w") e.preventDefault(); // closes a note tab when notes are shown; never the window
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [client]);
 }
 
 /** What runs now: terminals, chat turns and a wiki build, one line each. The terminal and chat lines are left out when their lists cannot be read. */
@@ -124,6 +132,7 @@ function useLiveRefresh(enabled: boolean) {
       listen("automations-changed", () => client.invalidateQueries({ queryKey: ["automations"] })),
       listen<string>("executive-changed", (e) => client.invalidateQueries({ queryKey: ["executive", e.payload] })),
       listen<{ ref: string }>("open-note", (e) => useWorkspace.getState().openNote(e.payload.ref)),
+      listen<FilesChanged>("files-changed", (e) => onFilesChanged(client, e.payload)),
     ];
     return () => { stops.forEach((stop) => stop.then((unlisten) => unlisten())); };
   }, [enabled, client]);
@@ -140,6 +149,7 @@ export default function App() {
   useAttentionEvents();
   const closeGuard = useCloseGuard();
   const quitDialog = useQuitRequest();
+  useEffect(() => startDocumentSync(), []);
   useEffect(() => { if (link.data) useConnection.getState().set(link.data.version); }, [link.data]);
 
   // Start on the largest bound domain once domains are known.

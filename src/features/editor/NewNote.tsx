@@ -61,6 +61,11 @@ export function NewNote({ tab }: { tab: Tab }) {
     }, 1000);
     return () => clearTimeout(timer);
   }, [f, domain, started, tab]);
+  // Leaving the page within the debounce would drop the last edits: write them on unmount, unless the note was saved.
+  const saved = useRef(false);
+  const flush = useRef(() => {});
+  flush.current = () => { if (started && !saved.current) putDraft({ key: draftKey(tab), domain, mine: fRef.current, savedAt: new Date().toISOString() }).catch(() => {}); };
+  useEffect(() => () => flush.current(), []);
 
   const changeType = (type: NoteType) => {
     // Swap the starting template only if the body is still untouched.
@@ -72,6 +77,7 @@ export function NewNote({ tab }: { tab: Tab }) {
   };
 
   const finish = (ref: string, title: string, mode: "live" | "reading") => {
+    saved.current = true;
     deleteDraft(draftKey(tab)).catch(() => {});
     setDirty(tab.id, false);
     updateTab(tab.id, { kind: "note", ref, mode, title, init: undefined });

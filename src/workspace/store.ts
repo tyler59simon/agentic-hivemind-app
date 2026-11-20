@@ -1,17 +1,23 @@
-// The open notes: side-by-side panes, each with tabs, shown on the Memory page. The layout survives restarts (per device).
+// The open documents: side-by-side panes, each with tabs, shared by the Memory page (notes) and the Notes page (notebook
+// pages). The layout survives restarts (per device).
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import { movedPath, sameDoc, type FileRef } from "../documents/keys";
+import { isMarkdown } from "../lib/notebooks";
 import type { NoteType } from "../lib/lm";
 import { prefs } from "../lib/prefs";
 import { safeStorage, useApp } from "../store";
 
 export type Mode = "reading" | "live" | "source" | "history";
-export type TabKind = "note" | "new-note";
+export type TabKind = "note" | "new-note" | "file";
+const KINDS: readonly string[] = ["note", "new-note", "file"];
+export type { FileRef };
 export interface Tab {
   id: string;
   kind: TabKind;
   ref?: string;           // note tabs: domain:id
-  mode?: Mode;            // note tabs
+  file?: FileRef;         // file tabs: a page of a folder notebook
+  mode?: Mode;            // note and file tabs
   title?: string;         // last known title, for the tab strip
   init?: { title?: string; type?: NoteType; domain?: string; tags?: string[] }; // new-note tabs
 }
@@ -37,6 +43,8 @@ interface WorkspaceState {
   setRail: (rail: boolean) => void;
   revealLine: (tabId: string, line: number) => void;
   replaceRef: (from: string, to: string) => void;
+  /** A page or folder of a notebook was renamed or moved: its tabs follow. */
+  retargetFile: (notebook: string, from: string, to: string) => void;
 }
 
 let counter = 0;
@@ -44,11 +52,19 @@ const newId = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${(count
 const firstPane = (): Pane => ({ id: newId("pane"), tabs: [], active: null });
 export const MAX_PANES = 3;
 
-/** A note is open at most once per pane set; a new note is always its own tab. */
-export const sameTab = (a: Omit<Tab, "id">, b: Tab) => a.kind === "note" && b.kind === "note" && a.ref === b.ref;
+/** A document is open at most once per pane set; a new note is always its own tab. */
+export const sameTab = (a: Omit<Tab, "id">, b: Tab) => sameDoc(a, b);
 
-/** Showing a tab also shows the page it lives on. */
-const showNotes = () => useApp.getState().go({ page: "memory", view: "notes" });
+/** Showing a tab also shows a page that holds the workspace: the one already shown, else Memory for notes and Notes
+ *  for notebook pages. */
+export function showTab(tab: Pick<Tab, "kind">) {
+  const { route, go } = useApp.getState();
+  if (route.page === "notes" || (route.page === "memory" && route.view === "notes")) return;
+  go(tab.kind === "file" ? { page: "notes" } : { page: "memory", view: "notes" });
+}
+
+/** The mode a second view of a tab opens in. */
+const splitMode = (tab: Tab): Mode => (tab.kind === "file" && tab.file && !isMarkdown(tab.file.path) ? "source" : "reading");
 
 export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
   const initial = firstPane();
@@ -65,7 +81,7 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
 
     openTab: (tab, opts = {}) => {
       const s = get();
-      showNotes();
+      showTab(tab);
       // Already open somewhere: show it (a split request still opens a second view).
       if (!opts.split) {
         for (const pane of s.panes) {
@@ -124,7 +140,7 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
       const s = get();
       const pane = s.panes.find((p) => p.id === s.focused);
       const tab = pane?.tabs.find((t) => t.id === pane.active);
-      if (tab && tab.kind === "note") get().openTab({ ...tab, mode: "reading" }, { split: true });
+      if (tab && tab.kind !== "new-note") get().openTab({ ...tab, mode: splitMode(tab) }, { split: true });
       else if (s.panes.length < MAX_PANES) { const p = firstPane(); set({ panes: [...s.panes, p], focused: p.id }); }
     },
 
@@ -137,13 +153,28 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
     // After a new note is captured, its tab becomes a note tab.
     replaceRef: (from, to) =>
       set((s) => ({ panes: s.panes.map((p) => ({ ...p, tabs: p.tabs.map((t) => (t.ref === from ? { ...t, ref: to } : t)) })) })),
+    retargetFile: (notebook, from, to) =>
+      set((s) => ({
+        panes: s.panes.map((p) => ({
+          ...p,
+          tabs: p.tabs.map((t) => {
+            if (t.kind !== "file" || t.file?.notebook !== notebook) return t;
+            const path = movedPath(t.file.path, from, to);
+            return path === null ? t : { ...t, file: { notebook, path }, title: undefined };
+          }),
+        })),
+      })),
   };
 }, {
   name: "hivemind.workspace",
-  version: 2,
+  version: 3,
   storage: createJSONStorage(() => safeStorage),
-  // Version 1 also kept graph, project, system and session tabs; those are pages now.
-  migrate: (stored) => notesOnly(stored as { panes?: Pane[]; focused?: string; panel?: string | null }),
+  // Version 1 also kept graph, project, system and session tabs; those are pages now. Version 2 had notes only and loads
+  // as it is.
+  migrate: (stored, version) =>
+    version >= 2 ? (stored as WorkspaceState) : notesOnly(stored as { panes?: Pane[]; focused?: string; panel?: string | null }),
+  // Tabs of a kind this build does not know (written by a newer one) are dropped.
+  merge: (stored, current) => ({ ...current, ...knownKinds(stored as Partial<WorkspaceState>) }),
   partialize: (s) => ({
     // New-note tabs hold unsaved text in drafts, not here; keep only reopenable tabs.
     panes: s.panes.map((p) => ({ ...p, tabs: p.tabs.filter((t) => t.kind !== "new-note") })),
@@ -164,6 +195,16 @@ export function notesOnly(stored: { panes?: Pane[]; focused?: string; panel?: st
   return { panes: all, focused: all.some((p) => p.id === stored.focused) ? stored.focused! : all[0].id, rail: stored.panel !== null };
 }
 
+/** A stored layout without tabs of unknown kinds. */
+export function knownKinds(stored: Partial<WorkspaceState> | undefined): Partial<WorkspaceState> {
+  if (!stored?.panes) return stored ?? {};
+  const panes = stored.panes.map((p) => {
+    const tabs = p.tabs.filter((t) => KINDS.includes(t.kind) && (t.kind !== "file" || !!t.file));
+    return { ...p, tabs, active: tabs.some((t) => t.id === p.active) ? p.active : tabs[0]?.id ?? null };
+  });
+  return { ...stored, panes };
+}
+
 /** The tab shown in the focused pane. */
 export function activeTab(s: Pick<WorkspaceState, "panes" | "focused">): Tab | undefined {
   const pane = s.panes.find((p) => p.id === s.focused) ?? s.panes[0];
@@ -173,5 +214,5 @@ export function activeTab(s: Pick<WorkspaceState, "panes" | "focused">): Tab | u
 /** Whether the context rail is shown for the current number of panes. */
 export const railShown = (s: Pick<WorkspaceState, "panes" | "rail" | "railSplit">) => (s.panes.length > 1 ? s.railSplit : s.rail);
 
-/** Whether any note is open. */
+/** Whether any document is open. */
 export const hasTabs = (s: Pick<WorkspaceState, "panes">) => s.panes.some((p) => p.tabs.length > 0);

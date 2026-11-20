@@ -4,6 +4,7 @@ import { ChangeWizardHost } from "../features/changes/ChangeWizard";
 import { ChangesPage } from "../features/changes/ChangesPage";
 import { DashboardsPage } from "../features/dashboards/DashboardsPage";
 import { MemoryPage } from "../features/library/MemoryPage";
+import { NotesPage } from "../features/notes/NotesPage";
 import { ExecutivePage } from "../features/executive/ExecutivePage";
 import { OverviewPage } from "../features/projects/OverviewPage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
@@ -26,6 +27,7 @@ const PAGES: Record<Page, () => ReactNode> = {
   changes: () => <ChangesPage />,
   architecture: () => <ArchitecturePage />,
   memory: () => <MemoryPage />,
+  notes: () => <NotesPage />,
   dashboards: () => <DashboardsPage />,
   wiki: () => <WikiPage />,
   recap: () => <RecapPage />,

@@ -1,7 +1,11 @@
 import { Columns2, Library, PanelRight, Plus, X } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NewNote } from "../features/editor/NewNote";
 import { NoteTab } from "../features/editor/NoteTab";
+import { FileTab } from "../features/notes/FileTab";
+import { newPageHere } from "../features/notes/actions";
+import { fileName, isMarkdown, pageTitle } from "../lib/notebooks";
 import { useApp } from "../store";
 import { Confirm } from "../ui/Modal";
 import { MAX_PANES, railShown, useWorkspace, type Pane, type Tab } from "./store";
@@ -10,21 +14,26 @@ import { MAX_PANES, railShown, useWorkspace, type Pane, type Tab } from "./store
 export const TAB_VIEWS: Record<Tab["kind"], (tab: Tab) => ReactNode> = {
   note: (tab) => <NoteTab tab={tab} />,
   "new-note": (tab) => <NewNote key={tab.id} tab={tab} />,
+  file: (tab) => <FileTab key={tab.id} tab={tab} />,
 };
 
-const label = (tab: Tab) => (tab.kind === "note" ? tab.title || tab.ref?.split(":")[1]?.slice(0, 8) || "Note" : tab.title || "New note");
+const label = (tab: Tab) => (tab.kind === "note" ? tab.title || tab.ref?.split(":")[1]?.slice(0, 8) || "Note"
+  : tab.kind === "file" ? tab.title || pageTitle(tab.file?.path ?? "") || "Page" : tab.title || "New note");
 
 /** Close a tab, asking first when it holds unsaved edits. */
 export function useCloseTab() {
-  const [asking, setAsking] = useState<{ paneId: string; tabId: string } | null>(null);
+  const [asking, setAsking] = useState<{ paneId: string; tabId: string; file?: string } | null>(null);
   const closeTab = useWorkspace((s) => s.closeTab);
   const request = (paneId: string, tabId: string) => {
-    if (useWorkspace.getState().dirty[tabId]) setAsking({ paneId, tabId });
+    const ws = useWorkspace.getState();
+    const tab = ws.panes.find((p) => p.id === paneId)?.tabs.find((t) => t.id === tabId);
+    if (ws.dirty[tabId]) setAsking({ paneId, tabId, file: tab?.kind === "file" ? fileName(tab.file?.path ?? "") : undefined });
     else closeTab(paneId, tabId);
   };
   const dialog = asking && (
     <Confirm title="Discard unsaved changes?" danger action="Discard"
-      message="This tab has edits that are not saved to Living Memory. A draft is kept until you discard it."
+      message={asking.file ? `This tab has edits that are not saved to ${asking.file}. A draft is kept, and they come back when you open the page again.`
+        : "This tab has edits that are not saved to Living Memory. A draft is kept until you discard it."}
       onAnswer={(yes) => { if (yes) closeTab(asking.paneId, asking.tabId); setAsking(null); }} />
   );
   return { request, dialog };
@@ -54,6 +63,17 @@ function LibraryPill({ active }: { active: boolean }) {
 
 const newNote = () => useWorkspace.getState().openTab({ kind: "new-note" });
 
+/** The strip's + button: a new page on the Notes page, a new note elsewhere. */
+function NewButton({ onBefore }: { onBefore?: () => void }) {
+  const notes = useApp((s) => s.route.page === "notes");
+  const client = useQueryClient();
+  const label = notes ? "New page" : "New note";
+  return (
+    <button className="icon-button" title={`${label} (Ctrl+N)`} aria-label={label}
+      onClick={() => { onBefore?.(); if (notes) void newPageHere(client); else newNote(); }}><Plus size="1.2em" aria-hidden /></button>
+  );
+}
+
 function PaneView({ pane, focused, first, last, onClose }: {
   pane: Pane; focused: boolean; first: boolean; last: boolean; onClose: (paneId: string, tabId: string) => void;
 }) {
@@ -69,7 +89,7 @@ function PaneView({ pane, focused, first, last, onClose }: {
       <div className="note-tabs" role="tablist" ref={strip} onWheel={(e) => { if (e.deltaY) e.currentTarget.scrollLeft += e.deltaY; }}>
         {first && <LibraryPill active={false} />}
         {pane.tabs.map((t) => <TabPill key={t.id} tab={t} active={t.id === active?.id} onPick={() => activate(pane.id, t.id)} onClose={() => onClose(pane.id, t.id)} />)}
-        <button className="icon-button" title="New note (Ctrl+N)" aria-label="New note" onClick={() => { focus(pane.id); newNote(); }}><Plus size="1.2em" aria-hidden /></button>
+        <NewButton onBefore={() => focus(pane.id)} />
         <span className="fill" />
         {last && (
           <>
@@ -83,7 +103,7 @@ function PaneView({ pane, focused, first, last, onClose }: {
       </div>
       <div className="pane-body">
         {active ? TAB_VIEWS[active.kind](active) : (
-          <div className="center muted"><p>Open a note here: Ctrl+click a link, or press <kbd>Ctrl</kbd>+<kbd>O</kbd>.</p></div>
+          <div className="center muted"><p>Open a note or page here: Ctrl+click a link, or press <kbd>Ctrl</kbd>+<kbd>O</kbd>.</p></div>
         )}
       </div>
     </section>
@@ -126,6 +146,7 @@ export function Workspace() {
         e.preventDefault();
         const tab = pane?.tabs.find((t) => t.id === pane.active);
         if (tab?.kind === "note") ws.updateTab(tab.id, { mode: tab.mode === "live" ? "reading" : "live" });
+        else if (tab?.kind === "file" && tab.file && isMarkdown(tab.file.path)) ws.updateTab(tab.id, { mode: (tab.mode ?? "live") === "reading" ? "live" : "reading" });
       }
     };
     window.addEventListener("keydown", onKey);

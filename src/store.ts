@@ -5,7 +5,8 @@ import { createJSONStorage, persist, type StateStorage } from "zustand/middlewar
 
 export type Shelf = "active" | "archived" | "any";
 
-/** One page per sidebar section. Memory also holds the open notes (`view: "notes"`) and its sub-views. */
+/** One page per sidebar section. Memory also holds the open notes (`view: "notes"`) and its sub-views; Notes holds the
+ *  notebooks and shows the same open documents. */
 export type Route =
   | { page: "overview"; view?: "work" }
   | { page: "executive"; tab?: ExecutiveTab; capture?: string; briefing?: string; draft?: string; session?: string }
@@ -14,6 +15,7 @@ export type Route =
   | { page: "architecture"; system?: string }
   | { page: "dashboards"; ref?: string }
   | { page: "memory"; view?: "notes" | "graph" | "activity" | "history" | "tags"; q?: string }
+  | { page: "notes"; notebook?: string; path?: string }
   | { page: "wiki"; domain?: string; at?: string; edition?: "agent"; project?: string }
   | { page: "recap" }
   | { page: "maintenance" }

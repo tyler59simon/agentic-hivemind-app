@@ -96,4 +96,19 @@ New modules; register commands in `lib.rs` `generate_handler!` and state in `App
 
 ## 9. Shipped
 
-(Filled in when the phase lands: commits, what was verified, deviations.)
+Landed on 2026-11-20 (commit history of `docs/notes-studio/phase-1a-workspace.md` and `src/features/notes/`).
+
+**Verified**
+- `npm test` (81 files, 579 tests), `npx tsc --noEmit`, `npm run build`, `cargo test --lib`, `cargo clippy --all-targets` (one warning, in older workflow code at `lib.rs` `workflow::templates()`). `src/workspace/store.test.ts` is unedited.
+- `cargo test`: `bridge::tests::a_script_that_fails_shows_its_stderr` fails about one run in eight on main as well; it is tracked as a separate bug.
+- Real app, driven over CDP with a scratch notebook registered in app data and removed afterwards: tree with sections and subpages; open, edit, Ctrl+S; unsaved dots on the tab and on the Notes section; a CRLF file with a BOM keeps both and every byte outside the edit; a clean tab follows a Notepad edit with its banner; a dirty tab gets "changed on disk", Merge, and the merged page saves; after a restart, a draft whose file changed meanwhile came back merged as unsaved edits; `[[Plan]]` opens the page, `[[Missing page]]` offers Create; rename in the tree and a pointer drag into a section move the open tab with them; delete goes to `.hivemind/trash/<time>/<path>` and closes the tab; a `.txt` file opens in Source with line numbers; Ctrl+N makes `Untitled.md` beside the focused page; Ctrl+\ splits one document into two panes; Ctrl+W on a dirty page names the file; Ctrl+O lists pages and opens them on Notes from Memory. Memory regression: the library, a note from Ctrl+O, its rail (Connections, Source history, On this page) and Ctrl+E.
+
+**Found by the UI pass:** the watcher emitted an array of changes per event while the webview expects one `{ notebook, paths }` object, so outside edits were never seen. `watch::watch` now calls back once per notebook, and a test pins the payload shape.
+
+**Deviations**
+- No `useDocument.ts` or `adapters/file.ts`: `src/documents/store.ts` holds the controller (open, edit, save, merge, reload, refresh, retarget, release, discard) and calls `src/lib/notebooks.ts` directly; `src/documents/sync.ts` keeps documents and tabs in step (unsaved dots, letting go of documents no tab shows, routing `files-changed`). A rename pauses that sync while documents and tabs move together.
+- `MergeDialog` gained `noun: "note" | "page"` and a `PageMergeDialog` wrapper instead of a `fields={false}` prop.
+- Saves use `files::atomic::Held` (round 2 of the design review): the file is held without write or delete sharing, renamed aside through its handle, and the new file moved in without replacing.
+- `NoteEditor.tsx` already wrote its draft on unmount; only `NewNote.tsx` changed (it now does too, unless the note was saved).
+- Not done here: an Attachments heading in the tree (the attachments folder shows as an ordinary section until NS-1B shows images), and drag to reorder within a folder (drag moves between folders; an order in the sidecar is honoured).
+

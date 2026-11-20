@@ -8,6 +8,7 @@ import { sessionsQuery } from "../lib/agent";
 import { useSystemsEnabled } from "../lib/connection";
 import { OTHER_FOLDERS, realProject } from "../lib/folders";
 import { useApp } from "../store";
+import { notebooksQuery, pageTitle } from "../lib/notebooks";
 import { activeTab, useWorkspace } from "../workspace/store";
 import { SECTIONS } from "./Sidebar";
 
@@ -22,12 +23,17 @@ function useCrumbs(): Crumb[] {
   const other = useApp((s) => s.project === OTHER_FOLDERS);
   const domain = useApp((s) => s.domain);
   const noteTitle = useWorkspace((s) => activeTab(s)?.title);
+  const page = useWorkspace((s) => { const t = activeTab(s); return t?.kind === "file" ? t.file : undefined; });
+  const notebooks = useQuery({ ...notebooksQuery(), enabled: route.page === "notes" });
   const systemsOn = useSystemsEnabled();
   const sessions = useQuery({ ...sessionsQuery(), enabled: systemsOn && route.page === "agents" });
   const systems = useQuery({ ...systemsQuery(), enabled: systemsOn && route.page === "architecture" });
   const root: Crumb = { label: project?.name ?? (other ? "Other folders" : "All memory"), go: () => go({ page: "overview" }) };
   if (route.page === "overview") return route.view === "work" ? [root, { label: "Open work" }] : [{ label: "Projects" }, { label: root.label }];
   const section: Crumb = { label: SECTIONS.find((s) => s.page === route.page)?.label ?? route.page, go: () => go({ page: route.page }) };
+  if (route.page === "notes" && page) {
+    return [root, section, { label: notebooks.data?.find((n) => n.id === page.notebook)?.title ?? "Notebook" }, { label: pageTitle(page.path) }];
+  }
   const leaf = route.page === "memory" ? (route.view === "notes" ? noteTitle : route.view && MEMORY_VIEWS[route.view])
     : route.page === "agents" ? (route.view === "new" ? "New session" : sessions.data?.find((s) => s.id === route.session)?.title)
     : route.page === "architecture" ? systems.data?.systems.find((s) => s.slug === route.system)?.name

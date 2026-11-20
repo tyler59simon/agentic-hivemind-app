@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, BriefcaseBusiness, ChevronDown, Database, GitBranch, House, LayoutDashboard, Network, Wrench, ScrollText, Sparkles, SquareCheck, Terminal, Workflow, type LucideIcon } from "lucide-react";
+import { BookOpen, BriefcaseBusiness, ChevronDown, Database, GitBranch, House, LayoutDashboard, Network, NotebookPen, Wrench, ScrollText, Sparkles, SquareCheck, Terminal, Workflow, type LucideIcon } from "lucide-react";
 import logo from "../assets/logo.png";
 import { ProjectSwitcher } from "../features/projects/ProjectSwitcher";
 import { dotOf, useAttention } from "../features/terminal/attention";
@@ -10,6 +10,7 @@ import type { ConnectInfo } from "../lib/lm";
 import { refreshStore } from "../lib/refresh";
 import { useApp, type Page } from "../store";
 import { Menu } from "../ui/Menu";
+import { useShallow } from "zustand/react/shallow";
 import { useWorkspace } from "../workspace/store";
 import { useHidden } from "./hidden";
 
@@ -21,6 +22,7 @@ export const SECTIONS: { page: Page; label: string; icon: LucideIcon }[] = [
   { page: "changes", label: "Changes", icon: GitBranch },
   { page: "architecture", label: "Architecture", icon: Network },
   { page: "memory", label: "Memory", icon: Database },
+  { page: "notes", label: "Notes", icon: NotebookPen },
   { page: "dashboards", label: "Dashboards", icon: LayoutDashboard },
   { page: "wiki", label: "Wiki", icon: BookOpen },
   { page: "recap", label: "Recap", icon: ScrollText },
@@ -61,9 +63,13 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
   const attention = useAttention((s) => dotOf(Object.values(s.byId)));
   const waiting = sessions.data?.some((s) => s.status === "waiting") || attention === "waiting";
   const running = sessions.data?.some((s) => s.status === "running");
-  const unsaved = useWorkspace((s) => Object.values(s.dirty).some(Boolean));
+  // The unsaved dot sits on the section that holds the tab: notes on Memory, notebook pages on Notes.
+  const unsaved = useWorkspace(useShallow((s) => {
+    const kinds = new Set(s.panes.flatMap((p) => p.tabs.filter((t) => s.dirty[t.id]).map((t) => (t.kind === "file" ? "notes" : "memory"))));
+    return { memory: kinds.has("memory"), notes: kinds.has("notes") };
+  }));
   const user = info.user || "You";
-  const mark = (p: Page) => (p === "agents" && waiting ? "An agent session is waiting for you" : p === "agents" && attention === "done" ? "A terminal finished" : p === "agents" && running ? "An agent session is running" : p === "memory" && unsaved ? "A note has unsaved edits" : null);
+  const mark = (p: Page) => (p === "agents" && waiting ? "An agent session is waiting for you" : p === "agents" && attention === "done" ? "A terminal finished" : p === "agents" && running ? "An agent session is running" : p === "memory" && unsaved.memory ? "A note has unsaved edits" : p === "notes" && unsaved.notes ? "A page has unsaved edits" : null);
 
   return (
     <aside className="sidebar">
@@ -74,7 +80,7 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
           <button key={p} className={`nav-item ${page === p ? "on" : ""}`} aria-current={page === p ? "page" : undefined} onClick={() => go({ page: p })}
             onContextMenu={(e) => { e.preventDefault(); setMenu(p === "overview" ? null : { page: p, x: e.clientX, y: e.clientY, from: e.currentTarget }); }}>
             <Icon size="1.35em" aria-hidden /><span className="grow">{label}</span>
-            {mark(p) && <span className={`nav-dot ${p === "agents" && waiting ? "waiting" : p === "agents" && attention === "done" ? "done" : p === "memory" ? "unsaved" : ""}`} title={mark(p)!} aria-label={mark(p)!} />}
+            {mark(p) && <span className={`nav-dot ${p === "agents" && waiting ? "waiting" : p === "agents" && attention === "done" ? "done" : p === "memory" || p === "notes" ? "unsaved" : ""}`} title={mark(p)!} aria-label={mark(p)!} />}
           </button>
         ))}
       </nav>

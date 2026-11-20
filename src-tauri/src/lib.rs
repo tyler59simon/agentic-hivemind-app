@@ -7,17 +7,20 @@ mod capture;
 mod conductor;
 mod drafts;
 mod executive;
+mod files;
 mod folders;
 mod git;
 mod instance;
 mod learning;
 mod managed;
 mod oneshot;
+mod notebooks;
 mod notify;
 mod resources;
 mod review;
 mod settings;
 mod skills;
+mod studio;
 mod term;
 mod uninstall;
 mod watcher;
@@ -55,6 +58,13 @@ struct AppState {
     watcher: Mutex<Option<notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>>,
     /// Why the quick-capture hotkey could not be registered, for the settings screen.
     shortcut_error: Mutex<Option<String>>,
+    /// Folder notebooks the user registered (Notes Studio).
+    notebooks: notebooks::Registry,
+    /// Settings of notebooks whose folder Hivemind cannot write.
+    notebook_meta_dir: PathBuf,
+    notebook_watcher: Mutex<Option<notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>>,
+    /// The Living Memory store root from the last connect; a notebook may not be inside it.
+    store_root: Mutex<Option<PathBuf>>,
 }
 
 #[derive(Serialize)]
@@ -129,6 +139,7 @@ async fn connect(app: AppHandle, state: State<'_, AppState>) -> Result<ConnectIn
         },
     )?;
     *state.watcher.lock().unwrap() = Some(debouncer);
+    *state.store_root.lock().unwrap() = Some(PathBuf::from(&root));
     let launch = state.bridge.launch();
     let user = std::env::var("USERNAME").or_else(|_| std::env::var("USER")).ok().filter(|name| !name.is_empty());
     Ok(ConnectInfo { version: version.result, root, program: launch.program, script: launch.script.display().to_string(), user })
@@ -1744,7 +1755,12 @@ pub fn run() {
                 capturing: executive::Claims::default(),
                 watcher: Mutex::new(None),
                 shortcut_error: Mutex::new(shortcut_error),
+                notebooks: notebooks::Registry::new(app.path().app_data_dir()?.join("notebooks.json")),
+                notebook_meta_dir: app.path().app_data_dir()?.join("notebook-meta"),
+                notebook_watcher: Mutex::new(None),
+                store_root: Mutex::new(None),
             });
+            studio::rewatch(app.handle());
             conductor::run(report_queue, vec![session_notices(app.handle().clone()), learning_reports(app.handle().clone()), orchestration_reports(app.handle().clone()), executive_reports(app.handle().clone())]);
             {
                 let state = app.state::<AppState>();
@@ -1786,7 +1802,10 @@ pub fn run() {
             skills_upkeep, skill_from_note, workflow_templates, workflow_list, workflow_create, workflow_edit, workflow_act, workflow_delete, workflow_report,
             automation_list, automation_put, automation_delete, automation_act, architecture_drift, architecture_rules_set, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, uninstall_inventory, uninstall_remove_worktree, uninstall_delete_branch, repo_branches,
             agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_stop_and_approve, review_request_changes, review_request_terminal_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
-            system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export, wiki_agent_build, wiki_agent_cancel
+            system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export, wiki_agent_build, wiki_agent_cancel,
+            studio::notebooks_list, studio::notebook_add, studio::notebook_remove, studio::notebook_rename, studio::notebook_tree, studio::notebook_meta_get,
+            studio::notebook_meta_set, studio::file_read, studio::file_save, studio::file_create, studio::file_mkdir, studio::file_rename, studio::file_delete,
+            studio::file_reveal
         ])
         .build(context)
         .expect("error while running tauri application")

@@ -1,0 +1,45 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// Rust's draft store, answering slowly so the cache is what a quick read sees.
+const disk = new Map<string, unknown>();
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(async (cmd: string, args: { key?: string; value?: unknown }) => {
+    await new Promise((r) => setTimeout(r, 5));
+    if (cmd === "draft_put") disk.set(args.key!, args.value);
+    else if (cmd === "draft_get") return disk.get(args.key!) ?? null;
+    else if (cmd === "draft_delete") disk.delete(args.key!);
+    return null;
+  }),
+}));
+
+const { deleteDraft, getDraft, getFileDraft, putDraft } = await import("./drafts");
+
+const note = (key: string, title: string) => ({ key, ref: key, baseRevision: "r", base: {} as never, mine: { title } as never, savedAt: "t" });
+const file = (key: string, mine: string) => ({
+  key, kind: "file" as const, target: { notebook: "nb", path: "a.md" }, precondition: { sha256: "s", size: 1, mtimeMs: 1 },
+  format: { encoding: "UTF-8", bom: false, eol: "lf" as const }, mine, savedAt: "t",
+});
+
+describe("drafts", () => {
+  beforeEach(() => disk.clear());
+
+  it("a draft put and read back at once returns the newest value", async () => {
+    void putDraft(note("d:1", "old"));
+    void putDraft(note("d:1", "new"));
+    expect((await getDraft("d:1"))?.mine).toEqual({ title: "new" });
+  });
+
+  it("a delete is seen at once, before Rust answers", async () => {
+    await putDraft(note("d:2", "x"));
+    void deleteDraft("d:2");
+    expect(await getDraft("d:2")).toBeNull();
+  });
+
+  it("keeps note and page drafts apart", async () => {
+    await putDraft(file("file-abc", "page text"));
+    expect(await getDraft("file-abc")).toBeNull();
+    expect((await getFileDraft("file-abc"))?.mine).toBe("page text");
+    await putDraft(note("d:3", "n"));
+    expect(await getFileDraft("d:3")).toBeNull();
+  });
+});

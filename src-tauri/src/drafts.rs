@@ -12,11 +12,18 @@ fn file_for(dir: &Path, key: &str) -> Result<PathBuf, String> {
     Ok(dir.join(format!("{name}.json")))
 }
 
+/// A draft larger than this is refused (a page's draft holds the text and, under 2 MB, its base too).
+pub const MAX_BYTES: usize = 32 * 1024 * 1024;
+
 pub fn put(dir: &Path, key: &str, value: &Value) -> Result<(), String> {
+    let bytes = serde_json::to_vec(value).map_err(|e| e.to_string())?;
+    if bytes.len() > MAX_BYTES {
+        return Err("This draft is larger than 32 MB, so it is not kept".into());
+    }
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let path = file_for(dir, key)?;
     let temp = path.with_extension("json.tmp");
-    std::fs::write(&temp, serde_json::to_vec(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    std::fs::write(&temp, bytes).map_err(|e| e.to_string())?;
     std::fs::rename(&temp, &path).map_err(|e| e.to_string())
 }
 
@@ -32,6 +39,42 @@ pub fn delete(dir: &Path, key: &str) -> Result<(), String> {
     match std::fs::remove_file(file_for(dir, key)?) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
         _ => Ok(()),
+    }
+}
+
+/// The draft key of a notebook page, as `src/documents/keys.ts` computes it: `file-` and the sha256 of its document key.
+pub fn file_key(notebook: &str, path: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(format!("file:{notebook}:{}", path.to_lowercase()).as_bytes());
+    format!("file-{}", digest.iter().map(|b| format!("{b:02x}")).collect::<String>())
+}
+
+/// After a page or folder of `notebook` moved from `from` to `to`, move the drafts of every page it held, so unsaved
+/// edits follow the file even if the app stops before the webview catches up.
+pub fn retarget(dir: &Path, notebook: &str, from: &str, to: &str) {
+    let moved = |path: &str| {
+        let (low, f) = (path.to_lowercase(), from.to_lowercase());
+        if low == f {
+            Some(to.to_string())
+        } else if low.starts_with(&format!("{f}/")) {
+            Some(format!("{to}{}", &path[from.len()..]))
+        } else {
+            None
+        }
+    };
+    for mut draft in list(dir) {
+        let Some(target) = draft.get("target").filter(|_| draft.get("kind").and_then(Value::as_str) == Some("file")) else { continue };
+        if target.get("notebook").and_then(Value::as_str) != Some(notebook) {
+            continue;
+        }
+        let Some(old) = target.get("path").and_then(Value::as_str).map(str::to_string) else { continue };
+        let Some(new) = moved(&old) else { continue };
+        let key = file_key(notebook, &new);
+        draft["target"]["path"] = Value::from(new);
+        draft["key"] = Value::from(key.clone());
+        if put(dir, &key, &draft).is_ok() && key != file_key(notebook, &old) {
+            let _ = delete(dir, &file_key(notebook, &old));
+        }
     }
 }
 
@@ -63,6 +106,38 @@ mod tests {
         assert_eq!(get(&dir, "demo:1234").unwrap(), None);
         assert!(get(&dir, "").is_err());
         assert!(file_for(&dir, "../../etc/passwd").unwrap().starts_with(&dir));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn file_drafts_follow_a_move() {
+        let dir = std::env::temp_dir().join(format!("hivemind-drafts-move-{}", std::process::id()));
+        let draft = |path: &str| json!({ "key": file_key("nb-1", path), "kind": "file", "target": { "notebook": "nb-1", "path": path }, "mine": "x" });
+        put(&dir, &file_key("nb-1", "Projects/A.md"), &draft("Projects/A.md")).unwrap();
+        put(&dir, &file_key("nb-1", "Other.md"), &draft("Other.md")).unwrap();
+        retarget(&dir, "nb-1", "Projects", "Archive/Projects");
+        assert_eq!(get(&dir, &file_key("nb-1", "Projects/A.md")).unwrap(), None);
+        let moved = get(&dir, &file_key("nb-1", "Archive/Projects/A.md")).unwrap().unwrap();
+        assert_eq!(moved["target"]["path"], "Archive/Projects/A.md");
+        assert!(get(&dir, &file_key("nb-1", "Other.md")).unwrap().is_some());
+        // A case-only rename keeps the key.
+        retarget(&dir, "nb-1", "Other.md", "other.md");
+        assert_eq!(get(&dir, &file_key("nb-1", "other.md")).unwrap().unwrap()["target"]["path"], "other.md");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn the_file_key_matches_the_webview() {
+        // sha256 of "file:nb-1:projects/a.md", computed outside Rust; src/documents/keys.test.ts checks the same value.
+        assert_eq!(file_key("nb-1", "Projects/A.md"), "file-ee426da86755468a9c6ed248410253426f97a9dbb18eee94b3a5e0e10fa30c67");
+    }
+
+    #[test]
+    fn drafts_over_the_cap_are_refused() {
+        let dir = std::env::temp_dir().join(format!("hivemind-drafts-cap-{}", std::process::id()));
+        let big = json!({ "mine": "x".repeat(MAX_BYTES) });
+        assert!(put(&dir, "file-abc", &big).unwrap_err().contains("32 MB"));
+        assert_eq!(get(&dir, "file-abc").unwrap(), None);
         std::fs::remove_dir_all(dir).ok();
     }
 }

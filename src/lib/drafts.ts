@@ -1,8 +1,11 @@
 // Unsaved edits, stored by the Rust side in the app's data folder (never in the Living Memory store).
 import { invoke } from "@tauri-apps/api/core";
 import type { Fields } from "../features/editor/save";
+import type { FileRef } from "../documents/keys";
+import type { FileFormat, Stamp } from "./notebooks";
 
-export interface Draft {
+/** A note's draft (no `kind`, the shape drafts always had). */
+export interface NoteDraft {
   key: string;
   ref?: string;               // the note, once it exists
   domain?: string;            // new notes: where they will be captured
@@ -12,7 +15,50 @@ export interface Draft {
   savedAt: string;
 }
 
-export const putDraft = (draft: Draft) => invoke<void>("draft_put", { key: draft.key, value: draft });
-export const getDraft = (key: string) => invoke<Draft | null>("draft_get", { key });
-export const deleteDraft = (key: string) => invoke<void>("draft_delete", { key });
+/** A notebook page's draft. `base` is left out for pages over 2 MB. */
+export interface FileDraft {
+  key: string;
+  kind: "file";
+  target: FileRef;
+  precondition: Stamp;
+  format: FileFormat;
+  base?: string;
+  mine: string;
+  savedAt: string;
+}
+
+export type Draft = NoteDraft | FileDraft;
+export const isFileDraft = (d: Draft): d is FileDraft => (d as FileDraft).kind === "file";
+
+// The newest value of every draft written in this run, so a reader never sees an older one while the write to disk is
+// still on its way (an editor that unmounts and mounts again at once, when moving between the Notes and Memory pages).
+const recent = new Map<string, Draft | null>();
+
+export function putDraft(draft: Draft): Promise<void> {
+  recent.set(draft.key, draft);
+  return invoke<void>("draft_put", { key: draft.key, value: draft });
+}
+
+async function readDraft(key: string): Promise<Draft | null> {
+  if (recent.has(key)) return recent.get(key) ?? null;
+  return invoke<Draft | null>("draft_get", { key });
+}
+
+/** A note's draft (note keys are refs or `new-<tab>`, never a file key). */
+export const getDraft = async (key: string): Promise<NoteDraft | null> => {
+  const d = await readDraft(key);
+  return d && !isFileDraft(d) ? d : null;
+};
+
+/** A notebook page's draft, by its hashed key (`draftKeyOf`). */
+export const getFileDraft = async (key: string): Promise<FileDraft | null> => {
+  const d = await readDraft(key);
+  return d && isFileDraft(d) ? d : null;
+};
+
+export function deleteDraft(key: string): Promise<void> {
+  recent.set(key, null);
+  return invoke<void>("draft_delete", { key });
+}
+
 export const listDrafts = () => invoke<Draft[]>("draft_list");

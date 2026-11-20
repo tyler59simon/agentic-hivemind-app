@@ -1,7 +1,10 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { useChangesEnabled, useProjectsEnabled, useSystemsEnabled, useWikiEnabled } from "../../lib/connection";
 import { domains, list } from "../../lib/lm";
+import { folderOf, notebooksQuery, pageTitle, treeQuery } from "../../lib/notebooks";
+import { newPageHere, openPage } from "../notes/actions";
+import { useAddNotebook } from "../notes/NotesPage";
 import { refreshStore } from "../../lib/refresh";
 import { fuzzy } from "../../lib/text";
 import { useHidden } from "../../shell/hidden";
@@ -34,14 +37,23 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
   const wikiOn = useWikiEnabled();
   const hidden = useHidden((s) => s.hidden);
   const systems = useQuery({ ...systemsQuery(), enabled: systemsOn && app.palette === "commands" });
+  const notebooks = useQuery({ ...notebooksQuery(), enabled: app.palette === "notes" });
+  const trees = useQueries({ queries: (notebooks.data ?? []).map((nb) => ({ ...treeQuery(nb.id), enabled: app.palette === "notes" })) });
+  const addNotebook = useAddNotebook();
   useEffect(() => { setQuery(""); setIndex(0); }, [app.palette]);
 
   const entries = useMemo<Entry[]>(() => {
     if (app.palette === "notes") {
-      return (notes.data?.notes ?? []).map((n) => ({
+      const found: Entry[] = (notes.data?.notes ?? []).map((n) => ({
         key: n.ref, label: n.title, detail: `${n.domain} · ${n.type}`,
         run: () => { app.setDomain(n.domain); app.setPalette(null); ws.openNote(n.ref, { title: n.title }); },
       }));
+      // Every page of every notebook too (pages, not other text files).
+      const pages = (notebooks.data ?? []).flatMap((nb, i) => (trees[i]?.data?.entries ?? []).filter((e) => e.kind === "page").map((e) => ({
+        key: `${nb.id}:${e.path}`, label: pageTitle(e.path), detail: [nb.title, folderOf(e.path)].filter(Boolean).join(" · "),
+        run: () => { app.setPalette(null); openPage({ notebook: nb.id, path: e.path }); },
+      })));
+      return [...found, ...pages];
     }
     const close = () => app.setPalette(null);
     const page = (route: Route) => () => { close(); app.go(route); };
@@ -50,6 +62,9 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "new", label: "New note", detail: "Ctrl+N", run: () => { close(); ws.openTab({ kind: "new-note" }); } },
       { key: "overview", label: "Overview", run: page({ page: "overview" }) },
       { key: "memory", label: "Memory library", section: "memory" as Page, run: page({ page: "memory" }) },
+      { key: "notes", label: "Notes", section: "notes" as Page, run: page({ page: "notes" }) },
+      { key: "new-page", label: "New page", detail: "Ctrl+N on Notes", section: "notes" as Page, run: () => { close(); void newPageHere(client); } },
+      { key: "add-notebook", label: "Add a notebook…", section: "notes" as Page, run: () => { close(); void addNotebook(); } },
       { key: "graph", label: "Open the graph", detail: "Ctrl+G", run: page({ page: "memory", view: "graph" }) },
       { key: "activity", label: "Recent activity (who changed what)", detail: "Ctrl+Shift+A", run: page({ page: "memory", view: "activity" }) },
       { key: "tags", label: "Manage tags", run: page({ page: "memory", view: "tags" }) },
@@ -92,7 +107,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       })),
     ];
     return all.filter((e) => !e.section || !hidden.includes(e.section));
-  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, changesOn, wikiOn, hidden, client, onSettings, onReconnect]);
+  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, changesOn, wikiOn, hidden, client, onSettings, onReconnect, notebooks.data, trees, addNotebook]);
 
   const shown = useMemo(() => entries
     .map((e) => ({ e, score: fuzzy(query, e.label) }))
@@ -106,7 +121,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
   return (
     <div className="overlay" onMouseDown={() => app.setPalette(null)}>
       <div className="palette" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label="Palette">
-        <input autoFocus value={query} placeholder={app.palette === "notes" ? "Go to note…" : "Run a command…"}
+        <input autoFocus value={query} placeholder={app.palette === "notes" ? "Go to note or page…" : "Run a command…"}
           onChange={(e) => { setQuery(e.target.value); setIndex(0); }}
           onKeyDown={(e) => {
             if (e.key === "Escape") app.setPalette(null);

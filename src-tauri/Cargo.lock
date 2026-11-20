@@ -28,6 +28,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-winrt-notification",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
