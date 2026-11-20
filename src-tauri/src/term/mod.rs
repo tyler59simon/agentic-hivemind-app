@@ -1209,6 +1209,7 @@ mod tests {
         }
 
         /// Wait for the `count`th exit.
+        #[track_caller]
         fn wait_exits(&self, count: usize) -> Vec<TermExit> {
             let start = Instant::now();
             loop {
@@ -1771,6 +1772,7 @@ mod tests {
         rig.terms.inner.terms.lock().unwrap().get(id).unwrap().shared.clone()
     }
 
+    #[track_caller]
     fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
         let start = Instant::now();
         while !done() {
