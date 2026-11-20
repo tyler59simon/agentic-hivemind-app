@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fixtures from "./__fixtures__/note-format.json";
 import {
-  actionItems, addEvidence, allowsActions, defaultTags, evidenceItems, formatBody, outline, parts, rewriteWikilinks, sectionKey, sections,
+  actionItems, addEvidence, allowsActions, builtinDef, defaultTags, evidenceItems, formatBody, outline, parts, rewriteWikilinks, sectionKey, sections,
   setEvidence, stepParts, stripTitle, template, TEMPLATE_PROMPTS, wikilinks,
 } from "./note";
 import type { NoteTypeDef } from "./lm";
@@ -171,6 +171,13 @@ describe("new notes", () => {
     expect(allowsActions("incident")).toBe(false);
     expect(allowsActions("plan")).toBe(true);
     expect(allowsActions("decision")).toBe(false);
+  });
+
+  it("a custom type named after an Object property reads no built-in table", () => {
+    expect(builtinDef("constructor")).toMatchObject({ summary: "", sections: [], actions: false, concern: null, subject: null });
+    expect(template("constructor")).toBe(template("incident"));
+    expect(defaultTags("constructor", ["subject/project"])).toEqual(["subject/project"]);
+    expect(allowsActions("toString")).toBe(false);
   });
 });
 

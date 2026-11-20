@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { BUILTIN_TYPES } from "../../lib/lm";
-import { byUpdated, filterItems, GROUPS, searchFilters, type Filter, type Item } from "./library";
+import { byUpdated, filterItems, GROUPS, searchFilters, widerCustomSearch, type Filter, type Item } from "./library";
 
 const item = (over: Partial<Item>): Item =>
   ({ ref: "d:1", title: "T", type: "knowledge", status: "active", domain: "d", tags: [], updated: "2026-11-01", text: "", ...over });
@@ -48,6 +48,16 @@ describe("library", () => {
     expect(searchFilters({ ...base, projectTag: "project/pay" })).toMatchObject({ tag: "project/pay", limit: 60 });
     expect(searchFilters({ ...base, tag: "subject/x", projectTag: "project/pay" })).toMatchObject({ tag: "subject/x", limit: 100 });
     expect(searchFilters({ ...base, tag: "subject/x" })).toMatchObject({ tag: "subject/x", limit: 60 });
+  });
+
+  it("widens a Custom tab search only when the fallback scope's primary hits hold no custom type", () => {
+    const hit = (type: string) => ({ type });
+    expect(widerCustomSearch("custom", "fallback", { fallback: false, results: [hit("decision"), hit("bug")] })).toBe(true);
+    expect(widerCustomSearch("custom", "fallback", { fallback: false, results: [hit("decision"), hit("incident")] })).toBe(false);
+    expect(widerCustomSearch("custom", "fallback", { fallback: true, results: [] })).toBe(false); // LM already searched the other domains
+    expect(widerCustomSearch("custom", "active", { fallback: false, results: [hit("decision")] })).toBe(false);
+    expect(widerCustomSearch("knowledge", "fallback", { fallback: false, results: [hit("decision")] })).toBe(false);
+    expect(widerCustomSearch("custom", "fallback", undefined)).toBe(false);
   });
 
   it("sorts newest first without changing the input", () => {

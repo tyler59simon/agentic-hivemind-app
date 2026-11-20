@@ -37,6 +37,12 @@ describe("precheck", () => {
     expect(precheck({ ...base, tags: ["subject/project"] }, tax, false)).toEqual([]); // updates are not held to new-note facets
     expect(precheck({ ...base, review_by: "soon" }, tax, false)).toEqual([expect.stringContaining("YYYY-MM-DD")]);
   });
+  it("holds only new notes to a custom type's summary prompt", () => {
+    const def = { name: "incident", builtin: false, status: "active" as const, description: "", summary: "What broke.", sections: [], actions: false, review_days: null, concern: null, subject: null };
+    const prompt = { ...base, type: "incident", body: "What broke.\n\n## Details\n- a" };
+    expect(precheck(prompt, tax, true, def)).toEqual([expect.stringContaining("Replace the template's first line")]);
+    expect(precheck(prompt, tax, false, def)).toEqual([]); // a title or tag edit of an existing note still saves
+  });
   it("finds the summary the way LM's formatter does", () => {
     expect(summaryOf("Lead text\n\n## Details\n- x")).toBe("Lead text");
     expect(summaryOf("Lead text\n\n> **Important:** careful\n\n## Why\nBecause.")).toBe("Lead text");

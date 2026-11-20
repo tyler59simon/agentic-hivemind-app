@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useNoteTypesEnabled } from "./connection";
 import { BUILTIN_TYPES, isBuiltinType, noteTypes, type NoteTypeDef } from "./lm";
-import { builtinDef } from "./note";
+import { allowsActions, builtinDef } from "./note";
 
 /** The badge colour class: each built-in type has its own, every custom type shares one. */
 export const typeClass = (type: string) => `type-${isBuiltinType(type) ? type : "custom"}`;
@@ -29,8 +29,14 @@ export function useNoteTypes(probe = false): NoteTypes {
   }, [enabled, q.data]);
 }
 
-/** Names for a type picker: the active types, plus the current one when it is retired or not loaded yet. */
-export function typeOptions(active: NoteTypeDef[], current?: string): string[] {
-  const names = active.map((t) => t.name);
+/** Names for a type picker: the active types except `omit`, plus the current one when it is not among them. */
+export function typeOptions(active: NoteTypeDef[], current?: string, omit: readonly string[] = []): string[] {
+  const names = active.map((t) => t.name).filter((t) => !omit.includes(t));
   return current && !names.includes(current) ? [...names, current] : names;
 }
+
+/** Types the new-note and quick capture forms leave out: a brief needs the project folder (files), which they do not ask for. */
+export const NOT_CAPTURED = ["brief"] as const;
+
+/** Whether a note of this type can be resolved and reopened: a bug, or a custom type that takes Action items. */
+export const resolvable = (type: string, def?: NoteTypeDef) => type === "bug" || (!isBuiltinType(type) && allowsActions(type, def));

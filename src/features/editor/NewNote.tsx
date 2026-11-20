@@ -4,7 +4,7 @@ import { deleteDraft, getDraft, putDraft } from "../../lib/drafts";
 import { classify } from "../../lib/errors";
 import { capture, domains, taxonomy, taxonomyAdd, type CapturePayload, type NoteType } from "../../lib/lm";
 import { defaultTags, template } from "../../lib/note";
-import { typeOptions, useNoteTypes } from "../../lib/noteTypes";
+import { NOT_CAPTURED, typeOptions, useNoteTypes } from "../../lib/noteTypes";
 import { recordOperation } from "../../lib/oplog";
 import { useApp } from "../../store";
 import { Modal } from "../../ui/Modal";
@@ -136,7 +136,7 @@ export function NewNote({ tab }: { tab: Tab }) {
           </select>
         </dd></div>
         <div><dt>Type</dt><dd>
-          <select value={f.type} onChange={(e) => changeType(e.target.value as NoteType)}>{typeOptions(types.active, f.type).map((t) => <option key={t}>{t}</option>)}</select>
+          <select value={f.type} onChange={(e) => changeType(e.target.value as NoteType)}>{typeOptions(types.active, f.type, NOT_CAPTURED).map((t) => <option key={t}>{t}</option>)}</select>
         </dd></div>
         <div><dt>Tags</dt><dd><TagPicker tags={f.tags} taxonomy={tax.data?.tags ?? []} onChange={(tags) => { touchedTags.current = true; setF({ ...f, tags }); }} /></dd></div>
       </dl>

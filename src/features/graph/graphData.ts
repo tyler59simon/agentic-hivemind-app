@@ -2,6 +2,7 @@
 import Graph from "graphology";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import type { LinkGraph, NoteType } from "../../lib/lm";
+import { byType } from "../../lib/note";
 
 export const TYPE_COLORS: Record<NoteType, string> = {
   knowledge: "#94a3b8", decision: "#3b82f6", preference: "#a855f7", context: "#64748b", status: "#14b8a6",
@@ -9,7 +10,7 @@ export const TYPE_COLORS: Record<NoteType, string> = {
   brief: "#6366f1",
 };
 /** Custom note types share one neutral colour. */
-export const typeColor = (type: NoteType) => TYPE_COLORS[type] ?? "#999";
+export const typeColor = (type: NoteType) => byType(TYPE_COLORS, type) ?? "#999";
 
 export interface GraphFilter { domain?: string; types?: NoteType[]; tag?: string; includeRetired?: boolean }
 

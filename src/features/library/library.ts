@@ -52,6 +52,12 @@ export function filterItems(items: Item[], f: Filter): Item[] {
 /** Newest first. */
 export const byUpdated = (items: Item[]) => [...items].sort((a, b) => b.updated.localeCompare(a.updated));
 
+/** Living Memory's fallback scope searches the other domains only when the primary ones match nothing, and a search takes
+ *  one type filter (a repeated one keeps the last). So on the Custom tab, primary hits of built-in types can hide custom notes
+ *  in other domains: when no hit of a custom type remains, the tab searches every domain instead. */
+export const widerCustomSearch = (group: Group, scope: Scope, result?: { fallback: boolean; results: { type: NoteType }[] }) =>
+  group === "custom" && scope === "fallback" && !!result && !result.fallback && !result.results.some((h) => !isBuiltinType(h.type));
+
 /** What a search asks Living Memory for. It filters by one type, one status and one tag, and cuts the result
  *  at `limit`; whatever must still be filtered here (several types, the archive, a second tag) gets a wider net,
  *  so matches are not cut off before the filter sees them. */

@@ -1,11 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef, useState } from "react";
 import { classify, type Problem } from "../../lib/errors";
 import { capture, domains, projects, showMain, taxonomy, type CapturePayload, type NoteType } from "../../lib/lm";
 import { defaultTags, HEADINGS } from "../../lib/note";
-import { typeOptions, useNoteTypes } from "../../lib/noteTypes";
+import { NOT_CAPTURED, typeOptions, useNoteTypes } from "../../lib/noteTypes";
 import { recordOperation } from "../../lib/oplog";
 import { prefs } from "../../lib/prefs";
 import { TagPicker } from "../editor/PropertiesForm";
@@ -28,6 +28,7 @@ async function openInMain(ref: string) {
 
 /** The always-on-top quick capture window (global hotkey or tray). Ctrl+Enter saves, Esc hides. */
 export function QuickCapture() {
+  const client = useQueryClient();
   const known = useQuery({ queryKey: ["domains"], queryFn: domains });
   const tax = useQuery({ queryKey: ["taxonomy"], queryFn: taxonomy });
   // The capture window has its own webview and no connection store, so the feature is detected by a successful projects() call.
@@ -52,11 +53,16 @@ export function QuickCapture() {
     if (!domain && known.data) setDomain(known.data.domains.find((d) => d.bound)?.name ?? known.data.domains[0]?.name ?? "");
   }, [known.data, domain]);
   useEffect(() => { if (tax.data && !tagsTouched) setTags(defaultTags(type, tax.data.tags, types.def(type))); }, [tax.data, type, tagsTouched, types]);
-  // Each time the window is shown again, start with the cursor in the title.
+  // Each time the window is shown again, start with the cursor in the title. The window is hidden, not closed, and has its
+  // own query cache, so note types created, edited or retired in the main window meanwhile are fetched again.
   useEffect(() => {
-    const stop = getCurrentWindow().onFocusChanged(({ payload: focused }) => { if (focused) titleRef.current?.focus(); });
+    const stop = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (!focused) return;
+      titleRef.current?.focus();
+      client.invalidateQueries({ queryKey: ["types"] });
+    });
     return () => { stop.then((u) => u()); };
-  }, []);
+  }, [client]);
 
   const reset = () => { setTitle(""); setSummary(""); setDetails(""); setProblem(null); setTagsTouched(false); };
 
@@ -90,7 +96,7 @@ export function QuickCapture() {
           {known.data?.domains.map((d) => <option key={d.name} value={d.name}>{d.name}</option>)}
         </select>
         <select value={type} onChange={(e) => setType(e.target.value as NoteType)} aria-label="Type">
-          {typeOptions(types.active, type).map((t) => <option key={t}>{t}</option>)}
+          {typeOptions(types.active, type, NOT_CAPTURED).map((t) => <option key={t}>{t}</option>)}
         </select>
       </div>
       {projs.isSuccess && (

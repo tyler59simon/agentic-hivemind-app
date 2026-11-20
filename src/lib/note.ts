@@ -319,12 +319,17 @@ const CONCERN_BY_TYPE: Partial<Record<NoteType, string>> = {
   research: "concern/knowledge",
 };
 
+/** A type's entry in a table keyed by type name. Only the table's own keys count, so a custom type named after an
+ *  Object property (`constructor`) finds nothing. */
+export const byType = <T>(table: Partial<Record<NoteType, T>>, type: NoteType): T | undefined =>
+  Object.prototype.hasOwnProperty.call(table, type) ? table[type] : undefined;
+
 /** A built-in type's definition from the tables above, for an LM without the `types` command. */
 export function builtinDef(name: NoteType): NoteTypeDef {
   return {
-    name, builtin: true, status: "active", description: "", summary: TEMPLATE_PROMPTS[name] ?? "",
-    sections: [...(TYPE_SECTIONS[name] ?? [])], actions: ACTION_TYPES.has(name), review_days: null,
-    concern: CONCERN_BY_TYPE[name] ?? null, subject: SUBJECT_BY_TYPE[name] ?? null,
+    name, builtin: true, status: "active", description: "", summary: byType(TEMPLATE_PROMPTS, name) ?? "",
+    sections: [...(byType(TYPE_SECTIONS, name) ?? [])], actions: ACTION_TYPES.has(name), review_days: null,
+    concern: byType(CONCERN_BY_TYPE, name) ?? null, subject: byType(SUBJECT_BY_TYPE, name) ?? null,
   };
 }
 

@@ -5,7 +5,7 @@ import { typeWrite, type NoteTypeDef } from "../../lib/lm";
 import { typeClass, useNoteTypes } from "../../lib/noteTypes";
 import { Modal } from "../../ui/Modal";
 import { DirectDialog, undoToast, useDirect } from "../plans/DirectDialog";
-import { fieldsOfType, MAX_SECTIONS, typePayload, typeProblems, type TypeFields } from "./noteTypeForm";
+import { DEFAULT_SUBJECT, fieldsOfType, MAX_SECTIONS, typePayload, typeProblems, type TypeFields } from "./noteTypeForm";
 
 /** Create a custom note type, or edit one (its name stays). */
 function NoteTypeForm({ def, tags, onClose }: { def?: NoteTypeDef; tags: string[]; onClose: () => void }) {
@@ -22,7 +22,8 @@ function NoteTypeForm({ def, tags, onClose }: { def?: NoteTypeDef; tags: string[
     set({ sections });
   };
   const options = (facet: string) => {
-    const known = tags.filter((t) => t.startsWith(facet + "/"));
+    // The default subject is the empty choice, so it is not listed a second time.
+    const known = tags.filter((t) => t.startsWith(facet + "/") && t !== DEFAULT_SUBJECT);
     const current = facet === "concern" ? f.concern : f.subject;
     return current && !known.includes(current) ? [...known, current] : known;
   };
@@ -65,7 +66,7 @@ function NoteTypeForm({ def, tags, onClose }: { def?: NoteTypeDef; tags: string[
           </select></label>
         <label className="field"><span>Default subject</span>
           <select value={f.subject} onChange={(e) => set({ subject: e.target.value })}>
-            <option value="">none</option>
+            <option value="">{DEFAULT_SUBJECT} (default)</option>
             {options("subject").map((t) => <option key={t} value={t}>{t}</option>)}
           </select></label>
         <label className="check"><input type="checkbox" checked={f.actions} onChange={(e) => set({ actions: e.target.checked })} /> Notes have Action items (and can be resolved)</label>

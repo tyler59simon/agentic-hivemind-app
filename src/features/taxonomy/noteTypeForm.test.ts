@@ -20,6 +20,13 @@ describe("note type form", () => {
       name: "incident", description: "Outages", summary: "", sections: ["Timeline"], actions: false, review_days: null, concern: null, subject: null,
     });
     expect(typePayload(fieldsOfType(incident), incident)).toBeNull();
+    // Living Memory reports subject/project for a type with no subject: the form shows it as the default and sends nothing.
+    const reported = { ...incident, subject: "subject/project" };
+    expect(fieldsOfType(reported).subject).toBe("");
+    expect(typePayload(fieldsOfType(reported), reported)).toBeNull();
+    expect(typePayload({ ...fieldsOfType(reported), subject: "subject/team" }, reported)).toEqual({ name: "incident", subject: "subject/team" });
+    expect(typePayload({ ...fieldsOfType({ ...incident, subject: "subject/team" }), subject: "" }, { ...incident, subject: "subject/team" }))
+      .toEqual({ name: "incident", subject: null });
     expect(typePayload({ ...fieldsOfType(incident), sections: ["Impact", "Timeline"], reviewDays: "", concern: "" }, incident))
       .toEqual({ name: "incident", sections: ["Impact", "Timeline"], review_days: null, concern: null });
   });

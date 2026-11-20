@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LinkGraph } from "../../lib/lm";
-import { filterGraph, neighborhood, toGraphology } from "./graphData";
+import { filterGraph, neighborhood, toGraphology, typeColor } from "./graphData";
 
 const node = (ref: string, extra: Partial<LinkGraph["nodes"][0]> = {}) =>
   ({ ref, id: ref.split(":")[1], domain: ref.split(":")[0], title: ref, type: "knowledge", status: "active", tags: [], ...extra }) as LinkGraph["nodes"][0];
@@ -36,5 +36,13 @@ describe("graph data", () => {
     expect(graph.getNodeAttribute("d:b", "size")).toBeGreaterThan(graph.getNodeAttribute("d:lone", "size"));
     const { x, y } = graph.getNodeAttributes("d:a");
     expect(Number.isFinite(x) && Number.isFinite(y)).toBe(true);
+  });
+
+  it("colours custom types grey, including one named after an Object property", () => {
+    expect(typeColor("bug")).toBe("#ef4444");
+    expect(typeColor("incident")).toBe("#999");
+    expect(typeColor("constructor")).toBe("#999");
+    const graph = toGraphology({ ...g, nodes: [node("d:k", { type: "constructor" })], edges: [] });
+    expect(graph.getNodeAttribute("d:k", "color")).toBe("#999");
   });
 });

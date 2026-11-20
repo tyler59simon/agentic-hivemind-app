@@ -46,7 +46,8 @@ export function precheck(f: Fields, taxonomy: string[], isNew: boolean, def?: No
   const summary = (found.summary ?? "").trim();
   if (!summary) problems.push("Write a summary: start the body with one or two sentences.");
   // LM's Obsidian sync refuses a note whose summary is still the template's prompt; the app's templates use the same prompts.
-  else if (PROMPTS.has(summary) || summary === def?.summary) problems.push("Replace the template's first line with a summary of the note.");
+  // A custom type's own prompt is checked on new notes only, so an older note that starts with it can still be retitled or retagged.
+  else if (PROMPTS.has(summary) || (isNew && summary === def?.summary)) problems.push("Replace the template's first line with a summary of the note.");
   if (found.actions && !allowsActions(f.type, def)) problems.push("Action items are only for plan, bug and risk notes and custom types that allow them; record lasting facts in the body instead, or change the type.");
   const known = new Set(taxonomy);
   const unknown = f.tags.filter((t) => !known.has(t));

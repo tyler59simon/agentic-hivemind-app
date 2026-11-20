@@ -6,17 +6,19 @@ export interface TypeFields {
   name: string; description: string; summary: string; sections: string[]; actions: boolean;
   /** Blank means no review interval. */
   reviewDays: string;
-  /** Empty means none. */
+  /** Empty means none for the concern, and the default subject (DEFAULT_SUBJECT) for the subject. */
   concern: string; subject: string;
 }
 
 export const MAX_SECTIONS = 8;
 const NAME = /^[a-z][a-z0-9]{2,23}$/;
+/** The subject Living Memory applies, and reports, for a type that names none. */
+export const DEFAULT_SUBJECT = "subject/project";
 
 export const fieldsOfType = (d?: NoteTypeDef): TypeFields => ({
   name: d?.name ?? "", description: d?.description ?? "", summary: d?.summary ?? "", sections: [...(d?.sections ?? [])],
   actions: d?.actions ?? false, reviewDays: d?.review_days == null ? "" : String(d.review_days),
-  concern: d?.concern ?? "", subject: d?.subject ?? "",
+  concern: d?.concern ?? "", subject: !d?.subject || d.subject === DEFAULT_SUBJECT ? "" : d.subject,
 });
 
 export function typeProblems(f: TypeFields, creating: boolean): string[] {
@@ -47,6 +49,6 @@ export function typePayload(f: TypeFields, def?: NoteTypeDef): NoteTypeCreate | 
   if (values.actions !== before.actions) changed.actions = values.actions;
   if (values.review_days !== (def.review_days ?? null)) changed.review_days = values.review_days;
   if (values.concern !== (def.concern ?? null)) changed.concern = values.concern;
-  if (values.subject !== (def.subject ?? null)) changed.subject = values.subject;
+  if (values.subject !== (before.subject || null)) changed.subject = values.subject;
   return Object.keys(changed).length > 1 ? changed : null;
 }

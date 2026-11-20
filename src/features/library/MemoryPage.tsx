@@ -26,7 +26,7 @@ import { Triage } from "../projects/TriageDialog";
 import { useCurrentProject, useProject } from "../projects/useProject";
 import { TaxonomyView } from "../taxonomy/TaxonomyView";
 import { noteQuery } from "../viewer/NoteView";
-import { byUpdated, filterItems, fromHit, fromRow, GROUPS, searchFilters, type Group, type Item, type Scope } from "./library";
+import { byUpdated, filterItems, fromHit, fromRow, GROUPS, searchFilters, widerCustomSearch, type Group, type Item, type Scope } from "./library";
 
 function useDebounced<T>(value: T, ms: number): T {
   const [settled, setSettled] = useState(value);
@@ -132,15 +132,22 @@ function Library() {
     queryFn: () => search({ query: settled, domain: domain!, scope: inProject ? "all" : (scope as SearchOptions["scope"]), ...asked }),
     enabled: !!settled && !!domain,
   });
-  const source = settled ? hits : inProject ? members : scope === "active" ? inDomain : everything;
+  const widen = !inProject && widerCustomSearch(group, scope, hits.data);
+  const wide = useQuery({
+    queryKey: ["search", domain, settled, "all", asked],
+    queryFn: () => search({ query: settled, domain: domain!, scope: "all", ...asked }),
+    enabled: !!settled && !!domain && widen,
+  });
+  const found = widen ? wide : hits;
+  const source = settled ? found : inProject ? members : scope === "active" ? inDomain : everything;
 
   const items = useMemo(() => {
-    const raw = settled ? (hits.data?.results ?? []).map(fromHit)
+    const raw = settled ? (found.data?.results ?? []).map(fromHit)
       : byUpdated(((inProject ? members.data : scope === "active" ? inDomain.data : everything.data)?.notes ?? []).map(fromRow));
     const required = [...(inProject ? [project.tag] : []), ...(tag ? [tag] : [])];
     const allowed = settled || inProject || scope !== "fallback" || !domain ? null : [domain, ...(known.data?.global_domains ?? [])];
     return filterItems(raw, { group, shelf, tags: required, domains: allowed });
-  }, [settled, hits.data, members.data, inDomain.data, everything.data, inProject, project, scope, tag, group, shelf, domain, known.data]);
+  }, [settled, found.data, members.data, inDomain.data, everything.data, inProject, project, scope, tag, group, shelf, domain, known.data]);
   const current = items.find((i) => i.ref === selected) ?? items[0];
   const words = terms(settled);
   const newNote = () => useWorkspace.getState().openTab({ kind: "new-note", init: { tags: project ? [project.tag] : undefined, domain: domain ?? undefined } });
@@ -187,8 +194,8 @@ function Library() {
         <div className="split-main">
           {source.isLoading && <p className="muted">Loading…</p>}
           {source.error && <p className="error">{classify(source.error).message}</p>}
-          {settled && hits.data?.fallback && <p className="muted small">Nothing matched in this domain; these are from other domains.</p>}
-          {settled && (hits.data?.results.length ?? 0) >= asked.limit && (
+          {settled && (hits.data?.fallback || (widen && items.length > 0)) && <p className="muted small">Nothing matched in this domain; these are from other domains.</p>}
+          {settled && (found.data?.results.length ?? 0) >= asked.limit && (
             <p className="muted small">Only the best {asked.limit} matches are shown or filtered. Add a word to the search if a note is missing.</p>
           )}
           {!source.isLoading && !source.error && !items.length && (
