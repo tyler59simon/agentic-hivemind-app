@@ -80,6 +80,10 @@ pub struct Task {
     pub verdict: Option<Verdict>,
     #[serde(default)]
     pub error: Option<String>,
+    /// What the task's first session had spent when its turn ended: the run's own work. A retry, or a message the user
+    /// sends the session afterwards, is the user's own spending and does not change it (Codex review R7-3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -476,7 +480,7 @@ impl Workflows {
             id: uuid::Uuid::new_v4().simple().to_string(),
             tasks: new.tasks.into_iter().map(|mut spec| {
                 spec.prompt = spec.prompt.replace("{goal}", &goal);
-                Task { spec, state: TaskState::Waiting, session: None, branch: None, checkpoint: None, files: 0, summary: None, verdict: None, error: None }
+                Task { spec, state: TaskState::Waiting, session: None, branch: None, checkpoint: None, files: 0, summary: None, verdict: None, error: None, cost_usd: None }
             }).collect(),
             goal, project: new.project, repo: new.repo, base_branch: new.base_branch.filter(|b| !b.trim().is_empty()), template: new.template,
             model: new.model.filter(|m| !m.trim().is_empty()), unattended: new.unattended, budget_usd: new.budget_usd, origin, state: RunState::Planned, created_at: now_ms(), ended_at: None,
@@ -496,7 +500,7 @@ impl Workflows {
             return Err("Only a workflow that has not started can be edited".into());
         }
         check_unattended(&tasks, run.unattended)?;
-        run.tasks = tasks.into_iter().map(|spec| Task { spec, state: TaskState::Waiting, session: None, branch: None, checkpoint: None, files: 0, summary: None, verdict: None, error: None }).collect();
+        run.tasks = tasks.into_iter().map(|spec| Task { spec, state: TaskState::Waiting, session: None, branch: None, checkpoint: None, files: 0, summary: None, verdict: None, error: None, cost_usd: None }).collect();
         self.save(run)?;
         Ok(run.clone())
     }
@@ -656,6 +660,7 @@ impl Workflows {
         let t = run.task_mut(task_id).unwrap();
         if let Some(info) = &info {
             t.summary = info.summary.clone();
+            t.cost_usd = t.cost_usd.or(info.cost_usd);
             t.verdict = info.verdict;
             t.files = info.files_changed.map(|f| f.files).unwrap_or(0);
         }
@@ -882,6 +887,24 @@ mod tests {
         assert!(on_disk.get("saveError").is_none());
         // The progress missed by the failed save is on disk now: a restart keeps both finished tasks.
         assert_eq!(states(&Workflows::new(dir.clone()).get(&run.id).unwrap())[..2], [TaskState::Succeeded, TaskState::Succeeded]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_task_keeps_the_cost_of_its_first_attempt() {   // Codex review R7-3
+        let dir = scratch();
+        let flows = Workflows::new(dir.clone());
+        let host = fake(3);
+        let run = flows.start(&feature(&flows).id, &host).unwrap();
+        host.infos.borrow_mut().get_mut("s0").unwrap().cost_usd = Some(0.2);
+        turn(&flows, &host, "s0", false, None);
+        assert_eq!(flows.get(&run.id).unwrap().tasks[0].cost_usd, Some(0.2));
+        // The user retries the failed task; its new session's spending is the user's.
+        flows.retry_or_skip(&run.id, "plan", false, &host).unwrap();
+        let retry = flows.get(&run.id).unwrap().tasks[0].session.clone().unwrap();
+        host.infos.borrow_mut().get_mut(&retry).unwrap().cost_usd = Some(0.9);
+        turn(&flows, &host, &retry, true, None);
+        assert_eq!(flows.get(&run.id).unwrap().tasks[0].cost_usd, Some(0.2));
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -819,8 +819,9 @@ impl Automations {
         row
     }
 
-    /// End the run of each workflow an automation started that has ended, with the workflow's outcome and the cost of its
-    /// sessions (`cost_of`). Called after every session report and after the user acts on a workflow: a cancel, or a skip
+    /// End the run of each workflow an automation started that has ended, with the workflow's outcome and its cost: what each
+    /// task's first attempt spent (`Task::cost_usd`), or for a task stopped before its turn ended, what its session has
+    /// spent (`cost_of`). Called after every session report and after the user acts on a workflow: a cancel, or a skip
     /// of its last open task, ends a workflow with no session report (Codex review F15-3). A run already ended is left as it is.
     pub fn workflows_ended(&self, runs: Vec<crate::workflow::Run>, cost_of: impl Fn(&str) -> Option<f64>, doer: &dyn Doer) {
         use crate::workflow::RunState as Flow;
@@ -831,7 +832,7 @@ impl Automations {
                 Flow::Cancelled => "was cancelled",
                 _ => continue,
             };
-            let cost: f64 = run.tasks.iter().filter_map(|t| t.session.as_deref()).filter_map(&cost_of).sum();
+            let cost: f64 = run.tasks.iter().filter_map(|t| t.cost_usd.or_else(|| t.session.as_deref().and_then(&cost_of))).sum();
             self.finished(None, Some(&run.id), run.state == Flow::Succeeded, format!("The workflow {outcome}"), Some(cost), doer);
         }
     }
@@ -1523,15 +1524,18 @@ mod tests {
         run.id = "w1".into();
         run.state = crate::workflow::RunState::Cancelled;
         run.tasks[0].session = Some("s7".into());
+        // A task whose first attempt cost 0.5 counts that, not what its session (retried or messaged since) shows now.
+        run.tasks[1].session = Some("s8".into());
+        run.tasks[1].cost_usd = Some(0.5);
         let user_made = crate::workflow::Run { id: "w2".into(), origin: None, ..run.clone() };
-        let cost = |s: &str| (s == "s7").then_some(0.3);
+        let cost = |s: &str| match s { "s7" => Some(0.3), "s8" => Some(2.0), _ => None };
         autos.workflows_ended(vec![run.clone(), user_made], cost, &doer);
         let ended = autos.runs(&flow.id)[0].clone();
-        assert_eq!((ended.state, ended.cost_usd, ended.detail.as_deref()), (RunState::Failed, Some(0.3), Some("The workflow was cancelled")));
-        assert_eq!(*doer.charged.lock().unwrap(), [0.3]);
+        assert_eq!((ended.state, ended.cost_usd, ended.detail.as_deref()), (RunState::Failed, Some(0.8), Some("The workflow was cancelled")));
+        assert_eq!(*doer.charged.lock().unwrap(), [0.8]);
         // Asked again (every session report asks), nothing changes.
         autos.workflows_ended(vec![run], cost, &doer);
-        assert_eq!(*doer.charged.lock().unwrap(), [0.3]);
+        assert_eq!(*doer.charged.lock().unwrap(), [0.8]);
         let _ = std::fs::remove_dir_all(&store.0);
     }
 
