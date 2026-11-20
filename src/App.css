@@ -722,7 +722,7 @@ input[type="checkbox"] { accent-color: var(--success); }
 .markdown pre { background: var(--bg-code); border: 1px solid var(--border); padding: .8rem; border-radius: .5rem; overflow: auto; }
 .markdown pre code { background: none; padding: 0; }
 .markdown .mermaid-diagram { margin: .8rem 0; overflow-x: auto; }
-.markdown .mermaid-diagram svg { max-width: 100%; height: auto; }
+.markdown .mermaid-diagram svg { display: block; }
 .markdown blockquote { margin: .8rem 0; padding: .25rem .8rem; border-left: 3px solid var(--warn-fg); color: var(--warn-fg); }
 .markdown a { color: var(--accent); }
 .markdown table { border-collapse: collapse; }
