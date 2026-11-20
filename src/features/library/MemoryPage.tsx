@@ -145,12 +145,13 @@ function Library() {
     const raw = settled ? (found.data?.results ?? []).map(fromHit)
       : byUpdated(((inProject ? members.data : scope === "active" ? inDomain.data : everything.data)?.notes ?? []).map(fromRow));
     const required = [...(inProject ? [project.tag] : []), ...(tag ? [tag] : [])];
-    // The wider Custom search runs across every domain; keep only those fallback scope covers (this domain, the global ones and
-    // the configured foreign domains), so it never shows notes from unrelated domains.
-    const allowed = widen && domain ? [domain, ...(known.data?.global_domains ?? []), ...(known.data?.foreign_domains ?? [])]
+    // The wider Custom search runs across every domain; keep only those fallback scope covers: the domains the primary search
+    // used (this one, its parents and children, the global ones) and the configured foreign domains, aliases resolved.
+    const foreign = (known.data?.foreign_domains ?? []).map((d) => known.data?.aliases?.[d] ?? d);
+    const allowed = widen && domain ? [domain, ...(hits.data?.domains ?? []), ...(known.data?.global_domains ?? []), ...foreign]
       : settled || inProject || scope !== "fallback" || !domain ? null : [domain, ...(known.data?.global_domains ?? [])];
     return filterItems(raw, { group, shelf, tags: required, domains: allowed });
-  }, [settled, found.data, members.data, inDomain.data, everything.data, inProject, project, scope, tag, group, shelf, domain, known.data, widen]);
+  }, [settled, found.data, hits.data, members.data, inDomain.data, everything.data, inProject, project, scope, tag, group, shelf, domain, known.data, widen]);
   const current = items.find((i) => i.ref === selected) ?? items[0];
   const words = terms(settled);
   const newNote = () => useWorkspace.getState().openTab({ kind: "new-note", init: { tags: project ? [project.tag] : undefined, domain: domain ?? undefined } });
