@@ -422,6 +422,15 @@ impl workflow::Host for AppHost {
     }
 }
 
+/// An automation's repository, checked when it runs: it must still be one of the project's, since it may have left Living
+/// Memory after the automation was saved. `entry` reads the project's registry entry.
+fn checked_repo(project: &str, repo: &str, entry: impl FnOnce(&str) -> Result<Value, String>) -> Result<String, String> {
+    if project.is_empty() || repo.is_empty() {
+        return Ok(repo.to_string());
+    }
+    Ok(agent::scope::project_repo(&entry(project)?, repo)?.display().to_string())
+}
+
 /// What automations do, with the app's state.
 struct AppDoer(AppHandle);
 
@@ -430,13 +439,8 @@ impl automations::Doer for AppDoer {
         use automations::{Action, Started};
         let state = self.0.state::<AppState>();
         let saved = settings::load(&state.settings_path);
-        let (project, repo) = (a.project.clone().unwrap_or_default(), a.repo.clone().unwrap_or_default());
-        // The repository must still be one of the project's: it may have left Living Memory since the automation was saved.
-        let repo = if project.is_empty() || repo.is_empty() {
-            repo
-        } else {
-            agent::scope::project_repo(&git::project_entry(&state.bridge, &project)?, &repo)?.display().to_string()
-        };
+        let project = a.project.clone().unwrap_or_default();
+        let repo = checked_repo(&project, a.repo.as_deref().unwrap_or_default(), |slug| git::project_entry(&state.bridge, slug))?;
         let origin = format!("automation:{}", a.id);
         match &a.action {
             Action::Role { role, engine, prompt } => {
@@ -1770,5 +1774,19 @@ mod tests {
         assert_eq!(wiki_file_name("a b/c", false, None), "a_b_c-wiki.html");
         assert_eq!(wiki_file_name("sandbox", true, None), "sandbox-agent-wiki.html");
         assert_eq!(wiki_file_name("sandbox", true, Some("core x")), "sandbox-core_x-agent-wiki.html");
+    }
+
+    #[test]
+    fn an_automation_repository_is_checked_against_the_registry_when_it_runs() {
+        let registry = |slug: &str| if slug == "pay" { Ok(serde_json::json!({"repos": ["C:/Work/Pay"]})) } else { Err("Unknown project".to_string()) };
+        // Still registered: the registry's own spelling is used.
+        assert_eq!(checked_repo("pay", "c:\\work\\pay", registry).unwrap(), "C:/Work/Pay");
+        // Removed from the project since the automation was saved, or the project itself is gone.
+        assert_eq!(checked_repo("pay", "C:/Work/Old", registry).unwrap_err(), "That repository is not registered for this project");
+        assert_eq!(checked_repo("gone", "C:/Work/Pay", registry).unwrap_err(), "Unknown project");
+        // No project or no repository: nothing to check, and the registry is not read.
+        let unread = |_: &str| -> Result<Value, String> { panic!("the registry was read") };
+        assert_eq!(checked_repo("", "C:/Work/Pay", unread).unwrap(), "C:/Work/Pay");
+        assert_eq!(checked_repo("pay", "", unread).unwrap(), "");
     }
 }
