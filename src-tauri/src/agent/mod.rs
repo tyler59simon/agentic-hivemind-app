@@ -1681,6 +1681,18 @@ fn architecture_of(bridge: &Bridge, repo: &std::path::Path) -> Option<(String, S
     crate::architecture::systems_for_repo(bridge, repo).into_iter().find(|(_, _, folder)| folder.is_dir())
 }
 
+/// A resumed architect or reviewer keeps the extra folders it started with (its architecture folder), read-only as at the
+/// start. They come from the session's own record, not a new lookup, so a registry that cannot be read does not silently
+/// take them away (Codex review S-4). A folder that no longer exists is left out.
+fn resumed_folders(info: &SessionInfo, scope: &mut scope::Scope) {
+    if !matches!((info.role, &info.task), (Some(Role::Architect | Role::Reviewer), AgentTask::Work { .. })) {
+        return;
+    }
+    for folder in info.workspace.iter().skip(1).map(std::path::Path::new).filter(|folder| folder.is_dir()) {
+        scope::read_only_folder(scope, folder);
+    }
+}
+
 /// For an architect or reviewer: the architecture briefing of the system the repository belongs to, and its output folder
 /// as an extra folder it may read but not edit. Other sessions are returned unchanged.
 fn with_architecture(bridge: &Bridge, manager: &Manager, repo: &std::path::Path, options: StartOptions, scope: Result<scope::Scope, String>) -> (StartOptions, Result<scope::Scope, String>) {
@@ -1950,12 +1962,7 @@ pub fn send_task(
             }
             let cli = chat_program(engine, saved)?;
             let mut scope = scope::for_session(bridge, saved, info)?;
-            // A resumed architect or reviewer keeps its architecture folder, read-only as at the start.
-            if let (Some(Role::Architect | Role::Reviewer), AgentTask::Work { repo, .. }) = (info.role, &info.task)
-                && let Some((_, _, folder)) = architecture_of(bridge, std::path::Path::new(repo))
-            {
-                scope::read_only_folder(&mut scope, &folder);
-            }
+            resumed_folders(info, &mut scope);
             Ok(Launch {
                 scope,
                 program: cli.program,
@@ -2824,6 +2831,36 @@ mod tests {
         let options = with_preamble(StartOptions { role: Some(Role::Tester), briefing: Some("Brief".into()), ..Default::default() });
         assert_eq!(options.briefing, Some(format!("{}\n\nBrief", Role::Tester.preamble())));
         assert_eq!(with_preamble(StartOptions::default()).briefing, None);
+    }
+
+    #[test]
+    fn a_resumed_architect_keeps_the_folder_it_started_with() {   // Codex review S-4
+        let base = std::env::temp_dir().join(format!("hivemind-resume-{}", uuid::Uuid::new_v4().simple()));
+        let (tree, arch) = (base.join("tree"), base.join("arch"));
+        std::fs::create_dir_all(&arch).unwrap();
+        let worktree = crate::worktree::Worktree { repo: "r".into(), path: tree.display().to_string(), branch: "hivemind/1a2b3c4d".into(),
+            base_branch: "main".into(), base_sha: "0".repeat(40), reviewed_sha: None };
+        let fresh = || scope::work_as(worktree.clone(), Profile::ReadOnly, false, &[], "t").unwrap();
+        let mut info: SessionInfo = serde_json::from_value(json!({"id": "x", "adapter": "claude-code", "cliVersion": null,
+            "task": {"kind": "work", "project": "p", "repo": "r"}, "title": "t", "workspace": [tree.display().to_string(), arch.display().to_string()],
+            "status": "idle", "startedAt": 1, "endedAt": null, "costUsd": null, "error": null, "structured": null})).unwrap();
+        info.role = Some(Role::Architect);
+        let mut resumed = fresh();
+        resumed_folders(&info, &mut resumed);
+        let mut started = fresh();
+        scope::read_only_folder(&mut started, &arch);
+        assert_eq!((&resumed.add_dirs, &resumed.deny), (&vec![arch.clone()], &started.deny), "the folder and its deny rule, as at the start");
+        // A developer gets no extra folder, and a folder that is gone is left out.
+        info.role = Some(Role::Developer);
+        let mut developer = fresh();
+        resumed_folders(&info, &mut developer);
+        assert!(developer.add_dirs.is_empty());
+        info.role = Some(Role::Reviewer);
+        std::fs::remove_dir(&arch).unwrap();
+        let mut gone = fresh();
+        resumed_folders(&info, &mut gone);
+        assert!(gone.add_dirs.is_empty());
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]
