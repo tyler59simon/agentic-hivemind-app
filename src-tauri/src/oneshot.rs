@@ -101,6 +101,10 @@ pub fn run(claude: &str, dir: &Path, ledger: &Ledger, cap: f64, id: &str, call: 
     if cancelled() {
         return (Err(CANCELLED.into()), None);
     }
+    // Managed policy would still run its hooks here, and a managed MCP file makes the call exit: refuse before reserving.
+    if let Err(e) = crate::managed::refuse() {
+        return (Err(e), None);
+    }
     let now = crate::agent::now_ms();
     if let Err(e) = ledger.reserve(id, call.budget_usd, cap, now) {
         return (Err(e), None);
@@ -192,6 +196,20 @@ mod tests {
         let cancel = AtomicBool::new(true);
         let (answer, _) = run("no-such-program", &dir, &ledger, 1.0, "y", &call(), "hi", Duration::from_secs(5), Some(&cancel));
         assert_eq!(answer.unwrap_err(), CANCELLED);
+        assert!(ledger.used(crate::agent::now_ms()).abs() < 1e-9);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn managed_settings_stop_the_call_before_it_reserves() {   // EXEC-11
+        let dir = std::env::temp_dir().join(format!("hivemind-oneshot-managed-{}", std::process::id()));
+        let ledger = Ledger::new(dir.join("spend.json"));
+        crate::managed::FAKE.with(|fake| *fake.borrow_mut() = Some("/etc/claude-code/managed-settings.json".into()));
+        let (answer, cost) = run("no-such-program", &dir, &ledger, 1.0, "x", &call(), "hi", Duration::from_secs(5), None);
+        crate::managed::FAKE.with(|fake| *fake.borrow_mut() = None);
+        let refused = answer.unwrap_err();
+        assert!(refused.contains("managed settings") && !refused.starts_with(crate::git::COULD_NOT_RUN), "{refused}");
+        assert_eq!(cost, None);
         assert!(ledger.used(crate::agent::now_ms()).abs() < 1e-9);
         std::fs::remove_dir_all(&dir).ok();
     }

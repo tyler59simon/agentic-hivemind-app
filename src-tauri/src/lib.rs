@@ -11,6 +11,7 @@ mod folders;
 mod git;
 mod instance;
 mod learning;
+mod managed;
 mod oneshot;
 mod notify;
 mod resources;

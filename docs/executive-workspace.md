@@ -39,6 +39,8 @@ A capture batch is model output that waits for review. It is not memory: it hold
 
 Extraction, drafting, refining, briefings and style learning are tool-free one-shot calls through `src-tauri/src/oneshot.rs` (shared with the commit-learning reviewer): `claude -p --output-format json --tools "" --safe-mode --strict-mcp-config --no-session-persistence --json-schema`, with `LIVING_MEMORY_OFF=1`, secrets redacted from the input, a per-call budget ($0.25 for drafts and extraction, $0.15 for a refine, $0.50 for a briefing) and the shared daily cap (`learning_daily_usd` in Settings). Rust owns every prompt and schema; the webview names the task and sends the user's text. They are refused while Claude Code is hidden in Settings.
 
+Managed (organization) Claude Code settings still apply to these calls and to the assistant: Claude Code's documentation says `--safe-mode` keeps "managed settings policy, including policy-configured hooks", `--restricted` "loads only managed settings and `--settings`", and a deployed `managed-mcp.json` makes Claude Code exit at startup on `--strict-mcp-config` (checked 2026-11-19). So before every one-shot call and before a Claude assistant chat starts or restarts, `src-tauri/src/managed.rs` looks for managed policy and refuses with a message that names what it found: `managed-settings.json`, a `.json` file in `managed-settings.d/` or `managed-mcp.json` in `C:\Program Files\ClaudeCode\` (Windows), `/Library/Application Support/ClaudeCode/` (macOS) or `/etc/claude-code/` (Linux), the `Settings` value under `HKLM` or `HKCU\SOFTWARE\Policies\ClaudeCode`, or the macOS `com.anthropic.claudecode` managed preferences file. A Codex assistant is not affected.
+
 ## Tests
 
 - `src/features/executive/executive.test.ts`: commitment parsing, health suggestions, the portfolio rows and attention, capture write planning, citations and exports.
@@ -53,7 +55,7 @@ Extraction, drafting, refining, briefings and style learning are tool-free one-s
 - Hivemind redacts secrets from the briefing and every message it sends to the assistant (`learning::redact`), but not from tool output: Claude Code runs its `alm` reads itself, so a secret stored in a note reaches the model as written.
 - The assistant's allow rules are command prefixes, so arguments after them are not checked: a second `--domain`, `--root`, a ref from another domain or `search --rebuild` still run. A project-scoped chat can therefore read other domains of the user's own memory. A Hivemind-owned read tool would close this (user decision 2026-11-19: tracked, not built).
 - Each bound domain adds 40 allow rules to Claude's command line; past about 13 domains an all-projects chat would exceed the Windows command-line limit.
-- Managed (enterprise) Claude Code settings still apply under `--restricted`, and a deployed `managed-mcp.json` makes Claude Code refuse `--strict-mcp-config`; on such a machine the executive chat's rules may not be the effective boundary, or it may not start.
+- Server-managed settings from the claude.ai console leave nothing on the computer for Hivemind to find, so on an organization account they can still apply to its Claude calls, hooks included.
 - Health is a suggestion from simple signals (overdue milestones and commitments, open risks, status age). It does not read code or CI.
 - Duplicate detection is title overlap within the project domains, not semantic.
 - Commitments follow a text convention. An action item written another way still shows, without owner or due date.

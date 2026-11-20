@@ -1876,6 +1876,9 @@ pub fn start_executive(
     let options = StartOptions { interface: Interface::Chat, briefing: Some(briefing), profile: Some(Profile::ReadOnly), role: None, unattended: false, ..options };
     check_combination(&task, options.engine, options.interface)?;
     let options = check_launch_options(saved, options)?;
+    if options.engine == Engine::Claude {
+        crate::managed::refuse()?;
+    }
     let cli = chat_program(options.engine, saved)?;
     let scope = scope::executive(dir, format!("Executive: {}", scope::task_title(prompt)), domains)?;
     let launch = Launch { scope, program: cli.program, program_args: cli.args, budget_usd: saved.agent_budget_usd(), memory_root: bridge.launch().root };
@@ -1935,7 +1938,12 @@ pub fn send_task(
         text,
         options,
         |info| {
-            let cli = chat_program(Engine::of(&info.adapter), saved)?;
+            let engine = Engine::of(&info.adapter);
+            // A restarted executive chat is checked again: managed settings may have been deployed since it started.
+            if engine == Engine::Claude && matches!(info.task, AgentTask::Executive { .. }) {
+                crate::managed::refuse()?;
+            }
+            let cli = chat_program(engine, saved)?;
             Ok(Launch {
                 scope: scope::for_session(bridge, saved, info)?,
                 program: cli.program,
@@ -3850,6 +3858,21 @@ mod tests {
         let terminal = StartOptions { interface: Interface::Terminal, ..Default::default() };
         let as_chat = start_executive(&rig.manager, &bridge, &saved, &dir, None, &domains, String::new(), "Hi", terminal).unwrap();
         assert_eq!(as_chat.interface, Interface::Chat, "the executive assistant is always a chat");
+    }
+
+    #[test]
+    fn managed_settings_keep_a_claude_executive_chat_from_starting() {   // EXEC-R7
+        let rig = Rig::scripted("executive-managed", &[&["<", INIT, RESULT, "<"]]);
+        let harmless = if cfg!(windows) { std::env::var("ComSpec").unwrap_or_else(|_| "C:\\Windows\\System32\\cmd.exe".into()) } else { "/bin/sh".into() };
+        let saved = Settings { claude_path: Some(harmless), ..Default::default() };
+        let bridge = Bridge::new(crate::settings::resolve(&saved, |_| None));
+        let dir = rig.dir.join("executive").join("agent");
+        crate::managed::FAKE.with(|fake| *fake.borrow_mut() = Some(r"C:\Program Files\ClaudeCode\managed-mcp.json".into()));
+        let started = start_executive(&rig.manager, &bridge, &saved, &dir, None, &[], String::new(), "What is overdue?", StartOptions::default());
+        crate::managed::FAKE.with(|fake| *fake.borrow_mut() = None);
+        let refused = started.unwrap_err();
+        assert!(refused.contains(r"(C:\Program Files\ClaudeCode\managed-mcp.json)"), "{refused}");
+        assert!(rig.manager.sessions().is_empty(), "no session was started");
     }
 
     #[test]
