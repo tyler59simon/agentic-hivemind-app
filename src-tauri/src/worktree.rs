@@ -125,18 +125,28 @@ pub fn folder_for(worktrees: &Path, repo: &Path) -> PathBuf {
 }
 
 pub fn create(worktrees: &Path, repo: &Path, branch: Option<&str>, session_id: &str) -> Result<Worktree, String> {
+    create_at(worktrees, repo, branch, None, session_id)
+}
+
+/// `create`, started at the commit `start` (a full sha) rather than at the branch's tip, with `branch` still recorded as
+/// the base. A workflow starts a dependent task at the checkpoint it verified, which the branch may have left since.
+pub fn create_at(worktrees: &Path, repo: &Path, branch: Option<&str>, start: Option<&str>, session_id: &str) -> Result<Worktree, String> {
     if !repo.is_dir() {
         return Err(format!("The repository folder does not exist: {}", repo.display()));
     }
     if run(repo, &["rev-parse", "--is-inside-work-tree"]).map(|s| s.trim() == "true") != Ok(true) {
         return Err(format!("Not a git repository: {}", repo.display()));
     }
-    let (base_branch, base_sha) = match branch {
-        Some(name) => {
+    let (base_branch, base_sha) = match (branch, start) {
+        (_, Some(sha)) => {
+            let found = Some(sha).filter(|sha| crate::git::is_sha(sha)).and_then(|sha| resolve(repo, sha));
+            (branch.unwrap_or("HEAD").to_string(), found.ok_or_else(|| format!("Unknown commit: {sha}"))?)
+        }
+        (Some(name), None) => {
             let sha = resolve(repo, &format!("refs/heads/{name}")).ok_or_else(|| format!("Unknown branch: {name}"))?;
             (name.to_string(), sha)
         }
-        None => match run(repo, &["symbolic-ref", "--quiet", "--short", "HEAD"]).map(|s| s.trim().to_string()) {
+        (None, None) => match run(repo, &["symbolic-ref", "--quiet", "--short", "HEAD"]).map(|s| s.trim().to_string()) {
             Ok(name) if !name.is_empty() => {
                 let sha = resolve(repo, &format!("refs/heads/{name}")).ok_or("The repository has no commits yet")?;
                 (name, sha)
@@ -439,6 +449,26 @@ mod tests {
         let other = create(&rig.worktrees, &rig.repo, None, "fedcba9876543210").unwrap();
         assert_eq!(other.base_branch, "main");
         assert_eq!(other.branch, "hivemind/fedcba98");
+    }
+
+    #[test]
+    fn a_worktree_can_start_at_a_checkpoint_its_branch_has_left() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let checkpoint = sh(&rig.repo, &["rev-parse", "feature/x"]).trim().to_string();
+        // The branch moves on after the checkpoint was verified.
+        sh(&rig.repo, &["commit", "-q", "--allow-empty", "-m", "later"]);
+        sh(&rig.repo, &["branch", "-f", "feature/x", "main"]);
+        assert_ne!(sh(&rig.repo, &["rev-parse", "feature/x"]).trim(), checkpoint);
+        let tree = create_at(&rig.worktrees, &rig.repo, Some("feature/x"), Some(&checkpoint), "0123456789abcdef").unwrap();
+        assert_eq!((tree.base_branch.as_str(), tree.base_sha.as_str()), ("feature/x", checkpoint.as_str()));
+        assert_eq!(sh(Path::new(&tree.path), &["rev-parse", "HEAD"]).trim(), checkpoint);
+        // Only a full sha the repository has is taken.
+        for bad in ["feature/x", &checkpoint[..7], &"0".repeat(40), "--upload-pack=x"] {
+            assert_eq!(create_at(&rig.worktrees, &rig.repo, Some("feature/x"), Some(bad), "fedcba9876543210"), Err(format!("Unknown commit: {bad}")));
+        }
     }
 
     #[test]

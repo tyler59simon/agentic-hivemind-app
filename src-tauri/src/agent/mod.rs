@@ -332,6 +332,10 @@ pub struct StartOptions {
     /// A lower Claude budget than the settings' one, for workflows and automations; never read from the webview.
     #[serde(skip)]
     pub budget_usd: Option<f64>,
+    /// Set by workflows: the commit (a verified checkpoint) the worktree starts at, with the task's branch as its base;
+    /// never read from the webview.
+    #[serde(skip)]
+    pub start: Option<String>,
 }
 
 /// Where a work session runs.
@@ -1825,7 +1829,7 @@ pub fn start_task(
     if place == Place::Checkout {
         return start_direct(manager, terminals, &id, task.clone(), &repo, prompt, &options);
     }
-    let tree = worktree::create(worktrees, &repo, branch.as_deref(), &id)?;
+    let tree = worktree::create_at(worktrees, &repo, branch.as_deref(), options.start.as_deref(), &id)?;
     let profile = options.profile.or(options.role.map(Role::profile));
     let scope = match profile {
         Some(profile) => scope::work_as(tree.clone(), profile, !options.unattended, &saved.allowed_commands(project), prompt),

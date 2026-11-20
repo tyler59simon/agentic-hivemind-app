@@ -527,8 +527,9 @@ impl Workflows {
             };
             let task = run.task(&next).unwrap().clone();
             // A task that starts from another starts from that task's checkpoint, and only when its branch still points
-            // there: a discard or a later commit would hand it a different revision than the one the run recorded. A skipped
-            // task left nothing to start from, so the base branch is used.
+            // there: a discard or a later commit would hand it a different revision than the one the run recorded. The
+            // worktree starts at the checkpoint itself, so a move after this check does not change it. A skipped task left
+            // nothing to start from, so the base branch is used.
             let branch = match task.spec.from.as_deref().and_then(|from| run.task(from)) {
                 Some(up) if up.state == TaskState::Succeeded && up.branch.is_some() => {
                     let name = up.branch.clone().unwrap();
@@ -537,10 +538,10 @@ impl Workflows {
                             "{name} no longer points at the checkpoint {} of \"{}\"; retry that task or skip this one",
                             &checkpoint[..7.min(checkpoint.len())], up.spec.title
                         )),
-                        _ => Ok(Some(name)),
+                        checkpoint => Ok((Some(name), checkpoint.clone())),
                     }
                 }
-                _ => Ok(run.base_branch.clone()),
+                _ => Ok((run.base_branch.clone(), None)),
             };
             let options = StartOptions {
                 briefing: Some(run.briefing(&task)),
@@ -553,8 +554,9 @@ impl Workflows {
                 budget_usd: run.budget_usd,
                 ..Default::default()
             };
-            let started = branch.and_then(|branch| {
-                host.start(AgentTask::Work { project: run.project.clone(), repo: run.repo.clone(), branch, change: None }, &task.spec.prompt, options)
+            let started = branch.and_then(|(branch, start)| {
+                let work = AgentTask::Work { project: run.project.clone(), repo: run.repo.clone(), branch, change: None };
+                host.start(work, &task.spec.prompt, StartOptions { start, ..options })
             });
             let mut runs = self.runs.lock().unwrap();
             let Some(run) = runs.get_mut(id) else { return };
@@ -884,7 +886,7 @@ mod tests {
         assert_eq!(run.tasks[0].checkpoint, None, "a read-only task makes no checkpoint");
         assert_eq!(states(&run)[1], TaskState::Running);
         let (_, branch, options) = host.started.borrow()[1].clone();
-        assert_eq!(branch.as_deref(), Some("main"), "build starts from the base");
+        assert_eq!((branch.as_deref(), options.start.as_deref()), (Some("main"), None), "build starts from the base");
         assert!(options.briefing.unwrap().contains("summary of s0"), "the plan is in the developer's briefing");
 
         turn(&flows, &host, "s1", true, None);
@@ -894,6 +896,7 @@ mod tests {
         let started = host.started.borrow();
         for (_, branch, options) in &started[2..] {
             assert_eq!(branch.as_deref(), Some("hivemind/s1"), "both start from the developer's checkpoint");
+            assert_eq!(options.start.as_deref(), Some("s1-commit"), "at the verified commit, not wherever the branch is by then");
             assert!(options.briefing.as_ref().unwrap().contains("Your worktree starts from its checkpoint."));
         }
         drop(started);
