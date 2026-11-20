@@ -69,7 +69,7 @@ pub struct Task {
     /// The session's `hivemind/<id8>` branch.
     #[serde(default)]
     pub branch: Option<String>,
-    /// The checkpoint commit an editing task left; dependents branch from its branch.
+    /// The checkpoint commit an editing task left (its branch's commit when it made no edits); dependents start from it.
     #[serde(default)]
     pub checkpoint: Option<String>,
     #[serde(default)]
@@ -628,18 +628,26 @@ impl Workflows {
     }
 
     fn finish(&self, run_id: &str, task_id: &str, ok: bool, host: &dyn Host) {
-        let (session, role, title) = {
+        let (session, role, title, repo, branch) = {
             let runs = self.runs.lock().unwrap();
-            let Some(t) = runs.get(run_id).and_then(|r| r.task(task_id)) else { return };
+            let Some(run) = runs.get(run_id) else { return };
+            let Some(t) = run.task(task_id) else { return };
             if t.state != TaskState::Running {
                 return;
             }
-            (t.session.clone().unwrap_or_default(), t.spec.role, t.spec.title.clone())
+            (t.session.clone().unwrap_or_default(), t.spec.role, t.spec.title.clone(), run.repo.clone(), t.branch.clone())
         };
         let info = host.info(&session);
-        // An editing task's edits become a commit its dependents can branch from.
+        // An editing task's edits become a commit its dependents can branch from. A task with no edits leaves its branch
+        // where it started, and that commit is its checkpoint, so its dependents start there too (Codex review F7-1).
         let checkpoint = if ok && role.profile() == Profile::EditWorktree {
-            host.checkpoint(&session, &format!("Workflow checkpoint: {title}"))
+            match host.checkpoint(&session, &format!("Workflow checkpoint: {title}")) {
+                Ok(None) => {
+                    let tip = branch.as_deref().and_then(|b| host.branch_tip(&repo, b));
+                    tip.map(Some).ok_or_else(|| format!("Could not read the branch {}", branch.as_deref().unwrap_or("of the session")))
+                }
+                made => made,
+            }
         } else {
             Ok(None)
         };
@@ -762,9 +770,11 @@ mod tests {
         stopped: RefCell<Vec<String>>,
         /// Branches moved since their checkpoint.
         moved: RefCell<Vec<String>>,
+        /// Editing sessions made no edits, so there is nothing to commit.
+        no_edits: bool,
     }
     fn fake(limit: usize) -> Fake {
-        Fake { started: RefCell::new(vec![]), limit, fail: None, infos: RefCell::new(BTreeMap::new()), stopped: RefCell::new(vec![]), moved: RefCell::new(vec![]) }
+        Fake { started: RefCell::new(vec![]), limit, fail: None, infos: RefCell::new(BTreeMap::new()), stopped: RefCell::new(vec![]), moved: RefCell::new(vec![]), no_edits: false }
     }
 
     fn info(id: &str) -> SessionInfo {
@@ -797,7 +807,7 @@ mod tests {
             self.infos.borrow().get(session).cloned()
         }
         fn checkpoint(&self, session: &str, _message: &str) -> Result<Option<String>, String> {
-            Ok(Some(format!("{session}-commit")))
+            Ok((!self.no_edits).then(|| format!("{session}-commit")))
         }
         fn stop(&self, session: &str) {
             self.stopped.borrow_mut().push(session.to_string());
@@ -923,6 +933,22 @@ mod tests {
         assert!(check(&[spec("a", Role::Developer, "A", "do", &[], None), spec("b", Role::Tester, "B", "do", &[], Some("a"))]).unwrap_err().contains("must depend"));
         assert!(check(&[spec("a b", Role::Developer, "A", "do", &[], None)]).is_err());
         assert!(check(&[]).is_err());
+    }
+
+    #[test]
+    fn a_task_without_edits_pins_its_dependents_to_its_branch_commit() {   // Codex review F7-1
+        let dir = scratch();
+        let flows = Workflows::new(dir.clone());
+        let host = Fake { no_edits: true, ..fake(3) };
+        let run = flows.start(&feature(&flows).id, &host).unwrap();
+        turn(&flows, &host, "s0", true, None);
+        turn(&flows, &host, "s1", true, None);
+        let run = flows.get(&run.id).unwrap();
+        assert_eq!(run.tasks[1].checkpoint.as_deref(), Some("s1-commit"), "the branch's commit, read when the task ended");
+        for (_, branch, options) in &host.started.borrow()[2..] {
+            assert_eq!((branch.as_deref(), options.start.as_deref()), (Some("hivemind/s1"), Some("s1-commit")));
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
