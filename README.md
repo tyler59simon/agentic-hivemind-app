@@ -20,7 +20,7 @@ It runs on Tauri 2 with React and TypeScript, on Windows, macOS and Linux. It is
   - a properties form, `[[` title autocomplete, and Ctrl+S to save
   - unsaved edits kept as drafts that survive a crash
   - a three-way merge when an agent saved the same note meanwhile
-- **Lifecycle:** archive, resolve, reopen, supersede, merge and delete, each as a reviewed Living Memory plan whose diff you see before it applies.
+- **Lifecycle:** archive, resolve, reopen and supersede apply at once and can be undone from Activity; merge and delete are reviewed Living Memory plans whose diff you see before they apply.
 - **Action items:** tick them in reading view.
 - **Renames:** a renamed note offers to rewrite `[[Old Title]]` links elsewhere.
 - **Graph** (Ctrl+G, under Memory): every note and link, coloured by type, with filters.
@@ -41,15 +41,25 @@ See [docs/engineering-workspace.md](docs/engineering-workspace.md) for how the a
 Living Memory stays the only writer, and Hivemind never touches the store's files itself.
 - **Bridge:** the app starts one `living_memory.py serve --stdio` process and sends it JSON-lines commands (`src-tauri/src/bridge.rs`).
 - **Reads** run as `--actor viewer`. They are read-only and don't count as usage in Living Memory's stats.
-- **Writes** go through `update --expected-revision` and send only the fields that changed. Living Memory journals every write, so it can be undone. Lifecycle, tag and undo changes go through Living Memory's plan, inspect and apply flow (`src/features/plans/PlanDialog.tsx`).
+- **Writes** go through `update --expected-revision` and send only the fields that changed. Living Memory journals every write, so it can be undone. Archive, resolve, reopen, supersede and new tags are direct writes. Delete, merge, tag renames and undoing those go through Living Memory's plan, inspect and apply flow (`src/features/plans/PlanDialog.tsx`).
 - **Live refresh:** a file watcher on `domains/*/notes|archive` refreshes the UI when agents write (`src-tauri/src/watcher.rs`). It never opens `search.sqlite3`.
 - **Drafts and preferences:** drafts live in the app's data folder (`src-tauri/src/drafts.rs`). The open notes, the picked project and page, the default editor mode and Hivemind's own operation log stay on this device.
 
 ## Requirements
 
-- **Living Memory with the app bridge** (`serve`, `list`, `domains`, `version`, `--actor viewer`; API level 1; agentic-living-memory PR #11). Backlinks and the graph also need `links` (PR #12). Without it Hivemind says so and the rest still works.
-- **Python 3.10+** with SQLite FTS5 (the same interpreter Living Memory uses).
+- **Living Memory with the app bridge and direct writes:** its `version` reports API level 1 or later, the `serve`, `list`, `domains` and `version` commands, and `capabilities.direct_writes` 1 or later. Hivemind will not open an older one and says to update it. Backlinks and the graph also need `links`; without it Hivemind says so and the rest still works.
+- **Python 3.10+** with SQLite FTS5. Hivemind uses the interpreter Living Memory's installer recorded, so the app and Living Memory's hooks run the same one.
 - **To build:** Rust (stable), Node 20+, and the [Tauri prerequisites](https://tauri.app/start/prerequisites/). On Windows that means the MSVC C++ Build Tools and WebView2. On Linux the tray icon needs `libayatana-appindicator3`.
+
+## Install Living Memory
+
+Hivemind does not include Living Memory. From a checkout of [agentic-living-memory](https://github.com/tyler59simon/agentic-living-memory), run:
+
+```sh
+py -3 install.py
+```
+
+That copies Living Memory to its per-user app folder (below) and records the Python it ran under. Then wire each coding agent you use, as `install.py` prints: run `integrations/setup.py claude --hooks` (or `codex`, `copilot`, `factory`) from the installed copy and apply the plan it prints with `--apply-plan ID --expected-plan-sha256 DIGEST`. Hivemind itself needs only the installed copy. See `INSTALLATION.md` in that repository for the details.
 
 ## Configuration
 
@@ -61,7 +71,7 @@ It uses whichever store Living Memory is configured for. You can override these 
 
 | Variable | Meaning |
 | --- | --- |
-| `HIVEMIND_PYTHON` | Python interpreter (default `py -3` on Windows, `python3` elsewhere) |
+| `HIVEMIND_PYTHON` | Python interpreter (default: the one Living Memory's installer recorded in `app/.core-ownership-v1.json`, else `py -3` on Windows and `python3` elsewhere) |
 | `HIVEMIND_LM_SCRIPT` | Path to `living_memory.py`, e.g. a development checkout |
 | `HIVEMIND_LM_ROOT` | Store root; use a throwaway store while developing |
 | `HIVEMIND_SKILL_DIRS` | Skill folders to publish to, separated by `;` on Windows and `:` elsewhere (default `~/.claude/skills` and `~/.codex/skills`); use scratch folders while developing |
@@ -71,6 +81,24 @@ Settings also sets:
 - the quick-capture hotkey (or turns it off)
 - whether closing the window keeps Hivemind in the tray
 - which mode notes open in
+
+## Machines with managed policy
+
+Hivemind has no policy of its own. After a confirm tick, a user can start a session with Claude Code's `bypassPermissions` mode or Codex's `danger-full-access` sandbox, and automations run unattended from the tray. Hivemind starts the `claude` and `codex` command lines, and they enforce their own administrator settings, so IT controls Hivemind's agents there:
+
+- **Claude Code managed settings** (`managed-settings.json`, its `managed-settings.d` drop-ins, the Windows `Policies\ClaudeCode` registry key, or settings from the claude.ai console): `permissions.disableBypassPermissionsMode` set to `"disable"` blocks bypass mode, and managed permission rules apply to every Claude session Hivemind starts.
+- **Codex `requirements.toml`**: limits the sandbox modes and approval policies Codex accepts, including the ones Hivemind passes.
+
+What managed policy turns off in Hivemind: when Claude Code has any managed policy (a managed settings or MCP file, a drop-in, the registry value, or cached console settings), Hivemind refuses its isolated Claude calls (the executive chat, the learning reviewer, and the briefing and comms one-shot calls), because those calls cannot run isolated under managed hooks and MCP servers. They still work with Codex. Sessions you start yourself are not refused; the CLI applies the policy to them.
+
+## Uninstall
+
+1. **Before you uninstall:** in Settings, under **Before you uninstall**, press Check. For each session worktree, end the session, approve or discard its edits, and remove the worktree; then delete the `hivemind/...` branches already merged. Unapproved edits live only in those worktrees. Uninstalling first loses them and leaves stale entries in each repository's `.git/worktrees` until you run `git worktree prune` there. Branches with unmerged commits are listed but never deleted.
+2. **Run the uninstaller.**
+3. **What stays afterwards:**
+   - App data. With Tauri's default installers, the NSIS uninstaller keeps `%APPDATA%\dev.hivemind.app` unless you tick its option to delete app data, and the MSI never removes it. It holds settings, `agent-sessions`, `worktrees`, `terminals`, `learning` and `skills`. WebView2 data is in `%LOCALAPPDATA%\dev.hivemind.app`. Delete both folders to remove everything.
+   - Published skills in `~/.claude/skills` and `~/.codex/skills` (each folder has a `.hivemind-skill.json` marker). Delete the ones you no longer want.
+   - Living Memory and its store. They are separate and keep working with your coding agents. If you turned on memory maintenance from Hivemind, Living Memory keeps scheduling those paid `claude -p` runs from its SessionStart hook; run `alm maintenance disable` to stop them.
 
 ## Develop
 
