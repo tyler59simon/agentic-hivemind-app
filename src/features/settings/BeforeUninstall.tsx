@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { agentCancel, agentEnd, reviewDiscard, uninstallDeleteBranch, uninstallInventory, uninstallRemoveWorktree, type UninstallInventory, type UninstallTree } from "../../lib/agent";
+import { agentCancel, agentEnd, agentSessions, reviewDiscard, uninstallDeleteBranch, uninstallInventory, uninstallRemoveWorktree, type UninstallInventory, type UninstallTree } from "../../lib/agent";
 import { Confirm } from "../../ui/Modal";
-import { deletable, treeStep } from "./uninstall";
+import { deletable, treeStep, waitStopped } from "./uninstall";
 
 function stateText(tree: UninstallTree): string {
   if (!tree.exists) return "folder already gone";
@@ -35,7 +35,7 @@ export function BeforeUninstall({ onOpenReview, onOpenSession }: { onOpenReview?
       case "terminal": return onOpenSession
         ? <button type="button" disabled={busy} onClick={() => onOpenSession(tree.session)}>Open terminal to stop it</button>
         : <span className="muted small">stop it in its terminal</span>;
-      case "stop": return <button type="button" disabled={busy} onClick={() => run(() => agentCancel(tree.session))}>Stop session</button>;
+      case "stop": return <button type="button" disabled={busy} onClick={() => run(() => agentCancel(tree.session).then(() => waitStopped(tree.session, agentSessions)))}>Stop session</button>;
       case "end": return <button type="button" disabled={busy} onClick={() => run(() => agentEnd(tree.session))}>End session</button>;
       case "review": return <>
         {onOpenReview && <button type="button" disabled={busy} onClick={() => onOpenReview(tree.session)}>Open in Review</button>}
@@ -75,7 +75,7 @@ export function BeforeUninstall({ onOpenReview, onOpenSession }: { onOpenReview?
               {r.branches.map((b) => (
                 <li key={b.name}>
                   <code>{b.name}</code>{" "}
-                  {b.checkedOut ? "· in use by a worktree" : b.merged
+                  {b.checkedOut ? "· in use by a worktree, rebase or bisect" : b.merged === null ? <>· could not compare with {r.target}; see the error above</> : b.merged
                     ? <>· merged into {r.target} <button type="button" disabled={busy} onClick={() => run(() => uninstallDeleteBranch(r.repo, b.name))}>Delete</button></>
                     : <>· has commits not in {r.target ?? "the default branch"}; merge it or delete it yourself</>}
                 </li>

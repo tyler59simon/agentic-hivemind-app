@@ -1018,6 +1018,15 @@ impl Manager {
 
     /// Remove the worktree of a session that has ended.
     pub fn remove_worktree(&self, id: &str) -> Result<(), String> {
+        self.remove_worktree_with(id, worktree::remove)
+    }
+
+    /// `remove_worktree`, but git refuses a worktree with untracked or modified files instead of deleting them.
+    pub fn remove_clean_worktree(&self, id: &str) -> Result<(), String> {
+        self.remove_worktree_with(id, worktree::remove_clean)
+    }
+
+    fn remove_worktree_with(&self, id: &str, remove: fn(&Worktree) -> Result<(), String>) -> Result<(), String> {
         let inner = &self.inner;
         store::log_path(&inner.dir, id)?;
         if inner.sessions.lock().unwrap().get(id).is_some_and(|session| session.reserved) {
@@ -1027,7 +1036,7 @@ impl Manager {
         if !inner.sessions.lock().unwrap().get(id).is_some_and(|session| is_over(session.info.status)) {
             return Err("End the session before removing its worktree".into());
         }
-        worktree::remove(&tree)?;
+        remove(&tree)?;
         inner.update(id, |info| (info.worktree, info.files_changed) = (None, None));
         Ok(())
     }

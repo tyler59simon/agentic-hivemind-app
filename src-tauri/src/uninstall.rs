@@ -38,9 +38,9 @@ pub struct Tree {
 #[serde(rename_all = "camelCase")]
 pub struct Branch {
     pub name: String,
-    /// Every commit on it is in `Repo::target`.
-    pub merged: bool,
-    /// A worktree has it checked out, so git would refuse to delete it.
+    /// Every commit on it is in `Repo::target`; None when git could not compare them (the reason is in `Repo::error`).
+    pub merged: Option<bool>,
+    /// A worktree has it checked out, or a rebase or bisect in one is using it.
     pub checked_out: bool,
     /// The session that made it, when Hivemind still knows it.
     pub session: Option<String>,
@@ -88,15 +88,29 @@ fn merged(repo: &Path, tip: &str, target: &str) -> Result<bool, String> {
     }
 }
 
-fn checked_out(repo: &Path) -> Result<Vec<String>, String> {
-    Ok(worktree::list(repo)?.into_iter().filter_map(|listed| listed.branch).collect())
+/// The branches git would refuse to delete because they are in use: checked out in a worktree, or the branch a paused
+/// rebase or bisect in one of them returns to (git shows such a worktree as detached).
+fn in_use(repo: &Path) -> Result<Vec<String>, String> {
+    let listed = worktree::list(repo)?;
+    let mut used: Vec<String> = listed.iter().filter_map(|l| l.branch.clone()).collect();
+    for tree in &listed {
+        let Ok(dir) = run(Path::new(&tree.path), &["rev-parse", "--absolute-git-dir"]) else { continue };
+        let dir = Path::new(dir.trim());
+        for file in ["rebase-merge/head-name", "rebase-apply/head-name", "BISECT_START"] {
+            if let Ok(text) = std::fs::read_to_string(dir.join(file)) {
+                let name = text.trim();
+                used.push(name.strip_prefix("refs/heads/").unwrap_or(name).to_string());
+            }
+        }
+    }
+    Ok(used)
 }
 
 fn branches(repo: &Path, sessions: &[SessionInfo]) -> Repo {
     let spelled = folders::plain(repo);
     let target = target(repo);
     let listed = run(repo, &["for-each-ref", "--format=%(refname:short)", &format!("refs/heads/{PREFIX}")])
-        .and_then(|text| Ok((text, checked_out(repo)?)));
+        .and_then(|text| Ok((text, in_use(repo)?)));
     let (text, out) = match listed {
         Ok(found) => found,
         Err(error) => return Repo { repo: spelled, target, branches: vec![], error: Some(error) },
@@ -108,13 +122,11 @@ fn branches(repo: &Path, sessions: &[SessionInfo]) -> Repo {
         .filter(|name| name.starts_with(PREFIX))
         .map(|name| Branch {
             name: name.to_string(),
-            // A failed comparison counts as not merged (nothing is offered for deletion) and is reported.
-            merged: target.as_deref().is_some_and(|t| {
-                merged(repo, &format!("refs/heads/{name}"), t).unwrap_or_else(|e| {
-                    errors.push(format!("{name}: {e}"));
-                    false
-                })
-            }),
+            // No target (a detached HEAD) means nothing counts as merged; a failed comparison is unknown and reported.
+            merged: match target.as_deref() {
+                None => Some(false),
+                Some(t) => merged(repo, &format!("refs/heads/{name}"), t).map_err(|e| errors.push(format!("{name}: {e}"))).ok(),
+            },
             checked_out: out.iter().any(|b| b == name),
             session: sessions
                 .iter()
@@ -195,8 +207,12 @@ pub fn delete_branch(repo: &Path, branch: &str) -> Result<(), String> {
     let Some(tip) = worktree::branch_tip(repo, branch) else {
         return Err(format!("No branch {branch} in {}", repo.display()));
     };
-    if checked_out(repo)?.iter().any(|b| b == branch) {
-        return Err(format!("{branch} is checked out in a worktree; remove the worktree first"));
+    // A symbolic ref is an alias for another branch; deleting through it could reach that branch.
+    if run(repo, &["symbolic-ref", "--quiet", &format!("refs/heads/{branch}")]).is_ok() {
+        return Err(format!("{branch} is a symbolic ref, not a branch Hivemind made; it was left alone"));
+    }
+    if in_use(repo)?.iter().any(|b| b == branch) {
+        return Err(format!("{branch} is checked out in a worktree or used by a rebase or bisect; finish or remove that first"));
     }
     let Some(target) = target(repo) else {
         return Err("The repository is on a detached commit, so there is no default branch to compare with".into());
@@ -209,7 +225,7 @@ pub fn delete_branch(repo: &Path, branch: &str) -> Result<(), String> {
 
 /// Delete the branch only if it still points at `tip`, the commit just checked: a branch that moved since is left alone.
 fn delete_at(repo: &Path, branch: &str, tip: &str) -> Result<(), String> {
-    run(repo, &["update-ref", "-d", &format!("refs/heads/{branch}"), tip])
+    run(repo, &["update-ref", "--no-deref", "-d", &format!("refs/heads/{branch}"), tip])
         .map(|_| ())
         .map_err(|e| format!("{branch} changed while it was checked, so it was left alone: {e}"))
 }
@@ -308,9 +324,9 @@ mod tests {
         let repo = &found.repos[0];
         assert_eq!(repo.target.as_deref(), Some("main"));
         let row = |name: &str| repo.branches.iter().find(|b| b.name == name).map(|b| (b.merged, b.checked_out, b.session.clone()));
-        assert_eq!(row("hivemind/aaaaaaaa"), Some((true, false, None)));
-        assert_eq!(row("hivemind/bbbbbbbb"), Some((false, false, None)));
-        assert_eq!(row("hivemind/cccccccc"), Some((true, true, Some("cccccccc-1".into()))), "no commits yet, so merged, but checked out");
+        assert_eq!(row("hivemind/aaaaaaaa"), Some((Some(true), false, None)));
+        assert_eq!(row("hivemind/bbbbbbbb"), Some((Some(false), false, None)));
+        assert_eq!(row("hivemind/cccccccc"), Some((Some(true), true, Some("cccccccc-1".into()))), "no commits yet, so merged, but checked out");
     }
 
     #[test]
@@ -332,6 +348,20 @@ mod tests {
         assert!(delete_branch(&rig.repo, "hivemind/nothere").unwrap_err().starts_with("No branch"));
         assert!(delete_branch(&rig.repo, "hivemind/bbbbbbbb").unwrap_err().contains("not in main"));
         assert!(delete_branch(&rig.repo, "hivemind/cccccccc").unwrap_err().contains("checked out"));
+        // A symbolic hivemind/* ref pointing at main is refused, and main survives.
+        sh(&rig.repo, &["symbolic-ref", "refs/heads/hivemind/alias", "refs/heads/main"]);
+        assert!(delete_branch(&rig.repo, "hivemind/alias").unwrap_err().contains("symbolic ref"));
+        assert!(worktree::branch_tip(&rig.repo, "main").is_some());
+        sh(&rig.repo, &["symbolic-ref", "--delete", "refs/heads/hivemind/alias"]);
+        // A merged branch that a paused bisect returns to is in use.
+        sh(&rig.repo, &["branch", "hivemind/bisect", "main"]);
+        let bisect = rig.worktrees.join("bisect");
+        sh(&rig.repo, &["worktree", "add", "-q", bisect.to_str().unwrap(), "hivemind/bisect"]);
+        sh(&bisect, &["bisect", "start"]);
+        sh(&bisect, &["checkout", "-q", "--detach"]);
+        assert!(delete_branch(&rig.repo, "hivemind/bisect").unwrap_err().contains("rebase or bisect"));
+        sh(&bisect, &["bisect", "reset"]);
+        sh(&rig.repo, &["worktree", "remove", "--force", bisect.to_str().unwrap()]);
         assert_eq!(delete_branch(&rig.repo, "hivemind/aaaaaaaa"), Ok(()));
         // A tip that is not in main is refused even when it is passed as the checked commit.
         let tip = worktree::branch_tip(&rig.repo, "hivemind/bbbbbbbb").unwrap();
@@ -350,7 +380,15 @@ mod tests {
         assert!(check_clean(&busy).unwrap_err().starts_with("The worktree has 1 changed file now"));
         std::fs::remove_file(Path::new(&busy.path).join("late.txt")).unwrap();
         assert_eq!(check_clean(&busy), Ok(()));
-        worktree::remove(&busy).unwrap();
+        // A nested repository is not counted as a change, but git will not remove the worktree without force.
+        let nested = Path::new(&busy.path).join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        sh(&nested, &["init", "-q"]);
+        assert_eq!(check_clean(&busy), Ok(()));
+        assert!(worktree::remove_clean(&busy).unwrap_err().starts_with("Git would not remove the worktree"));
+        assert!(nested.join(".git").exists());
+        std::fs::remove_dir_all(&nested).unwrap();
+        worktree::remove_clean(&busy).unwrap();
         let admin = rig.repo.join(".git").join("worktrees");
         assert!(!admin.exists() || std::fs::read_dir(&admin).unwrap().next().is_none());
     }

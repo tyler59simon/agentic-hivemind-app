@@ -332,11 +332,28 @@ pub fn list(repo: &Path) -> Result<Vec<Listed>, String> {
 
 /// Removing a worktree that is already gone is fine. The branch goes too, but only when the session made no commits on it.
 pub fn remove(tree: &Worktree) -> Result<(), String> {
+    remove_with(tree, true)
+}
+
+/// `remove` without `--force`: git refuses a worktree that has untracked or modified files, a nested repository included.
+pub fn remove_clean(tree: &Worktree) -> Result<(), String> {
+    remove_with(tree, false)
+}
+
+fn remove_with(tree: &Worktree, force: bool) -> Result<(), String> {
     let (repo, path) = (Path::new(&tree.repo), Path::new(&tree.path));
     let mut command = git(repo);
-    command.args(["worktree", "remove", "--force"]).arg(path);
+    command.args(["worktree", "remove"]);
+    if force {
+        command.arg("--force");
+    }
+    command.arg(path);
     if let (Err(e), true) = (run_with_timeout(command, TIMEOUT), path.exists()) {
-        return Err(format!("Could not remove the worktree (is a program still open in it?): {e}"));
+        return Err(if force {
+            format!("Could not remove the worktree (is a program still open in it?): {e}")
+        } else {
+            format!("Git would not remove the worktree, so it was left alone (it may hold files git does not track): {e}")
+        });
     }
     run(repo, &["worktree", "prune"])?;
     if ahead(tree) == Ok(0) {

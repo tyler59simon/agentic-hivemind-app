@@ -169,8 +169,8 @@ export const agentRename = (sessionId: string, name: string) => invoke<void>("ag
 export const agentRemoveWorktree = (sessionId: string) => invoke<void>("agent_remove_worktree", { sessionId });
 /** A session worktree an uninstall would leave behind. `files` is read now; null when git could not read the worktree. */
 export interface UninstallTree { session: string; title: string; status: SessionStatus; interface: Interface; mode: "interactive" | "unattended"; repo: string; branch: string; path: string; exists: boolean; files: number | null; review: ReviewState | null }
-/** A `hivemind/*` branch. `merged`: every commit is in the repository's `target` branch. */
-export interface UninstallBranch { name: string; merged: boolean; checkedOut: boolean; session: string | null }
+/** A `hivemind/*` branch. `merged`: every commit is in the repository's `target` branch; null when git could not compare them. */
+export interface UninstallBranch { name: string; merged: boolean | null; checkedOut: boolean; session: string | null }
 export interface UninstallRepo { repo: string; target: string | null; branches: UninstallBranch[]; error: string | null }
 export interface UninstallInventory { trees: UninstallTree[]; repos: UninstallRepo[] }
 export const uninstallInventory = () => invoke<UninstallInventory>("uninstall_inventory");

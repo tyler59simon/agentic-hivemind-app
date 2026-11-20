@@ -14,7 +14,16 @@ export function treeStep(tree: UninstallTree): TreeStep {
   return "remove";
 }
 
+/** Wait until a session that was asked to stop has stopped (at most `ms`), so the next check sees its final status. */
+export async function waitStopped(session: string, list: () => Promise<{ id: string; status: string }[]>, ms = 5000, step = 250): Promise<void> {
+  for (let waited = 0; waited < ms; waited += step) {
+    const info = (await list()).find((s) => s.id === session);
+    if (!info || !["running", "waiting", "idle"].includes(info.status)) return;
+    await new Promise((done) => setTimeout(done, step));
+  }
+}
+
 /** The branches "Delete all merged" removes in a repository. */
 export function deletable(repo: UninstallRepo): string[] {
-  return repo.branches.filter((b) => b.merged && !b.checkedOut).map((b) => b.name);
+  return repo.branches.filter((b) => b.merged === true && !b.checkedOut).map((b) => b.name);
 }

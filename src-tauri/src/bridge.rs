@@ -34,8 +34,8 @@ struct Proc {
 
 impl Proc {
     /// `error`, plus the exit code and the server's last stderr output once its stderr has closed (waiting up to a second).
-    /// The output is what it wrote last, which is not always why it stopped.
-    fn stopped(&mut self, error: &str) -> String {
+    /// The output is what it wrote last, which is not always why it stopped. `hint` is added only when there was no output.
+    fn stopped(&mut self, error: &str, hint: &str) -> String {
         let deadline = Instant::now() + Duration::from_secs(1);
         while !self.drain.is_finished() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
@@ -45,7 +45,9 @@ impl Proc {
             text.push_str(&format!(" ({status})"));
         }
         let tail = String::from_utf8_lossy(&self.stderr.lock().unwrap()).trim().to_string();
-        if !tail.is_empty() {
+        if tail.is_empty() {
+            text.push_str(hint);
+        } else {
             text.push_str(&format!(". Its last error output:\n{tail}"));
         }
         text
@@ -139,17 +141,15 @@ impl Bridge {
         let mut line = serde_json::to_string(&request).map_err(|e| e.to_string())?;
         line.push('\n');
         if let Err(e) = proc.stdin.write_all(line.as_bytes()).and_then(|_| proc.stdin.flush()) {
-            return Err(proc.stopped(&format!("Living Memory stopped: {e}")));
+            return Err(proc.stopped(&format!("Living Memory stopped: {e}"), ""));
         }
         let mut answer = String::new();
         let read = match proc.stdout.read_line(&mut answer) {
             Ok(read) => read,
-            Err(e) => return Err(proc.stopped(&format!("Living Memory stopped: {e}"))),
+            Err(e) => return Err(proc.stopped(&format!("Living Memory stopped: {e}"), "")),
         };
         if read == 0 {
-            let said = !proc.stderr.lock().unwrap().is_empty();
-            let hint = if said { "" } else { ". If it is older than the app bridge, update it (needs `serve --stdio`)" };
-            return Err(proc.stopped(&format!("Living Memory exited{hint}")));
+            return Err(proc.stopped("Living Memory exited", ". If it is older than the app bridge, update it (needs `serve --stdio`)"));
         }
         let value: Value = serde_json::from_str(&answer).map_err(|e| format!("Unreadable reply from Living Memory: {e}"))?;
         if value.get("id").and_then(Value::as_u64) != Some(id) {

@@ -958,7 +958,7 @@ async fn uninstall_remove_worktree(state: State<'_, AppState>, session_id: Strin
     blocking(move || {
         let tree = agents.info(&session_id)?.worktree.ok_or("This session has no worktree")?;
         uninstall::check_clean(&tree)?;
-        agents.remove_worktree(&session_id)
+        agents.remove_clean_worktree(&session_id)
     })
     .await
 }
