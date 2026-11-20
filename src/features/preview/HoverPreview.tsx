@@ -5,6 +5,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { read } from "../../lib/lm";
 import { sections } from "../../lib/note";
+import { typeClass } from "../../lib/noteTypes";
 
 const DELAY = 400;
 
@@ -20,7 +21,7 @@ export function PreviewCard({ refId, x, y }: { refId: string; x: number; y: numb
         <>
           <strong className="hover-title">{n.title}</strong>
           <div className="result-meta">
-            <span className={`badge type-${n.type}`}>{n.type}</span>
+            <span className={`badge ${typeClass(n.type)}`}>{n.type}</span>
             {n.status !== "active" && <span className={`badge status-${n.status}`}>{n.status}</span>}
             <span className="muted small">{n.domain}</span>
           </div>

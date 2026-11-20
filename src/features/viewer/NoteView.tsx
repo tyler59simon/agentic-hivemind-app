@@ -6,7 +6,8 @@ import Markdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { classify } from "../../lib/errors";
 import { check, read, type Note } from "../../lib/lm";
-import { ACTION_TYPES, actionItems } from "../../lib/note";
+import { actionItems, allowsActions } from "../../lib/note";
+import { useNoteTypes } from "../../lib/noteTypes";
 import { recordOperation } from "../../lib/oplog";
 import { shortDate } from "../../lib/text";
 import { MermaidPre } from "../../ui/Mermaid";
@@ -106,6 +107,7 @@ export function NoteView({ refId, tabId }: { refId: string; tabId: string }) {
   const { note: links } = useNoteLinks(refId);
   const updateTab = useWorkspace((s) => s.updateTab);
   const reveal = useWorkspace((s) => s.reveal);
+  const types = useNoteTypes();
   const n = note.data;
   useEffect(() => { if (n) updateTab(tabId, { title: n.title }); }, [n?.title, tabId, updateTab]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -113,7 +115,7 @@ export function NoteView({ refId, tabId }: { refId: string; tabId: string }) {
   }, [reveal, tabId]);
   const components = useMemo<Components>(() => {
     if (!n) return {};
-    const tickable = ACTION_TYPES.has(n.type) && n.status === "active";
+    const tickable = allowsActions(n.type, types.def(n.type)) && n.status === "active";
     const items = new Map(actionItems(n.body).map((a) => [a.line, a]));
     const heading = (Tag: "h1" | "h2" | "h3" | "h4" | "h5" | "h6"): Components["h1"] =>
       ({ node, children }) => <Tag id={`${tabId}-l${(node?.position?.start.line ?? 1) - 1}`}>{children}</Tag>;
@@ -137,7 +139,7 @@ export function NoteView({ refId, tabId }: { refId: string; tabId: string }) {
       h1: heading("h1"), h2: heading("h2"), h3: heading("h3"), h4: heading("h4"), h5: heading("h5"), h6: heading("h6"),
       pre: MermaidPre,
     };
-  }, [n, links, tabId]);
+  }, [n, links, tabId, types]);
 
   if (note.isLoading) return <p className="muted pad">Loading…</p>;
   if (note.error) return <p className="error pad">{classify(note.error).message}</p>;

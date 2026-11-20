@@ -6,7 +6,7 @@
 // type's own `##` sections, then Details, Links and Action items. Notes written before this layout used
 // `# 🎯 Title`, `## 📌 Executive Summary`, a `---` rule, `## 📝 Key Details`, `## 🗂️ Resource Links`,
 // `## 🟩 Action Items` and a closing `> ℹ️ **Important Note:**` callout; those still parse.
-import type { NoteType } from "./lm";
+import type { NoteType, NoteTypeDef } from "./lm";
 
 export type SectionKey = "summary" | "details" | "links" | "actions" | "important";
 export const HEADINGS: Record<"details" | "links" | "actions", string> = {
@@ -308,29 +308,43 @@ export const TEMPLATE_PROMPTS: Record<NoteType, string> = {
   policy: "The rule, who requires it, and where it applies.",
   map: "What the repo is for, in one or two sentences.",
   runbook: "What the procedure does.",
+  brief: "What the project is and where it stands.",
 };
-
-/** A starting body for a new note of this type, as LM's Obsidian templates: the summary prompt, an Important
- *  placeholder, the type's sections, Details for types without their own, Links, and Action items for plan, bug
- *  and risk. Sections left unfilled are dropped when LM saves the note. */
-export function template(type: NoteType): string {
-  const own = TYPE_SECTIONS[type];
-  const parts = [TEMPLATE_PROMPTS[type], CALLOUT + " "];
-  if (own) parts.push(...own.map((h) => "## " + h));
-  if (!own && type !== "knowledge") parts.push(`## ${HEADINGS.details}\n- `);
-  parts.push(`## ${HEADINGS.links}\n- `);
-  if (ACTION_TYPES.has(type)) parts.push(`## ${HEADINGS.actions}\n- [ ] `);
-  return parts.join("\n\n") + "\n";
-}
 
 const SUBJECT_BY_TYPE: Partial<Record<NoteType, string>> = { preference: "subject/user" };
 const CONCERN_BY_TYPE: Partial<Record<NoteType, string>> = {
-  decision: "concern/decision", preference: "concern/preference", bug: "concern/bug",
-  knowledge: "concern/knowledge", policy: "concern/workflow",
+  decision: "concern/decision", preference: "concern/preference", bug: "concern/bug", knowledge: "concern/knowledge",
+  policy: "concern/workflow", map: "concern/architecture", runbook: "concern/workflow", brief: "concern/knowledge",
+  plan: "concern/workflow", context: "concern/knowledge", status: "concern/knowledge", risk: "concern/constraint",
+  research: "concern/knowledge",
 };
 
+/** A built-in type's definition from the tables above, for an LM without the `types` command. */
+export function builtinDef(name: NoteType): NoteTypeDef {
+  return {
+    name, builtin: true, status: "active", description: "", summary: TEMPLATE_PROMPTS[name] ?? "",
+    sections: [...(TYPE_SECTIONS[name] ?? [])], actions: ACTION_TYPES.has(name), review_days: null,
+    concern: CONCERN_BY_TYPE[name] ?? null, subject: SUBJECT_BY_TYPE[name] ?? null,
+  };
+}
+
+/** Whether notes of this type may have Action items. */
+export const allowsActions = (type: NoteType, def: NoteTypeDef = builtinDef(type)) => def.actions;
+
+/** A starting body for a new note of this type, as LM's Obsidian templates: the summary prompt, an Important
+ *  placeholder, the type's sections, Details for types without their own (except knowledge), Links, and Action
+ *  items for types that have them. Sections left unfilled are dropped when LM saves the note. */
+export function template(type: NoteType, def: NoteTypeDef = builtinDef(type)): string {
+  const parts = [def.summary, CALLOUT + " "];
+  parts.push(...def.sections.map((h) => "## " + h));
+  if (!def.sections.length && type !== "knowledge") parts.push(`## ${HEADINGS.details}\n- `);
+  parts.push(`## ${HEADINGS.links}\n- `);
+  if (def.actions) parts.push(`## ${HEADINGS.actions}\n- [ ] `);
+  return parts.join("\n\n") + "\n";
+}
+
 /** The subject/ and concern/ tags LM would infer for this type (cli._infer_tags), when the taxonomy has them. */
-export function defaultTags(type: NoteType, taxonomy: string[]): string[] {
+export function defaultTags(type: NoteType, taxonomy: string[], def: NoteTypeDef = builtinDef(type)): string[] {
   const known = new Set(taxonomy);
-  return [SUBJECT_BY_TYPE[type] ?? "subject/project", CONCERN_BY_TYPE[type]].filter((t): t is string => !!t && known.has(t));
+  return [def.subject ?? "subject/project", def.concern].filter((t): t is string => !!t && known.has(t));
 }

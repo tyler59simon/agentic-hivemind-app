@@ -17,6 +17,9 @@ export const useSystemsEnabled = () => useConnection((s) => s.commands.includes(
 /** Numbered changes need an LM that has the `changes` command. */
 export const useChangesEnabled = () => useConnection((s) => s.commands.includes("changes"));
 
+/** Custom note types need an LM that has the `types` command. */
+export const useNoteTypesEnabled = () => useConnection((s) => s.commands.includes("types"));
+
 /** The History view needs an LM that has the `log` command. */
 export const useLogEnabled = () => useConnection((s) => s.commands.includes("log"));
 

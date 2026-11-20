@@ -1,16 +1,24 @@
 // Pure helpers for the Memory library: the type tabs, and one row shape for listed notes and search hits.
-import type { NoteRow, NoteType, SearchHit, SearchOptions, Status } from "../../lib/lm";
+import { isBuiltinType, type NoteRow, type NoteType, type SearchHit, type SearchOptions, type Status } from "../../lib/lm";
 import type { Shelf } from "../../store";
 
-export type Group = "decisions" | "knowledge" | "plans" | "risks" | "all";
-/** The tabs over the list. Every note type belongs to exactly one group besides All. */
+export type Group = "decisions" | "knowledge" | "plans" | "risks" | "custom" | "all";
+/** The tabs over the list. Every built-in type belongs to exactly one group besides All; Custom holds every other type. */
 export const GROUPS: { id: Group; label: string; types: NoteType[] | null }[] = [
   { id: "decisions", label: "Decisions", types: ["decision"] },
-  { id: "knowledge", label: "Knowledge", types: ["knowledge", "research", "context", "map", "policy", "preference", "runbook", "status"] },
+  { id: "knowledge", label: "Knowledge", types: ["knowledge", "research", "context", "map", "policy", "preference", "runbook", "status", "brief"] },
   { id: "plans", label: "Plans", types: ["plan"] },
   { id: "risks", label: "Risks", types: ["risk", "bug"] },
+  { id: "custom", label: "Custom", types: null },
   { id: "all", label: "All", types: null },
 ];
+
+/** Whether a group's tab shows notes of this type. */
+export function inGroup(group: Group, type: NoteType): boolean {
+  if (group === "custom") return !isBuiltinType(type);
+  const types = GROUPS.find((g) => g.id === group)?.types ?? null;
+  return !types || types.includes(type);
+}
 
 /** Where the library looks: the picked project, or a domain the way search scopes it. */
 export type Scope = "project" | "fallback" | "active" | "all";
@@ -34,9 +42,8 @@ export interface Filter {
 }
 
 export function filterItems(items: Item[], f: Filter): Item[] {
-  const types = GROUPS.find((g) => g.id === f.group)?.types ?? null;
   return items.filter((n) =>
-    (!types || types.includes(n.type))
+    inGroup(f.group, n.type)
     && (f.shelf === "any" || (f.shelf === "active" ? n.status === "active" : n.status !== "active"))
     && f.tags.every((t) => n.tags.includes(t))
     && (!f.domains || f.domains.includes(n.domain)));
@@ -50,7 +57,7 @@ export const byUpdated = (items: Item[]) => [...items].sort((a, b) => b.updated.
  *  so matches are not cut off before the filter sees them. */
 export function searchFilters(f: { group: Group; shelf: Shelf; tag: string; projectTag?: string }): Required<Pick<SearchOptions, "limit">> & Pick<SearchOptions, "type" | "status" | "tag"> {
   const types = GROUPS.find((g) => g.id === f.group)?.types ?? null;
-  const filteredHere = (types !== null && types.length > 1) || f.shelf === "archived" || (!!f.tag && !!f.projectTag);
+  const filteredHere = f.group === "custom" || (types !== null && types.length > 1) || f.shelf === "archived" || (!!f.tag && !!f.projectTag);
   return {
     type: types?.length === 1 ? types[0] : undefined,
     status: f.shelf === "active" ? "active" : undefined,

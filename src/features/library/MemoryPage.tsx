@@ -5,6 +5,7 @@ import { useChangesEnabled, useLogEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { domains, list, search, taxonomy, type SearchOptions } from "../../lib/lm";
 import { sections } from "../../lib/note";
+import { typeClass, useNoteTypes } from "../../lib/noteTypes";
 import { highlight, terms } from "../../lib/text";
 import { openChange, useApp, type Shelf } from "../../store";
 import { Markdown } from "../../ui/Markdown";
@@ -58,7 +59,7 @@ function Preview({ item }: { item: Item }) {
   };
   return (
     <div className="lib-preview">
-      <span className={`badge type-${item.type}`}>{item.type}</span>
+      <span className={`badge ${typeClass(item.type)}`}>{item.type}</span>
       <h2>{item.title}</h2>
       <div className="page-meta">
         <span className={`status-chip cap ${item.status}`}>{item.status}</span>
@@ -100,6 +101,9 @@ function Library() {
   const { project } = useCurrentProject();
   const [query, setQuery] = useState(routeQuery);
   const [group, setGroup] = useState<Group>("all");
+  // The Custom tab only when the store defines its own types.
+  const hasCustom = useNoteTypes().all.some((t) => !t.builtin);
+  const groups = hasCustom ? GROUPS : GROUPS.filter((g) => g.id !== "custom");
   const [scope, setScope] = useState<Scope>(project ? "project" : "fallback");
   const [tag, setTag] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
@@ -156,7 +160,7 @@ function Library() {
         <input value={query} placeholder="Search decisions, lessons, risks…" aria-label="Search notes" onChange={(e) => setQuery(e.target.value)} />
       </label>
       <div className="lib-bar">
-        <Tabs items={GROUPS} value={group} onChange={setGroup} label="Note types" />
+        <Tabs items={groups} value={group} onChange={setGroup} label="Note types" />
         <div className="lib-filters">
           <select value={scope} onChange={(e) => setScope(e.target.value as Scope)} aria-label="Scope">
             {project && <option value="project">This project</option>}

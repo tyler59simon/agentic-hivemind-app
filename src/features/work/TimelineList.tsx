@@ -2,6 +2,7 @@ import { useWorkspace } from "../../workspace/store";
 import { dayLabel } from "../history/activity";
 import { HoverPreview } from "../preview/HoverPreview";
 import type { TimelineEntry } from "./work";
+import { typeClass } from "../../lib/noteTypes";
 
 /** Notes grouped by day, newest first (the caller sorts). */
 export function TimelineList({ rows }: { rows: TimelineEntry[] }) {
@@ -20,7 +21,7 @@ export function TimelineList({ rows }: { rows: TimelineEntry[] }) {
           <h4 className="work-day">{d.label}</h4>
           {d.rows.map((r) => (
             <div key={r.ref} className={`work-head${r.status === "active" ? "" : " retired"}`}>
-              <span className={`badge type-${r.type}`}>{r.type}</span>
+              <span className={`badge ${typeClass(r.type)}`}>{r.type}</span>
               <HoverPreview refId={r.ref}>
                 <button className="link-row" onClick={() => useWorkspace.getState().openNote(r.ref, { title: r.title })}>{r.title}</button>
               </HoverPreview>

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { LmError, addAction, archiveNote, isPlan, supersedeNote, taxonomyAdd, undo, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, ruleAllowed, setPin, setRule, writeChange, changesArgs, list, listArgs, logArgs, openArgs, writeProject, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setDetail, setTransport, writeSystem, systemsArgs, timelineArgs, wikiModel, agentWikiModel, type Invoke } from "./lm";
+import { LmError, addAction, archiveNote, isPlan, supersedeNote, taxonomyAdd, undo, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, ruleAllowed, setPin, setRule, writeChange, changesArgs, list, listArgs, logArgs, openArgs, writeProject, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setDetail, setTransport, writeSystem, systemsArgs, noteTypes, typeWrite, timelineArgs, wikiModel, agentWikiModel, type Invoke } from "./lm";
 
 afterEach(() => setTransport(invoke as Invoke));
 
@@ -73,6 +73,15 @@ describe("run", () => {
     const read = fake({ exit_code: 0, result: { ok: true, projects: [], warnings: [] }, error: null });
     await projects({ status: "active" });
     expect((read[0] as [string, { argv: string[] }])[1].argv).toEqual(["projects", "--status", "active", "--actor", "viewer"]);
+  });
+
+  it("type is a direct write and types is a viewer read", async () => {
+    const calls = fake({ exit_code: 0, result: { ok: true }, error: null });
+    await typeWrite("retire", { name: "incident" });
+    expect(calls[0]).toEqual(["lm", { argv: ["type", "retire"], stdin: JSON.stringify({ name: "incident" }) }]);
+    const read = fake({ exit_code: 0, result: { ok: true, types: [], warnings: [] }, error: null });
+    await noteTypes(true);
+    expect((read[0] as [string, { argv: string[] }])[1].argv).toEqual(["types", "--all", "--actor", "viewer"]);
   });
 
   it("system is a direct write and systems is a viewer read", async () => {

@@ -7,6 +7,7 @@ import { useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { writeSystem, type NoteRow, type System } from "../../lib/lm";
 import { sections } from "../../lib/note";
+import { typeClass } from "../../lib/noteTypes";
 import { refreshStore } from "../../lib/refresh";
 import { shortDate } from "../../lib/text";
 import { openSession, openSystem, startSession, useApp } from "../../store";
@@ -41,7 +42,7 @@ function NoteList({ rows, badge }: { rows: NoteRow[]; badge?: boolean }) {
       {rows.map((r) => (
         <li key={r.ref} className={r.status === "active" ? "" : "retired"}>
           <div className="row-line">
-            {badge && <span className={`badge type-${r.type}`}>{r.type}</span>}
+            {badge && <span className={`badge ${typeClass(r.type)}`}>{r.type}</span>}
             <NoteLink row={r} />
             <span className="tabbar-fill" />
             {r.status !== "active" && <span className={`badge status-${r.status}`}>{r.status}</span>}

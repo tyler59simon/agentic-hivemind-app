@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { useProjectsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { domains, log, type LogRow } from "../../lib/lm";
+import { typeClass } from "../../lib/noteTypes";
 import { openChange } from "../../store";
 import { useWorkspace } from "../../workspace/store";
 import { HoverPreview } from "../preview/HoverPreview";
@@ -67,7 +68,7 @@ export function LogView() {
                 <div className="work-head wraps">
                   <span className="muted small">{time(r.time)}</span>
                   <span className="badge">{r.event}</span>
-                  {r.type && r.event !== "session" && <span className={`badge type-${r.type}`}>{r.type}</span>}
+                  {r.type && r.event !== "session" && <span className={`badge ${typeClass(r.type)}`}>{r.type}</span>}
                   <Title row={r} />
                   {r.actor && <span className={`actor actor-${serverActor(r.actor).kind}`}>{serverActor(r.actor).label}</span>}
                   {r.event === "session" && r.title && <span className="muted small">{r.title}</span>}

@@ -2,11 +2,13 @@
 // Reads run as the viewer actor: read-only, and they leave no usage-diary events.
 import { invoke } from "@tauri-apps/api/core";
 
-export const NOTE_TYPES = [
+/** Living Memory's own note types. A store can define more (`types`), so a note's type is any string. */
+export const BUILTIN_TYPES = [
   "knowledge", "decision", "preference", "context", "status",
-  "bug", "plan", "risk", "research", "policy", "map", "runbook",
+  "bug", "plan", "risk", "research", "policy", "map", "runbook", "brief",
 ] as const;
-export type NoteType = (typeof NOTE_TYPES)[number];
+export type NoteType = string;
+export const isBuiltinType = (type: string) => (BUILTIN_TYPES as readonly string[]).includes(type);
 export const STATUSES = ["active", "resolved", "archived", "superseded"] as const;
 export type Status = (typeof STATUSES)[number];
 
@@ -41,7 +43,7 @@ export async function run<T>(argv: string[], stdin?: string): Promise<T> {
 const view = (argv: string[]) => [...argv, "--actor", "viewer"];
 
 /** What `version` reports under `capabilities`. */
-export interface Capabilities { direct_writes?: number; history?: number; restore?: number; pin?: number; rule?: number; maintenance?: { version: number; actions: string[] }; wiki_agent?: { version: number } }
+export interface Capabilities { direct_writes?: number; history?: number; restore?: number; pin?: number; rule?: number; maintenance?: { version: number; actions: string[] }; wiki_agent?: { version: number }; note_types?: number }
 
 export interface ConnectInfo {
   version: { api: number; python: string; commands: string[]; capabilities?: Capabilities };
@@ -155,6 +157,16 @@ export const search = (o: SearchOptions) => run<SearchResult>(searchArgs(o));
 
 export const taxonomy = () => run<{ tags: string[]; facets?: string[] }>(view(["taxonomy"]));
 
+/** One note type as `types` reports it: built-ins first, then the store's own. `summary` is the template's first line. */
+export interface NoteTypeDef {
+  name: string; builtin: boolean; status: "active" | "retired"; description: string; summary: string;
+  sections: string[]; actions: boolean; review_days: number | null; concern: string | null; subject: string | null;
+  created?: string | null; updated?: string | null;
+}
+/** With `all`, retired custom types are listed too. */
+export const noteTypes = (all = false) =>
+  run<{ ok: boolean; types: NoteTypeDef[]; warnings: string[] }>(view(["types", ...(all ? ["--all"] : [])]));
+
 /** The domain part of a `domain:id` ref. */
 export const domainOf = (ref: string) => ref.slice(0, ref.indexOf(":"));
 
@@ -225,6 +237,14 @@ export const reopenNote = (ref: string) => direct(["reopen", ref, "--domain", do
 /** `by` is the ID or ref of a note in the same domain. */
 export const supersedeNote = (ref: string, by: string) => direct(["supersede", ref, "--by", by, "--domain", domainOf(ref)]);
 export const taxonomyAdd = (tags: string[]) => direct(["taxonomy", "add", ...tags]);
+
+export interface NoteTypeCreate {
+  name: string; description: string; summary?: string; sections?: string[]; actions?: boolean;
+  review_days?: number | null; concern?: string | null; subject?: string | null;
+}
+export type NoteTypeUpdate = Partial<Omit<NoteTypeCreate, "name">> & { name: string; status?: "active" | "retired" };
+export const typeWrite = (action: "create" | "update" | "retire", payload: NoteTypeCreate | NoteTypeUpdate | { name: string }) =>
+  direct(["type", action], payload);
 
 // ---- Plans (delete, merge, bulk retag and the kept kinds): make, inspect (as a diff), apply with the digest. ----
 

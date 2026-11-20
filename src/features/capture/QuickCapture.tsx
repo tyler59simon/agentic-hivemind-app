@@ -3,8 +3,9 @@ import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef, useState } from "react";
 import { classify, type Problem } from "../../lib/errors";
-import { capture, domains, NOTE_TYPES, projects, showMain, taxonomy, type CapturePayload, type NoteType } from "../../lib/lm";
+import { capture, domains, projects, showMain, taxonomy, type CapturePayload, type NoteType } from "../../lib/lm";
 import { defaultTags, HEADINGS } from "../../lib/note";
+import { typeOptions, useNoteTypes } from "../../lib/noteTypes";
 import { recordOperation } from "../../lib/oplog";
 import { prefs } from "../../lib/prefs";
 import { TagPicker } from "../editor/PropertiesForm";
@@ -32,6 +33,8 @@ export function QuickCapture() {
   // The capture window has its own webview and no connection store, so the feature is detected by a successful projects() call.
   const projs = useQuery({ queryKey: ["projects"], queryFn: () => projects(), retry: false });
   const active = projs.data?.projects.filter((p) => p.status === "active") ?? [];
+  // Custom note types the same way: asked for, with the built-ins when Living Memory has no `types` command.
+  const types = useNoteTypes(true);
   const [project, setProject] = useState(prefs.captureProject() ?? "");
   const [domain, setDomain] = useState(prefs.captureDomain() ?? "");
   const [type, setType] = useState<NoteType>("knowledge");
@@ -48,7 +51,7 @@ export function QuickCapture() {
   useEffect(() => {
     if (!domain && known.data) setDomain(known.data.domains.find((d) => d.bound)?.name ?? known.data.domains[0]?.name ?? "");
   }, [known.data, domain]);
-  useEffect(() => { if (tax.data && !tagsTouched) setTags(defaultTags(type, tax.data.tags)); }, [tax.data, type, tagsTouched]);
+  useEffect(() => { if (tax.data && !tagsTouched) setTags(defaultTags(type, tax.data.tags, types.def(type))); }, [tax.data, type, tagsTouched, types]);
   // Each time the window is shown again, start with the cursor in the title.
   useEffect(() => {
     const stop = getCurrentWindow().onFocusChanged(({ payload: focused }) => { if (focused) titleRef.current?.focus(); });
@@ -87,7 +90,7 @@ export function QuickCapture() {
           {known.data?.domains.map((d) => <option key={d.name} value={d.name}>{d.name}</option>)}
         </select>
         <select value={type} onChange={(e) => setType(e.target.value as NoteType)} aria-label="Type">
-          {NOTE_TYPES.map((t) => <option key={t}>{t}</option>)}
+          {typeOptions(types.active, type).map((t) => <option key={t}>{t}</option>)}
         </select>
       </div>
       {projs.isSuccess && (

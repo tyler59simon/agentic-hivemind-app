@@ -104,6 +104,7 @@ function useLiveRefresh(enabled: boolean) {
         client.invalidateQueries({ queryKey: ["projects"] });
         client.invalidateQueries({ queryKey: ["systems"] });
         client.invalidateQueries({ queryKey: ["taxonomy"] });
+        client.invalidateQueries({ queryKey: ["types"] });
         client.invalidateQueries({ queryKey: ["changes"] });
         client.invalidateQueries({ queryKey: ["views"] }); // views.json: dashboards added or removed from the CLI
         client.invalidateQueries({ queryKey: ["log"] });

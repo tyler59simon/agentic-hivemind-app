@@ -1,6 +1,7 @@
 import { useId, useState } from "react";
-import { NOTE_TYPES, type Note, type NoteType } from "../../lib/lm";
-import { ACTION_TYPES, actionItems } from "../../lib/note";
+import type { Note, NoteType } from "../../lib/lm";
+import { actionItems, allowsActions } from "../../lib/note";
+import { typeOptions, useNoteTypes } from "../../lib/noteTypes";
 import { shortDate } from "../../lib/text";
 import type { Fields } from "./save";
 
@@ -32,13 +33,14 @@ export function TagPicker({ tags, taxonomy, onChange }: { tags: string[]; taxono
 export function PropertiesForm({ fields, note, taxonomy, onChange }: {
   fields: Fields; note?: Note; taxonomy: string[]; onChange: (patch: Partial<Fields>) => void;
 }) {
+  const types = useNoteTypes();
   const hasActions = actionItems(fields.body).length > 0;
-  const typeBlocked = (t: NoteType) => hasActions && !ACTION_TYPES.has(t);
+  const typeBlocked = (t: NoteType) => hasActions && !allowsActions(t, types.def(t));
   return (
     <dl className="properties editable">
       <div><dt>Type</dt><dd>
         <select value={fields.type} onChange={(e) => onChange({ type: e.target.value as NoteType })}>
-          {NOTE_TYPES.map((t) => <option key={t} value={t} disabled={typeBlocked(t)}>{t}{typeBlocked(t) ? " (has Action items)" : ""}</option>)}
+          {typeOptions(types.active, fields.type).map((t) => <option key={t} value={t} disabled={typeBlocked(t)}>{t}{typeBlocked(t) ? " (has Action items)" : ""}</option>)}
         </select>
       </dd></div>
       {note && <div><dt>Status</dt><dd><span className={`badge status-${note.status}`}>{note.status}</span> <span className="muted small">change it from the ⋯ menu</span></dd></div>}

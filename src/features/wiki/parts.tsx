@@ -5,6 +5,7 @@ import { createContext, useContext, useMemo, type ReactNode } from "react";
 import Markdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { WikiNote, WikiPageSource } from "../../lib/lm";
+import { typeClass } from "../../lib/noteTypes";
 import { ArrowLink, Row, Section } from "../../ui/Page";
 import { HoverPreview } from "../preview/HoverPreview";
 import { remarkWikilinks, WIKI_PREFIX } from "../viewer/remarkWikilinks";
@@ -19,9 +20,8 @@ export const useNav = () => {
   return nav;
 };
 
-/** The note type's badge colour; a brief has no colour of its own and reads like context. */
-export const typeClass = (type: string) => `type-${type === "brief" ? "context" : type}`;
-export const TypeBadge = ({ type }: { type: string }) => <span className={`badge ${typeClass(type)}`}>{type}</span>;
+/** A note type's badge; a page of the agent-written edition (type "article") has its own colour. */
+export const TypeBadge = ({ type }: { type: string }) => <span className={`badge ${type === "article" ? "type-article" : typeClass(type)}`}>{type}</span>;
 /** Where an agent-written page stands: planned (not written yet) or stale (a source changed). A current page has no mark. */
 export function PageFlag({ note }: { note: WikiNote }) {
   const status = pageStatus(note);

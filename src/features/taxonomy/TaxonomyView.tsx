@@ -1,12 +1,15 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState, type ReactNode } from "react";
+import { useNoteTypesEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { list, retagPlan, taxonomy, taxonomyAdd } from "../../lib/lm";
+import { typeClass } from "../../lib/noteTypes";
 import { Modal } from "../../ui/Modal";
 import { useApp } from "../../store";
 import { useWorkspace } from "../../workspace/store";
 import { finishDirect, undoToast } from "../plans/DirectDialog";
 import { PlanDialog } from "../plans/PlanDialog";
+import { NoteTypesSection } from "./NoteTypesSection";
 import { facetsOf, parseTags, tagUsage, type TagUsage } from "./taxonomy";
 
 /** Rename a tag everywhere, or fold it into another existing tag (LM's retag-plan, across every domain). */
@@ -37,6 +40,7 @@ export function TaxonomyView() {
   const notes = useQuery({ queryKey: ["list", "*", "any"], queryFn: () => list({ allDomains: true, status: "any" }) });
   const usage = useMemo(() => tagUsage(tax.data?.tags ?? [], notes.data?.notes ?? [], facetsOf(tax.data)), [tax.data, notes.data]);
   const client = useQueryClient();
+  const typesOn = useNoteTypesEnabled();
   const [adding, setAdding] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [dialog, setDialog] = useState<ReactNode>(null);
@@ -99,12 +103,13 @@ export function TaxonomyView() {
           </section>
         ))}
       </div>
+      {typesOn && <NoteTypesSection tags={tax.data?.tags ?? []} />}
       {selected && (
         <section className="facet">
           <h3>Notes tagged {selected} <span className="muted small">{tagged.length}</span></h3>
           {tagged.map((n) => (
             <button key={n.ref} className="link-row" onClick={() => useWorkspace.getState().openNote(n.ref, { title: n.title })}>
-              <span className={`badge type-${n.type}`}>{n.type}</span> {n.title} <span className="muted small">{n.domain}{n.status !== "active" ? ` · ${n.status}` : ""}</span>
+              <span className={`badge ${typeClass(n.type)}`}>{n.type}</span> {n.title} <span className="muted small">{n.domain}{n.status !== "active" ? ` · ${n.status}` : ""}</span>
             </button>
           ))}
           {!tagged.length && <p className="muted small">No notes use it.</p>}

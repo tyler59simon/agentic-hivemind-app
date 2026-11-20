@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { check, type OpenItem } from "../../lib/lm";
 import { classify } from "../../lib/errors";
+import { typeClass } from "../../lib/noteTypes";
 import { recordOperation } from "../../lib/oplog";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
@@ -34,7 +35,7 @@ export function OpenWorkList({ items }: { items: OpenItem[] }) {
       {groupOpenItems(items).map((g) => (
         <section key={g.ref} className="work-group">
           <div className="work-head">
-            <span className={`badge type-${g.type}`}>{g.type}</span>
+            <span className={`badge ${typeClass(g.type)}`}>{g.type}</span>
             <HoverPreview refId={g.ref}>
               <button className="link-row" onClick={() => useWorkspace.getState().openNote(g.ref, { title: g.title })}>{g.title}</button>
             </HoverPreview>

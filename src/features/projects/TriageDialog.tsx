@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { classify } from "../../lib/errors";
 import { domains, search, type Project } from "../../lib/lm";
+import { typeClass } from "../../lib/noteTypes";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
 import { Modal } from "../../ui/Modal";
@@ -63,7 +64,7 @@ export function Triage({ project, onClose }: { project: Project; onClose: () => 
             <input type="checkbox" checked={checked(s)} onChange={(e) => setPicked({ ...picked, [s.ref]: e.target.checked })} aria-label={`Select ${s.title}`} />
             <div className="triage-main">
               <div className="triage-title">
-                <span className={`badge type-${s.type}`}>{s.type}</span>
+                <span className={`badge ${typeClass(s.type)}`}>{s.type}</span>
                 <NoteLink row={s} />
                 <span className="muted small">{s.domain}</span>
               </div>

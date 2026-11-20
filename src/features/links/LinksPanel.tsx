@@ -9,7 +9,7 @@ import { useWorkspace, type Tab } from "../../workspace/store";
 import { changesFor } from "../changes/changes";
 import { changesQuery } from "../changes/useChanges";
 import { GraphCanvas } from "../graph/GraphCanvas";
-import { neighborhood, TYPE_COLORS } from "../graph/graphData";
+import { neighborhood, typeColor } from "../graph/graphData";
 import { HoverPreview } from "../preview/HoverPreview";
 import { useLinks, useNoteLinks } from "./useLinks";
 
@@ -19,7 +19,7 @@ function NoteLink({ node }: { node: LinkNode }) {
     <HoverPreview refId={node.ref}>
       <button className={`link-row ${node.status !== "active" ? "retired" : ""}`}
         onClick={(e) => openNote(node.ref, { split: e.ctrlKey || e.metaKey, title: node.title })}>
-        <span className="swatch" style={{ background: TYPE_COLORS[node.type] }} />{node.title}
+        <span className="swatch" style={{ background: typeColor(node.type) }} />{node.title}
         {node.status !== "active" && <span className="muted small"> · {node.status}</span>}
       </button>
     </HoverPreview>

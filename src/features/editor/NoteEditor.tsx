@@ -5,6 +5,7 @@ import { deleteDraft, getDraft, putDraft } from "../../lib/drafts";
 import { classify, type Problem } from "../../lib/errors";
 import { domainOf, read, taxonomy, taxonomyAdd, update } from "../../lib/lm";
 import { rewriteWikilinks } from "../../lib/note";
+import { useNoteTypes } from "../../lib/noteTypes";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
 import { toast } from "../../ui/toast";
@@ -48,6 +49,7 @@ export function NoteEditor({ tab, live, head }: { tab: Tab; live: boolean; head:
   const client = useQueryClient();
   const note = useQuery(noteQuery(ref));
   const tax = useQuery({ queryKey: ["taxonomy"], queryFn: taxonomy });
+  const types = useNoteTypes();
   const { setDirty, updateTab, openNote, openTab } = useWorkspace();
   const reveal = useWorkspace((s) => (s.reveal?.tabId === tab.id ? s.reveal : null));
   const titles = useTitles(domainOf(ref));
@@ -143,7 +145,7 @@ export function NoteEditor({ tab, live, head }: { tab: Tab; live: boolean; head:
     if (!s) return;
     const payload = changedPayload(s.base, s.mine);
     if (isEmpty(payload)) { toast("Nothing to save."); return; }
-    const problems = precheck(s.mine, tax.data?.tags ?? [], false);
+    const problems = precheck(s.mine, tax.data?.tags ?? [], false, types.def(s.mine.type));
     const unknown = s.mine.tags.filter((t) => tax.data && !tax.data.tags.includes(t));
     if (unknown.length) { setBanner({ kind: "error", problem: { kind: "unknown-tags", message: "", tags: unknown } }); return; }
     if (problems.length) { setBanner({ kind: "problems", problems }); return; }
@@ -169,7 +171,7 @@ export function NoteEditor({ tab, live, head }: { tab: Tab; live: boolean; head:
         setMerging({ base: s.base, mine: s.mine, theirs: fieldsOf(fresh), rev: fresh.revision });
       } else setBanner({ kind: "error", problem });
     } finally { setSaving(false); }
-  }, [ref, tax.data, client]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ref, tax.data, types, client]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addTags = (tags: string[]) => setDialog(
     <DirectDialog title="Add tags to the taxonomy" run={() => taxonomyAdd(tags)} applyLabel="Add tags"

@@ -4,6 +4,7 @@ import { useRecapEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { realProject } from "../../lib/folders";
 import { recap, type Recap } from "../../lib/lm";
+import { typeClass } from "../../lib/noteTypes";
 import { useApp } from "../../store";
 import { PageHeader } from "../../ui/Page";
 import { useWorkspace } from "../../workspace/store";
@@ -50,7 +51,7 @@ function Body({ r }: { r: Recap }) {
             {(open.has(group) ? items : items.slice(0, GROUP_SHOWN)).map((c) => (
               <div key={c.ref}>
                 <div className="work-head wraps">
-                  {c.type && <span className={`badge type-${c.type}`}>{c.type}</span>}
+                  {c.type && <span className={`badge ${typeClass(c.type)}`}>{c.type}</span>}
                   <NoteLink refId={c.ref} title={c.title} />
                   {c.actor && <span className={`actor actor-${serverActor(c.actor).kind}`}>{serverActor(c.actor).label}</span>}
                   {repeatLabel(c.count) && <span className="muted small">{repeatLabel(c.count)}</span>}

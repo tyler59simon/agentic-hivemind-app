@@ -668,6 +668,8 @@ input[type="checkbox"] { accent-color: var(--success); }
 .taxonomy h2 { margin: 0; }
 .add-tags { display: flex; gap: .5rem; }
 .add-tags input { flex: 1; }
+.type-section { display: flex; gap: .25rem; align-items: center; }
+.type-section input { flex: 1; }
 .facets-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: .8rem; }
 .facet { border: 1px solid var(--border); border-radius: .5rem; padding: .5rem .8rem; background: var(--bg-alt); }
 .facet h3 { margin: .25rem 0 .5rem; font-size: .93rem; text-transform: uppercase; letter-spacing: .04em; }
@@ -691,6 +693,7 @@ input[type="checkbox"] { accent-color: var(--success); }
 .type-knowledge { color: #94a3b8; } .type-decision { color: #7fb0ff; } .type-preference { color: #c58bff; } .type-context { color: #94a3b8; }
 .type-status { color: #14b8a6; } .type-bug { color: #ff7a7a; } .type-plan { color: #4ade80; } .type-risk { color: #f59e0b; }
 .type-research { color: #22d3ee; } .type-policy { color: #eab308; } .type-map { color: #fb923c; } .type-runbook { color: #f472b6; }
+.type-brief { color: #818cf8; } .type-custom { color: #a1a1aa; } /* every custom type shares the neutral grey */
 .type-article { color: var(--accent); } /* a page of the agent-written wiki; a token, so each theme keeps its own contrast */
 /* Emerald Enterprise Light: the same hues, dark enough for 4.5:1 on its surfaces. */
 :root[data-theme="emerald-light"] .type-knowledge, :root[data-theme="emerald-light"] .type-context { color: #475569; }
@@ -699,6 +702,7 @@ input[type="checkbox"] { accent-color: var(--success); }
 :root[data-theme="emerald-light"] .type-plan { color: #166534; } :root[data-theme="emerald-light"] .type-risk { color: #92400e; }
 :root[data-theme="emerald-light"] .type-research { color: #155e75; } :root[data-theme="emerald-light"] .type-policy { color: #854d0e; }
 :root[data-theme="emerald-light"] .type-map { color: #9a3412; } :root[data-theme="emerald-light"] .type-runbook { color: #be185d; }
+:root[data-theme="emerald-light"] .type-brief { color: #4338ca; } :root[data-theme="emerald-light"] .type-custom { color: #52525b; }
 .status-archived, .status-superseded, .status-resolved, .status-retired, .status-cancelled { color: var(--muted); }
 .status-running { color: var(--running); }
 .status-failed { color: var(--error); }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NOTE_TYPES } from "../../lib/lm";
+import { BUILTIN_TYPES } from "../../lib/lm";
 import { byUpdated, filterItems, GROUPS, searchFilters, type Filter, type Item } from "./library";
 
 const item = (over: Partial<Item>): Item =>
@@ -8,10 +8,14 @@ const all: Filter = { group: "all", shelf: "any", tags: [], domains: null };
 const refs = (items: Item[]) => items.map((i) => i.ref);
 
 describe("library", () => {
-  it("puts every note type in exactly one tab besides All", () => {
+  it("puts every built-in type in exactly one tab besides All, and custom types under Custom", () => {
     const grouped = GROUPS.flatMap((g) => g.types ?? []);
-    expect([...grouped].sort()).toEqual([...NOTE_TYPES].sort());
+    expect([...grouped].sort()).toEqual([...BUILTIN_TYPES].sort());
     expect(new Set(grouped).size).toBe(grouped.length);
+    const custom = [item({ ref: "d:5", type: "incident" }), item({ ref: "d:6", type: "brief" })];
+    expect(refs(filterItems(custom, { ...all, group: "custom" }))).toEqual(["d:5"]);
+    expect(refs(filterItems(custom, { ...all, group: "knowledge" }))).toEqual(["d:6"]);
+    expect(searchFilters({ group: "custom", shelf: "active", tag: "" })).toMatchObject({ type: undefined, limit: 100 });
   });
 
   const items = [

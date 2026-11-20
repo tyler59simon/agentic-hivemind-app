@@ -1,10 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useConnection } from "../../lib/connection";
-import { domains, links, NOTE_TYPES, taxonomy, type NoteType } from "../../lib/lm";
+import { domains, links, taxonomy, type NoteType } from "../../lib/lm";
+import { useNoteTypes } from "../../lib/noteTypes";
 import { useWorkspace } from "../../workspace/store";
 import { GraphCanvas } from "./GraphCanvas";
-import { filterGraph, TYPE_COLORS } from "./graphData";
+import { filterGraph, typeColor } from "./graphData";
 
 /** The whole store as a graph: [[links]] and supersedes between notes, coloured by type. `tag` starts the tag filter (the picked project). */
 export function GraphView({ tag: initialTag = "" }: { tag?: string }) {
@@ -12,6 +13,7 @@ export function GraphView({ tag: initialTag = "" }: { tag?: string }) {
   const openNote = useWorkspace((s) => s.openNote);
   const [domain, setDomain] = useState("");
   const [types, setTypes] = useState<NoteType[]>([]);
+  const noteTypes = useNoteTypes();
   const [tag, setTag] = useState(initialTag);
   const [retired, setRetired] = useState(false);
   const known = useQuery({ queryKey: ["domains"], queryFn: domains });
@@ -34,9 +36,9 @@ export function GraphView({ tag: initialTag = "" }: { tag?: string }) {
         </select>
         <label className="check"><input type="checkbox" checked={retired} onChange={(e) => setRetired(e.target.checked)} /> Include archived</label>
         <div className="chips">
-          {NOTE_TYPES.map((t) => (
+          {noteTypes.all.map(({ name: t }) => (
             <button key={t} className={`chip ${types.includes(t) ? "on" : ""}`} onClick={() => setTypes(types.includes(t) ? types.filter((x) => x !== t) : [...types, t])}>
-              <span className="swatch" style={{ background: TYPE_COLORS[t] }} />{t}
+              <span className="swatch" style={{ background: typeColor(t) }} />{t}
             </button>
           ))}
         </div>

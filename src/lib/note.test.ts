@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import fixtures from "./__fixtures__/note-format.json";
 import {
-  actionItems, addEvidence, defaultTags, evidenceItems, formatBody, outline, parts, rewriteWikilinks, sectionKey, sections,
+  actionItems, addEvidence, allowsActions, defaultTags, evidenceItems, formatBody, outline, parts, rewriteWikilinks, sectionKey, sections,
   setEvidence, stepParts, stripTitle, template, TEMPLATE_PROMPTS, wikilinks,
 } from "./note";
+import type { NoteTypeDef } from "./lm";
 
 describe("parity with Living Memory's note_format", () => {
   for (const c of fixtures.cases) {
@@ -113,6 +114,63 @@ describe("new notes", () => {
     expect(defaultTags("preference", tax)).toEqual(["subject/user", "concern/preference"]);
     expect(defaultTags("plan", tax)).toEqual(["subject/project"]);
     expect(defaultTags("bug", tax)).toEqual(["subject/project"]); // concern/bug is not in this taxonomy
+    expect(defaultTags("brief", [...tax, "concern/knowledge"])).toEqual(["subject/project", "concern/knowledge"]);
+  });
+
+  const incident: NoteTypeDef = {
+    name: "incident", builtin: false, status: "active", description: "Outages and what we learned.", summary: "What broke, for whom and for how long.",
+    sections: ["Timeline", "Impact"], actions: true, review_days: 60, concern: "concern/bug", subject: null,
+  };
+
+  it("a custom type's definition drives its template", () => {
+    expect(template("incident", incident)).toBe(
+      `${incident.summary}
+
+> **Important:** 
+
+## Timeline
+
+## Impact
+
+## Links
+- 
+
+## Action items
+- [ ] 
+`);
+    // No sections of its own: Details instead, and no Action items unless the type has them.
+    expect(template("incident", { ...incident, sections: [], actions: false, summary: "" })).toBe(`
+
+> **Important:** 
+
+## Details
+- 
+
+## Links
+- 
+`);
+    // Without a definition, an unknown type gets the plain layout.
+    expect(template("incident")).toBe(`
+
+> **Important:** 
+
+## Details
+- 
+
+## Links
+- 
+`);
+    expect(template("brief")).toContain("What the project is and where it stands.");
+  });
+
+  it("a custom type's definition drives its default tags and Action items", () => {
+    const tax = ["subject/project", "subject/team", "concern/bug"];
+    expect(defaultTags("incident", tax, incident)).toEqual(["subject/project", "concern/bug"]);
+    expect(defaultTags("incident", tax, { ...incident, subject: "subject/team", concern: null })).toEqual(["subject/team"]);
+    expect(allowsActions("incident", incident)).toBe(true);
+    expect(allowsActions("incident")).toBe(false);
+    expect(allowsActions("plan")).toBe(true);
+    expect(allowsActions("decision")).toBe(false);
   });
 });
 

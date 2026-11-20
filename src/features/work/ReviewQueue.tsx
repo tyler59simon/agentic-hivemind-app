@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { archiveNote, confirm, LmError, meta, resolveNote, update, type ReviewRow } from "../../lib/lm";
 import { classify } from "../../lib/errors";
+import { typeClass } from "../../lib/noteTypes";
 import { recordOperation } from "../../lib/oplog";
 import { shortDate } from "../../lib/text";
 import { toast } from "../../ui/toast";
@@ -56,7 +57,7 @@ function ReviewItem({ row, snooze: snoozing = true }: { row: ReviewRow; snooze?:
   return (
     <div className="work-group">
       <div className="work-head">
-        <span className={`badge type-${row.type}`}>{row.type}</span>
+        <span className={`badge ${typeClass(row.type)}`}>{row.type}</span>
         <HoverPreview refId={row.ref}>
           <button className="link-row" onClick={open}>{row.title}</button>
         </HoverPreview>

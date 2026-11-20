@@ -2,8 +2,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { deleteDraft, getDraft, putDraft } from "../../lib/drafts";
 import { classify } from "../../lib/errors";
-import { capture, domains, NOTE_TYPES, taxonomy, taxonomyAdd, type CapturePayload, type NoteType } from "../../lib/lm";
+import { capture, domains, taxonomy, taxonomyAdd, type CapturePayload, type NoteType } from "../../lib/lm";
 import { defaultTags, template } from "../../lib/note";
+import { typeOptions, useNoteTypes } from "../../lib/noteTypes";
 import { recordOperation } from "../../lib/oplog";
 import { useApp } from "../../store";
 import { Modal } from "../../ui/Modal";
@@ -25,10 +26,11 @@ export function NewNote({ tab }: { tab: Tab }) {
   const appDomain = useApp((s) => s.domain);
   const known = useQuery({ queryKey: ["domains"], queryFn: domains });
   const tax = useQuery({ queryKey: ["taxonomy"], queryFn: taxonomy });
+  const types = useNoteTypes();
   const { updateTab, setDirty, openNote } = useWorkspace();
   const [domain, setDomain] = useState(tab.init?.domain ?? appDomain ?? "");
   const initialType: NoteType = tab.init?.type ?? "knowledge";
-  const [f, setF] = useState<Fields>({ title: tab.init?.title ?? "", body: template(initialType), type: initialType, tags: [], context: "", review_by: "", files: [] });
+  const [f, setF] = useState<Fields>({ title: tab.init?.title ?? "", body: template(initialType, types.def(initialType)), type: initialType, tags: [], context: "", review_by: "", files: [] });
   const [version, setVersion] = useState(1);
   const [banner, setBanner] = useState<ReactNode>(null);
   const [dialog, setDialog] = useState<ReactNode>(null);
@@ -37,13 +39,21 @@ export function NewNote({ tab }: { tab: Tab }) {
   const touchedTags = useRef(false);
   const fRef = useRef(f);
   fRef.current = f;
+  const blank = template(f.type, types.def(f.type));
+  const shownTemplate = useRef(f.body);
 
   // Suggested tags follow the type until the user picks tags themselves.
   useEffect(() => {
-    if (tax.data && !touchedTags.current) setF((x) => ({ ...x, tags: mergeTags(defaultTags(x.type, tax.data.tags), tab.init?.tags ?? []) }));
-  }, [tax.data, f.type]);
+    if (tax.data && !touchedTags.current) setF((x) => ({ ...x, tags: mergeTags(defaultTags(x.type, tax.data.tags, types.def(x.type)), tab.init?.tags ?? []) }));
+  }, [tax.data, f.type, types]);
+  // The type's definition can arrive from Living Memory after the tab opened: an untouched body follows it.
+  useEffect(() => {
+    const last = shownTemplate.current;
+    shownTemplate.current = blank;
+    if (blank !== last && fRef.current.body === last) { setF((x) => ({ ...x, body: blank })); setVersion((v) => v + 1); }
+  }, [blank]);
   useEffect(() => { getDraft(draftKey(tab)).then((d) => { if (d) { setF(d.mine); if (d.domain) setDomain(d.domain); setVersion((v) => v + 1); } }).catch(() => {}); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  const started = f.title.trim() !== (tab.init?.title ?? "") || f.body !== template(f.type);
+  const started = f.title.trim() !== (tab.init?.title ?? "") || f.body !== blank;
   useEffect(() => { setDirty(tab.id, started); updateTab(tab.id, { title: f.title || "New note" }); }, [started, f.title, tab.id, setDirty, updateTab]);
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -54,8 +64,10 @@ export function NewNote({ tab }: { tab: Tab }) {
 
   const changeType = (type: NoteType) => {
     // Swap the starting template only if the body is still untouched.
-    const fresh = f.body === template(f.type);
-    setF({ ...f, type, body: fresh ? template(type) : f.body });
+    const fresh = f.body === blank;
+    const next = template(type, types.def(type));
+    if (fresh) shownTemplate.current = next;
+    setF({ ...f, type, body: fresh ? next : f.body });
     if (fresh) setVersion((v) => v + 1);
   };
 
@@ -67,7 +79,7 @@ export function NewNote({ tab }: { tab: Tab }) {
   };
 
   const save = async (extra: Partial<CapturePayload> = {}, redact = false) => {
-    const problems = precheck(f, tax.data?.tags ?? [], true);
+    const problems = precheck(f, tax.data?.tags ?? [], true, types.def(f.type));
     if (!domain) problems.unshift("Choose a domain.");
     const unknown = f.tags.filter((t) => tax.data && !tax.data.tags.includes(t));
     if (unknown.length) return setBanner(<ProblemBanner problem={{ kind: "unknown-tags", message: "", tags: unknown }} onRedact={() => {}} onAddTags={addTags} />);
@@ -124,7 +136,7 @@ export function NewNote({ tab }: { tab: Tab }) {
           </select>
         </dd></div>
         <div><dt>Type</dt><dd>
-          <select value={f.type} onChange={(e) => changeType(e.target.value as NoteType)}>{NOTE_TYPES.map((t) => <option key={t}>{t}</option>)}</select>
+          <select value={f.type} onChange={(e) => changeType(e.target.value as NoteType)}>{typeOptions(types.active, f.type).map((t) => <option key={t}>{t}</option>)}</select>
         </dd></div>
         <div><dt>Tags</dt><dd><TagPicker tags={f.tags} taxonomy={tax.data?.tags ?? []} onChange={(tags) => { touchedTags.current = true; setF({ ...f, tags }); }} /></dd></div>
       </dl>

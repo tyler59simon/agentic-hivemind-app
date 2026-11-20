@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { list, type NoteRow } from "../../lib/lm";
+import { typeClass } from "../../lib/noteTypes";
 import { fuzzy } from "../../lib/text";
 import { Modal } from "../../ui/Modal";
 
@@ -21,7 +22,7 @@ export function NotePicker({ title, domain, exclude, onPick, onClose }: {
       <input autoFocus value={query} placeholder="Find a note…" onChange={(e) => setQuery(e.target.value)} />
       <ul className="pick-list">
         {shown.map(({ n }) => (
-          <li key={n.ref}><button onClick={() => onPick(n)}><span>{n.title}</span><span className={`badge type-${n.type}`}>{n.type}</span></button></li>
+          <li key={n.ref}><button onClick={() => onPick(n)}><span>{n.title}</span><span className={`badge ${typeClass(n.type)}`}>{n.type}</span></button></li>
         ))}
         {notes.data && !shown.length && <li className="muted pad">No matching notes.</li>}
       </ul>

@@ -77,7 +77,7 @@ describe("themes", () => {
 
   it("darkens the note-type colours for the light theme", () => {
     const shades = [...css.matchAll(/:root\[data-theme="emerald-light"\] \.type-[a-z, :\[\]="-.]*\{ color: (#[0-9a-f]{6}); \}/g)].map((m) => m[1]);
-    expect(shades.length).toBe(11);
+    expect(shades.length).toBe(13);
     for (const shade of shades) for (const surface of ["--bg", "--bg-alt", "--bg-hover"]) expect([shade, contrast(shade, light.get(surface)!) >= 4.5]).toEqual([shade, true]);
   });
 });
