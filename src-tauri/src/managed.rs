@@ -25,15 +25,29 @@ fn found(folder: &Path, keys: &[&str], has_settings: impl Fn(&str) -> bool, othe
     };
     let path = file.or_else(drop_in).map(|path| path.display().to_string());
     path.or_else(|| keys.iter().find(|key| has_settings(key)).map(|key| format!(r"{key}\Settings")))
-        .or_else(|| others.iter().find(|path| path.exists()).map(|path| path.display().to_string()))
+        .or_else(|| others.iter().find(|path| holds_policy(path)).map(|path| path.display().to_string()))
 }
 
-/// Where Claude Code caches server-managed settings: `remote-settings.json` in its config folder (`CLAUDE_CONFIG_DIR`, else
-/// `~/.claude`).
+/// Whether one of `others` holds a policy: any file there, except a JSON file that is an empty object, which is how Claude
+/// Code records that the server has no policy for the account.
+fn holds_policy(path: &Path) -> bool {
+    let Ok(bytes) = std::fs::read(path) else { return false };
+    path.extension().is_none_or(|ext| ext != "json")
+        || serde_json::from_slice::<serde_json::Value>(&bytes).map_or(true, |value| value != serde_json::json!({}))
+}
+
+/// Where Claude Code caches server-managed settings in its config folder (`CLAUDE_CONFIG_DIR`, else `~/.claude`):
+/// `remote-settings.json`, and `state/hybrid-settings*.json` for an organization sign-in (names as in Claude Code 2.1.329).
 #[cfg(not(test))]
 fn remote_cache() -> Vec<PathBuf> {
     let dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).or_else(|| dirs::home_dir().map(|home| home.join(".claude")));
-    dir.map(|dir| vec![dir.join("remote-settings.json")]).unwrap_or_default()
+    let Some(dir) = dir else { return vec![] };
+    let hybrid = std::fs::read_dir(dir.join("state")).into_iter().flatten().flatten().map(|entry| entry.path());
+    let hybrid = hybrid.filter(|path| path.file_name().is_some_and(|name| {
+        let name = name.to_string_lossy();
+        name.starts_with("hybrid-settings") && name.ends_with(".json")
+    }));
+    std::iter::once(dir.join("remote-settings.json")).chain(hybrid).collect()
 }
 
 /// Whether the registry key has a `Settings` value: `reg query` exits 0 only then.
@@ -114,6 +128,11 @@ mod tests {
         let plist = dir.join("com.anthropic.claudecode.plist");
         std::fs::write(&plist, "x").unwrap();
         assert_eq!(found(&dir, &KEYS, none, std::slice::from_ref(&plist)), Some(plist.display().to_string()));
+        let cache = dir.join("remote-settings.json");
+        std::fs::write(&cache, "{ }").unwrap();
+        assert_eq!(found(&dir, &KEYS, none, std::slice::from_ref(&cache)), None, "an empty cache records that there is no policy");
+        std::fs::write(&cache, r#"{"hooks": {}}"#).unwrap();
+        assert_eq!(found(&dir, &KEYS, none, std::slice::from_ref(&cache)), Some(cache.display().to_string()));
         let hkcu = |key: &str| key.starts_with("HKCU");
         assert_eq!(found(&dir, &KEYS, hkcu, &[]).as_deref(), Some(r"HKCU\SOFTWARE\Policies\ClaudeCode\Settings"));
         let drop_in = dir.join(DROP_INS).join("10-team.json");
