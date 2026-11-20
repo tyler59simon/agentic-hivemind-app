@@ -402,7 +402,8 @@ fn state_word(state: TaskState) -> &'static str {
 pub trait Host {
     fn start(&self, task: AgentTask, prompt: &str, options: StartOptions) -> Result<SessionInfo, String>;
     fn info(&self, session: &str) -> Option<SessionInfo>;
-    /// Commit the session's edits on its branch; None when there was nothing to commit.
+    /// Commit the session's edits on its branch. With nothing to commit, the commit the worktree is on (the app's host), or
+    /// None when the host cannot tell; the branch's tip is read then.
     fn checkpoint(&self, session: &str, message: &str) -> Result<Option<String>, String>;
     fn stop(&self, session: &str);
     /// The commit a branch of the repository points at now.

@@ -394,14 +394,15 @@ pub fn approve(agents: &Manager, worktrees_dir: &Path, id: &str, message: &str) 
 }
 
 /// A workflow checkpoint: the session's edits as a commit on its own branch, without recording a review decision (the
-/// user still approves the session in Review; the approval then finds this commit). None when nothing changed.
+/// user still approves the session in Review; the approval then finds this commit). When nothing changed, the worktree's
+/// commit as it is, read while the session is held, so the checkpoint is the commit this call saw (Codex review F7-1).
 pub fn checkpoint(agents: &Manager, worktrees_dir: &Path, id: &str, message: &str) -> Result<Option<String>, String> {
     let _held = agents.reserve(id)?;
     let tree = checked_worktree(&agents.info(id)?, worktrees_dir)?;
     checked_for_write(id, &tree)?;
     match commit_all(&tree, message) {
         Ok(commit) => Ok(Some(commit)),
-        Err(e) if e.starts_with("There is nothing to approve") => Ok(None),
+        Err(e) if e.starts_with("There is nothing to approve") => crate::git::head_sha(Path::new(&tree.path)).map(Some),
         Err(e) => Err(e),
     }
 }
@@ -908,6 +909,21 @@ mod tests {
         assert_eq!(info.review.map(|review| (review.state, review.commit)), Some((ReviewState::Dismissed, None)));
         assert_eq!(info.files_changed.map_or(0, |totals| totals.files), 0);
         assert_eq!(worktree::changes(&tree).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn a_checkpoint_without_edits_is_the_worktrees_commit() {   // Codex review F7-1
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let tree = rig.tree(1);
+        let (manager, _) = rig.manager(&[session(1, Some(tree.clone()))]);
+        assert_eq!(checkpoint(&manager, &rig.worktrees, &id(1), "nothing"), Ok(Some(tree.base_sha.clone())));
+        make_edits(&tree);
+        let made = checkpoint(&manager, &rig.worktrees, &id(1), "edits").unwrap().unwrap();
+        assert_ne!(made, tree.base_sha);
+        assert_eq!(head(Path::new(&tree.path)), made);
     }
 
     #[test]
