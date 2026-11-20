@@ -323,11 +323,18 @@ pub fn profile_policy(profile: Profile, cwd: &Path, attended: bool, commands: &[
 /// get back. A rule matches the words anywhere in the command line, so a quoted mention is refused too (the safe side).
 const DESTRUCTIVE_GIT: [&str; 5] = ["git push", "git reset --hard", "git clean", "git branch -D", "git branch --delete"];
 
-/// Every rule a session is denied: Living Memory's governed commands and the destructive git commands.
+/// Git options that turn a reading command (READ_GIT) into one that writes a file (`--output`) or runs a program the
+/// repository names (`--ext-diff`, `--textconv`). Refused with any git command; `--no-ext-diff` and `--no-textconv` do not
+/// contain them.
+const UNSAFE_GIT_OPTIONS: [&str; 3] = ["--output", "--ext-diff", "--textconv"];
+
+/// Every rule a session is denied: Living Memory's governed commands, the destructive git commands and the unsafe git
+/// options.
 pub fn deny_rules() -> Vec<String> {
     let mut rules = governed_rules();
     for tool in ["Bash", "PowerShell"] {
         rules.extend(DESTRUCTIVE_GIT.iter().map(|command| format!("{tool}(*{command}*)")));
+        rules.extend(UNSAFE_GIT_OPTIONS.iter().map(|option| format!("{tool}(*git *{option}*)")));
     }
     rules
 }
@@ -897,6 +904,21 @@ mod tests {
         assert_eq!(&rules[..80], governed_rules().as_slice());
         for rule in ["Bash(*git push*)", "PowerShell(*git reset --hard*)", "Bash(*git clean*)", "PowerShell(*git branch -D*)"] {
             assert!(rules.iter().any(|r| r == rule), "{rule}");
+        }
+    }
+
+    #[test]
+    fn reading_git_commands_may_not_write_files_or_run_programs() {
+        let rules = deny_rules();
+        for tool in ["Bash", "PowerShell"] {
+            for option in ["--output", "--ext-diff", "--textconv"] {
+                let rule = format!("{tool}(*git *{option}*)");
+                assert!(rules.contains(&rule), "{rule}");
+            }
+        }
+        // The safe spellings Hivemind itself uses are not matched by the pattern's fixed text.
+        for safe in ["git log -p --no-ext-diff --no-textconv", "git diff --no-color"] {
+            assert!(!UNSAFE_GIT_OPTIONS.iter().any(|option| safe.contains(option)), "{safe}");
         }
     }
 

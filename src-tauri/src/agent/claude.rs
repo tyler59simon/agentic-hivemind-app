@@ -775,6 +775,20 @@ mod tests {
         command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect()
     }
 
+    /// Every rule is an argument. An unattended editing role with five allowed commands, every deny rule and an npm `.cmd`
+    /// launcher must stay under cmd.exe's 8191 characters (about 5,300 on 2026-11-20); count before adding rules.
+    #[test]
+    fn a_role_session_command_line_fits_the_cmd_limit() {
+        use crate::agent::{roles::Profile, scope};
+        let commands = ["npm test", "npm run build", "cargo test", "cargo clippy", "npx tsc --noEmit"].map(String::from);
+        let policy = scope::profile_policy(Profile::EditWorktree, Path::new("C:/Users/someone/AppData/Roaming/hivemind/worktrees/0f9e8d7c"), false, &commands).unwrap();
+        let mut role = spec(policy);
+        role.deny = scope::deny_rules();
+        let args = args_of(&ClaudeCode.command(&role));
+        let length: usize = args.iter().map(|arg| arg.len() + 3).sum::<usize>() + "C:/Users/someone/AppData/Roaming/npm/claude.cmd".len();
+        assert!(length < 8191, "{length}");
+    }
+
     #[test]
     fn command_carries_the_spec() {
         let allow = vec!["Edit(//work/arch/**)".to_string(), "Bash(*architecture-suite.py *)".to_string()];
