@@ -2,10 +2,10 @@
 //! nobody approved yet, and approved sessions leave `hivemind/<id8>` branches that are never merged for the user.
 //! Discarding, ending and removing worktrees reuse the review and agent commands; this module lists, and deletes only
 //! `hivemind/*` branches already merged into the repository's default branch.
-use crate::agent::events::Status;
-use crate::agent::{ReviewState, SessionInfo};
+use crate::agent::events::{Mode, Status};
+use crate::agent::{Interface, ReviewState, SessionInfo};
 use crate::folders;
-use crate::git::run_with_timeout;
+use crate::git::{run_captured, run_with_timeout};
 use crate::settings::Settings;
 use crate::worktree;
 use serde::Serialize;
@@ -21,6 +21,9 @@ pub struct Tree {
     pub session: String,
     pub title: String,
     pub status: Status,
+    /// How the session is stopped: a terminal session in its terminal, a background one with Stop, a chat with End.
+    pub interface: Interface,
+    pub mode: Mode,
     pub repo: String,
     pub branch: String,
     pub path: String,
@@ -73,8 +76,16 @@ fn target(repo: &Path) -> Option<String> {
     Some(name.trim().to_string()).filter(|n| !n.is_empty())
 }
 
-fn merged(repo: &Path, branch: &str, target: &str) -> bool {
-    run(repo, &["merge-base", "--is-ancestor", &format!("refs/heads/{branch}"), target]).is_ok()
+/// Whether every commit up to `tip` is in `target`. Git answers no with exit code 1; anything else is an error.
+fn merged(repo: &Path, tip: &str, target: &str) -> Result<bool, String> {
+    let mut command = worktree::git(repo);
+    command.args(["merge-base", "--is-ancestor", tip, target]);
+    let ran = run_captured(command, TIMEOUT)?;
+    match ran.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(format!("Could not compare with {target}: {}", ran.stderr.trim())),
+    }
 }
 
 fn checked_out(repo: &Path) -> Result<Vec<String>, String> {
@@ -90,13 +101,20 @@ fn branches(repo: &Path, sessions: &[SessionInfo]) -> Repo {
         Ok(found) => found,
         Err(error) => return Repo { repo: spelled, target, branches: vec![], error: Some(error) },
     };
+    let mut errors = Vec::new();
     let branches = text
         .lines()
         .map(str::trim)
         .filter(|name| name.starts_with(PREFIX))
         .map(|name| Branch {
             name: name.to_string(),
-            merged: target.as_deref().is_some_and(|t| merged(repo, name, t)),
+            // A failed comparison counts as not merged (nothing is offered for deletion) and is reported.
+            merged: target.as_deref().is_some_and(|t| {
+                merged(repo, &format!("refs/heads/{name}"), t).unwrap_or_else(|e| {
+                    errors.push(format!("{name}: {e}"));
+                    false
+                })
+            }),
             checked_out: out.iter().any(|b| b == name),
             session: sessions
                 .iter()
@@ -104,7 +122,8 @@ fn branches(repo: &Path, sessions: &[SessionInfo]) -> Repo {
                 .map(|s| s.id.clone()),
         })
         .collect();
-    Repo { repo: spelled, target, branches, error: None }
+    let error = (!errors.is_empty()).then(|| errors.join("; "));
+    Repo { repo: spelled, target, branches, error }
 }
 
 /// The repository a folder belongs to, as git spells its top level; None when it is not in one.
@@ -117,7 +136,22 @@ fn toplevel(folder: &str) -> Option<String> {
     Some(top.trim().to_string()).filter(|t| !t.is_empty())
 }
 
-pub fn inventory(sessions: &[SessionInfo], saved: &Settings) -> Inventory {
+/// Refuse when the worktree has changed files now (tracked or untracked; files git ignores are not counted).
+pub fn check_clean(tree: &worktree::Worktree) -> Result<(), String> {
+    if !Path::new(&tree.path).is_dir() {
+        return Ok(());
+    }
+    match worktree::changes(tree)?.len() {
+        0 => Ok(()),
+        n => Err(format!("The worktree has {n} changed file{} now; review or discard them first, then check again", if n == 1 { "" } else { "s" })),
+    }
+}
+
+/// An error when git cannot run at all: an empty list would read as "nothing to clean up".
+pub fn inventory(sessions: &[SessionInfo], saved: &Settings) -> Result<Inventory, String> {
+    let mut probe = std::process::Command::new("git");
+    probe.arg("--version");
+    run_with_timeout(probe, TIMEOUT).map_err(|e| format!("Git is needed for this check and could not run: {e}"))?;
     let trees = sessions
         .iter()
         .filter_map(|info| {
@@ -127,6 +161,8 @@ pub fn inventory(sessions: &[SessionInfo], saved: &Settings) -> Inventory {
                 session: info.id.clone(),
                 title: info.name.clone().unwrap_or_else(|| info.title.clone()),
                 status: info.status,
+                interface: info.interface,
+                mode: info.mode,
                 repo: tree.repo.clone(),
                 branch: tree.branch.clone(),
                 path: tree.path.clone(),
@@ -147,7 +183,7 @@ pub fn inventory(sessions: &[SessionInfo], saved: &Settings) -> Inventory {
         }
     }
     let repos = repos.iter().map(|r| branches(Path::new(r), sessions)).filter(|r| r.error.is_some() || !r.branches.is_empty()).collect();
-    Inventory { trees, repos }
+    Ok(Inventory { trees, repos })
 }
 
 /// Delete one `hivemind/*` branch, only when every commit on it is already in the default branch and no worktree has it out.
@@ -156,19 +192,26 @@ pub fn delete_branch(repo: &Path, branch: &str) -> Result<(), String> {
     if !branch.starts_with(PREFIX) || branch.len() == PREFIX.len() {
         return Err(format!("Only {PREFIX}* branches are deleted here"));
     }
-    if worktree::branch_tip(repo, branch).is_none() {
+    let Some(tip) = worktree::branch_tip(repo, branch) else {
         return Err(format!("No branch {branch} in {}", repo.display()));
-    }
+    };
     if checked_out(repo)?.iter().any(|b| b == branch) {
         return Err(format!("{branch} is checked out in a worktree; remove the worktree first"));
     }
     let Some(target) = target(repo) else {
         return Err("The repository is on a detached commit, so there is no default branch to compare with".into());
     };
-    if !merged(repo, branch, &target) {
+    if !merged(repo, &tip, &target)? {
         return Err(format!("{branch} has commits that are not in {target}; it was left alone"));
     }
-    run(repo, &["branch", "-D", branch]).map(|_| ())
+    delete_at(repo, branch, &tip)
+}
+
+/// Delete the branch only if it still points at `tip`, the commit just checked: a branch that moved since is left alone.
+fn delete_at(repo: &Path, branch: &str, tip: &str) -> Result<(), String> {
+    run(repo, &["update-ref", "-d", &format!("refs/heads/{branch}"), tip])
+        .map(|_| ())
+        .map_err(|e| format!("{branch} changed while it was checked, so it was left alone: {e}"))
 }
 
 #[cfg(test)]
@@ -256,7 +299,7 @@ mod tests {
 
         let sessions = [info("cccccccc-1", Some(&open), "ended")];
         let saved = Settings { other_folders: Some(vec![rig.repo.display().to_string()]), ..Default::default() };
-        let found = inventory(&sessions, &saved);
+        let found = inventory(&sessions, &saved).unwrap();
 
         assert_eq!(found.trees.len(), 1);
         let tree = &found.trees[0];
@@ -290,10 +333,23 @@ mod tests {
         assert!(delete_branch(&rig.repo, "hivemind/bbbbbbbb").unwrap_err().contains("not in main"));
         assert!(delete_branch(&rig.repo, "hivemind/cccccccc").unwrap_err().contains("checked out"));
         assert_eq!(delete_branch(&rig.repo, "hivemind/aaaaaaaa"), Ok(()));
+        // A tip that is not in main is refused even when it is passed as the checked commit.
+        let tip = worktree::branch_tip(&rig.repo, "hivemind/bbbbbbbb").unwrap();
+        assert_eq!(super::merged(&rig.repo, &tip, "main"), Ok(false));
+        assert!(super::merged(&rig.repo, &tip, "no-such-branch").unwrap_err().starts_with("Could not compare with no-such-branch"));
+        // A branch that moved after its check is not deleted.
+        let checked = worktree::branch_tip(&rig.repo, "main").unwrap();
+        sh(&rig.repo, &["branch", "hivemind/moved", &tip]);
+        assert!(delete_at(&rig.repo, "hivemind/moved", &checked).unwrap_err().contains("changed while it was checked"));
+        assert_eq!(worktree::branch_tip(&rig.repo, "hivemind/moved").as_deref(), Some(tip.as_str()));
         let left = sh(&rig.repo, &["branch", "--list", "hivemind/*"]);
         assert!(!left.contains("aaaaaaaa") && left.contains("bbbbbbbb") && left.contains("cccccccc"), "{left}");
 
-        // The worktree removal the uninstall check offers leaves nothing in .git/worktrees.
+        // A worktree with a changed file is not removed; once clean, removing it leaves nothing in .git/worktrees.
+        std::fs::write(Path::new(&busy.path).join("late.txt"), "made after the check\n").unwrap();
+        assert!(check_clean(&busy).unwrap_err().starts_with("The worktree has 1 changed file now"));
+        std::fs::remove_file(Path::new(&busy.path).join("late.txt")).unwrap();
+        assert_eq!(check_clean(&busy), Ok(()));
         worktree::remove(&busy).unwrap();
         let admin = rig.repo.join(".git").join("worktrees");
         assert!(!admin.exists() || std::fs::read_dir(&admin).unwrap().next().is_none());

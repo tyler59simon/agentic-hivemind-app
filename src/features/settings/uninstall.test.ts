@@ -3,12 +3,16 @@ import type { UninstallRepo, UninstallTree } from "../../lib/agent";
 import { deletable, treeStep } from "./uninstall";
 
 const tree = (over: Partial<UninstallTree>): UninstallTree => ({
-  session: "s", title: "t", status: "ended", repo: "C:/r", branch: "hivemind/aaaaaaaa", path: "C:/w", exists: true, files: 0, review: null, ...over,
+  session: "s", title: "t", status: "ended", interface: "chat", mode: "interactive", repo: "C:/r", branch: "hivemind/aaaaaaaa", path: "C:/w", exists: true, files: 0, review: null, ...over,
 });
 
 describe("before you uninstall", () => {
   it("ends a live session first, then sends edits to review, else removes the worktree", () => {
-    for (const status of ["running", "waiting", "idle"] as const) expect(treeStep(tree({ status, files: 3 }))).toBe("end");
+    for (const status of ["running", "waiting", "idle"] as const) {
+      expect(treeStep(tree({ status, files: 3 }))).toBe("end");
+      expect(treeStep(tree({ status, interface: "terminal" }))).toBe("terminal");
+      expect(treeStep(tree({ status, mode: "unattended" }))).toBe("stop");
+    }
     expect(treeStep(tree({ files: 2 }))).toBe("review");
     expect(treeStep(tree({ files: 2, review: "dismissed" }))).toBe("review");
     expect(treeStep(tree({ files: null }))).toBe("review");

@@ -1,10 +1,14 @@
 import type { UninstallRepo, UninstallTree } from "../../lib/agent";
 
-/** What a worktree needs before it can go: end its session, review its edits, or nothing more than removing it. */
-export type TreeStep = "end" | "review" | "remove";
+/** What a worktree needs before it can go: stop its session (a terminal session in its terminal, a background one with
+ * Stop, a chat with End), review its edits, or nothing more than removing it. */
+export type TreeStep = "terminal" | "stop" | "end" | "review" | "remove";
 
 export function treeStep(tree: UninstallTree): TreeStep {
-  if (tree.status === "running" || tree.status === "waiting" || tree.status === "idle") return "end";
+  if (tree.status === "running" || tree.status === "waiting" || tree.status === "idle") {
+    if (tree.interface === "terminal") return "terminal";
+    return tree.mode === "interactive" ? "end" : "stop";
+  }
   // A worktree git cannot read may still hold edits: send the user to Review rather than offer removal.
   if (tree.exists && (tree.files === null || tree.files > 0)) return "review";
   return "remove";

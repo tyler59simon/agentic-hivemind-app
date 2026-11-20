@@ -20,7 +20,7 @@ import { invalidateWiki } from "./features/wiki/useWiki";
 import { needsLmUpdate, useConnection } from "./lib/connection";
 import { refreshStore } from "./lib/refresh";
 import { Shell } from "./shell/Shell";
-import { openReview, useApp } from "./store";
+import { openReview, openSession, useApp } from "./store";
 import { toast, Toasts } from "./ui/toast";
 import { useWorkspace } from "./workspace/store";
 
@@ -163,7 +163,9 @@ export default function App() {
             {link.error && <p className="error">{String(link.error)}</p>}
             {outdated && <p className="error">This version of Living Memory is too old: Hivemind needs one with direct writes (<code>alm version</code> lists <code>direct_writes</code> under capabilities). Update Living Memory, then reconnect.</p>}
             <SettingsForm onSaved={reconnect} />
-            <BeforeUninstall onOpenReview={link.isSuccess && !outdated ? (id) => { setSettings(false); openReview(id); } : undefined} />
+            <BeforeUninstall
+              onOpenReview={link.isSuccess && !outdated ? (id) => { setSettings(false); openReview(id); } : undefined}
+              onOpenSession={link.isSuccess && !outdated ? (id) => { setSettings(false); openSession(id); } : undefined} />
             {link.isSuccess && !outdated && <button className="link" onClick={() => setSettings(false)}>Back</button>}
           </div>
         </main>

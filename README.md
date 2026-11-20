@@ -56,7 +56,8 @@ Living Memory stays the only writer, and Hivemind never touches the store's file
 Hivemind does not include Living Memory. From a checkout of [agentic-living-memory](https://github.com/tyler59simon/agentic-living-memory), run:
 
 ```sh
-py -3 install.py
+py -3 install.py        # Windows
+python3 install.py      # macOS and Linux
 ```
 
 That copies Living Memory to its per-user app folder (below) and records the Python it ran under. Then wire each coding agent you use, as `install.py` prints: run `integrations/setup.py claude --hooks` (or `codex`, `copilot`, `factory`) from the installed copy and apply the plan it prints with `--apply-plan ID --expected-plan-sha256 DIGEST`. Hivemind itself needs only the installed copy. See `INSTALLATION.md` in that repository for the details.
@@ -89,11 +90,11 @@ Hivemind has no policy of its own. After a confirm tick, a user can start a sess
 - **Claude Code managed settings** (`managed-settings.json`, its `managed-settings.d` drop-ins, the Windows `Policies\ClaudeCode` registry key, or settings from the claude.ai console): `permissions.disableBypassPermissionsMode` set to `"disable"` blocks bypass mode, and managed permission rules apply to every Claude session Hivemind starts.
 - **Codex `requirements.toml`**: limits the sandbox modes and approval policies Codex accepts, including the ones Hivemind passes.
 
-What managed policy turns off in Hivemind: when Claude Code has any managed policy (a managed settings or MCP file, a drop-in, the registry value, or cached console settings), Hivemind refuses its isolated Claude calls (the executive chat, the learning reviewer, and the briefing and comms one-shot calls), because those calls cannot run isolated under managed hooks and MCP servers. They still work with Codex. Sessions you start yourself are not refused; the CLI applies the policy to them.
+What managed policy turns off in Hivemind: when Claude Code has any managed policy (a managed settings or MCP file, a drop-in, the registry value, or cached console settings), Hivemind refuses its isolated Claude calls (the executive chat, the learning reviewer, and the briefing and comms one-shot calls), because those calls cannot run isolated under managed hooks and MCP servers. The executive chat can still run with Codex; the learning reviewer and the briefing and comms calls run only on Claude, so they are off. Sessions you start yourself are not refused; the CLI applies the policy to them.
 
 ## Uninstall
 
-1. **Before you uninstall:** in Settings, under **Before you uninstall**, press Check. For each session worktree, end the session, approve or discard its edits, and remove the worktree; then delete the `hivemind/...` branches already merged. Unapproved edits live only in those worktrees. Uninstalling first loses them and leaves stale entries in each repository's `.git/worktrees` until you run `git worktree prune` there. Branches with unmerged commits are listed but never deleted.
+1. **Before you uninstall:** in Settings, under **Before you uninstall**, press Check. For each session worktree, end the session, approve or discard its edits, and remove the worktree; then delete the `hivemind/...` branches already merged. Unapproved edits live only in those worktrees, inside the app data folder below. Deleting that folder loses them and leaves stale entries in each repository's `.git/worktrees` until you run `git worktree prune` there. Commits already on a session's branch are in your repository and survive. Branches with unmerged commits are listed but never deleted.
 2. **Run the uninstaller.**
 3. **What stays afterwards:**
    - App data. With Tauri's default installers, the NSIS uninstaller keeps `%APPDATA%\dev.hivemind.app` unless you tick its option to delete app data, and the MSI never removes it. It holds settings, `agent-sessions`, `worktrees`, `terminals`, `learning` and `skills`. WebView2 data is in `%LOCALAPPDATA%\dev.hivemind.app`. Delete both folders to remove everything.

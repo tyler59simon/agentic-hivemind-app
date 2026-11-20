@@ -33,14 +33,22 @@ struct Proc {
 }
 
 impl Proc {
-    /// Why the server stopped: its stderr once it has closed (waiting up to a second), else `fallback`.
-    fn stopped(&self, fallback: String) -> String {
+    /// `error`, plus the exit code and the server's last stderr output once its stderr has closed (waiting up to a second).
+    /// The output is what it wrote last, which is not always why it stopped.
+    fn stopped(&mut self, error: &str) -> String {
         let deadline = Instant::now() + Duration::from_secs(1);
         while !self.drain.is_finished() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
         }
+        let mut text = error.to_string();
+        if let Ok(Some(status)) = self.child.try_wait() {
+            text.push_str(&format!(" ({status})"));
+        }
         let tail = String::from_utf8_lossy(&self.stderr.lock().unwrap()).trim().to_string();
-        if tail.is_empty() { fallback } else { format!("Living Memory exited: {tail}") }
+        if !tail.is_empty() {
+            text.push_str(&format!(". Its last error output:\n{tail}"));
+        }
+        text
     }
 }
 
@@ -131,12 +139,17 @@ impl Bridge {
         let mut line = serde_json::to_string(&request).map_err(|e| e.to_string())?;
         line.push('\n');
         if let Err(e) = proc.stdin.write_all(line.as_bytes()).and_then(|_| proc.stdin.flush()) {
-            return Err(proc.stopped(format!("Living Memory stopped: {e}")));
+            return Err(proc.stopped(&format!("Living Memory stopped: {e}")));
         }
         let mut answer = String::new();
-        let read = proc.stdout.read_line(&mut answer).map_err(|e| proc.stopped(format!("Living Memory stopped: {e}")))?;
+        let read = match proc.stdout.read_line(&mut answer) {
+            Ok(read) => read,
+            Err(e) => return Err(proc.stopped(&format!("Living Memory stopped: {e}"))),
+        };
         if read == 0 {
-            return Err(proc.stopped("Living Memory exited. If it is older than the app bridge, update it (needs `serve --stdio`).".into()));
+            let said = !proc.stderr.lock().unwrap().is_empty();
+            let hint = if said { "" } else { ". If it is older than the app bridge, update it (needs `serve --stdio`)" };
+            return Err(proc.stopped(&format!("Living Memory exited{hint}")));
         }
         let value: Value = serde_json::from_str(&answer).map_err(|e| format!("Unreadable reply from Living Memory: {e}"))?;
         if value.get("id").and_then(Value::as_u64) != Some(id) {
@@ -224,9 +237,10 @@ mod tests {
         std::fs::write(&script, "import sys\nsys.stderr.write('x' * 9000)\nraise SystemExit('boom: no module named core')\n").unwrap();
         let bridge = Bridge::new(Launch { program, args, script, root: None });
         let error = bridge.call(&["list".into()], None).unwrap_err();
-        assert!(error.starts_with("Living Memory exited: "), "{error}");
+        assert!(error.starts_with("Living Memory exited (") && error.contains("1). Its last error output:\n"), "{error}");
         assert!(error.ends_with("boom: no module named core"), "{error}");
-        assert!(error.len() <= "Living Memory exited: ".len() + STDERR_TAIL, "only the tail is kept");
+        assert!(!error.contains("update it"), "{error}");
+        assert!(error.len() <= 100 + STDERR_TAIL, "only the tail is kept");
         drop(bridge);
         std::fs::remove_dir_all(dir).ok();
     }

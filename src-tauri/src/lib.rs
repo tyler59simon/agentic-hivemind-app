@@ -105,6 +105,11 @@ async fn lm(state: State<'_, AppState>, argv: Vec<String>, stdin: Option<String>
 /// Start (or restart) the bridge, report what it connected to, and watch the store for changes.
 #[tauri::command]
 async fn connect(app: AppHandle, state: State<'_, AppState>) -> Result<ConnectInfo, String> {
+    // Resolved again on every connect: installing Living Memory meanwhile records the Python it should run under (REG-4).
+    let launch = settings::resolve(&settings::load(&state.settings_path), |k| std::env::var(k).ok());
+    if launch != state.bridge.launch() {
+        state.bridge.reconfigure(launch);
+    }
     let bridge = state.bridge.clone();
     let (version, doctor) = blocking(move || {
         let version = bridge.call(&["version".into()], None)?;
@@ -943,7 +948,19 @@ async fn agent_remove_worktree(state: State<'_, AppState>, session_id: String) -
 #[tauri::command]
 async fn uninstall_inventory(state: State<'_, AppState>) -> Result<uninstall::Inventory, String> {
     let (agents, path) = (state.agents.clone(), state.settings_path.clone());
-    blocking(move || Ok(uninstall::inventory(&agents.sessions(), &settings::load(&path)))).await
+    blocking(move || uninstall::inventory(&agents.sessions(), &settings::load(&path))).await
+}
+
+/// Remove an ended session's worktree, but only when it has no changed files now: the list the user saw may be old.
+#[tauri::command]
+async fn uninstall_remove_worktree(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    let agents = state.agents.clone();
+    blocking(move || {
+        let tree = agents.info(&session_id)?.worktree.ok_or("This session has no worktree")?;
+        uninstall::check_clean(&tree)?;
+        agents.remove_worktree(&session_id)
+    })
+    .await
 }
 
 /// Delete a `hivemind/*` branch already merged into the repository's default branch.
@@ -1767,7 +1784,7 @@ pub fn run() {
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_roles, learning_status, learning_review, skills_list, skill_proposals, skill_decide, skill_action, skill_version, skill_history,
             skills_upkeep, skill_from_note, workflow_templates, workflow_list, workflow_create, workflow_edit, workflow_act, workflow_delete, workflow_report,
-            automation_list, automation_put, automation_delete, automation_act, architecture_drift, architecture_rules_set, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, uninstall_inventory, uninstall_delete_branch, repo_branches,
+            automation_list, automation_put, automation_delete, automation_act, architecture_drift, architecture_rules_set, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, uninstall_inventory, uninstall_remove_worktree, uninstall_delete_branch, repo_branches,
             agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_stop_and_approve, review_request_changes, review_request_terminal_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
             system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export, wiki_agent_build, wiki_agent_cancel
         ])
