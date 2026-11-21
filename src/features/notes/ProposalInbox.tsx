@@ -102,7 +102,7 @@ export function ProposalInbox({ nb, onClose }: { nb: DocNotebook; onClose: () =>
     const { proposal, page, proposed } = loaded;
     const base = (await baseText(proposal)) ?? page?.text ?? "";
     setDialog(
-      <PageMergeDialog base={pageText(base).text} mine={page?.text ?? ""} theirs={proposed.text}
+      <PageMergeDialog noun="proposal" base={pageText(base).text} mine={page?.text ?? ""} theirs={proposed.text}
         onCancel={() => setDialog(null)}
         onResolve={(text) => void run(async () => {
           try {

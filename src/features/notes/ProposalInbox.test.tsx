@@ -12,8 +12,8 @@ import { invoke } from "@tauri-apps/api/core";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
 // CodeMirror does not run in jsdom: the merge dialog resolves to a fixed merge, and the diff draws nothing.
 vi.mock("../editor/MergeDialog", () => ({
-  PageMergeDialog: ({ onResolve, onCancel }: { onResolve: (text: string) => void; onCancel: () => void }) => (
-    <div data-merge=""><button onClick={() => onResolve("merged\n")}>Use this merge</button><button onClick={onCancel}>Cancel merge</button></div>
+  PageMergeDialog: ({ onResolve, onCancel, noun }: { onResolve: (text: string) => void; onCancel: () => void; noun?: string }) => (
+    <div data-merge="" data-noun={noun}><button onClick={() => onResolve("merged\n")}>Use this merge</button><button onClick={onCancel}>Cancel merge</button></div>
   ),
 }));
 vi.mock("../review/CodeDiff", () => ({ CodeDiff: () => null }));
@@ -82,6 +82,8 @@ describe("merging an agent's proposal in the inbox", () => {
     const { sent, rev } = await inbox({ exit_code: 6, error: { code: "stale", message: "Stale revision" } });
     await until(() => toasts.some((t) => t.kind === "warn"));
     expect(document.querySelector("[data-merge]")).not.toBeNull();
+    // The dialog is worded for an agent's proposal, not for a page that changed on disk (NS-2C UI pass).
+    expect(document.querySelector("[data-merge]")?.getAttribute("data-noun")).toBe("proposal");
     const merges = sent.filter((s) => s.cmd === "lm_body");
     expect(merges).toEqual([{ cmd: "lm_body", argv: ["doc", "accept", "--edited", "--expected-revision", rev, "--include-private", "--", "p1"], body: "merged\n" }]);
     expect(sent.some((s) => s.argv[1] === "write" || s.argv[1] === "reject")).toBe(false);

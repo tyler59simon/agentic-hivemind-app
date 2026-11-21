@@ -162,7 +162,7 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals }: {
         </button>
         {lm && lm.proposals > 0 && (
           <button className="icon-button proposals-badge" title={`${lm.proposals} proposed ${lm.proposals === 1 ? "edit" : "edits"} from agents`}
-            aria-label={`${lm.proposals} agent proposals`} onClick={onProposals}><Inbox size="1em" aria-hidden />{lm.proposals}</button>
+            aria-label={`${lm.proposals} agent ${lm.proposals === 1 ? "proposal" : "proposals"}`} onClick={onProposals}><Inbox size="1em" aria-hidden />{lm.proposals}</button>
         )}
         <button className="icon-button" title="New page" aria-label="New page" onClick={() => create(null)}><Plus size="1.1em" aria-hidden /></button>
         <button className="icon-button" title="New section" aria-label="New section" onClick={() => setNaming({ folder: "", value: "" })}><FolderPlus size="1.1em" aria-hidden /></button>

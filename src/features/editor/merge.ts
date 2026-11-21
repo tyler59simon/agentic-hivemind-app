@@ -4,11 +4,14 @@ import type { Fields } from "./save";
 
 export const MINE = "Your edit";
 export const THEIRS = "Saved version";
+/** The names written after <<<<<<< and >>>>>>> for each side. */
+export interface Sides { mine: string; theirs: string }
+const SIDES: Sides = { mine: MINE, theirs: THEIRS };
 
 /** Line-based merge of the body; conflicts are left as <<<<<<< / ======= / >>>>>>> blocks. */
-export function mergeBody(base: string, mine: string, theirs: string): { text: string; conflicts: number } {
+export function mergeBody(base: string, mine: string, theirs: string, sides: Sides = SIDES): { text: string; conflicts: number } {
   const lines = (s: string) => s.replace(/\r\n/g, "\n").split("\n");
-  const out = merge(lines(mine), lines(base), lines(theirs), { label: { a: MINE, b: THEIRS } });
+  const out = merge(lines(mine), lines(base), lines(theirs), { label: { a: sides.mine, b: sides.theirs } });
   const text = out.result.join("\n");
   return { text, conflicts: out.result.filter((l) => String(l).startsWith("<<<<<<<")).length };
 }
@@ -20,7 +23,7 @@ const KEYS: Key[] = ["title", "type", "tags", "context", "review_by", "files"];
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 /** Per property: whichever side changed wins; when both changed it differently, the user picks. */
-export function mergeFields(base: Fields, mine: Fields, theirs: Fields) {
+export function mergeFields(base: Fields, mine: Fields, theirs: Fields, sides: Sides = SIDES) {
   const merged = { ...theirs } as Fields;
   const conflicts: Key[] = [];
   for (const key of KEYS) {
@@ -29,7 +32,7 @@ export function mergeFields(base: Fields, mine: Fields, theirs: Fields) {
     else if (same(t, b)) (merged as unknown as Record<Key, unknown>)[key] = m;
     else conflicts.push(key);
   }
-  const body = mergeBody(base.body, mine.body, theirs.body);
+  const body = mergeBody(base.body, mine.body, theirs.body, sides);
   merged.body = body.text;
   return { merged, conflicts, bodyConflicts: body.conflicts };
 }
