@@ -127,10 +127,10 @@ export function section(text: string, heading?: string): string | null {
     const raw = text.slice(node.from, node.to);
     const title = m[1] === "ATXHeading"
       ? raw.replace(/^#{1,6}[ \t]*/, "").replace(/([ \t]+#+)?[ \t]*$/, "")
-      : raw.split(/\r?\n/)[0];
-    headings.push({ level: Number(m[2]), from: node.from, title: title.trim() });
+      : raw.split(/\r?\n/).slice(0, -1).join(" "); // every line before the underline (Codex re-review of 87a0a1f)
+    headings.push({ level: Number(m[2]), from: node.from, title: title.replace(/\s+/g, " ").trim() });
   }
-  const want = heading.trim().toLowerCase();
+  const want = heading.replace(/\s+/g, " ").trim().toLowerCase();
   const start = headings.findIndex((h) => h.title.toLowerCase() === want);
   if (start < 0) return null;
   const next = headings.slice(start + 1).find((h) => h.level <= headings[start].level);

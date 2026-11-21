@@ -180,8 +180,12 @@ pub fn attach(bridge: &Bridge, generation: Option<u64>, container: &str, file: &
 }
 
 /// The files in a notebook's `assets` folder as `assets/<name>`, sorted, links and folders left out, at most 10,000.
-/// A missing folder has none.
+/// A missing folder has none, and so has an `assets` that is a link: it would list another folder (Codex re-review of
+/// 87a0a1f).
 pub fn asset_names(assets: &Path) -> Vec<String> {
+    if crate::files::contain::is_link(assets) {
+        return Vec::new();
+    }
     let Ok(entries) = std::fs::read_dir(assets) else { return Vec::new() };
     let mut names: Vec<String> = entries
         .filter_map(Result::ok)
@@ -340,6 +344,14 @@ mod tests {
         std::fs::write(dir.join("00aa11bb-a.png"), b"x").unwrap();
         assert_eq!(asset_names(&dir), ["assets/00aa11bb-a.png", "assets/1a2b3c4d-pic.png"]);
         assert!(asset_names(&dir.join("missing")).is_empty());
+        // An `assets` folder that is a junction lists nothing (Codex re-review of 87a0a1f).
+        if cfg!(windows) {
+            let link = dir.join("linked");
+            let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&link).arg(&dir).output().unwrap();
+            assert!(made.status.success(), "mklink /J needs no admin rights: {}", String::from_utf8_lossy(&made.stderr));
+            assert!(asset_names(&link).is_empty());
+            std::fs::remove_dir(&link).ok();
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 

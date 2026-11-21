@@ -2,6 +2,7 @@
 // (NS-3A). While one is saved, a marker shows where its link goes; the marker is a widget, never text, so the page as
 // saved, a draft or an undo never holds a placeholder (Codex review of 398b956, P2). The marker follows edits around
 // it; a marker whose text the user deleted gets no link, and a page closed meanwhile gets the link on the clipboard.
+import { invertedEffects, isolateHistory } from "@codemirror/commands";
 import { StateEffect, StateField, type EditorState, type Range } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet } from "@codemirror/view";
 import type { RichContext } from "./context";
@@ -25,7 +26,10 @@ class AttachingWidget extends WidgetType {
   }
 }
 
-const addPending = StateEffect.define<{ id: number; batch: number; pos: number; name: string }[]>();
+type Marker = { id: number; batch: number; pos: number; name: string };
+const addPending = StateEffect.define<Marker[]>({ map: (markers, changes) => markers.map((m) => ({ ...m, pos: changes.mapPos(m.pos, -1) })) });
+/** Markers Undo took away: their attachments get no link (Codex re-review of 87a0a1f). */
+const cancelPending = StateEffect.define<number[]>();
 /** One attachment is done: its marker goes, and the batch's other markers move to `to` (after its link) when given. */
 const endPending = StateEffect.define<{ id: number; batch: number; to?: number }>();
 
@@ -37,6 +41,9 @@ export const pendingAttachments = StateField.define<DecorationSet>({
     for (const e of tr.effects) {
       if (e.is(addPending)) {
         set = set.update({ add: e.value.map((p) => Decoration.widget({ widget: new AttachingWidget(p.name), side: -1, id: p.id, batch: p.batch }).range(p.pos)), sort: true });
+      } else if (e.is(cancelPending)) {
+        const ids = e.value;
+        set = set.update({ filter: (_f, _t, d) => !ids.includes(d.spec.id) });
       } else if (e.is(endPending)) {
         const { id, batch, to } = e.value;
         const moved: Range<Decoration>[] = [];
@@ -59,8 +66,24 @@ const closed = new WeakSet<EditorView>();
 /** Notes which editors are gone, so an attachment finishing later does not write to one. */
 const closing = ViewPlugin.define((view) => ({ destroy() { closed.add(view); } }));
 
-/** What attaching needs in the editor: the markers and the note of closed editors. */
-export const attaching = [pendingAttachments, closing];
+/** Undo takes a marker away (and Redo puts it back), so Ctrl+Z after a paste cancels the link, not earlier typing. */
+const undoable = invertedEffects.of((tr) => {
+  const out: StateEffect<unknown>[] = [];
+  for (const e of tr.effects) {
+    if (e.is(addPending)) out.push(cancelPending.of(e.value.map((m) => m.id)));
+    else if (e.is(cancelPending)) {
+      const back: Marker[] = [];
+      tr.startState.field(pendingAttachments, false)?.between(0, tr.startState.doc.length, (from, _to, d) => {
+        if (e.value.includes(d.spec.id)) back.push({ id: d.spec.id, batch: d.spec.batch, pos: from, name: (d.spec.widget as AttachingWidget).name });
+      });
+      if (back.length) out.push(addPending.of(back));
+    }
+  }
+  return out;
+});
+
+/** What attaching needs in the editor: the markers, Undo for them, and the note of closed editors. */
+export const attaching = [pendingAttachments, undoable, closing];
 
 /** Where the marker `id` is now, or null when it is gone. */
 function markerAt(state: EditorState, id: number): number | null {
@@ -81,8 +104,9 @@ export async function attachAt(view: EditorView, ctx: RichContext, pos: number, 
   const ids = names.map(() => ++counter);
   const line = view.state.doc.lineAt(pos);
   const lead = pos > line.from && names.length > 1 ? "\n" : "";
-  view.dispatch({ effects: addPending.of(names.map((name, i) => ({ id: ids[i], batch, pos, name: name.replace(/[[\]]/g, "") }))) });
+  view.dispatch({ effects: addPending.of(names.map((name, i) => ({ id: ids[i], batch, pos, name: name.replace(/[[\]]/g, "") }))), annotations: isolateHistory.of("full") });
   let linked = false;
+  const unlinked: { name: string; link: string }[] = [];
   for (let i = 0; i < names.length; i++) {
     let link: string | null = null;
     try {
@@ -91,26 +115,31 @@ export async function attachAt(view: EditorView, ctx: RichContext, pos: number, 
       ctx.fail(`${names[i]} was not attached: ${e instanceof Error ? e.message : String(e)}`);
     }
     if (closed.has(view) || !view.state.field(pendingAttachments, false)) {
-      if (link) lost(ctx, names[i], link, "the page was closed before it could be linked");
+      if (link) unlinked.push({ name: names[i], link });
       continue;
     }
     const at = markerAt(view.state, ids[i]);
     if (at === null || !link) {
       view.dispatch({ effects: endPending.of({ id: ids[i], batch }) });
-      if (link) ctx.fail(`${names[i]} was attached, but the text where it was going was removed, so the page has no link to it.`);
+      if (link) ctx.fail(`${names[i]} was attached, but the place for its link was removed or undone, so the page has no link to it.`);
       continue;
     }
     const insert = (linked ? "\n" : lead) + link;
     linked = true;
     view.dispatch({ changes: { from: at, insert }, effects: endPending.of({ id: ids[i], batch, to: at + insert.length }), userEvent: "input.paste" });
   }
+  // Every link a closed page missed goes on the clipboard at once (Codex re-review of 87a0a1f).
+  if (unlinked.length) lost(ctx, unlinked);
 }
 
-/** Say that an attachment was saved but not linked, and put its link on the clipboard. */
-function lost(ctx: RichContext, name: string, link: string, why: string) {
-  const say = (copied: boolean) => ctx.fail(`${name} was attached, but ${why}.${copied ? " Its link is on the clipboard." : ` Its link: ${link}`}`);
+/** Say that attachments were saved but not linked because the page closed, and put their links on the clipboard. */
+function lost(ctx: RichContext, items: { name: string; link: string }[]) {
+  const names = items.map((it) => it.name).join(", ");
+  const links = items.map((it) => it.link).join("\n");
+  const one = items.length === 1;
+  const say = (copied: boolean) => ctx.fail(`${names} ${one ? "was" : "were"} attached, but the page was closed before ${one ? "it" : "they"} could be linked.${copied ? ` ${one ? "Its link is" : "Their links are"} on the clipboard.` : ` ${one ? "Its link" : "Their links"}: ${links}`}`);
   try {
-    navigator.clipboard.writeText(link).then(() => say(true), () => say(false));
+    navigator.clipboard.writeText(links).then(() => say(true), () => say(false));
   } catch {
     say(false);
   }

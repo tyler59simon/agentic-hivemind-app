@@ -109,7 +109,7 @@ describe("attaching pictures", () => {
     finish("![b.png](b.png)");
     await pending;
     expect(view.state.doc.toString()).toBe("Teore");
-    expect(fail).toHaveBeenLastCalledWith("b.png was attached, but the text where it was going was removed, so the page has no link to it.");
+    expect(fail).toHaveBeenLastCalledWith("b.png was attached, but the place for its link was removed or undone, so the page has no link to it.");
 
     pending = attachAt(view, ctx({ fail }), 2, ["c.png"], () => new Promise((r) => { finish = r; }));
     view.destroy();
@@ -123,6 +123,37 @@ describe("attaching pictures", () => {
     const view = editor("Line one", ctx());
     await attachAt(view, ctx(), 4, ["a.png", "b.png", "c.png"], async (i) => `![${i}](${i}.png)`);
     expect(view.state.doc.toString()).toBe("Line\n![0](0.png)\n![1](1.png)\n![2](2.png) one");
+  });
+
+  it("lets Undo cancel a picture still being saved, not the typing before it (Codex re-review of 87a0a1f)", async () => {
+    const fail = vi.fn();
+    const view = editor("Hello", ctx({ fail }));
+    view.dispatch({ changes: { from: 5, insert: " there" }, userEvent: "input.type" });
+    let finish!: (link: string) => void;
+    const pending = attachAt(view, ctx({ fail }), 11, ["p.png"], () => new Promise((r) => { finish = r; }));
+    undo(view);
+    expect(view.state.doc.toString()).toBe("Hello there");
+    expect(view.dom.querySelector(".cm-attaching")).toBeNull();
+    finish("![p](p.png)");
+    await pending;
+    expect(view.state.doc.toString()).toBe("Hello there");
+    expect(fail).toHaveBeenLastCalledWith("p.png was attached, but the place for its link was removed or undone, so the page has no link to it.");
+  });
+
+  it("puts every link a closed page missed in one message", async () => {
+    const fail = vi.fn();
+    const view = editor("Text", ctx({ fail }));
+    const finish: ((link: string) => void)[] = [];
+    const pending = attachAt(view, ctx({ fail }), 4, ["a.png", "b.png"], () => new Promise((r) => { finish.push(r); }));
+    view.destroy();
+    finish[0]("![a](a.png)");
+    await flush();
+    finish[1]("![b](b.png)");
+    await pending;
+    await flush();
+    expect(fail).toHaveBeenCalledTimes(1);
+    expect(fail.mock.calls[0][0]).toMatch(/^a\.png, b\.png were attached, but the page was closed before they could be linked\./);
+    expect(fail.mock.calls[0][0]).toMatch(/!\[a\]\(a\.png\)\n!\[b\]\(b\.png\)|on the clipboard/);
   });
 
   it("names clipboard pictures by the time and skips other files", () => {

@@ -175,5 +175,9 @@ describe("Codex review of 398b956", () => {
     expect(section(page, "Setup")).toBe("Setup\n=====\n\nReal setup.\n\n```\n# Other\n```\n\nstill setup");
     expect(section(page, "Other")).toBeNull();
     expect(section("## A ##\n\nx\n\n## B\n\ny", "A")).toBe("## A ##\n\nx");
+    // A Setext title over two lines is matched whole (Codex re-review of 87a0a1f).
+    const setext = "Long\ntitle\n=====\n\nx\n\n# Next";
+    expect(section(setext, "Long title")).toBe("Long\ntitle\n=====\n\nx");
+    expect(section(setext, "Long")).toBeNull();
   });
 });

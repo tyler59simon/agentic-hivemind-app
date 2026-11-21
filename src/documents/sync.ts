@@ -56,6 +56,8 @@ export function onDocsChanged(client: QueryClient, { domain, notebook, paths }: 
   client.invalidateQueries({ queryKey: ["notebook-tree", container] });
   if (paths.some((p) => p === "notebook.json" || p.startsWith(".proposals/"))) client.invalidateQueries({ queryKey: ["lm-notebooks"] });
   if (paths.some((p) => p.startsWith(".proposals/"))) client.invalidateQueries({ queryKey: ["lm-proposals", domain, notebook] });
+  // `![[picture.png]]` looks among the notebook's attachments (Codex re-review of 87a0a1f).
+  if (paths.some((p) => /^assets\//i.test(p))) client.invalidateQueries({ queryKey: ["lm-assets", container] });
   const pages = paths.filter((p) => /\.md$/i.test(p) && !p.startsWith(".") && !/^assets\//i.test(p));
   // The proposal open in the inbox compares against its page as it is now: either changing asks for it again, so the
   // inbox moves from Accept to Merge when the page moves on (Codex review of 32fee20, U1).

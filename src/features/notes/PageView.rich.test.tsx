@@ -10,7 +10,7 @@ vi.mock("../../ui/Math", () => ({
 }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn(async () => {}) }));
 
-import { prepareForReading, MATH_BLOCK_MARK, MATH_MARK } from "../editor/rich/reading";
+import { prepare, prepareForReading, MATH_MARK } from "../editor/rich/reading";
 import { PageView } from "./PageView";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -81,19 +81,29 @@ describe("reading a page", () => {
     expect([...embed.querySelectorAll("a.wikilink")].some((a) => a.textContent === "Q1")).toBe(true);
   });
 
-  it("keeps quotes, lists and line numbers around math and comments (Codex review of 398b956)", async () => {
-    const text = "> $$\n> x^2\n> $$\n\n# After\n\n$$y$$\n\n- a %%one\n  two%% b\n\n## End";
+  it("keeps quotes, lists, block boundaries and heading lines around math and comments (Codex review of 398b956 and re-review)", async () => {
+    const text = "> $$\n> x^2\n> $$\n\n# After\n\n$$y$$\n---\n\n- a %%one\n  two%%# not a heading\n\n- $$z$$\n\n## End";
     const out = prepareForReading(text);
-    expect(out.split("\n").length).toBe(text.split("\n").length);
     expect(out).toContain("> ```math\n> x^2\n> ```");
-    expect(out).toContain(`\`${MATH_BLOCK_MARK}y\``);
-    expect(out).toContain("- a \n   b");
+    expect(out).toContain("```math\ny\n```\n---");
+    expect(out).toContain("- a # not a heading");
+    expect(out).toContain("- ```math\n  z\n  ```");
     const el = await render(text);
     expect(el.querySelector("blockquote [data-math=\"display\"]")?.textContent).toBe("x^2");
-    expect(el.querySelector("h1")?.textContent).toBe("After");
-    expect(el.querySelector("h1")?.id).toBe("t-l4");
-    expect(el.querySelectorAll('[data-math="display"]').length).toBe(2);
-    expect(el.querySelector("h2")?.id).toBe("t-l11");
+    expect(el.querySelectorAll('[data-math="display"]').length).toBe(3);
+    expect(el.querySelector("hr")).not.toBeNull();
+    expect([...el.querySelectorAll("h1")].map((h) => [h.textContent, h.id])).toEqual([["After", "t-l4"]]);
+    expect(el.querySelector("h2")?.id).toBe("t-l14");
+    expect(el.querySelector("li [data-math=\"display\"]")?.textContent).toBe("z");
+    // Lines a fence adds map back to the line it came from.
+    const { sourceLine } = prepare("$$a$$\n# H");
+    expect([0, 1, 2, 3].map(sourceLine)).toEqual([0, 0, 0, 1]);
+  });
+
+  it("leaves bold that runs past a callout's title line in its body", async () => {
+    const el = await render("> [!note]- Fix **this\n> one** now\n> Body");
+    expect(el.querySelector("details.callout summary")?.textContent).toBe("Fix");
+    expect(el.querySelector("details.callout strong")?.textContent).toBe("this\none");
   });
 
   it("keeps a callout's formatted title in its summary", async () => {

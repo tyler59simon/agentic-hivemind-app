@@ -78,7 +78,7 @@ describe("docs-changed", () => {
     const spy = vi.spyOn(client, "invalidateQueries");
     onDocsChanged(client, { domain: "demo", notebook: "plans", paths: ["A.md", "S/B.MD", ".proposals/x.json", "assets/p.png", "notebook.json"] });
     const keys = spy.mock.calls.map(([f]) => JSON.stringify((f as { queryKey: unknown }).queryKey));
-    expect(keys).toEqual(expect.arrayContaining(['["notebook-tree","lm:demo:plans"]', '["lm-notebooks"]', '["lm-proposals","demo","plans"]']));
+    expect(keys).toEqual(expect.arrayContaining(['["notebook-tree","lm:demo:plans"]', '["lm-notebooks"]', '["lm-proposals","demo","plans"]', '["lm-assets","lm:demo:plans"]']));
     expect(refresh).toHaveBeenCalledWith("lm:demo:plans", ["A.md", "S/B.MD"]);
   });
 
@@ -89,7 +89,7 @@ describe("docs-changed", () => {
     expect(spy.mock.calls.map(([f]) => (f as { queryKey: string[] }).queryKey[0])).toEqual(["notebook-tree", "lm-proposal"]);
     spy.mockClear();
     onDocsChanged(client, { domain: "demo", notebook: "plans", paths: ["assets/p.png"] });
-    expect(spy.mock.calls.map(([f]) => (f as { queryKey: string[] }).queryKey[0])).toEqual(["notebook-tree"]);
+    expect(spy.mock.calls.map(([f]) => (f as { queryKey: string[] }).queryKey[0])).toEqual(["notebook-tree", "lm-assets"]);
   });
 });
 

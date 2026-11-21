@@ -9,9 +9,6 @@ import { richSyntax } from "./syntax";
 /** Inline code that starts with this character is math. It is a private-use character, so no page has it by accident. */
 export const MATH_MARK = "";
 
-/** Inline code that starts with this character is display math (`$$x$$` on one line). */
-export const MATH_BLOCK_MARK = "";
-
 const parser = baseParser.configure([GFM, richSyntax]);
 
 /** A code span holding `text` exactly: a backtick run longer than any inside it, and a space where it would touch one. */
@@ -22,10 +19,17 @@ function codeSpan(text: string): string {
   return `${fence}${pad}${text}${pad}${fence}`;
 }
 
-/** The page text with `$math$` as marked code spans, `$$` blocks as ```math fences, and `%%comments%%` removed. */
-export function prepareForReading(text: string): string {
-  if (!text.includes("$") && !text.includes("%%")) return text;
+/** The text Reading mode parses, and the source line (from 0) of each of its lines (from 0), for heading anchors. */
+export interface Prepared { text: string; sourceLine: (line: number) => number }
+
+/** The page text with `$math$` as marked code spans, `$$` blocks as ```math fences, and `%%comments%%` removed. A fence
+ *  keeps the quote or list it is in; the lines it adds are mapped back to the source, so the Outline's line numbers
+ *  still match (Codex review of 398b956 and its re-review). */
+export function prepare(text: string): Prepared {
+  if (!text.includes("$") && !text.includes("%%")) return { text, sourceLine: (n) => n };
   const edits: { from: number; to: number; insert: string }[] = [];
+  const lineStart = (pos: number) => text.lastIndexOf("\n", pos - 1) + 1;
+  const lineEnd = (pos: number) => { const n = text.indexOf("\n", pos); return n < 0 ? text.length : n; };
   parser.parse(text).iterate({
     enter: (node) => {
       if (node.name === "InlineMath") {
@@ -33,46 +37,61 @@ export function prepareForReading(text: string): string {
         if (marks.length === 2) edits.push({ from: node.from, to: node.to, insert: codeSpan(MATH_MARK + text.slice(marks[0].to, marks[1].from)) });
         return false;
       }
-      // Every rewrite keeps the page's lines and their container markers (`> `, list indents), so a quote or list
-      // around the math stays whole and the Outline's line numbers still match the source (Codex review of 398b956, P2).
       if (node.name === "BlockMath") {
         const marks = node.node.getChildren("BlockMathMark");
         const inner = marks.length === 2 ? text.slice(marks[0].to, marks[1].from) : text.slice(node.from + 2, node.to);
-        const lineEnd = (pos: number) => { const n = text.indexOf("\n", pos); return n < 0 ? text.length : n; };
-        const lineStart = (pos: number) => text.lastIndexOf("\n", pos - 1) + 1;
+        const longest = Math.max(2, ...[...inner.matchAll(/`+/g)].map((m) => m[0].length));
+        const fence = "`".repeat(longest + 1);
         const alone = marks.length === 2
           && !text.slice(marks[0].to, lineEnd(marks[0].to)).trim()
           && /^[ \t>]*$/.test(text.slice(lineStart(marks[1].from), marks[1].from))
           && !text.slice(marks[1].to, lineEnd(marks[1].to)).trim();
         if (alone) {
-          // `$$` on lines of their own: the marks become a math fence in place.
-          const longest = Math.max(2, ...[...inner.matchAll(/`+/g)].map((m) => m[0].length));
-          const fence = "`".repeat(longest + 1);
+          // `$$` on lines of their own: the marks become the fence in place.
           edits.push({ from: marks[0].from, to: marks[0].to, insert: `${fence}math` }, { from: marks[1].from, to: marks[1].to, insert: fence });
         } else {
-          // `$$x$$` and math sharing a line with its marks: display math in a code span over the same lines.
-          edits.push({ from: node.from, to: node.to, insert: codeSpan(MATH_BLOCK_MARK + inner.trim()) });
+          // `$$x$$`, or math sharing a line with a mark: a fence over new lines, each with the container's markers
+          // (a list marker becomes spaces), so the quote or list goes on around it.
+          const pre = text.slice(lineStart(node.from), node.from).replace(/[-*+]|\d+[.)]/g, (m) => " ".repeat(m.length));
+          edits.push({ from: node.from, to: node.to, insert: `${fence}math\n${pre}${inner.trim()}\n${pre}${fence}` });
         }
         return false;
       }
       if (node.name === "Comment") {
-        // Only its line breaks and each later line's container markers stay.
-        const kept = text.slice(node.from, node.to).split("\n").map((l, i) => (i === 0 ? "" : /^[ \t>]*/.exec(l)![0])).join("\n");
-        edits.push({ from: node.from, to: node.to, insert: kept });
+        edits.push({ from: node.from, to: node.to, insert: "" });
         return false;
       }
     },
   });
+  // map[k] is the source line of output line k: lines of unchanged text count one for one, lines added by an edit
+  // stay on the line where it started.
+  const map: number[] = [0];
   let out = "";
   let at = 0;
+  let line = 0;
+  const count = (s: string) => s.split("\n").length - 1;
   for (const e of edits) {
-    out += text.slice(at, e.from) + e.insert;
+    const kept = text.slice(at, e.from);
+    for (let k = 1; k <= count(kept); k++) map.push(line + k);
+    line += count(kept);
+    const end = line + count(text.slice(e.from, e.to));
+    for (let k = 1; k <= count(e.insert); k++) map.push(Math.min(line + k, end));
+    line = end;
+    out += kept + e.insert;
     at = e.to;
   }
-  return out + text.slice(at);
+  const tail = text.slice(at);
+  for (let k = 1; k <= count(tail); k++) map.push(line + k);
+  return { text: out + tail, sourceLine: (n) => map[n] ?? n };
 }
 
-interface MdNode { type: string; value?: string; url?: string; alt?: string; children?: MdNode[]; data?: Record<string, unknown> }
+/** The page text Reading mode parses; see `prepare`. */
+export const prepareForReading = (text: string) => prepare(text).text;
+
+interface MdNode {
+  type: string; value?: string; url?: string; alt?: string; children?: MdNode[]; data?: Record<string, unknown>;
+  position?: { start: { line: number }; end: { line: number } };
+}
 
 /** `==text==` inside a text node becomes `<mark>`. */
 function splitHighlights(node: MdNode): MdNode[] {
@@ -138,6 +157,8 @@ function walkCallouts(node: MdNode) {
           i++;
           break;
         }
+        // A node that goes on past the title line (bold over two lines) stays in the body (Codex re-review of 87a0a1f).
+        if (k.position && first.position && k.position.end.line > first.position.start.line) break;
         titled.push(k);
       }
       rest = [...rest, ...kids.slice(i)];

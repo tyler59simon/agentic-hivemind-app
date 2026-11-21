@@ -7,7 +7,7 @@ import { Mermaid, mermaidSource } from "../../ui/Mermaid";
 import { useWorkspace } from "../../workspace/store";
 import type { EmbedPage } from "../editor/rich/context";
 import { section, splitSize } from "../editor/rich/parse";
-import { MATH_BLOCK_MARK, MATH_MARK, prepareForReading, remarkCallouts, remarkEmbeds, remarkHighlights, WIKI_PICTURE } from "../editor/rich/reading";
+import { MATH_MARK, prepare, remarkCallouts, remarkEmbeds, remarkHighlights, WIKI_PICTURE } from "../editor/rich/reading";
 import { remarkWikilinks, WIKI_PREFIX } from "../viewer/remarkWikilinks";
 import { findFile, pictureUrl, relativeTarget } from "./pictures";
 import { folderOf } from "../../lib/notebooks";
@@ -65,12 +65,12 @@ export function PageView({ text, tabId, onLink, onFile, pictures, embed, nested 
   useEffect(() => {
     if (!nested && reveal?.tabId === tabId) document.getElementById(`${tabId}-l${reveal.line}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [reveal, tabId, nested]);
-  const prepared = useMemo(() => prepareForReading(text), [text]);
+  const prepared = useMemo(() => prepare(text), [text]);
   const { base, folder = "", files } = pictures ?? {};
   const components = useMemo<Components>(() => {
     const pictures: Pictures = { base, folder, files };
     const heading = (Tag: "h1" | "h2" | "h3" | "h4" | "h5" | "h6"): Components["h1"] =>
-      ({ node, children }) => <Tag id={nested ? undefined : `${tabId}-l${(node?.position?.start.line ?? 1) - 1}`}>{children}</Tag>;
+      ({ node, children }) => <Tag id={nested ? undefined : `${tabId}-l${prepared.sourceLine((node?.position?.start.line ?? 1) - 1)}`}>{children}</Tag>;
     const link = (href: string | undefined, children: ReactNode) => {
       if (href?.startsWith(WIKI_PREFIX)) {
         const target = decodeURIComponent(href.slice(WIKI_PREFIX.length));
@@ -103,7 +103,6 @@ export function PageView({ text, tabId, onLink, onFile, pictures, embed, nested 
       code: ({ node: _node, className, children, ...rest }) => {
         const source = String(children ?? "");
         if (source.startsWith(MATH_MARK)) return <MathView tex={source.slice(MATH_MARK.length)} display={false} />;
-        if (source.startsWith(MATH_BLOCK_MARK)) return <MathView tex={source.slice(MATH_BLOCK_MARK.length)} display />;
         return <code className={className} {...rest}>{children}</code>;
       },
       pre: ({ node: _node, children, ...rest }) => {
@@ -125,9 +124,9 @@ export function PageView({ text, tabId, onLink, onFile, pictures, embed, nested 
       },
       h1: heading("h1"), h2: heading("h2"), h3: heading("h3"), h4: heading("h4"), h5: heading("h5"), h6: heading("h6"),
     };
-  }, [tabId, onLink, onFile, base, folder, files, embed, nested]);
+  }, [tabId, onLink, onFile, base, folder, files, embed, nested, prepared]);
   const body = text.trim()
-    ? <Markdown remarkPlugins={PLUGINS} components={components} urlTransform={keepUrl}>{prepared}</Markdown>
+    ? <Markdown remarkPlugins={PLUGINS} components={components} urlTransform={keepUrl}>{prepared.text}</Markdown>
     : nested ? null : <p className="muted">This page is empty. Press <kbd>Ctrl</kbd>+<kbd>E</kbd> to write.</p>;
   if (nested) return <div className="markdown">{body}</div>;
   return (
