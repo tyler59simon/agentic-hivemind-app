@@ -2,8 +2,10 @@
 // React, so moving between the Notes and Memory pages (which remounts the workspace) keeps edits and state.
 import { create } from "zustand";
 import { deleteDraft, getFileDraft, putDraft } from "../lib/drafts";
-import { readFile, saveFile, type Loaded as RawLoaded } from "../lib/notebooks";
+import type { Loaded as RawLoaded } from "../lib/notebooks";
 import { mergeBody } from "../features/editor/merge";
+import { isLm } from "./adapters/lmdoc";
+import { readDoc, saveDoc } from "./io";
 import { docKey, draftKeyOf, movedPath, type FileRef } from "./keys";
 import { initial, isUnsaved, reduce, type DocEvent, type DocState, type Loaded } from "./session";
 
@@ -136,7 +138,7 @@ async function draftOf(key: string, ref: FileRef) {
 async function load(key: string, ref: FileRef, attempt: number, convertNow = false) {
   let loaded: Loaded;
   try {
-    loaded = toLoaded(await readFile(ref.notebook, ref.path));
+    loaded = toLoaded(await readDoc(ref));
   } catch (e) {
     if (!current(key, attempt)) return;
     // A page gone from disk may still have unsaved edits kept as a draft: they are shown, to copy out or discard
@@ -180,6 +182,19 @@ async function load(key: string, ref: FileRef, attempt: number, convertNow = fal
 }
 
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
+/** Living Memory pages save 5 seconds after typing stops (and on Ctrl+S); folder pages only on Ctrl+S. Never per
+ *  keystroke, so Living Memory's journal does not fill with saves (NS-2C). */
+const autosaves = new Map<string, ReturnType<typeof setTimeout>>();
+export const AUTOSAVE_MS = 5000;
+function scheduleSave(key: string) {
+  clearTimeout(autosaves.get(key));
+  autosaves.set(key, setTimeout(() => {
+    autosaves.delete(key);
+    // A save still running or a move holding the page would make this one a no-op: try again once they settle.
+    if (isHeld(key) || get(key)?.status === "saving") scheduleSave(key);
+    else void save(key);
+  }, AUTOSAVE_MS));
+}
 
 /** Keep a draft of unsaved edits, a little after typing stops. */
 function scheduleDraft(key: string) {
@@ -294,11 +309,13 @@ export async function convertToUtf8(key: string) {
   scheduleDraft(key);
 }
 
-export function edit(key: string, text: string) {
+/** The editor's text changed; `outside` for a change not typed in the editor, which the editor then shows. */
+export function edit(key: string, text: string, outside = false) {
   const ref = useDocuments.getState().refs[key];
   if (ref && isArriving(useDocuments.getState().held, ref)) return;
-  dispatch(key, { type: "edited", text });
+  dispatch(key, { type: "edited", text, outside });
   scheduleDraft(key);
+  if (ref && isLm(ref)) scheduleSave(key);
 }
 
 /** Discard the draft shown beside a page that cannot take it (its file is gone, or read-only). */
@@ -316,13 +333,13 @@ export async function save(key: string) {
   const generation = generations.get(key);
   const run = (async () => {
     try {
-      const out = await saveFile(ref.notebook, ref.path, text, s.base!.stamp, s.base!.format, !!s.convert);
+      const out = await saveDoc(ref, text, s.base!.stamp, s.base!.format, !!s.convert);
       if (!current(key, generation)) return;
       if (out.status === "saved") {
         dispatch(key, { type: "saved", stamp: { sha256: out.sha256, size: out.size, mtimeMs: out.mtimeMs } });
         if (!isUnsaved(get(key))) { clearTimeout(timers.get(key)); timers.delete(key); await writeDraft(key); }
       } else if (out.status === "stale") {
-        const theirs = toLoaded(await readFile(ref.notebook, ref.path));
+        const theirs = toLoaded(await readDoc(ref));
         if (current(key, generation)) dispatch(key, { type: "stale", theirs });
       } else {
         dispatch(key, { type: "gone" });
@@ -357,7 +374,7 @@ export async function reload(key: string): Promise<boolean> {
   const before = get(key), generation = generations.get(key);
   if (!ref || !before) return false;
   try {
-    const theirs = toLoaded(await readFile(ref.notebook, ref.path));
+    const theirs = toLoaded(await readDoc(ref));
     if (!current(key, generation) || get(key)?.text !== before.text) return false;
     clearTimeout(timers.get(key)); timers.delete(key);
     dispatch(key, { type: "reloaded", theirs });
@@ -377,7 +394,7 @@ async function recheck(key: string) {
   const ref = useDocuments.getState().refs[key], generation = generations.get(key);
   if (!ref || !get(key) || get(key).status === "loading") return;
   try {
-    const theirs = toLoaded(await readFile(ref.notebook, ref.path));
+    const theirs = toLoaded(await readDoc(ref));
     if (!current(key, generation)) return;
     // A draft kept beside a read-only page comes back once the file can take it, through a load that merges it like
     // any draft (Codex final review of a34fafd, D3b).
@@ -454,6 +471,8 @@ export function retarget(notebook: string, from: string, to: string) {
       if (kept.has(key)) { kept.set(next, kept.get(key)!); kept.delete(key); }
       const timer = timers.get(key);
       if (timer) { clearTimeout(timer); timers.delete(key); scheduleDraft(next); }
+      const autosave = autosaves.get(key);
+      if (autosave) { clearTimeout(autosave); autosaves.delete(key); scheduleSave(next); }
     }
     return { docs, refs };
   });
@@ -477,6 +496,8 @@ export function release(key: string) {
 export function discard(key: string) {
   clearTimeout(timers.get(key));
   timers.delete(key);
+  clearTimeout(autosaves.get(key));
+  autosaves.delete(key);
   generations.delete(key);
   kept.delete(key);
   unkept.delete(key);

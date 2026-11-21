@@ -6,7 +6,8 @@ import { beforeMove, discard, edit, hold, keyOf, open, refresh, unsavedUnder, us
 import { retargetAll } from "../../documents/sync";
 import { classify } from "../../lib/errors";
 import { forgetMoved } from "../../lib/drafts";
-import { createFile, deleteFile, fileName, folderOf, isMarkdown, makeFolder, notebooksQuery, pageTitle, renameFile } from "../../lib/notebooks";
+import { createDoc, createSection, deleteDoc, moveDoc } from "../../documents/io";
+import { fileName, folderOf, isMarkdown, notebooksQuery, pageTitle } from "../../lib/notebooks";
 import { isLoose, saveAs } from "../../lib/opens";
 import { untitledText } from "./untitled";
 import { toast } from "../../ui/toast";
@@ -34,7 +35,7 @@ async function createUnique(notebook: string, folder: string, base: string, text
   for (let n = 1; n < 100; n++) {
     const path = join(folder, `${n === 1 ? base : `${base} ${n}`}.md`);
     try {
-      await createFile(notebook, path, text);
+      await createDoc(notebook, path, text);
       return path;
     } catch (e) {
       if (!/exists/i.test(String(e))) throw e;
@@ -52,8 +53,10 @@ export async function newPage(client: QueryClient, notebook: string, folder = ""
 
 export async function newSection(client: QueryClient, notebook: string, folder: string, name: string) {
   const path = join(folder, name.trim());
-  await makeFolder(notebook, path);
+  // A Living Memory section is made with its first page, which opens (NS-2C).
+  const first = await createSection(notebook, path);
   client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
+  if (first) openPage({ notebook, path: first });
   return path;
 }
 
@@ -68,7 +71,7 @@ export async function movePath(client: QueryClient, notebook: string, from: stri
   try {
     // A page at the destination with unsaved edits would be overwritten by the move (Codex re-review of fa08348, F2).
     if (unsavedUnder(notebook, to).length) throw new Error(`${to} has unsaved edits; save or discard them first`);
-    await renameFile(notebook, from, to);
+    await moveDoc(notebook, from, to);
     forgetMoved(notebook, from);
     retargetAll(notebook, from, to);
   } finally {
@@ -161,7 +164,7 @@ export async function trashPath(client: QueryClient, notebook: string, path: str
     const doc = useDocuments.getState().docs[keyOf({ notebook, path })];
     const closed = closeTabsUnder(notebook, path);
     try {
-      await deleteFile(notebook, path, doc?.base?.stamp);
+      await deleteDoc(notebook, path, doc?.base?.stamp);
     } catch (e) {
       for (const ref of closed.values()) openPage(ref);
       throw e;

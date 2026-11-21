@@ -36,7 +36,7 @@ export interface DocState {
 
 export type DocEvent =
   | { type: "loaded"; loaded: Loaded; draft?: { text: string; at: string }; convert?: boolean }
-  | { type: "edited"; text: string }
+  | { type: "edited"; text: string; outside?: boolean } // outside: not typed in the editor (an attachment link), so it shows the text
   | { type: "saveStarted" }
   | { type: "saved"; stamp: Stamp }
   | { type: "stale"; theirs: Loaded }
@@ -76,10 +76,12 @@ export function reduce(s: DocState, e: DocEvent): DocState {
       }
       return { status: "clean", base: loaded, text: loaded.text, version: s.version + 1 };
     }
-    case "edited":
+    case "edited": {
       if (s.status === "readOnly" || s.status === "loading" || s.status === "error") return s;
-      if (s.status === "saving" || s.status === "stale") return { ...s, text: e.text };
-      return { ...s, text: e.text, status: dirtyOr(s, e.text) };
+      const version = e.outside ? s.version + 1 : s.version;
+      if (s.status === "saving" || s.status === "stale") return { ...s, text: e.text, version };
+      return { ...s, text: e.text, status: dirtyOr(s, e.text), version };
+    }
     case "saveStarted":
       return s.status === "dirty" ? { ...s, status: "saving", saving: s.text } : s;
     case "saved": {

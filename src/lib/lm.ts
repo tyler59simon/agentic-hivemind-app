@@ -43,7 +43,12 @@ export async function run<T>(argv: string[], stdin?: string): Promise<T> {
 const view = (argv: string[]) => [...argv, "--actor", "viewer"];
 
 /** What `version` reports under `capabilities`. */
-export interface Capabilities { direct_writes?: number; history?: number; restore?: number; pin?: number; rule?: number; maintenance?: { version: number; actions: string[] }; wiki_agent?: { version: number }; note_types?: number }
+export interface Capabilities {
+  direct_writes?: number; history?: number; restore?: number; pin?: number; rule?: number; maintenance?: { version: number; actions: string[] };
+  wiki_agent?: { version: number }; note_types?: number;
+  /** Notebook pages (NS-2A, NS-2B). */
+  docs?: { version: number; max_page_bytes: number; max_asset_bytes: number; notebook_only_domains?: boolean; search?: boolean; folder_policy?: boolean };
+}
 
 export interface ConnectInfo {
   version: { api: number; python: string; commands: string[]; capabilities?: Capabilities };
@@ -82,14 +87,19 @@ export const saveSettings = (value: Settings) => call("save_settings", { value }
 export const captureStatus = () => call("capture_status", {}) as Promise<CaptureStatus>;
 export const showMain = () => call("show_main", {}) as Promise<void>;
 
-export interface DomainInfo { name: string; bound: boolean; prefixes: string[]; active: number; archived: number }
+/** `kind` is "notebook" for a domain that holds notebooks only (NS-2A); older stores leave it out. */
+export interface DomainInfo { name: string; bound: boolean; prefixes: string[]; active: number; archived: number; kind?: "memory" | "notebook"; pages?: number }
 export interface Domains {
   domains: DomainInfo[];
   aliases: Record<string, string>;
   global_domains: string[];
   foreign_domains: string[];
 }
-export const domains = () => run<Domains>(view(["domains"]));
+/** Every domain, notebook-only ones included: for the Notes page. */
+export const allDomains = () => run<Domains>(view(["domains"]));
+/** Memory domains only. A notebook-only domain holds no notes, so no memory picker (capture, new note, library, graph,
+ *  history, wiki, work, the default domain) offers it (NS-2C). */
+export const domains = () => allDomains().then((d) => ({ ...d, domains: d.domains.filter((x) => x.kind !== "notebook") }));
 
 export interface NoteRow {
   ref: string; id: string; domain: string; title: string; type: NoteType; status: Status;
@@ -598,3 +608,74 @@ export const isNoAgentWiki = (e: unknown) => e instanceof LmError && /no agent w
 export const agentWikiModel = (domain: string, project?: string) =>
   run<{ ok: boolean; model: WikiModel }>(view(["wiki", "--agent", "--format", "json", "--domain", domain, ...(project ? ["--project", project] : [])]))
     .then((r) => r.model, (e: unknown) => { if (isNoAgentWiki(e)) return null; throw e; });
+
+// Notebook pages (NS-2A, NS-2B, used by NS-2C). Hivemind sees private notebooks (`--include-private`, its bridge only)
+// and hidden ones (`--include-hidden`). Reads run as the viewer; writes as the main actor.
+export type Visibility = "hidden" | "searchable" | "injectable";
+export interface DocNotebook {
+  domain: string; notebook: string; title: string; visibility: Visibility; private: boolean; revision: string;
+  pages: number; assets: number; asset_bytes: number; proposals: number; updated: string;
+}
+export interface DocEntry { path: string; kind: "folder" | "page"; size?: number; revision?: string; updated?: string }
+export interface DocPage { domain: string; notebook: string; path: string; text: string; revision: string; size: number; updated: string; truncated?: boolean }
+/** What a `doc` write returns: the operation and, for page writes, the new revision. */
+export interface DocReceipt { operation_id: string; revision?: string; path?: string; summary?: Record<string, unknown> }
+export interface DocProposalRow {
+  id: string; domain: string; notebook: string; path: string; base_revision: string | null; note: string | null;
+  created: string; status: "pending" | "accepted" | "rejected"; reason: string | null; settled: string | null; size: number;
+}
+export interface DocProposal extends Omit<DocProposalRow, "reason" | "settled" | "size"> { body: string; session?: string | null }
+export interface DocHistoryRow { operation_id: string; kind: string; state: string; created: string; before_revision: string | null; after_revision: string | null }
+
+const PRIVATE = "--include-private";
+/** A command that carries a page body: Rust sends it as stdin, or through a staging file when it is large (NS-2C). */
+async function runBody<T>(argv: string[], body: string): Promise<T> {
+  const reply = (await call("lm_body", { argv, body })) as Reply<T>;
+  if (reply.exit_code !== 0) {
+    const error = reply.error ?? { code: "invalid", message: `Exit code ${reply.exit_code}` };
+    throw new LmError(error.code, error.message, reply.exit_code);
+  }
+  return reply.result;
+}
+
+export const docNotebooks = () =>
+  run<{ notebooks: DocNotebook[] }>(view(["doc", "notebooks", "--all-domains", "--include-hidden", PRIVATE])).then((r) => r.notebooks);
+export const lmNotebooksQuery = () => ({ queryKey: ["lm-notebooks"], queryFn: docNotebooks });
+/** Pending proposals of one notebook. */
+export const proposalsQuery = (domain: string, notebook: string) => ({ queryKey: ["lm-proposals", domain, notebook], queryFn: () => docProposals(domain, notebook) });
+export const docNotebookCreate = (domain: string, notebook: string, title: string) =>
+  run<DocReceipt>(["doc", "notebook", "create", domain, notebook, "--title", title]);
+export const docNotebookUpdate = (domain: string, notebook: string, patch: { title?: string; visibility?: Visibility; private?: boolean }) =>
+  run<DocReceipt>([
+    "doc", "notebook", "update", domain, notebook, PRIVATE,
+    ...(patch.title !== undefined ? ["--title", patch.title] : []),
+    ...(patch.visibility ? ["--visibility", patch.visibility] : []),
+    ...(patch.private === undefined ? [] : [patch.private ? "--private" : "--no-private"]),
+  ]);
+export const docList = (domain: string, notebook: string) =>
+  run<{ title: string; entries: DocEntry[] }>(view(["doc", "list", domain, notebook, PRIVATE]));
+export const docRead = (domain: string, notebook: string, path: string) => run<DocPage>(view(["doc", "read", domain, notebook, path, PRIVATE]));
+export const docWrite = (domain: string, notebook: string, path: string, body: string, expected: string) =>
+  runBody<DocReceipt>(["doc", "write", domain, notebook, path, "--expected-revision", expected, PRIVATE], body);
+export const docCreate = (domain: string, notebook: string, path: string, body: string) =>
+  runBody<DocReceipt>(["doc", "create", domain, notebook, path, PRIVATE], body);
+export const docDelete = (domain: string, notebook: string, path: string, expected: string) =>
+  run<DocReceipt>(["doc", "delete", domain, notebook, path, "--expected-revision", expected, PRIVATE]);
+export const docHistory = (domain: string, notebook: string, path: string, limit = 50) =>
+  run<{ history: DocHistoryRow[] }>(view(["doc", "history", domain, notebook, path, "--limit", String(limit), PRIVATE])).then((r) => r.history);
+/** The page as operation `op` left it. */
+export const docVersion = (domain: string, notebook: string, path: string, op: string) =>
+  run<DocPage>(view(["doc", "history", domain, notebook, path, "--version", op, PRIVATE]));
+export const docProposals = (domain?: string, notebook?: string) =>
+  run<{ proposals: DocProposalRow[] }>(view(["doc", "proposals", ...(domain ? [domain] : []), ...(notebook ? [notebook] : []), PRIVATE])).then((r) => r.proposals);
+export const docProposal = (id: string) => run<{ proposal: DocProposal }>(view(["doc", "proposal", id, PRIVATE])).then((r) => r.proposal);
+export const docAccept = (id: string) => run<DocReceipt>(["doc", "accept", id, PRIVATE]);
+export const docReject = (id: string, reason?: string) => run<DocReceipt>(["doc", "reject", id, ...(reason ? ["--reason", reason] : []), PRIVATE]);
+export const domainCreateNotebook = (name: string) => run<{ domain: string; kind: string }>(["domain", "create", name, "--notebook-only"]);
+/** Register a folder notebook outside the store, or change how far agents reach into it. `isPrivate` undefined keeps
+ *  what Living Memory has: a folder that was private before it was removed stays private when it is added again. */
+export const docFolderSet = (path: string, domain: string, visibility: Visibility, isPrivate?: boolean) =>
+  run<unknown>(["doc", "folder", "set", path, "--domain", domain, "--visibility", visibility,
+    ...(isPrivate === undefined ? [] : [isPrivate ? "--private" : "--no-private"])]);
+/** Living Memory forgets a folder notebook; a hidden or private one stays out of reach. */
+export const docFolderUnset = (path: string) => run<unknown>(["doc", "folder", "unset", path]);

@@ -1,8 +1,10 @@
 // Folder notebooks: the Tauri commands of src-tauri/src/studio.rs. The webview names a notebook by id and a page by a
 // relative, forward-slash path; Rust resolves both, so nothing here ever holds an absolute path it could misuse.
 import { invoke } from "@tauri-apps/api/core";
+import type { Visibility } from "./lm";
 
-export interface Notebook { id: string; path: string; title: string; added: string }
+/** `domain`, `visibility` and `private` copy what Living Memory holds for the folder (NS-2C); absent until it was registered there. */
+export interface Notebook { id: string; path: string; title: string; added: string; domain?: string; visibility?: Visibility; private?: boolean }
 export type EntryKind = "dir" | "page" | "text" | "other";
 export interface Entry { path: string; kind: EntryKind; size: number; mtimeMs: number }
 export interface Tree { entries: Entry[]; truncated: boolean }

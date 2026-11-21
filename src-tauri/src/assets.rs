@@ -16,30 +16,48 @@ const MAX_BYTES: u64 = 50 * 1024 * 1024;
 /// The origins the app's pages load from: production, and the dev server.
 pub const ORIGINS: &[&str] = &["http://tauri.localhost", "tauri://localhost", "http://localhost:1420"];
 
+/// What a grant serves: any picture under a folder outside the store (a folder notebook, a loose file's folder), or
+/// only the `assets/` folder of a Living Memory notebook, which lies inside the store (NS-2C).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Scope {
+    Folder,
+    LmAssets,
+}
+
 /// Opaque ids for folders the webview may load pictures from, rebuilt each run.
 #[derive(Default)]
 pub struct AssetGrants {
-    roots: Mutex<HashMap<String, PathBuf>>,
+    roots: Mutex<HashMap<String, (PathBuf, Scope)>>,
 }
 
 impl AssetGrants {
     /// The grant for `root`, made on first use.
     pub fn grant(&self, root: &Path) -> String {
+        self.grant_scoped(root, Scope::Folder)
+    }
+
+    /// The grant for a Living Memory notebook folder: it serves files under its `assets/` folder only.
+    pub fn grant_lm(&self, notebook: &Path) -> String {
+        self.grant_scoped(notebook, Scope::LmAssets)
+    }
+
+    fn grant_scoped(&self, root: &Path, scope: Scope) -> String {
         let mut roots = self.roots.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((id, _)) = roots.iter().find(|(_, r)| r.as_path() == root) {
+        if let Some((id, _)) = roots.iter().find(|(_, (r, s))| r.as_path() == root && *s == scope) {
             return id.clone();
         }
         let id = uuid::Uuid::new_v4().simple().to_string();
-        roots.insert(id.clone(), root.to_path_buf());
+        roots.insert(id.clone(), (root.to_path_buf(), scope));
         id
     }
 
-    /// Withdraw every grant whose root `keep` rejects.
+    /// Withdraw every folder grant whose root `keep` rejects. Living Memory notebook grants stay: they serve only
+    /// attachments, which Hivemind may show for any notebook it lists.
     pub fn retain(&self, keep: impl Fn(&Path) -> bool) {
-        self.roots.lock().unwrap_or_else(|e| e.into_inner()).retain(|_, r| keep(r));
+        self.roots.lock().unwrap_or_else(|e| e.into_inner()).retain(|_, (r, s)| *s == Scope::LmAssets || keep(r));
     }
 
-    fn root(&self, id: &str) -> Option<PathBuf> {
+    fn root(&self, id: &str) -> Option<(PathBuf, Scope)> {
         self.roots.lock().unwrap_or_else(|e| e.into_inner()).get(id).cloned()
     }
 }
@@ -128,7 +146,7 @@ pub fn serve(request: &Request<Vec<u8>>, label: &str, grants: &AssetGrants, prot
     }
     let path = request.uri().path().trim_start_matches('/');
     let Some((grant, rel)) = path.split_once('/') else { return status(StatusCode::NOT_FOUND) };
-    let Some(root) = grants.root(grant) else { return status(StatusCode::NOT_FOUND) };
+    let Some((root, scope)) = grants.root(grant) else { return status(StatusCode::NOT_FOUND) };
     // The granted folder must still be the one granted: a junction put in its place leads elsewhere (Codex review of
     // 52051c8, A1).
     if !contain::unmoved(&root) {
@@ -139,7 +157,14 @@ pub fn serve(request: &Request<Vec<u8>>, label: &str, grants: &AssetGrants, prot
     // Hidden parts are refused in the path asked for and in the path it resolves to, so a visible alias of a hidden
     // folder serves nothing (Codex review of 52051c8, A2).
     let hidden = |rel: &str| contain::check_rel(rel).map(|parts| parts.iter().any(|p| p.starts_with('.'))).unwrap_or(true);
-    if protected.check(&full).is_err() || hidden(&rel) || contain::resolved_rel(&root, &full).is_none_or(|r| hidden(&r)) {
+    let resolved = contain::resolved_rel(&root, &full);
+    // A Living Memory notebook lies inside the store, which is otherwise never served: only its attachments are, judged
+    // on the path they resolve to (NS-2C).
+    let allowed = match scope {
+        Scope::Folder => protected.check(&full).is_ok(),
+        Scope::LmAssets => resolved.as_deref().is_some_and(|r| r.split('/').next().is_some_and(|first| first.eq_ignore_ascii_case("assets")) && r.contains('/')),
+    };
+    if !allowed || hidden(&rel) || resolved.is_none_or(|r| hidden(&r)) {
         return status(StatusCode::FORBIDDEN);
     }
     let ext = full.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
@@ -321,6 +346,32 @@ mod tests {
         let g = grants.grant(&dir);
         let r = serve(&get(&format!("{}img/a%20b.png", base_url(&g)), &[]), "main", &grants, &Protected::new(Some(&store)));
         assert_eq!(r.status(), StatusCode::FORBIDDEN);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// NS-2C: a Living Memory notebook lies inside the store; its grant serves its attachments and nothing else.
+    #[test]
+    fn a_living_memory_grant_serves_only_attachments() {
+        let dir = scratch();
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        std::fs::write(dir.join("assets").join("1a2b3c4d-pic.png"), b"png").unwrap();
+        let grants = AssetGrants::default();
+        let g = grants.grant_lm(&dir);
+        let store = Protected::new(Some(&dir));
+        let code = |rel: &str| serve(&get(&format!("{}{rel}", base_url(&g)), &[]), "main", &grants, &store).status();
+        assert_eq!(code("assets/1a2b3c4d-pic.png"), StatusCode::OK);
+        if cfg!(windows) {
+            assert_eq!(code("ASSETS/1a2b3c4d-pic.png"), StatusCode::OK, "Windows matches the folder in any case");
+        }
+        assert_eq!(code("img/a%20b.png"), StatusCode::FORBIDDEN, "a picture outside assets/");
+        assert_eq!(code("assets/../img/a%20b.png"), StatusCode::FORBIDDEN);
+        assert_eq!(code("notes.md"), StatusCode::FORBIDDEN);
+        // A folder grant of the same folder is still refused inside the store, and pruning keeps the notebook grant.
+        let folder = grants.grant(&dir);
+        assert_ne!(folder, g);
+        assert_eq!(serve(&get(&format!("{}assets/1a2b3c4d-pic.png", base_url(&folder)), &[]), "main", &grants, &store).status(), StatusCode::FORBIDDEN);
+        grants.retain(|_| false);
+        assert_eq!(code("assets/1a2b3c4d-pic.png"), StatusCode::OK);
         std::fs::remove_dir_all(&dir).ok();
     }
 

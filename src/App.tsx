@@ -23,7 +23,7 @@ import { Shell } from "./shell/Shell";
 import { openReview, openSession, useApp } from "./store";
 import { toast, Toasts } from "./ui/toast";
 import { unsavedUntitled, useWorkspace } from "./workspace/store";
-import { onFilesChanged, startDocumentSync } from "./documents/sync";
+import { onDocsChanged, onFilesChanged, startDocumentSync, type DocsChanged } from "./documents/sync";
 import { draftsPending, flushAllDrafts, onDraftLost } from "./documents/store";
 import { useOpenRequests } from "./features/notes/opening";
 import { newPageHere } from "./features/notes/actions";
@@ -182,6 +182,7 @@ function useLiveRefresh(enabled: boolean) {
       listen<string>("executive-changed", (e) => client.invalidateQueries({ queryKey: ["executive", e.payload] })),
       listen<{ ref: string }>("open-note", (e) => useWorkspace.getState().openNote(e.payload.ref)),
       listen<FilesChanged>("files-changed", (e) => onFilesChanged(client, e.payload)),
+      listen<DocsChanged>("docs-changed", (e) => onDocsChanged(client, e.payload)),
     ];
     return () => { stops.forEach((stop) => stop.then((unlisten) => unlisten())); };
   }, [enabled, client]);

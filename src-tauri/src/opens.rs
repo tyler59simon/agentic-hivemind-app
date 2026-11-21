@@ -319,7 +319,7 @@ mod prune_tests {
 
     #[test]
     fn picture_grants_stay_only_for_notebooks_and_folders_of_recent_files() {
-        let nb = |p: &str| crate::notebooks::Notebook { id: "nb-1".into(), path: p.into(), title: String::new(), added: String::new() };
+        let nb = |p: &str| crate::notebooks::Notebook { id: "nb-1".into(), path: p.into(), ..Default::default() };
         let grant = |p: &str| Grant { id: "g".into(), path: p.into(), opened: String::new() };
         let (notebooks, grants) = (vec![nb(r"C:\nb")], vec![grant(r"C:\docs\a.txt")]);
         assert!(in_use(Path::new(r"C:\nb"), &notebooks, &grants));

@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 /// Oldest `serve` API this app speaks (Living Memory's `version` reports it).
 pub const MIN_API: u64 = 1;
 const REQUIRED: [&str; 4] = ["serve", "list", "domains", "version"];
+/// The longest request line Living Memory's `serve` reads (its SERVE_LIMIT); a longer one is never sent (NS-2C, C2).
+pub const SERVE_LIMIT: usize = 2 * 1024 * 1024;
 /// How much of the server's stderr is kept to explain why it exited.
 const STDERR_TAIL: usize = 4096;
 
@@ -168,6 +170,10 @@ impl Bridge {
     /// Run one command. Transport failures drop the process so the next call starts a new one;
     /// a failed request is never retried, because it may already have changed the store.
     pub fn call(&self, argv: &[String], stdin: Option<&str>) -> Result<Reply, String> {
+        // Measured before the process is touched, so a request that is too large never costs a restart.
+        if stdin.is_some_and(|s| s.len() > SERVE_LIMIT / 8) && too_large(argv, stdin) {
+            return Err("This request is larger than the 2 MiB Living Memory accepts".into());
+        }
         let mut guard = self.proc.lock().unwrap();
         if guard.is_none() {
             let mut proc = Self::spawn(&self.launch())?;
@@ -180,6 +186,11 @@ impl Bridge {
         }
         outcome
     }
+}
+
+/// Whether the request line for `argv` and `stdin` would exceed SERVE_LIMIT.
+fn too_large(argv: &[String], stdin: Option<&str>) -> bool {
+    serde_json::to_string(&json!({ "id": u64::MAX, "argv": argv, "stdin": stdin })).map(|line| line.len() + 1 > SERVE_LIMIT).unwrap_or(true)
 }
 
 pub fn check_version(reply: &Reply) -> Result<(), String> {
@@ -226,6 +237,22 @@ mod tests {
         let bridge = Bridge::new(Launch { program: "py".into(), args: vec![], script: script.clone(), root: None });
         let error = bridge.call(&["list".into()], None).unwrap_err();
         assert!(error.starts_with(&format!("Living Memory is not installed at {}", script.display())), "{error}");
+    }
+
+    /// NS-2C: a request line longer than Living Memory reads is refused before any process starts, so it never
+    /// costs a restart (the script here does not even exist).
+    #[test]
+    fn a_request_over_the_serve_limit_is_refused_before_it_is_sent() {
+        let script = std::env::temp_dir().join("hivemind-no-such-dir").join("living_memory.py");
+        let bridge = Bridge::new(Launch { program: "py".into(), args: vec![], script, root: None });
+        let error = bridge.call(&["doc".into(), "write".into()], Some(&"a".repeat(SERVE_LIMIT))).unwrap_err();
+        assert!(error.contains("larger than the 2 MiB"), "{error}");
+        // Escaping counts: a body of control characters is six times longer on the line.
+        let error = bridge.call(&["doc".into()], Some(&"\u{1}".repeat(SERVE_LIMIT / 6 + 1))).unwrap_err();
+        assert!(error.contains("larger than the 2 MiB"), "{error}");
+        // A smaller request goes on to start the process.
+        let error = bridge.call(&["doc".into()], Some(&"a".repeat(SERVE_LIMIT / 2))).unwrap_err();
+        assert!(error.starts_with("Living Memory is not installed"), "{error}");
     }
 
     #[test]

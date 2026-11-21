@@ -1,7 +1,8 @@
 //! Watch the store's note folders (read-only) so the UI refreshes when agents write.
 use notify_debouncer_mini::notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_mini::{new_debouncer, DebounceEventResult, Debouncer};
-use std::collections::BTreeSet;
+use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 use std::time::Duration;
 
@@ -20,6 +21,43 @@ pub fn note_domain(domains_dir: &Path, path: &Path) -> Option<String> {
     is_note.then(|| parts[0].clone())
 }
 
+/// Files of one Living Memory notebook that changed (NS-2C): paths inside the notebook, `/`-separated.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct DocsChanged {
+    pub domain: String,
+    pub notebook: String,
+    pub paths: Vec<String>,
+}
+
+/// The notebook a changed path belongs to, if it lies under `domains/<d>/notebooks/<nb>/`: its domain, notebook and path
+/// in the notebook. The index (`docs.sqlite3`) and the mirror state (`notebook-sync.json`) sit beside `notebooks/`, so
+/// they never match.
+pub fn doc_change(domains_dir: &Path, path: &Path) -> Option<(String, String, String)> {
+    let rel = path.strip_prefix(domains_dir).ok()?;
+    let parts: Vec<String> = rel
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect();
+    if parts.len() < 4 || parts[1] != "notebooks" {
+        return None;
+    }
+    Some((parts[0].clone(), parts[2].clone(), parts[3..].join("/")))
+}
+
+/// Changed notebook files grouped by notebook.
+pub fn docs_changed(domains_dir: &Path, paths: impl IntoIterator<Item = impl AsRef<Path>>) -> Vec<DocsChanged> {
+    let mut by: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    for path in paths {
+        if let Some((domain, notebook, rel)) = doc_change(domains_dir, path.as_ref()) {
+            by.entry((domain, notebook)).or_default().insert(rel);
+        }
+    }
+    by.into_iter().map(|((domain, notebook), paths)| DocsChanged { domain, notebook, paths: paths.into_iter().collect() }).collect()
+}
+
 /// Store-level config files the UI cares about, when a changed path is one of them directly under the store root.
 pub fn store_file(root: &Path, path: &Path) -> Option<String> {
     let name = path.file_name()?.to_str()?;
@@ -27,11 +65,12 @@ pub fn store_file(root: &Path, path: &Path) -> Option<String> {
 }
 
 /// Watch note folders (recursively) and the store root (non-recursively, for config files).
-/// `on_change` gets affected domains; `on_store` gets changed config file names.
+/// `on_change` gets affected domains; `on_store` gets changed config file names; `on_docs` gets changed notebook files.
 pub fn watch_all(
     root: &Path,
     on_change: impl Fn(Vec<String>) + Send + 'static,
     on_store: impl Fn(Vec<String>) + Send + 'static,
+    on_docs: impl Fn(Vec<DocsChanged>) + Send + 'static,
 ) -> Result<Debouncer<RecommendedWatcher>, String> {
     let domains_dir = root.join("domains");
     let base = domains_dir.clone();
@@ -45,6 +84,10 @@ pub fn watch_all(
             let files: BTreeSet<String> = events.iter().filter_map(|e| store_file(&store, &e.path)).collect();
             if !files.is_empty() {
                 on_store(files.into_iter().collect());
+            }
+            let docs = docs_changed(&base, events.iter().map(|e| e.path.as_path()));
+            if !docs.is_empty() {
+                on_docs(docs);
             }
         }
     })
@@ -74,6 +117,25 @@ mod tests {
         assert_eq!(note_domain(&base, &base.join("demo").join("search.sqlite3")), None);
         assert_eq!(note_domain(&base, &base.join("demo").join("staged").join("a.md")), None);
         assert_eq!(note_domain(&base, &base.join("demo").join("INDEX.md")), None);
+    }
+
+    #[test]
+    fn notebook_files_map_to_their_notebook() {
+        let base = PathBuf::from("store").join("domains");
+        let nb = base.join("demo").join("notebooks").join("plans");
+        assert_eq!(doc_change(&base, &nb.join("Ideas").join("First.md")), Some(("demo".into(), "plans".into(), "Ideas/First.md".into())));
+        assert_eq!(doc_change(&base, &nb.join("assets").join("1a2b-pic.png")).map(|c| c.2).as_deref(), Some("assets/1a2b-pic.png"));
+        assert_eq!(doc_change(&base, &nb.join("notebook.json")).map(|c| c.2).as_deref(), Some("notebook.json"));
+        assert_eq!(doc_change(&base, &nb.join(".proposals").join("abc.json")).map(|c| c.2).as_deref(), Some(".proposals/abc.json"));
+        assert_eq!(doc_change(&base, &nb), None, "the notebook folder itself");
+        assert_eq!(doc_change(&base, &base.join("demo").join("docs.sqlite3")), None);
+        assert_eq!(doc_change(&base, &base.join("demo").join("docs.sqlite3-wal")), None);
+        assert_eq!(doc_change(&base, &base.join("demo").join("notebook-sync.json")), None);
+        assert_eq!(doc_change(&base, &base.join("demo").join("notes").join("a.md")), None, "notes are not pages");
+        assert_eq!(note_domain(&base, &nb.join("Ideas").join("First.md")), None, "pages are not notes");
+        let grouped = docs_changed(&base, [nb.join("B.md"), nb.join("A.md"), nb.join("A.md"), base.join("jot").join("notebooks").join("daily").join("Today.md")]);
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(grouped[0], DocsChanged { domain: "demo".into(), notebook: "plans".into(), paths: vec!["A.md".into(), "B.md".into()] });
     }
 
     #[test]

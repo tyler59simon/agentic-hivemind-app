@@ -4,7 +4,10 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { convertToUtf8, discardKept, edit, isArriving, isDeleting, keyOf, open, reload, resolveMerge, save, useDocuments } from "../../documents/store";
 import { isUnsaved, mergeable, type DocState } from "../../documents/session";
 import { classify } from "../../lib/errors";
-import { createFile, fileName, folderOf, isMarkdown, notebooksQuery, pageTitle, revealFile, treeQuery, type Notebook } from "../../lib/notebooks";
+import { assetLink, attachFile, parseLm } from "../../documents/adapters/lmdoc";
+import { createDoc, treeQuery } from "../../documents/io";
+import { lmNotebooksQuery } from "../../lib/lm";
+import { fileName, folderOf, isMarkdown, notebooksQuery, pageTitle, revealFile, type Notebook } from "../../lib/notebooks";
 import { assetBase, isLoose, recentQuery, recentRef } from "../../lib/opens";
 import { Menu } from "../../ui/Menu";
 import { Confirm, Modal } from "../../ui/Modal";
@@ -48,7 +51,7 @@ function useFollow(tab: Tab, pages: string[], ask: (node: ReactNode) => void) {
         onAnswer={(yes) => {
           ask(null);
           if (!yes) return;
-          createFile(from.notebook, hit.missing, "").then(() => {
+          createDoc(from.notebook, hit.missing, "").then(() => {
             client.invalidateQueries({ queryKey: ["notebook-tree", from.notebook] });
             openPage({ notebook: from.notebook, path: hit.missing }, { split });
           }, (e) => toast(classify(e).message, "error"));
@@ -206,7 +209,11 @@ export function FileTab({ tab }: { tab: Tab }) {
   const reveal = useWorkspace((s) => (s.reveal?.tabId === tab.id ? s.reveal : null));
   const client = useQueryClient();
   const notebooks = useQuery(notebooksQuery());
-  const notebook = notebooks.data?.find((n) => n.id === ref.notebook);
+  // A Living Memory page (NS-2C) is named `domain · notebook title` and has no file on disk to show or open.
+  const lm = parseLm(ref.notebook);
+  const lmList = useQuery({ ...lmNotebooksQuery(), enabled: !!lm });
+  const lmTitle = lm && (lmList.data?.find((n) => n.domain === lm.domain && n.notebook === lm.notebook)?.title ?? lm.notebook);
+  const notebook: Notebook | undefined = lm ? { id: ref.notebook, path: "", title: `${lm.domain} · ${lmTitle}`, added: "" } : notebooks.data?.find((n) => n.id === ref.notebook);
   const pages = usePages(ref.notebook);
   const [dialog, setDialog] = useState<ReactNode>(null);
   const follow = useFollow(tab, pages, setDialog);
@@ -235,8 +242,17 @@ export function FileTab({ tab }: { tab: Tab }) {
   const recreate = () => {
     const d = useDocuments.getState().docs[key];
     if (!d) return;
-    createFile(ref.notebook, ref.path, d.text).then(() => reloadPage(key), (e) => toast(classify(e).message, "error"));
+    createDoc(ref.notebook, ref.path, d.text).then(() => reloadPage(key), (e) => toast(classify(e).message, "error"));
   };
+  /** Copy a file the user picks into the notebook's attachments and link it at the end of the page (NS-2C). */
+  const attach = () => attachFile(ref.notebook).then((asset) => {
+    if (!asset) return;
+    const d = useDocuments.getState().docs[key];
+    const name = fileName(asset).replace(/^[0-9a-f]{8}-/, "");
+    if (!d || d.status === "readOnly" || d.status === "loading" || d.status === "error") { toast(`Attached ${name}; this page cannot take a link to it now.`, "warn"); return; }
+    const link = `${/\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i.test(asset) ? "!" : ""}[${name}](${assetLink(ref.path, asset)})`;
+    edit(key, `${d.text}${d.text && !d.text.endsWith("\n") ? "\n" : ""}${link}\n`, true);
+  }, (e) => toast(classify(e).message, "error"));
   const remove = () => setDialog(
     <DeleteConfirm notebook={ref.notebook} path={ref.path} section={false}
       onAnswer={(yes) => {
@@ -280,6 +296,7 @@ export function FileTab({ tab }: { tab: Tab }) {
           <Menu label="Page actions" align="right" button={<Ellipsis size="1.3em" aria-hidden />} className="icon-menu">
             {(close) => {
               const item = (label: string, act: () => void, cls = "") => <li><button role="menuitem" className={cls} onClick={() => { close(); act(); }}>{label}</button></li>;
+              if (lm) return <>{item("Attach file…", () => void attach())}{item("Delete page…", remove, "danger-text")}</>;
               return (
                 <>
                   {item("Show in Explorer", () => revealFile(ref.notebook, ref.path).catch((e) => toast(classify(e).message, "error")))}

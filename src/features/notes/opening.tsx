@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { classify } from "../../lib/errors";
 import type { FileRef } from "../../documents/keys";
+import { announceAdded } from "./reach";
 import { addDroppedNotebook, LOOSE, openDialog, openForget, openPending, recentQuery } from "../../lib/opens";
 import { Confirm } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
@@ -60,10 +61,7 @@ export function useOpenRequests() {
         const { token } = offer;
         setOffer(null);
         if (!yes) return;
-        addDroppedNotebook(token).then((nb) => {
-          client.invalidateQueries({ queryKey: ["notebooks"] });
-          toast(`Added ${nb.title}.`);
-        }, (e) => toast(classify(e).message, "error"));
+        addDroppedNotebook(token).then((nb) => announceAdded(client, nb), (e) => toast(classify(e).message, "error"));
       }} />
   );
 }

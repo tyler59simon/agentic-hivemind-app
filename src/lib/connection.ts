@@ -29,6 +29,12 @@ export const useViewsEnabled = () => useConnection((s) => s.commands.includes("v
 /** The domain wiki needs an LM that has the `wiki` command. */
 export const useWikiEnabled = () => useConnection((s) => s.commands.includes("wiki"));
 
+/** Living Memory notebooks (NS-2C) need the `docs` capability and the `doc` command. */
+const docsOn = (s: { commands: string[]; capabilities?: Capabilities }) => (s.capabilities?.docs?.version ?? 0) >= 1 && s.commands.includes("doc");
+export const useDocsEnabled = () => useConnection(docsOn);
+/** The same check outside React. */
+export const docsEnabled = () => docsOn(useConnection.getState());
+
 /** The agent-written wiki edition needs the `wiki_agent` capability and the `wiki` command. */
 export const useAgentWikiEnabled = () => useConnection((s) => (s.capabilities?.wiki_agent?.version ?? 0) >= 1 && s.commands.includes("wiki"));
 

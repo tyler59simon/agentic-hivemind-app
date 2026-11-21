@@ -2,6 +2,7 @@
 // no tab shows any more is let go (its draft stays). Also routes the notebook watcher's events.
 import type { QueryClient } from "@tanstack/react-query";
 import type { FilesChanged } from "../lib/notebooks";
+import { lmContainer } from "./adapters/lmdoc";
 import { useWorkspace } from "../workspace/store";
 import { keyOf, refresh, release, retarget, useDocuments } from "./store";
 import { isUnsaved } from "./session";
@@ -43,6 +44,20 @@ export function retargetAll(notebook: string, from: string, to: string) {
     paused = false;
   }
   apply();
+}
+
+/** The `docs-changed` event: files of a Living Memory notebook changed (NS-2C). */
+export interface DocsChanged { domain: string; notebook: string; paths: string[] }
+
+/** Living Memory changed a notebook's files (an agent's proposal, an Obsidian edit, Hivemind's own saves). The tree
+ *  follows, open pages follow or warn, and the notebook list and proposals refresh when their files changed. */
+export function onDocsChanged(client: QueryClient, { domain, notebook, paths }: DocsChanged) {
+  const container = lmContainer(domain, notebook);
+  client.invalidateQueries({ queryKey: ["notebook-tree", container] });
+  if (paths.some((p) => p === "notebook.json" || p.startsWith(".proposals/"))) client.invalidateQueries({ queryKey: ["lm-notebooks"] });
+  if (paths.some((p) => p.startsWith(".proposals/"))) client.invalidateQueries({ queryKey: ["lm-proposals", domain, notebook] });
+  const pages = paths.filter((p) => /\.md$/i.test(p) && !p.startsWith(".") && !/^assets\//i.test(p));
+  if (pages.length) void refresh(container, pages);
 }
 
 /** Another program (or Hivemind's own tree actions) changed files in a notebook. */

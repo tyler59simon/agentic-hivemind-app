@@ -3,6 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // A fake notebook on disk and Rust's draft store. `gates` holds a read or save of a path until the test opens it;
 // `calls` counts commands; `failDrafts` makes draft writes fail; `readError` makes a read of a path fail.
 const files = new Map<string, string>();
+// Pages of the Living Memory notebook lm:demo:plans (NS-2C), served by fake `doc read` and `doc write` commands.
+const lmPages = new Map<string, string>();
+const lmRevs = new Map<string, string>();
+async function lmRevision(...texts: string[]) {
+  for (const text of texts) {
+    const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+    lmRevs.set(text, Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(""));
+  }
+}
 const drafts = new Map<string, unknown>();
 const gates = new Map<string, Promise<void>>();
 const calls: string[] = [];
@@ -76,6 +85,24 @@ vi.mock("@tauri-apps/api/core", () => ({
         if (flags.draftGetError) throw new Error("The draft store could not be read");
         return drafts.get(a.key as string) ?? null;
       case "draft_delete": drafts.delete(a.key as string); return null;
+      case "lm":
+      case "lm_body": {
+        const argv = a.argv as string[], page = argv[4];
+        // Web Crypto settles outside fake timers, so the test computes the revisions it needs first (`lmRevision`).
+        const rev = (t: string) => lmRevs.get(t) ?? "unknown";
+        const ok = (result: unknown) => ({ exit_code: 0, result, error: null });
+        if (!lmPages.has(page)) return { exit_code: 2, result: null, error: { code: "invalid", message: `not_found: no page ${page}` } };
+        if (argv[1] === "read") {
+          const text = lmPages.get(page)!;
+          return ok({ text, revision: rev(text), size: text.length, updated: "2026-11-21T00:00:00Z", truncated: false });
+        }
+        if (argv[1] === "write") {
+          if (rev(lmPages.get(page)!) !== argv[argv.indexOf("--expected-revision") + 1]) return { exit_code: 6, result: null, error: { code: "stale", message: "Stale revision" } };
+          lmPages.set(page, a.body as string);
+          return ok({ revision: rev(a.body as string) });
+        }
+        break;
+      }
     }
     throw new Error(`unexpected ${cmd}`);
   }),
@@ -105,7 +132,7 @@ describe("documents store", () => {
     // The drafts module caches the drafts this run wrote; in the app the cache and the store always agree, so it forgets
     // them when the fake store is cleared.
     for (const d of drafts.values()) forgetMoved("nb-1", (d as { target: { path: string } }).target.path);
-    files.clear(); drafts.clear(); gates.clear(); calls.length = 0;
+    files.clear(); lmPages.clear(); drafts.clear(); gates.clear(); calls.length = 0;
     flags.failDrafts = false; flags.readError.clear(); flags.deleteError = ""; flags.convertible.clear(); flags.legacy.clear(); flags.locked.clear(); flags.draftGetError = false; converted.length = 0;
     files.set("A.md", "one");
     useWorkspace.setState({ panes: [{ id: "p0", tabs: [], active: null }], focused: "p0", dirty: {}, reveal: null });
@@ -894,5 +921,37 @@ describe("documents store", () => {
     const { renamed } = await import("../features/notes/actions");
     expect(renamed("Projects/Release.2026", "Archive", true)).toBe("Projects/Archive");
     expect(renamed("Projects/Plan.md", "Roadmap")).toBe("Projects/Roadmap.md");
+  });
+  it("NS-2C: a Living Memory page saves itself 5 s after the last edit, and again after a save that was still running", async () => {
+    lmPages.set("A.md", "one\r\n");
+    await lmRevision("one\r\n", "three\r\n", "four\r\n", "five\r\n");
+    const lm = { notebook: "lm:demo:plans", path: "A.md" }, k = docs.keyOf(lm);
+    ws().openTab({ kind: "file", file: lm });
+    await docs.open(lm);
+    expect(docs.useDocuments.getState().docs[k]).toMatchObject({ status: "clean", text: "one\n" });
+    vi.useFakeTimers();
+    try {
+      docs.edit(k, "two\n");
+      await vi.advanceTimersByTimeAsync(4000);
+      docs.edit(k, "three\n");
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(lmPages.get("A.md")).toBe("one\r\n");
+      await vi.advanceTimersByTimeAsync(1500);
+      // Written with the page's own line endings.
+      expect(lmPages.get("A.md")).toBe("three\r\n");
+      expect(docs.useDocuments.getState().docs[k].status).toBe("clean");
+      // A save held at the bridge: the next autosave waits for it instead of being lost.
+      docs.edit(k, "four\n");
+      const open = gate("lm_body undefined");
+      void docs.save(k);
+      docs.edit(k, "five\n");
+      await vi.advanceTimersByTimeAsync(5500);
+      expect(lmPages.get("A.md")).toBe("three\r\n");
+      open();
+      await vi.advanceTimersByTimeAsync(5500);
+      expect(lmPages.get("A.md")).toBe("five\r\n");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

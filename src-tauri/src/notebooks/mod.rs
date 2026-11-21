@@ -18,13 +18,24 @@ const TEXT_EXT: &[&str] = &[
 const MAX_ENTRIES: usize = 20_000;
 const MAX_DEPTH: usize = 12;
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct Notebook {
     pub id: String,
     pub path: String,
     pub title: String,
     pub added: String,
+    /// What Living Memory holds for the folder (NS-2C): the memory domain agents find it from, how far they reach and
+    /// whether it is private. A copy written after Living Memory accepted a change; absent until the first one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private: Option<bool>,
 }
+
+/// The agent reach values Living Memory knows.
+pub const VISIBILITIES: &[&str] = &["hidden", "searchable", "injectable"];
 
 #[derive(Serialize, Deserialize, Default)]
 struct File {
@@ -201,7 +212,7 @@ impl Registry {
         let path = plain(&real);
         let title = real.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.clone());
         let id = format!("nb-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
-        let notebook = Notebook { id, path, title, added: now.to_string() };
+        let notebook = Notebook { id, path, title, added: now.to_string(), domain: None, visibility: None, private: None };
         file.version = 1;
         file.notebooks.push(notebook.clone());
         self.store(&file)?;
@@ -218,6 +229,25 @@ impl Registry {
             return Err("That notebook is no longer registered".into());
         }
         self.store(&file)
+    }
+
+    /// Keep a copy of what Living Memory now holds for the notebook's folder (NS-2C).
+    pub fn set_reach(&self, id: &str, domain: &str, visibility: &str, private: bool) -> Result<Notebook, String> {
+        if !VISIBILITIES.contains(&visibility) {
+            return Err(format!("Unknown agent reach \"{visibility}\""));
+        }
+        if domain.is_empty() || domain.len() > 120 || domain.chars().any(|c| c.is_control() || "/\\:*?\"<>|".contains(c)) {
+            return Err(format!("\"{domain}\" is not a domain name"));
+        }
+        let _held = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut file = self.load();
+        let nb = file.notebooks.iter_mut().find(|nb| nb.id == id).ok_or("That notebook is no longer registered")?;
+        nb.domain = Some(domain.to_string());
+        nb.visibility = Some(visibility.to_string());
+        nb.private = Some(private);
+        let done = nb.clone();
+        self.store(&file)?;
+        Ok(done)
     }
 
     pub fn rename(&self, id: &str, title: &str) -> Result<Notebook, String> {
@@ -326,6 +356,24 @@ mod tests {
         std::fs::write(&path, serde_json::json!({ "version": 1, "notebooks": [nb("nb-0123abcd"), nb("..\\..\\evil"), nb("nb-XYZ")] }).to_string()).unwrap();
         let ids: Vec<String> = Registry::new(path).list().into_iter().map(|n| n.id).collect();
         assert_eq!(ids, ["nb-0123abcd"]);
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// NS-2C: the registry keeps a copy of what Living Memory holds for the folder; an older registry loads without it.
+    #[test]
+    fn reach_is_kept_with_the_notebook() {
+        let base = scratch("reach");
+        let path = base.join("notebooks.json");
+        std::fs::write(&path, serde_json::json!({ "version": 1, "notebooks": [{ "id": "nb-0123abcd", "path": "C:\\x", "title": "x", "added": "t" }] }).to_string()).unwrap();
+        let registry = Registry::new(path.clone());
+        let before = registry.get("nb-0123abcd").unwrap();
+        assert_eq!((before.domain, before.visibility, before.private), (None, None, None));
+        let after = registry.set_reach("nb-0123abcd", "demo", "hidden", true).unwrap();
+        assert_eq!((after.domain.as_deref(), after.visibility.as_deref(), after.private), (Some("demo"), Some("hidden"), Some(true)));
+        assert_eq!(Registry::new(path).get("nb-0123abcd").unwrap(), after);
+        assert!(registry.set_reach("nb-0123abcd", "demo", "public", false).is_err());
+        assert!(registry.set_reach("nb-0123abcd", "..\\x", "hidden", false).is_err());
+        assert!(registry.set_reach("nb-99999999", "demo", "hidden", false).is_err());
         std::fs::remove_dir_all(&base).unwrap();
     }
 }

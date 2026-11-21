@@ -1,14 +1,17 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Ellipsis, File, FileText, Folder, FolderPlus, Plus } from "lucide-react";
+import { ChevronDown, ChevronRight, Ellipsis, File, FileText, Folder, FolderPlus, Inbox, Plus } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { classify } from "../../lib/errors";
-import { metaQuery, revealFile, treeQuery, type Notebook } from "../../lib/notebooks";
+import { treeQuery } from "../../documents/io";
+import type { DocNotebook } from "../../lib/lm";
+import { metaQuery, revealFile, type Notebook } from "../../lib/notebooks";
 import { Menu } from "../../ui/Menu";
 import { toast } from "../../ui/toast";
 import { activeTab, useWorkspace } from "../../workspace/store";
 import { movePath, newPage, newSection, openPage, renamed, trashPath } from "./actions";
 import { ancestors, buildTree, dropTarget, loadOpen, saveOpen, visibleRows, type Node } from "./tree";
 import { DeleteConfirm } from "./DeleteConfirm";
+import { REACH_TEXT, stricter } from "./reach";
 
 const low = (s: string) => s.toLowerCase();
 const PAGE = /\.(md|markdown)$/i;
@@ -67,11 +70,21 @@ export function useRowDrag(root: string, onDrop: (from: string, target: Node | n
   };
 }
 
-/** One registered notebook: its header, and its sections and pages as an expandable tree. */
-export function NotebookTree({ notebook, onSettings }: { notebook: Notebook; onSettings: () => void }) {
+/** How far agents reach, when it is not the default (searchable): shown beside the notebook's name. */
+function reachLabel(reach: { visibility?: DocNotebook["visibility"]; private?: boolean }) {
+  if (reach.private) return "Private";
+  return reach.visibility && reach.visibility !== "searchable" ? REACH_TEXT[reach.visibility].label : null;
+}
+
+/** One notebook: its header, and its sections and pages as an expandable tree. A Living Memory notebook (`lm`, NS-2C)
+ *  has no folder on disk to show, no empty sections and no section delete, and shows its agents' proposals. */
+export function NotebookTree({ notebook, onSettings, lm, onProposals }: {
+  notebook: Notebook; onSettings: () => void; lm?: DocNotebook; onProposals?: () => void;
+}) {
   const client = useQueryClient();
   const tree = useQuery(treeQuery(notebook.id));
-  const meta = useQuery(metaQuery(notebook.id));
+  const meta = useQuery({ ...metaQuery(notebook.id), enabled: !lm });
+  const reach = reachLabel(lm ?? stricter(notebook, (meta.data ?? {}) as Parameters<typeof stricter>[1]));
   const [open, setOpen] = useState(() => loadOpen(notebook.id));
   const [collapsed, setCollapsed] = useState(false);
   const [renaming, setRenaming] = useState<{ path: string; value: string } | null>(null);
@@ -145,14 +158,21 @@ export function NotebookTree({ notebook, onSettings }: { notebook: Notebook; onS
         <button className="notebook-toggle" aria-expanded={!collapsed} onClick={() => setCollapsed(!collapsed)} title={notebook.path}>
           {collapsed ? <ChevronRight size="1.1em" aria-hidden /> : <ChevronDown size="1.1em" aria-hidden />}
           <span className="grow">{notebook.title}</span>
+          {reach && <span className="badge">{reach}</span>}
         </button>
+        {lm && lm.proposals > 0 && (
+          <button className="icon-button proposals-badge" title={`${lm.proposals} proposed ${lm.proposals === 1 ? "edit" : "edits"} from agents`}
+            aria-label={`${lm.proposals} agent proposals`} onClick={onProposals}><Inbox size="1em" aria-hidden />{lm.proposals}</button>
+        )}
         <button className="icon-button" title="New page" aria-label="New page" onClick={() => create(null)}><Plus size="1.1em" aria-hidden /></button>
         <button className="icon-button" title="New section" aria-label="New section" onClick={() => setNaming({ folder: "", value: "" })}><FolderPlus size="1.1em" aria-hidden /></button>
         <Menu label="Notebook actions" align="right" button={<Ellipsis size="1.1em" aria-hidden />} className="icon-menu">
           {(close) => (
             <>
               <li><button role="menuitem" onClick={() => { close(); onSettings(); }}>Notebook settings…</button></li>
-              <li><button role="menuitem" onClick={() => { close(); revealFile(notebook.id, null).catch(fail); }}>Show in Explorer</button></li>
+              {lm
+                ? <li><button role="menuitem" onClick={() => { close(); onProposals?.(); }}>Agent proposals…</button></li>
+                : <li><button role="menuitem" onClick={() => { close(); revealFile(notebook.id, null).catch(fail); }}>Show in Explorer</button></li>}
               <li><button role="menuitem" onClick={() => { close(); client.invalidateQueries({ queryKey: ["notebook-tree", notebook.id] }); }}>Refresh</button></li>
             </>
           )}
@@ -219,8 +239,8 @@ export function NotebookTree({ notebook, onSettings }: { notebook: Notebook; onS
                 {n.kind !== "other" && item(n.kind === "dir" ? "New page here" : "New subpage", () => create(n))}
                 {n.kind === "dir" && item("New section here", () => { toggle(n.path, true); setNaming({ folder: n.path, value: "" }); })}
                 {item("Rename", () => setRenaming({ path: n.path, value: label(n) }))}
-                {item("Show in Explorer", () => revealFile(notebook.id, n.path).catch(fail))}
-                {item(n.kind === "dir" ? "Delete section…" : "Delete…", () => remove(n), "danger-text")}
+                {!lm && item("Show in Explorer", () => revealFile(notebook.id, n.path).catch(fail))}
+                {!(lm && n.kind === "dir") && item(n.kind === "dir" ? "Delete section…" : "Delete…", () => remove(n), "danger-text")}
               </>
             );
           })()}

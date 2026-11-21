@@ -1,21 +1,66 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { discard, keyOf } from "../../documents/store";
+import { useDocsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
+import { docNotebookUpdate, domains, type DocNotebook, type Visibility } from "../../lib/lm";
 import { metaQuery, removeNotebook, renameNotebook, setNotebookMeta, type Notebook, type NotebookMeta } from "../../lib/notebooks";
+import { useApp } from "../../store";
 import { Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
+import { domainForFolder, forgetFolder, REACH_TEXT, setFolderReach, stricter } from "./reach";
 
-/** A notebook's name and folders. Settings other than the name are kept in the notebook's `.hivemind/notebook.json`. */
+interface Reach { visibility: Visibility; private: boolean }
+
+/** Agent reach and Private, for both notebook kinds (NS-2C). */
+function ReachFields({ value, onChange }: { value: Reach; onChange: (v: Reach) => void }) {
+  return (
+    <fieldset className="field reach">
+      <legend>Agent reach</legend>
+      {(["hidden", "searchable", "injectable"] as const).map((v) => (
+        <label key={v} className="check"><input type="radio" name="reach" checked={value.visibility === v} onChange={() => onChange({ ...value, visibility: v })} />
+          <span><b>{REACH_TEXT[v].label}.</b> {REACH_TEXT[v].text}</span></label>
+      ))}
+      <label className="check"><input type="checkbox" checked={value.private} onChange={(e) => onChange({ ...value, private: e.target.checked })} />
+        <span><b>Private.</b> Hivemind's AI features and every Living Memory search and prompt leave this notebook out. It is not file
+          protection: an agent whose working folder holds the files can still read them with its own tools.</span></label>
+    </fieldset>
+  );
+}
+
+const unregistered = (nb: Notebook) => !nb.domain;
+
+/** Close every tab of a notebook, dropping their documents and drafts. */
+function closeNotebookTabs(id: string) {
+  const ws = useWorkspace.getState();
+  for (const pane of ws.panes) {
+    for (const tab of pane.tabs) {
+      if (tab.kind === "file" && tab.file?.notebook === id) { discard(keyOf(tab.file)); ws.closeTab(pane.id, tab.id); }
+    }
+  }
+}
+
+/** A folder notebook's name, folders and agent reach. Settings other than the name and reach are kept in the notebook's
+ *  `.hivemind/notebook.json`; reach goes to Living Memory first (NS-2C). */
 export function NotebookSettings({ notebook, onClose }: { notebook: Notebook; onClose: () => void }) {
   const client = useQueryClient();
   const meta = useQuery(metaQuery(notebook.id));
+  const docs = useDocsEnabled();
+  const known = useQuery({ queryKey: ["domains"], queryFn: domains, enabled: docs });
+  const fallback = useApp((s) => s.domain);
   const [title, setTitle] = useState(notebook.title);
   const [form, setForm] = useState<NotebookMeta | null>(null);
+  const [reach, setReach] = useState<Reach | null>(null);
+  const [domain, setDomain] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState(false);
   const values = form ?? meta.data ?? {};
+  // The stricter of Hivemind's copy and the sidecar, as Living Memory judges it.
+  const current = stricter(notebook, (meta.data ?? {}) as Partial<Reach>);
+  const shown = reach ?? current;
+  const memoryDomains = known.data?.domains ?? [];
+  const chosenDomain = domain ?? notebook.domain ?? domainForFolder(notebook.path, memoryDomains, fallback) ?? "";
   const field = (key: "attachments" | "templates" | "inbox", label: string, hint: string) => (
     <label className="field">
       <span>{label}</span>
@@ -36,6 +81,13 @@ export function NotebookSettings({ notebook, onClose }: { notebook: Notebook; on
         }
         if (Object.keys(patch).length) await setNotebookMeta(notebook.id, patch);
       }
+      // Reach changes only when the user touched it or the domain; a folder never registered with Living Memory is
+      // registered as searchable, keeping a private flag Living Memory still holds from before.
+      const reachChanged = !!reach && (reach.visibility !== current.visibility || reach.private !== current.private);
+      if (docs && (reachChanged || domain !== null || unregistered(notebook))) {
+        if (!chosenDomain) throw new Error("Pick the memory domain agents find this notebook from.");
+        await setFolderReach(notebook, chosenDomain, shown.visibility, reachChanged ? shown.private : undefined);
+      }
       client.invalidateQueries({ queryKey: ["notebooks"] });
       client.invalidateQueries({ queryKey: ["notebook-meta", notebook.id] });
       onClose();
@@ -50,14 +102,13 @@ export function NotebookSettings({ notebook, onClose }: { notebook: Notebook; on
     setBusy(true);
     try {
       await removeNotebook(notebook.id);
-      const ws = useWorkspace.getState();
-      for (const pane of ws.panes) {
-        for (const tab of pane.tabs) {
-          if (tab.kind === "file" && tab.file?.notebook === notebook.id) { discard(keyOf(tab.file)); ws.closeTab(pane.id, tab.id); }
-        }
-      }
+      closeNotebookTabs(notebook.id);
       client.invalidateQueries({ queryKey: ["notebooks"] });
       toast(`Removed ${notebook.title} from Hivemind. Its files are untouched.`);
+      // Living Memory forgets it too; a hidden or private folder stays out of agents' reach (NS-2C).
+      if (docs && !unregistered(notebook)) {
+        await forgetFolder(notebook).catch((e) => toast(`Living Memory still lists ${notebook.title} for agent search: ${classify(e).message}`, "warn"));
+      }
       onClose();
     } catch (e) {
       toast(classify(e).message, "error");
@@ -74,6 +125,19 @@ export function NotebookSettings({ notebook, onClose }: { notebook: Notebook; on
         {field("templates", "Templates folder", "Templates")}
         {field("inbox", "Inbox page", "Inbox.md")}
         <p className="muted small">These are kept in <code>.hivemind/notebook.json</code> inside the notebook, so they travel with the folder.</p>
+        {docs ? (
+          <>
+            <ReachFields value={shown} onChange={setReach} />
+            <label className="field">
+              <span>Agents find it from the domain</span>
+              <select value={chosenDomain} onChange={(e) => setDomain(e.target.value)}>
+                {!chosenDomain && <option value="">Pick a domain</option>}
+                {memoryDomains.map((d) => <option key={d.name} value={d.name}>{d.name}</option>)}
+              </select>
+            </label>
+            {unregistered(notebook) && <p className="muted small">Living Memory has not registered this folder yet, so agents do not search it. Save to register it.</p>}
+          </>
+        ) : <p className="muted small">Agent reach needs a newer Living Memory (with notebook pages).</p>}
       </div>
       {removing ? (
         <div className="banner warn">
@@ -88,6 +152,44 @@ export function NotebookSettings({ notebook, onClose }: { notebook: Notebook; on
           <button className="primary" onClick={save} disabled={busy}>Save</button>
         </div>
       )}
+    </Modal>
+  );
+}
+
+/** A Living Memory notebook's title and agent reach, kept in its `notebook.json` (NS-2C). */
+export function LmNotebookSettings({ nb, onClose }: { nb: DocNotebook; onClose: () => void }) {
+  const client = useQueryClient();
+  const [title, setTitle] = useState(nb.title);
+  const [reach, setReach] = useState<Reach>({ visibility: nb.visibility, private: nb.private });
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    const patch: { title?: string; visibility?: Visibility; private?: boolean } = {};
+    if (title.trim() && title.trim() !== nb.title) patch.title = title.trim();
+    if (reach.visibility !== nb.visibility) patch.visibility = reach.visibility;
+    if (reach.private !== nb.private) patch.private = reach.private;
+    if (!Object.keys(patch).length) { onClose(); return; }
+    setBusy(true);
+    try {
+      await docNotebookUpdate(nb.domain, nb.notebook, patch);
+      client.invalidateQueries({ queryKey: ["lm-notebooks"] });
+      onClose();
+    } catch (e) {
+      toast(classify(e).message, "error");
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title="Notebook settings" onClose={onClose} locked={busy}>
+      <div className="form">
+        <label className="field"><span>Name</span><input value={title} onChange={(e) => setTitle(e.target.value)} /></label>
+        <p className="muted small">Living Memory notebook <code>{nb.notebook}</code> in <code>{nb.domain}</code>: {nb.pages} pages, {nb.assets} attachments.</p>
+        <ReachFields value={reach} onChange={setReach} />
+      </div>
+      <div className="actions">
+        <span className="fill" />
+        <button onClick={onClose} disabled={busy}>Cancel</button>
+        <button className="primary" onClick={save} disabled={busy}>Save</button>
+      </div>
     </Modal>
   );
 }

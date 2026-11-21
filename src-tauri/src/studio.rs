@@ -204,6 +204,13 @@ pub fn notebook_remove(app: AppHandle, state: State<'_, AppState>, id: String) -
     Ok(())
 }
 
+/// Keep Hivemind's copy of what Living Memory now holds for a folder notebook (NS-2C). The webview calls it after
+/// `doc folder set` succeeded, with the values Living Memory replied with.
+#[tauri::command]
+pub fn notebook_reach_record(state: State<'_, AppState>, id: String, domain: String, visibility: String, private: bool) -> Result<Notebook, String> {
+    state.notebooks.set_reach(&id, &domain, &visibility, private)
+}
+
 #[tauri::command]
 pub fn notebook_rename(state: State<'_, AppState>, id: String, title: String) -> Result<Notebook, String> {
     state.notebooks.rename(&id, &title)
@@ -393,6 +400,12 @@ pub async fn file_reveal(app: AppHandle, notebook: String, path: Option<String>,
 /// file's folder for a loose file. The webview adds the picture's path relative to that folder.
 #[tauri::command]
 pub fn asset_base(state: State<'_, AppState>, notebook: String, path: String) -> Result<String, String> {
+    // A Living Memory notebook: its folder in the store, serving its attachments only (NS-2C).
+    if crate::lmdoc::parse(&notebook).is_some() {
+        let store = store_root(&state).ok_or("Hivemind does not know where the Living Memory store is")?;
+        let folder = crate::lmdoc::folder(&store, &notebook)?;
+        return Ok(crate::assets::base_url(&state.assets.grant_lm(&folder)));
+    }
     let root = match loose_id(&notebook) {
         Some(id) => loose(&state, id, &path)?.0.parent().map(Path::to_path_buf).ok_or("This file has no folder")?,
         None => root_of(&state, &notebook)?.0,
@@ -676,7 +689,7 @@ mod tests {
             std::fs::create_dir_all(&dir).unwrap();
             dir
         };
-        let register = |dir: &Path| Notebook { id: "nb-00000001".into(), path: crate::folders::plain(&std::fs::canonicalize(dir).unwrap()), title: "Notes".into(), added: String::new() };
+        let register = |dir: &Path| Notebook { id: "nb-00000001".into(), path: crate::folders::plain(&std::fs::canonicalize(dir).unwrap()), title: "Notes".into(), ..Default::default() };
         // A case-sensitive parent with two spellings: the registered one is found, and once it is gone the other
         // spelling is not taken for it.
         let sensitive = scratch();
