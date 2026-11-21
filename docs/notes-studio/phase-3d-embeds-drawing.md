@@ -62,4 +62,34 @@ vitest for each block's attribute validation, extraction text and export flatten
 
 ## 6. Shipped
 
-(Filled in when the phase lands.)
+Code landed on 2026-11-21: Hivemind `d201b86` (the phase, with the fixes from Claude's review of the diff) and `564865d` (fixes from the UI pass). At the user's request this phase had no Codex review; Claude reviewed every diff. No Rust or Living Memory change was needed, and the CSP is unchanged.
+
+**What differs from the survey above and sections 1 to 4.**
+- New files are in `src/features/hmdoc/blocks/`: `embeds.ts` (the six atom nodes), `embedViews.ts`, `EmbedDialogs.tsx` (pickers), `codeRange.ts` and `hash.ts` (a synchronous SHA-256), `pdf.ts`, `drawing.ts`, `DrawingDialog.tsx`, `excalidrawLoader.ts`, `freeform.ts`, `layout.ts`, `insert.ts` and `items.ts` (slash menu and the toolbar's Insert an embed menu). `RichContext` gains `notebook` (the page's notebook files, folder notebooks only); `isNotebookPath` in `src/lib/notebooks.ts` mirrors Rust's path checks.
+- `pdfjs-dist` 6 has no `isEvalSupported` option and no longer evaluates code; it runs with `useWasm: false` because the CSP allows no WebAssembly, so JPEG 2000 and JBIG2 pictures inside a PDF do not draw.
+- Excalidraw's fonts are served by a Vite plugin (`hivemind-excalidraw-assets` in `vite.config.ts`) from `/excalidraw-assets/fonts/`, without the Xiaolai family (13 MB): Chinese, Japanese and Korean text in a drawing uses a system font. Collaboration, AI, export, the library and help are off or hidden, and links inside a drawing do nothing.
+- Excalidraw's own nested packages brought 12 npm advisories; `overrides` in `package.json` lift them (lodash-es, nanoid, and katex inside mermaid-to-excalidraw, which Hivemind never calls), and `npm audit` reports none.
+- A drawing's preview is saved first and the scene is named after it; after an edit the preview is a new file (`Sketch 1.png`, then `Sketch.png` again) and only a PNG beside the scene with its stem is ever moved to the trash. A scene changed on disk is never overwritten: the dialog offers to save a new drawing.
+- A pasted embed with a refused attribute is left out rather than given a default, and a note card ref starting with `-` is refused (it is passed to `alm read` as an argument).
+- A PDF or code file must already be in the notebook: the attach path takes pictures only, so only the gallery offers "Add pictures from your computer".
+- Frames keep inside the block's width, snapped down to the 8 px grid, with 32 px of block below the lowest one; the block is its own stacking context.
+
+**Verified**
+- `npm test` (130 files, 1,404 tests, one skipped: the NS-3A 1 MB timing check), `npx tsc --noEmit`, `npm run build` and `npm audit` (0). The `.hmdoc` editor chunk is 51 KB; pdf.js (444 KB plus a 1.2 MB worker) and Excalidraw (1.1 MB plus 142 KB of CSS) are lazy chunks; the main chunk grew 58 KB, which the build attributes to shared CodeMirror code moving into it rather than new library code. The Excalidraw fonts are 500 KB.
+- Every new node and attribute has a rule, extraction text, an export with a report count (the NS-3C completeness test covers them), and a paste test; a fixture page with every embed (`fixtures/embeds.hmdoc`) reopens identically and extracts to `embeds.txt`; a test finds no `<iframe` in `src/`.
+
+**UI pass (2026-11-21).** The dev app ran against a scratch store (with one note for the card) and a folder notebook outside any bound folder, driven over WebView2 remote debugging:
+- A page with a note card, three code ranges (current, changed, file missing), a PDF page and a gallery opened without changing the file. The card showed the note's title, type, status and first lines; its title opened the note tab.
+- The code ranges were highlighted with line numbers; the changed one showed "Changed since embedded", and Update stored exactly the file's current lines and their SHA-256, the only change in the saved diff. The missing file showed the stored lines with a note.
+- pdf.js drew page 2 of a three-page PDF through the notebook's grant, with no console or CSP errors.
+- The gallery's pictures drew; a click opened the lightbox, the arrow keys moved, Escape closed it and focus went back to the picture.
+- The slash menu offered every kind. A new drawing opened Excalidraw full screen with Excalifont loaded from `/excalidraw-assets/`; Escape did not close it. Done wrote the scene and preview into `attachments/`; editing it again saved the scene with an added shape, pointed the page at a new preview and moved the old one to the notebook's trash; Cancel without changes closed it.
+- A free-positioned block took typing in its frame, Add a frame, moves and resizes; each change saved, frames stopped at the block's right edge on the grid, and the block slid under the toolbar when scrolled.
+
+The pass found eight problems, fixed in `564865d`: frame drags could leave the drawn position and the document apart so the change was lost (the drag now listens on the window and always ends from the document), frames could pass the block's right edge so its scrollbar covered the lowest corner, a fractional pane width still left a scrollbar strip, clamped values fell off the grid, frames and the block's bar drew over the toolbar, Excalidraw's dead Library button and help button showed, the Edit drawing button was unreadable over a white preview, and a code range repeated its label.
+
+**Known limits**
+- Ink is not built (the user's choice).
+- The architecture diagram embed was not driven in the UI pass, since the scratch store has no system with Architecture Suite output; its picker, placeholder and rules have tests.
+- A note card shows its body's first lines as plain text, Markdown marks included.
+- A page made in a wider pane and opened in a narrower one may scroll sideways inside its free-positioned block.
