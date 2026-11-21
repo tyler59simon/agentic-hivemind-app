@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { ENGINE_LABELS, ENGINES, enginesText, shownEngines, type Engine } from "../../lib/agent";
+import { pauseLmStore } from "../../documents/store";
 import { useProjectsEnabled } from "../../lib/connection";
 import { captureStatus, getSettings, saveSettings, type CaptureStatus, type Settings } from "../../lib/lm";
 import { prefs } from "../../lib/prefs";
@@ -58,7 +59,12 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
     <form className="settings" onSubmit={(e) => {
       e.preventDefault();
       prefs.setDefaultMode(mode);
-      saveSettings(value).then(() => captureStatus().then(setStatus)).then(onSaved).catch((err) => setError(String(err)));
+      // Living Memory pages wait while the store may change, so none saves into the store being switched to (Codex
+      // review of 32fee20, D1); connecting again names the store. Settings that were not saved change nothing.
+      const resume = pauseLmStore();
+      let saved = false;
+      saveSettings(value).then(() => { saved = true; return captureStatus().then(setStatus); }).then(onSaved)
+        .catch((err) => { if (!saved) resume(); setError(String(err)); });
     }}>
       <h3>Living Memory</h3>
       {field("python", "Python", "default: the Python Living Memory was installed with, else py -3 on Windows and python3 elsewhere")}

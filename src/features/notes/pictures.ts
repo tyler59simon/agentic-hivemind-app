@@ -7,7 +7,15 @@
 export function pictureUrl(src: string | undefined, base: string | undefined, folder: string): string | null {
   if (!src) return null;
   if (/^https?:\/\//i.test(src)) return src;
-  if (!base || /^[a-z][a-z0-9+.-]*:/i.test(src) || /^[\\/]/.test(src) || src.includes("\\")) return null;
+  if (!base) return null;
+  const path = relativeTarget(src, folder);
+  return path === null ? null : base + path.split("/").map(encodeURIComponent).join("/");
+}
+
+/** The path relative to the grant's root that a relative link or picture `src` in a page in `folder` names, or null
+ *  for a web or `file:` URL, a Windows path, or a path that climbs out of the root. */
+export function relativeTarget(src: string, folder: string): string | null {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(src) || /^[\\/]/.test(src) || src.includes("\\")) return null;
   let path: string;
   try {
     path = decodeURIComponent(src.replace(/[?#].*$/, ""));
@@ -22,6 +30,5 @@ export function pictureUrl(src: string | undefined, base: string | undefined, fo
       parts.pop();
     } else parts.push(part);
   }
-  if (!parts.length) return null;
-  return base + parts.map(encodeURIComponent).join("/");
+  return parts.length ? parts.join("/") : null;
 }

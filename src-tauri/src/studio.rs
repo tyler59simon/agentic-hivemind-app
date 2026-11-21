@@ -370,6 +370,17 @@ pub async fn file_delete(state: State<'_, AppState>, notebook: String, path: Str
     .await
 }
 
+/// Open an attachment of a Living Memory notebook (`assets/...`) with the program Windows associates with its kind: a
+/// read-only copy, so nothing but Living Memory writes the store (Codex review of 32fee20, U2).
+#[tauri::command]
+pub async fn lmdoc_open_asset(app: AppHandle, notebook: String, path: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let state = app.state::<AppState>();
+    let store = store_root(&state).ok_or("Hivemind does not know where the Living Memory store is")?;
+    let copy = blocking(move || crate::lmdoc::attachment(&store, &notebook, &path).and_then(|full| crate::lmdoc::copy_to_open(&full))).await?;
+    app.opener().open_path(copy.display().to_string(), None::<&str>).map_err(|e| e.to_string())
+}
+
 /// Show a page or folder in Explorer, or open a file with the program Windows associates with it.
 #[tauri::command]
 pub async fn file_reveal(app: AppHandle, notebook: String, path: Option<String>, open: bool) -> Result<(), String> {

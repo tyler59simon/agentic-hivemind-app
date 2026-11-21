@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { discard, keyOf } from "../../documents/store";
-import { useDocsEnabled } from "../../lib/connection";
+import { useFolderPolicyEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { docNotebookUpdate, domains, type DocNotebook, type Visibility } from "../../lib/lm";
 import { metaQuery, removeNotebook, renameNotebook, setNotebookMeta, type Notebook, type NotebookMeta } from "../../lib/notebooks";
@@ -9,7 +9,7 @@ import { useApp } from "../../store";
 import { Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
-import { domainForFolder, forgetFolder, REACH_TEXT, setFolderReach, stricter } from "./reach";
+import { domainForFolder, forgetFolder, REACH_TEXT, setFolderReach, stricter, type ReachChange } from "./reach";
 
 interface Reach { visibility: Visibility; private: boolean }
 
@@ -46,7 +46,8 @@ function closeNotebookTabs(id: string) {
 export function NotebookSettings({ notebook, onClose }: { notebook: Notebook; onClose: () => void }) {
   const client = useQueryClient();
   const meta = useQuery(metaQuery(notebook.id));
-  const docs = useDocsEnabled();
+  // Agent reach needs Living Memory's folder policy, not only notebook pages (Codex review of 32fee20, C1).
+  const docs = useFolderPolicyEnabled();
   const known = useQuery({ queryKey: ["domains"], queryFn: domains, enabled: docs });
   const fallback = useApp((s) => s.domain);
   const [title, setTitle] = useState(notebook.title);
@@ -81,12 +82,15 @@ export function NotebookSettings({ notebook, onClose }: { notebook: Notebook; on
         }
         if (Object.keys(patch).length) await setNotebookMeta(notebook.id, patch);
       }
-      // Reach changes only when the user touched it or the domain; a folder never registered with Living Memory is
-      // registered as searchable, keeping a private flag Living Memory still holds from before.
-      const reachChanged = !!reach && (reach.visibility !== current.visibility || reach.private !== current.private);
-      if (docs && (reachChanged || domain !== null || unregistered(notebook))) {
+      // Only what the user changed goes to Living Memory, so a privacy decision made elsewhere while this dialog was open
+      // stays (Codex review of 32fee20, P3). A folder never registered keeps what Living Memory holds for it, or becomes
+      // searchable.
+      const change: ReachChange = {};
+      if (reach && reach.visibility !== current.visibility) change.visibility = reach.visibility;
+      if (reach && reach.private !== current.private) change.private = reach.private;
+      if (docs && (Object.keys(change).length || domain !== null || unregistered(notebook))) {
         if (!chosenDomain) throw new Error("Pick the memory domain agents find this notebook from.");
-        await setFolderReach(notebook, chosenDomain, shown.visibility, reachChanged ? shown.private : undefined);
+        await setFolderReach(notebook, chosenDomain, change);
       }
       client.invalidateQueries({ queryKey: ["notebooks"] });
       client.invalidateQueries({ queryKey: ["notebook-meta", notebook.id] });
@@ -137,7 +141,7 @@ export function NotebookSettings({ notebook, onClose }: { notebook: Notebook; on
             </label>
             {unregistered(notebook) && <p className="muted small">Living Memory has not registered this folder yet, so agents do not search it. Save to register it.</p>}
           </>
-        ) : <p className="muted small">Agent reach needs a newer Living Memory (with notebook pages).</p>}
+        ) : <p className="muted small">Agent reach needs a newer Living Memory (with folder notebook policy).</p>}
       </div>
       {removing ? (
         <div className="banner warn">

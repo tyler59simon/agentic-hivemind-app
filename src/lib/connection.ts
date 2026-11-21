@@ -35,6 +35,16 @@ export const useDocsEnabled = () => useConnection(docsOn);
 /** The same check outside React. */
 export const docsEnabled = () => docsOn(useConnection.getState());
 
+/** Agent reach for folder notebooks needs `doc folder` (`docs.folder_policy`, NS-2B); notebook pages alone (NS-2A) have
+ *  no such command (Codex review of 32fee20, C1). */
+const folderPolicyOn = (s: { commands: string[]; capabilities?: Capabilities }) => docsOn(s) && !!s.capabilities?.docs?.folder_policy;
+export const useFolderPolicyEnabled = () => useConnection(folderPolicyOn);
+export const folderPolicyEnabled = () => folderPolicyOn(useConnection.getState());
+
+/** Merging an agent's proposal writes and settles it in one operation (`doc accept --edited`). Without it the write and
+ *  the settling would be two steps, so the inbox offers only Accept and Reject (Codex review of 32fee20, D3). */
+export const useAcceptEditedEnabled = () => useConnection((s) => docsOn(s) && !!s.capabilities?.docs?.accept_edited);
+
 /** The agent-written wiki edition needs the `wiki_agent` capability and the `wiki` command. */
 export const useAgentWikiEnabled = () => useConnection((s) => (s.capabilities?.wiki_agent?.version ?? 0) >= 1 && s.commands.includes("wiki"));
 

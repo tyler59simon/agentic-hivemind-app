@@ -76,7 +76,8 @@ export function NotesPage() {
   const [lmSettings, setLmSettings] = useState<DocNotebook | null>(null);
   const [inbox, setInbox] = useState<DocNotebook | null>(null);
   const [creating, setCreating] = useState(false);
-  const groups = useMemo(() => byDomain(lm.data ?? []), [lm.data]);
+  const groups = useMemo(() => byDomain(lm.data?.notebooks ?? []), [lm.data]);
+  const damaged = lm.data?.damaged ?? [];
 
   // A route naming a page (from the palette or a link) opens it, then settles back on the plain Notes route.
   const target = route.page === "notes" && route.notebook && route.path ? { notebook: route.notebook, path: route.path } : null;
@@ -101,12 +102,12 @@ export function NotesPage() {
   const list = notebooks.data ?? [];
   // Open tabs (a Memory note opened with Ctrl+O, pages of a notebook just removed) stay visible without notebooks
   // (Codex review of 32fd236, M1).
-  if (!list.length && !groups.length && !open && !lm.isLoading) return <><Empty onAdd={add} onNew={newNotebook} />{dialogs}</>;
+  if (!list.length && !groups.length && !damaged.length && !open && !lm.isLoading) return <><Empty onAdd={add} onNew={newNotebook} />{dialogs}</>;
   return (
     <div className="notes-page">
       <nav className="notebooks" aria-label="Notebooks">
         {list.map((nb) => <NotebookTree key={nb.id} notebook={nb} onSettings={() => setSettings(nb)} />)}
-        {groups.length > 0 && (
+        {(groups.length > 0 || damaged.length > 0) && (
           <div className="notebook-group" aria-label="Living Memory notebooks">
             <h2>Living Memory</h2>
             {groups.map(([domain, nbs]) => (
@@ -116,6 +117,10 @@ export function NotesPage() {
                   <NotebookTree key={d.notebook} notebook={asNotebook(d)} lm={d} onSettings={() => setLmSettings(d)} onProposals={() => setInbox(d)} />
                 ))}
               </div>
+            ))}
+            {/* A notebook Living Memory cannot read is said beside the others (Codex review of 32fee20, C2). */}
+            {damaged.map((d) => (
+              <p key={`${d.domain}:${d.notebook}`} className="error small pad">{d.domain} · {d.notebook}: {d.error}</p>
             ))}
           </div>
         )}

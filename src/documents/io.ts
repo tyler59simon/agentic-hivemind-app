@@ -16,9 +16,10 @@ export const saveDoc = (ref: FileRef, text: string, pre: Stamp, format: FileForm
   return lm ? lmdoc.savePage(lm, ref.path, text, pre, format) : files.saveFile(ref.notebook, ref.path, text, pre, format, convert);
 };
 
-export const createDoc = (notebook: string, path: string, text: string) => {
+/** `format` keeps a Living Memory page's line endings and byte order mark; Rust's `file_create` writes UTF-8 as given. */
+export const createDoc = (notebook: string, path: string, text: string, format?: FileFormat) => {
   const lm = lmdoc.parseLm(notebook);
-  return lm ? lmdoc.createPage(lm, path, text) : files.createFile(notebook, path, text);
+  return lm ? lmdoc.createPage(lm, path, text, format) : files.createFile(notebook, path, text);
 };
 
 /** A new section. Living Memory keeps no empty sections, so there it is made with its first page; returns that page,

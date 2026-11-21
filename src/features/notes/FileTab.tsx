@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { convertToUtf8, discardKept, edit, isArriving, isDeleting, keyOf, open, reload, resolveMerge, save, useDocuments } from "../../documents/store";
 import { isUnsaved, mergeable, type DocState } from "../../documents/session";
 import { classify } from "../../lib/errors";
-import { assetLink, attachFile, parseLm } from "../../documents/adapters/lmdoc";
+import { assetLink, attachFile, openAttachment, parseLm } from "../../documents/adapters/lmdoc";
 import { createDoc, treeQuery } from "../../documents/io";
 import { lmNotebooksQuery } from "../../lib/lm";
 import { fileName, folderOf, isMarkdown, notebooksQuery, pageTitle, revealFile, type Notebook } from "../../lib/notebooks";
@@ -212,7 +212,7 @@ export function FileTab({ tab }: { tab: Tab }) {
   // A Living Memory page (NS-2C) is named `domain · notebook title` and has no file on disk to show or open.
   const lm = parseLm(ref.notebook);
   const lmList = useQuery({ ...lmNotebooksQuery(), enabled: !!lm });
-  const lmTitle = lm && (lmList.data?.find((n) => n.domain === lm.domain && n.notebook === lm.notebook)?.title ?? lm.notebook);
+  const lmTitle = lm && (lmList.data?.notebooks.find((n) => n.domain === lm.domain && n.notebook === lm.notebook)?.title ?? lm.notebook);
   const notebook: Notebook | undefined = lm ? { id: ref.notebook, path: "", title: `${lm.domain} · ${lmTitle}`, added: "" } : notebooks.data?.find((n) => n.id === ref.notebook);
   const pages = usePages(ref.notebook);
   const [dialog, setDialog] = useState<ReactNode>(null);
@@ -242,17 +242,31 @@ export function FileTab({ tab }: { tab: Tab }) {
   const recreate = () => {
     const d = useDocuments.getState().docs[key];
     if (!d) return;
-    createDoc(ref.notebook, ref.path, d.text).then(() => reloadPage(key), (e) => toast(classify(e).message, "error"));
+    // A Living Memory page comes back with the line endings and byte order mark it had (Codex review of 32fee20, D5).
+    createDoc(ref.notebook, ref.path, d.text, d.base?.format).then(() => reloadPage(key), (e) => toast(classify(e).message, "error"));
   };
-  /** Copy a file the user picks into the notebook's attachments and link it at the end of the page (NS-2C). */
-  const attach = () => attachFile(ref.notebook).then((asset) => {
-    if (!asset) return;
+  /** Copy a file the user picks into the notebook's attachments and link it at the end of the page (NS-2C). A page that
+   *  cannot take the link is said before anything is copied (Codex review of 32fee20, U2). */
+  const takesLink = () => {
+    const d = useDocuments.getState().docs[key];
+    return !!d && d.status !== "readOnly" && d.status !== "loading" && d.status !== "error" && !arriving;
+  };
+  const attach = () => {
+    if (!takesLink()) { toast("This page cannot take a link now, so nothing was attached.", "warn"); return; }
+    return attachFile(ref.notebook).then((asset) => { if (asset) linkAsset(asset); }, (e) => toast(classify(e).message, "error"));
+  };
+  const linkAsset = (asset: string) => {
     const d = useDocuments.getState().docs[key];
     const name = fileName(asset).replace(/^[0-9a-f]{8}-/, "");
-    if (!d || d.status === "readOnly" || d.status === "loading" || d.status === "error") { toast(`Attached ${name}; this page cannot take a link to it now.`, "warn"); return; }
+    if (!d || !takesLink()) { toast(`Attached ${name}; this page cannot take a link to it now.`, "warn"); return; }
     const link = `${/\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i.test(asset) ? "!" : ""}[${name}](${assetLink(ref.path, asset)})`;
     edit(key, `${d.text}${d.text && !d.text.endsWith("\n") ? "\n" : ""}${link}\n`, true);
-  }, (e) => toast(classify(e).message, "error"));
+  };
+  /** A relative link in a Living Memory page: an attachment opens in its own program, a page opens in a tab. */
+  const openLinked = useCallback((path: string) => {
+    if (/^assets\//.test(path)) openAttachment(ref.notebook, path).catch((e) => toast(classify(e).message, "error"));
+    else if (isMarkdown(path)) openPage({ notebook: ref.notebook, path });
+  }, [ref.notebook]);
   const remove = () => setDialog(
     <DeleteConfirm notebook={ref.notebook} path={ref.path} section={false}
       onAnswer={(yes) => {
@@ -315,7 +329,7 @@ export function FileTab({ tab }: { tab: Tab }) {
       </header>
       <Banners doc={doc} docKey={key} onMerge={merge} onRecreate={recreate} />
       {mode === "reading"
-        ? <PageView text={doc.text} tabId={tab.id} onLink={follow} pictures={{ base: pictures.data, folder: loose ? "" : folderOf(ref.path) }} />
+        ? <PageView text={doc.text} tabId={tab.id} onLink={follow} onFile={lm ? openLinked : undefined} pictures={{ base: pictures.data, folder: loose ? "" : folderOf(ref.path) }} />
         : (
           <div className="note file-editor">
             <CodeEditor key={key} doc={doc.text} docVersion={doc.version} follow language={markdown ? "markdown" : "text"} live={mode === "live"}

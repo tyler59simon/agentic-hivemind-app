@@ -4,7 +4,10 @@ import type { QueryClient } from "@tanstack/react-query";
 import { movedPath, type FileRef } from "../../documents/keys";
 import { beforeMove, discard, edit, hold, keyOf, open, refresh, unsavedUnder, useDocuments } from "../../documents/store";
 import { retargetAll } from "../../documents/sync";
+import { lmContainer } from "../../documents/adapters/lmdoc";
+import { docsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
+import { lmNotebooksQuery } from "../../lib/lm";
 import { forgetMoved } from "../../lib/drafts";
 import { createDoc, createSection, deleteDoc, moveDoc } from "../../documents/io";
 import { fileName, folderOf, isMarkdown, notebooksQuery, pageTitle } from "../../lib/notebooks";
@@ -179,10 +182,17 @@ export async function trashPath(client: QueryClient, notebook: string, path: str
   client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
 }
 
-/** Ctrl+N on the Notes page: a new page in the focused page's notebook and folder, else the first notebook. */
+/** Ctrl+N on the Notes page: a new page in the focused page's notebook and folder, else the first notebook shown: a
+ *  folder notebook, else a Living Memory one (Codex review of 32fee20, U3). */
 export async function newPageHere(client: QueryClient) {
   const notebooks = await client.ensureQueryData(notebooksQuery());
-  const { notebook, folder } = currentNotebook(notebooks[0]?.id);
+  let first = notebooks[0]?.id;
+  if (!first && docsEnabled()) {
+    const lm = (await client.ensureQueryData(lmNotebooksQuery()).catch(() => null))?.notebooks ?? [];
+    const top = [...lm].sort((a, b) => a.domain.localeCompare(b.domain) || a.title.localeCompare(b.title))[0];
+    first = top && lmContainer(top.domain, top.notebook);
+  }
+  const { notebook, folder } = currentNotebook(first);
   // With no notebook yet, Ctrl+N starts an untitled text file (NS-1B).
   if (!notebook) { useWorkspace.getState().openTab({ kind: "new-file" }); return; }
   await newPage(client, notebook, folder).catch((e) => toast(classify(e).message, "error"));

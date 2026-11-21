@@ -47,6 +47,17 @@ Claude made these choices while building the phase on 2026-11-21, after running 
 - **Domain pickers.** `domains()` in `src/lib/lm.ts` returns memory domains only, so every picker that lists domains leaves out notebook-only ones; `allDomains()` keeps them for the Notes page.
 - **Gate.** `useDocsEnabled()` checks `capabilities.docs.version >= 1` and the `doc` command. Without it the Notes page shows only folder notebooks, with a line saying Living Memory notebooks need an update.
 
+## Changes from the Codex review
+
+The Codex review of `32fee20` (record: `reviews/ns2c-codex-review.md`) changed these decisions on 2026-11-21. Where the text above or below says otherwise, these win.
+
+- **Store binding (D1).** A Living Memory page belongs to the store it was read from. It saves only there, its draft names the store, and saving Settings pauses every Living Memory save until Hivemind has connected again.
+- **Proposal merges (D2, D3, D5).** Edit then accept and a stale merge run `doc accept ID --edited --expected-revision R` (Living Memory `a493525`, capability `docs.accept_edited`): the merge is written and the proposal settled as accepted and edited in one operation, so `MERGED` and the `doc reject` step are gone. A page or proposal the merge could not write unchanged is offered Accept, Reject and Open page only.
+- **Registering a folder (P1).** Registration sends `doc folder set PATH --domain D` with no visibility or private flag: Living Memory keeps what it holds for the folder, a tombstone included, and makes a new one searchable. The sidecar is written only when the user changes reach in Notebook settings, and then only the fields they changed (P3).
+- **Gate (C1).** Folder reach needs `docs.folder_policy` as well as the docs gate.
+- **Arguments (C4).** Every `doc` command sends options, then `--`, then its operands.
+- **Attachments (U2).** A relative link in a Living Memory page opens its attachment with the program Windows uses for its kind, from a read-only copy in the temporary folder (never an executable kind), or opens the page it names.
+
 ## 1. What the user sees
 
 - The notebook column lists Living Memory notebooks under a **Living Memory** heading, grouped by domain, below folder notebooks. **New notebook** offers "Folder on disk" or "Living Memory" (pick a domain, or **New notebook-only domain**, which asks for a name).

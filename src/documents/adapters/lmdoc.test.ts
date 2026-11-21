@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { setTransport, type Invoke } from "../../lib/lm";
 import { assetLink, deletePage, detectEol, lmContainer, pageBody, pageText, pageTree, parseLm, readPage, savePage } from "./lmdoc";
-import { createSection, readDoc } from "../io";
+import { createDoc, createSection, readDoc } from "../io";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => { throw new Error("no Rust in this test"); }) }));
 
@@ -67,7 +67,7 @@ describe("reading", () => {
     const calls = bridge(() => p);
     const loaded = await readPage(where, "A.md");
     expect(loaded).toMatchObject({ text: "# Plan\n", sha256: p.revision, readOnly: null, binary: false, convertible: false });
-    expect(calls[0].argv).toEqual(["doc", "read", "demo", "plans", "A.md", "--include-private", "--actor", "viewer"]);
+    expect(calls[0].argv).toEqual(["doc", "read", "--include-private", "--actor", "viewer", "--", "demo", "plans", "A.md"]);
   });
 
   it("opens read-only when the text is not the page's bytes (Living Memory replaced bad bytes)", async () => {
@@ -96,7 +96,7 @@ describe("saving", () => {
     const outcome = await savePage(where, "A.md", "new\n", { sha256: "r1", size: 2, mtimeMs: 0 }, format);
     expect(outcome).toMatchObject({ status: "saved", sha256: "r2" });
     expect(calls[0]).toMatchObject({ cmd: "lm_body", body: "new\n" });
-    expect(calls[0].argv).toEqual(["doc", "write", "demo", "plans", "A.md", "--expected-revision", "r1", "--include-private"]);
+    expect(calls[0].argv).toEqual(["doc", "write", "--expected-revision", "r1", "--include-private", "--", "demo", "plans", "A.md"]);
   });
 
   it("reports a stale revision and a page that is gone", async () => {
@@ -110,7 +110,7 @@ describe("saving", () => {
     const p = await page("x\n");
     const calls = bridge((_cmd, argv) => (argv[1] === "read" ? p : {}));
     await deletePage(where, "A.md");
-    expect(calls[1].argv).toEqual(["doc", "delete", "demo", "plans", "A.md", "--expected-revision", p.revision, "--include-private"]);
+    expect(calls[1].argv).toEqual(["doc", "delete", "--expected-revision", p.revision, "--include-private", "--", "demo", "plans", "A.md"]);
   });
 });
 
@@ -124,7 +124,13 @@ describe("tree and sections", () => {
   it("creates a Living Memory section with its first page", async () => {
     const calls = bridge(() => ({ revision: "r" }));
     expect(await createSection("lm:demo:plans", "Ideas")).toBe("Ideas/Untitled.md");
-    expect(calls[0].argv).toEqual(["doc", "create", "demo", "plans", "Ideas/Untitled.md", "--include-private"]);
+    expect(calls[0].argv).toEqual(["doc", "create", "--include-private", "--", "demo", "plans", "Ideas/Untitled.md"]);
+  });
+
+  it("D5 (review of 32fee20): creates a gone page again with the format it had", async () => {
+    const calls = bridge(() => ({ revision: "r" }));
+    await createDoc("lm:demo:plans", "A.md", "a\nb\n", pageText("\uFEFFx\r\n").format);
+    expect(calls[0].body).toBe("\uFEFFa\r\nb\r\n");
   });
 });
 

@@ -24,7 +24,7 @@ import { openReview, openSession, useApp } from "./store";
 import { toast, Toasts } from "./ui/toast";
 import { unsavedUntitled, useWorkspace } from "./workspace/store";
 import { onDocsChanged, onFilesChanged, startDocumentSync, type DocsChanged } from "./documents/sync";
-import { draftsPending, flushAllDrafts, onDraftLost } from "./documents/store";
+import { draftsPending, flushAllDrafts, onDraftLost, setLmStore } from "./documents/store";
 import { useOpenRequests } from "./features/notes/opening";
 import { newPageHere } from "./features/notes/actions";
 import type { FilesChanged } from "./lib/notebooks";
@@ -202,7 +202,11 @@ export default function App() {
   const folderOffer = useOpenRequests();
   useEffect(() => startDocumentSync(), []);
   useEffect(() => onDraftLost((line) => toast(`Unsaved edits could not be kept as a draft: ${line}`, "error")), []);
-  useEffect(() => { if (link.data) useConnection.getState().set(link.data.version); }, [link.data]);
+  useEffect(() => {
+    if (!link.data) return;
+    useConnection.getState().set(link.data.version);
+    setLmStore(link.data.root); // Living Memory pages belong to the store they were read from (Codex review of 32fee20, D1)
+  }, [link.data]);
 
   // Start on the largest bound domain once domains are known.
   useEffect(() => {

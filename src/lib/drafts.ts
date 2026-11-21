@@ -27,6 +27,9 @@ export interface FileDraft {
   savedAt: string;
   /** The user chose Convert to UTF-8 for this page. */
   convert?: boolean;
+  /** A Living Memory page: the store it was read from, so the draft never comes back in another store's page of the
+   *  same name (Codex review of 32fee20, D1). */
+  store?: string;
 }
 
 export type Draft = NoteDraft | FileDraft;

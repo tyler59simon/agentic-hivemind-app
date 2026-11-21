@@ -3,10 +3,10 @@
 // to Living Memory first, then to the sidecar when it can be written, then to the copy.
 import type { QueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
-import { docsEnabled } from "../../lib/connection";
+import { folderPolicyEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { docFolderSet, docFolderUnset, domains, type DomainInfo, type Visibility } from "../../lib/lm";
-import { setNotebookMeta, type Notebook } from "../../lib/notebooks";
+import { metaQuery, setNotebookMeta, type Notebook } from "../../lib/notebooks";
 import { useApp } from "../../store";
 import { toast } from "../../ui/toast";
 
@@ -33,39 +33,51 @@ export function domainForFolder(path: string, known: DomainInfo[], fallback: str
 /** Record Living Memory's answer in Hivemind's registry. */
 const record = (id: string, policy: FolderPolicy) => invoke<Notebook>("notebook_reach_record", { id, ...policy });
 
-/** Set how far agents reach into a folder notebook. `isPrivate` undefined keeps what Living Memory has (a folder that
- *  was private before stays private when it is added again). Returns the policy Living Memory now holds. */
-export async function setFolderReach(nb: Notebook, domain: string, visibility: Visibility, isPrivate?: boolean): Promise<FolderPolicy> {
-  const reply = await docFolderSet(nb.path, domain, visibility, isPrivate) as { folder?: Partial<FolderPolicy> };
+/** What the user changed in a folder notebook's reach; a field left out keeps what Living Memory holds. */
+export interface ReachChange { visibility?: Visibility; private?: boolean }
+
+/** Set how far agents reach into a folder notebook: only the fields in `change` (Codex review of 32fee20, P3), so a
+ *  dialog opened before a newer privacy decision cannot undo it. Returns the policy Living Memory now holds. */
+export async function setFolderReach(nb: Notebook, domain: string, change: ReachChange = {}): Promise<FolderPolicy> {
+  const reply = await docFolderSet(nb.path, domain, change) as { folder?: Partial<FolderPolicy> };
   const policy: FolderPolicy = {
     domain: reply.folder?.domain ?? domain,
-    visibility: reply.folder?.visibility ?? visibility,
-    private: reply.folder?.private ?? !!isPrivate,
+    visibility: reply.folder?.visibility ?? change.visibility ?? "searchable",
+    private: reply.folder?.private ?? !!change.private,
   };
-  // The sidecar is a second opinion Living Memory also reads; a folder Hivemind cannot write keeps it in app data.
-  await setNotebookMeta(nb.id, { visibility: policy.visibility, private: policy.private }).catch(() => {});
+  // The sidecar is a second opinion Living Memory also reads, so it gets only what the user changed: a stricter value
+  // it holds is never written over with a looser one (P1). A folder Hivemind cannot write keeps it in app data.
+  const sidecar: { visibility?: Visibility; private?: boolean } = {};
+  if (change.visibility !== undefined) sidecar.visibility = policy.visibility;
+  if (change.private !== undefined) sidecar.private = policy.private;
+  if (Object.keys(sidecar).length) await setNotebookMeta(nb.id, sidecar).catch(() => {});
   await record(nb.id, policy);
   return policy;
 }
 
-/** A folder just added as a notebook becomes searchable from its domain (the default reach). */
+/** A folder just added as a notebook: Living Memory registers it from its domain, keeping the visibility and private
+ *  flag it kept for the folder (a tombstone of one removed before) and making a new one searchable. Its sidecar is left
+ *  as it is; Living Memory reads it and the stricter of the two holds (Codex review of 32fee20, P1). */
 export async function registerFolder(nb: Notebook, fallback: string | null): Promise<FolderPolicy> {
   const known = await domains();
   const domain = domainForFolder(nb.path, known.domains, fallback);
   if (!domain) throw new Error("Pick a memory domain for this notebook in its settings, so agents can search it.");
-  return setFolderReach(nb, domain, "searchable");
+  return setFolderReach(nb, domain);
 }
 
 /** A folder notebook was just added (dialog or drop): Living Memory registers it so agents can search it. A failure
  *  leaves it out of agents' reach, which is said, not hidden. */
 export async function announceAdded(client: QueryClient, nb: Notebook) {
   client.invalidateQueries({ queryKey: ["notebooks"] });
-  if (!docsEnabled()) { toast(`Added ${nb.title}.`); return; }
+  if (!folderPolicyEnabled()) { toast(`Added ${nb.title}.`); return; }
   try {
     const policy = await registerFolder(nb, useApp.getState().domain);
     client.invalidateQueries({ queryKey: ["notebooks"] });
-    toast(policy.private || policy.visibility === "hidden"
-      ? `Added ${nb.title}. Living Memory keeps it out of agents' reach, as it was before.`
+    // Said as Living Memory judges it: the stricter of what it holds and the folder's own sidecar.
+    const sidecar = await client.fetchQuery(metaQuery(nb.id)).catch(() => ({}));
+    const reach = stricter(policy, sidecar as { visibility?: Visibility; private?: boolean });
+    toast(reach.private || reach.visibility === "hidden"
+      ? `Added ${nb.title}. Agents cannot reach it, as before; change that in its settings.`
       : `Added ${nb.title}. Agents can search it from ${policy.domain}; change that in its settings.`);
   } catch (e) {
     toast(`Added ${nb.title}, but Living Memory did not register it, so agents cannot search it yet: ${classify(e).message}`, "warn");

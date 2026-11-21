@@ -5,12 +5,14 @@ import remarkGfm from "remark-gfm";
 import { MermaidPre } from "../../ui/Mermaid";
 import { useWorkspace } from "../../workspace/store";
 import { remarkWikilinks, WIKI_PREFIX } from "../viewer/remarkWikilinks";
-import { pictureUrl } from "./pictures";
+import { pictureUrl, relativeTarget } from "./pictures";
 
-/** A Markdown page as it reads. `[[links]]` call `onLink`; web links open in the browser; nothing navigates the app.
+/** A Markdown page as it reads. `[[links]]` call `onLink`; web links open in the browser; a relative link calls
+ *  `onFile` with the path it names under the grant's root (an attachment, NS-2C), when given; nothing navigates the app.
  *  Pictures beside the page load through `hmfile` from `pictures.base` (the grant's prefix), relative to `folder`. */
-export function PageView({ text, tabId, onLink, pictures }: {
-  text: string; tabId: string; onLink: (target: string, split: boolean) => void; pictures?: { base?: string; folder: string };
+export function PageView({ text, tabId, onLink, onFile, pictures }: {
+  text: string; tabId: string; onLink: (target: string, split: boolean) => void; onFile?: (path: string) => void;
+  pictures?: { base?: string; folder: string };
 }) {
   const reveal = useWorkspace((s) => s.reveal);
   useEffect(() => {
@@ -25,7 +27,14 @@ export function PageView({ text, tabId, onLink, pictures }: {
         return <a href="#" className="wikilink" onClick={(e) => { e.preventDefault(); onLink(target, e.ctrlKey || e.metaKey); }}
           onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); onLink(target, true); } }}>{children}</a>;
       }
-      return <a href={href} onClick={(e) => { e.preventDefault(); if (href && /^https?:/i.test(href)) openUrl(href).catch(() => undefined); }}>{children}</a>;
+      return <a href={href} onClick={(e) => {
+        e.preventDefault();
+        if (!href) return;
+        if (/^https?:/i.test(href)) { openUrl(href).catch(() => undefined); return; }
+        // A link Attach file wrote opens its attachment (Codex review of 32fee20, U2).
+        const path = onFile ? relativeTarget(href, pictures?.folder ?? "") : null;
+        if (path) onFile!(path);
+      }}>{children}</a>;
     };
     return {
       a: ({ href, children }) => link(href, children),
@@ -36,7 +45,7 @@ export function PageView({ text, tabId, onLink, pictures }: {
       pre: MermaidPre,
       h1: heading("h1"), h2: heading("h2"), h3: heading("h3"), h4: heading("h4"), h5: heading("h5"), h6: heading("h6"),
     };
-  }, [tabId, onLink, pictures?.base, pictures?.folder]);
+  }, [tabId, onLink, onFile, pictures?.base, pictures?.folder]);
   return (
     <article className="note page-view">
       <div className="markdown">

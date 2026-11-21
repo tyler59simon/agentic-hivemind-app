@@ -10,16 +10,20 @@ import type { Eol, FileFormat, Loaded, SaveOutcome, Stamp, Tree } from "../../li
 export const LM = "lm:";
 export interface LmNotebookRef { domain: string; notebook: string }
 
-/** The container id of a Living Memory notebook. Domain names are folder names (never a colon); notebook ids are
- *  lowercase letters, digits and hyphens. */
+/** The container id of a Living Memory notebook. */
 export const lmContainer = (domain: string, notebook: string) => `${LM}${domain}:${notebook}`;
+
+/** Living Memory's names (`common.safe_domain`, `docs.SLUG`), checked the same way by Rust's `lmdoc::parse`, so a
+ *  notebook either works everywhere or nowhere (Codex review of 32fee20, C3). A domain is also a folder name. */
+const DOMAIN = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,254}$/;
+const NOTEBOOK = /^[a-z0-9][a-z0-9-]{1,39}$/;
 
 export function parseLm(container: string): LmNotebookRef | null {
   if (!container.startsWith(LM)) return null;
   const rest = container.slice(LM.length);
   const at = rest.indexOf(":");
-  if (at <= 0 || at === rest.length - 1) return null;
-  return { domain: rest.slice(0, at), notebook: rest.slice(at + 1) };
+  const domain = rest.slice(0, at), notebook = rest.slice(at + 1);
+  return at > 0 && DOMAIN.test(domain) && NOTEBOOK.test(notebook) ? { domain, notebook } : null;
 }
 
 export const isLm = (ref: { notebook: string }) => ref.notebook.startsWith(LM);
@@ -103,9 +107,12 @@ export async function savePage(where: LmNotebookRef, path: string, text: string,
   }
 }
 
-export async function createPage(where: LmNotebookRef, path: string, text: string): Promise<Stamp> {
-  const receipt = await docCreate(where.domain, where.notebook, path, text);
-  return { sha256: receipt.revision ?? (await sha256(text)), size: encoder.encode(text).length, mtimeMs: Date.now() };
+/** Create a page; with `format`, editor text is written with that format's line endings and byte order mark (a gone
+ *  page created again keeps the format it had, Codex review of 32fee20, D5). */
+export async function createPage(where: LmNotebookRef, path: string, text: string, format?: FileFormat): Promise<Stamp> {
+  const body = format ? pageBody(text, format) : text;
+  const receipt = await docCreate(where.domain, where.notebook, path, body);
+  return { sha256: receipt.revision ?? (await sha256(body)), size: encoder.encode(body).length, mtimeMs: Date.now() };
 }
 
 /** Delete a page. Without `pre` (the page is not open) it is deleted as it is now. */
@@ -120,6 +127,10 @@ export const movePage = (container: string, from: string, to: string) => invoke<
 
 /** Ask for a file with the native dialog and copy it into the notebook's `assets/`; null when the user cancelled. */
 export const attachFile = (container: string) => invoke<string | null>("lmdoc_attach", { notebook: container });
+
+/** Open an attachment (`assets/...`) with the program Windows uses for its kind. Rust opens a read-only copy, so the
+ *  store keeps Living Memory as its only writer (Codex review of 32fee20, U2). */
+export const openAttachment = (container: string, path: string) => invoke<void>("lmdoc_open_asset", { notebook: container, path });
 
 /** The notebook's sections and pages in the shape of a folder notebook's tree. */
 export async function pageTree(where: LmNotebookRef): Promise<Tree> {

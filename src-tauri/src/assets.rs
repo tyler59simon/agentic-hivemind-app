@@ -162,7 +162,9 @@ pub fn serve(request: &Request<Vec<u8>>, label: &str, grants: &AssetGrants, prot
     // on the path they resolve to (NS-2C).
     let allowed = match scope {
         Scope::Folder => protected.check(&full).is_ok(),
-        Scope::LmAssets => resolved.as_deref().is_some_and(|r| r.split('/').next().is_some_and(|first| first.eq_ignore_ascii_case("assets")) && r.contains('/')),
+        // `assets` exactly, as Living Memory names it: a distinct `Assets` in a case-sensitive folder is not served (Codex
+        // review of 32fee20, P2).
+        Scope::LmAssets => resolved.as_deref().is_some_and(|r| r.split('/').next() == Some("assets") && r.contains('/')),
     };
     if !allowed || hidden(&rel) || resolved.is_none_or(|r| hidden(&r)) {
         return status(StatusCode::FORBIDDEN);
@@ -372,6 +374,21 @@ mod tests {
         assert_eq!(serve(&get(&format!("{}assets/1a2b3c4d-pic.png", base_url(&folder)), &[]), "main", &grants, &store).status(), StatusCode::FORBIDDEN);
         grants.retain(|_| false);
         assert_eq!(code("assets/1a2b3c4d-pic.png"), StatusCode::OK);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Codex review of 32fee20, P2: a folder named `Assets` on disk is not Living Memory's `assets` and serves nothing.
+    #[test]
+    fn a_folder_named_otherwise_than_assets_is_not_served() {
+        let dir = scratch();
+        std::fs::create_dir_all(dir.join("Assets")).unwrap();
+        std::fs::write(dir.join("Assets").join("pic.png"), b"png").unwrap();
+        let grants = AssetGrants::default();
+        let g = grants.grant_lm(&dir);
+        let store = Protected::new(Some(&dir));
+        let code = |rel: &str| serve(&get(&format!("{}{rel}", base_url(&g)), &[]), "main", &grants, &store).status();
+        assert_eq!(code("Assets/pic.png"), StatusCode::FORBIDDEN);
+        assert_eq!(code("assets/pic.png"), StatusCode::FORBIDDEN, "found in any case, but named Assets");
         std::fs::remove_dir_all(&dir).ok();
     }
 

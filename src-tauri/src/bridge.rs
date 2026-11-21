@@ -170,8 +170,11 @@ impl Bridge {
     /// Run one command. Transport failures drop the process so the next call starts a new one;
     /// a failed request is never retried, because it may already have changed the store.
     pub fn call(&self, argv: &[String], stdin: Option<&str>) -> Result<Reply, String> {
-        // Measured before the process is touched, so a request that is too large never costs a restart.
-        if stdin.is_some_and(|s| s.len() > SERVE_LIMIT / 8) && too_large(argv, stdin) {
+        // Measured before the process is touched, so a request that is too large never costs a restart. Its arguments count
+        // as much as its stdin (Codex review of 32fee20, B1); JSON escaping at most sextuples a byte, so a request whose
+        // raw size is under an eighth of the limit is never measured.
+        let raw = argv.iter().map(String::len).sum::<usize>() + stdin.map_or(0, str::len);
+        if raw > SERVE_LIMIT / 8 && too_large(argv, stdin) {
             return Err("This request is larger than the 2 MiB Living Memory accepts".into());
         }
         let mut guard = self.proc.lock().unwrap();
@@ -249,6 +252,11 @@ mod tests {
         assert!(error.contains("larger than the 2 MiB"), "{error}");
         // Escaping counts: a body of control characters is six times longer on the line.
         let error = bridge.call(&["doc".into()], Some(&"\u{1}".repeat(SERVE_LIMIT / 6 + 1))).unwrap_err();
+        assert!(error.contains("larger than the 2 MiB"), "{error}");
+        // Arguments count too, with or without stdin (Codex review of 32fee20, B1).
+        let error = bridge.call(&["capture".into(), "--summary".into(), "a".repeat(SERVE_LIMIT)], None).unwrap_err();
+        assert!(error.contains("larger than the 2 MiB"), "{error}");
+        let error = bridge.call(&["doc".into(), "a".repeat(SERVE_LIMIT / 2)], Some(&"\u{1}".repeat(SERVE_LIMIT / 8))).unwrap_err();
         assert!(error.contains("larger than the 2 MiB"), "{error}");
         // A smaller request goes on to start the process.
         let error = bridge.call(&["doc".into()], Some(&"a".repeat(SERVE_LIMIT / 2))).unwrap_err();

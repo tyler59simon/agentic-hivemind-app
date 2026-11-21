@@ -47,7 +47,7 @@ export interface Capabilities {
   direct_writes?: number; history?: number; restore?: number; pin?: number; rule?: number; maintenance?: { version: number; actions: string[] };
   wiki_agent?: { version: number }; note_types?: number;
   /** Notebook pages (NS-2A, NS-2B). */
-  docs?: { version: number; max_page_bytes: number; max_asset_bytes: number; notebook_only_domains?: boolean; search?: boolean; folder_policy?: boolean };
+  docs?: { version: number; max_page_bytes: number; max_asset_bytes: number; notebook_only_domains?: boolean; search?: boolean; folder_policy?: boolean; accept_edited?: boolean };
 }
 
 export interface ConnectInfo {
@@ -638,44 +638,71 @@ async function runBody<T>(argv: string[], body: string): Promise<T> {
   return reply.result;
 }
 
-export const docNotebooks = () =>
-  run<{ notebooks: DocNotebook[] }>(view(["doc", "notebooks", "--all-domains", "--include-hidden", PRIVATE])).then((r) => r.notebooks);
+/** A `doc` command: options first, then `--` and the operands, so a page named `-Draft.md` is never read as an option
+ *  (Codex review of 32fee20, C4). Free text goes as `--option=value` for the same reason. Rust's `lm_body` puts
+ *  `--body-file` before the `--`. */
+function doc(action: string[], operands: string[], options: string[] = [], how: { viewer?: boolean; priv?: boolean } = {}) {
+  return ["doc", ...action, ...options, ...(how.priv === false ? [] : [PRIVATE]), ...(how.viewer ? ["--actor", "viewer"] : []), "--", ...operands];
+}
+
+/** A notebook Living Memory cannot read (its `notebook.json` is damaged): `error` says why. */
+export interface DocNotebookProblem { domain: string; notebook: string; error: string }
+/** Every notebook: those Living Memory can read, and the damaged ones apart, so one damaged notebook never takes the
+ *  list down (Codex review of 32fee20, C2). */
+export interface DocNotebooks { notebooks: DocNotebook[]; damaged: DocNotebookProblem[] }
+export async function docNotebooks(): Promise<DocNotebooks> {
+  const rows = (await run<{ notebooks: unknown[] }>(doc(["notebooks"], [], ["--all-domains", "--include-hidden"], { viewer: true }))).notebooks ?? [];
+  const out: DocNotebooks = { notebooks: [], damaged: [] };
+  for (const row of rows as Record<string, unknown>[]) {
+    if (typeof row.title === "string" && typeof row.error !== "string") out.notebooks.push(row as unknown as DocNotebook);
+    else out.damaged.push({ domain: String(row.domain ?? ""), notebook: String(row.notebook ?? ""), error: String(row.error ?? "Living Memory could not read this notebook") });
+  }
+  return out;
+}
 export const lmNotebooksQuery = () => ({ queryKey: ["lm-notebooks"], queryFn: docNotebooks });
 /** Pending proposals of one notebook. */
 export const proposalsQuery = (domain: string, notebook: string) => ({ queryKey: ["lm-proposals", domain, notebook], queryFn: () => docProposals(domain, notebook) });
 export const docNotebookCreate = (domain: string, notebook: string, title: string) =>
-  run<DocReceipt>(["doc", "notebook", "create", domain, notebook, "--title", title]);
+  run<DocReceipt>(doc(["notebook", "create"], [domain, notebook], [`--title=${title}`], { priv: false }));
 export const docNotebookUpdate = (domain: string, notebook: string, patch: { title?: string; visibility?: Visibility; private?: boolean }) =>
-  run<DocReceipt>([
-    "doc", "notebook", "update", domain, notebook, PRIVATE,
-    ...(patch.title !== undefined ? ["--title", patch.title] : []),
+  run<DocReceipt>(doc(["notebook", "update"], [domain, notebook], [
+    ...(patch.title !== undefined ? [`--title=${patch.title}`] : []),
     ...(patch.visibility ? ["--visibility", patch.visibility] : []),
     ...(patch.private === undefined ? [] : [patch.private ? "--private" : "--no-private"]),
-  ]);
+  ]));
 export const docList = (domain: string, notebook: string) =>
-  run<{ title: string; entries: DocEntry[] }>(view(["doc", "list", domain, notebook, PRIVATE]));
-export const docRead = (domain: string, notebook: string, path: string) => run<DocPage>(view(["doc", "read", domain, notebook, path, PRIVATE]));
+  run<{ title: string; entries: DocEntry[] }>(doc(["list"], [domain, notebook], [], { viewer: true }));
+export const docRead = (domain: string, notebook: string, path: string) => run<DocPage>(doc(["read"], [domain, notebook, path], [], { viewer: true }));
 export const docWrite = (domain: string, notebook: string, path: string, body: string, expected: string) =>
-  runBody<DocReceipt>(["doc", "write", domain, notebook, path, "--expected-revision", expected, PRIVATE], body);
+  runBody<DocReceipt>(doc(["write"], [domain, notebook, path], ["--expected-revision", expected]), body);
 export const docCreate = (domain: string, notebook: string, path: string, body: string) =>
-  runBody<DocReceipt>(["doc", "create", domain, notebook, path, PRIVATE], body);
+  runBody<DocReceipt>(doc(["create"], [domain, notebook, path]), body);
 export const docDelete = (domain: string, notebook: string, path: string, expected: string) =>
-  run<DocReceipt>(["doc", "delete", domain, notebook, path, "--expected-revision", expected, PRIVATE]);
+  run<DocReceipt>(doc(["delete"], [domain, notebook, path], ["--expected-revision", expected]));
 export const docHistory = (domain: string, notebook: string, path: string, limit = 50) =>
-  run<{ history: DocHistoryRow[] }>(view(["doc", "history", domain, notebook, path, "--limit", String(limit), PRIVATE])).then((r) => r.history);
+  run<{ history: DocHistoryRow[] }>(doc(["history"], [domain, notebook, path], ["--limit", String(limit)], { viewer: true })).then((r) => r.history);
 /** The page as operation `op` left it. */
 export const docVersion = (domain: string, notebook: string, path: string, op: string) =>
-  run<DocPage>(view(["doc", "history", domain, notebook, path, "--version", op, PRIVATE]));
+  run<DocPage>(doc(["history"], [domain, notebook, path], ["--version", op], { viewer: true }));
 export const docProposals = (domain?: string, notebook?: string) =>
-  run<{ proposals: DocProposalRow[] }>(view(["doc", "proposals", ...(domain ? [domain] : []), ...(notebook ? [notebook] : []), PRIVATE])).then((r) => r.proposals);
-export const docProposal = (id: string) => run<{ proposal: DocProposal }>(view(["doc", "proposal", id, PRIVATE])).then((r) => r.proposal);
-export const docAccept = (id: string) => run<DocReceipt>(["doc", "accept", id, PRIVATE]);
-export const docReject = (id: string, reason?: string) => run<DocReceipt>(["doc", "reject", id, ...(reason ? ["--reason", reason] : []), PRIVATE]);
+  run<{ proposals: DocProposalRow[] }>(doc(["proposals"], [...(domain ? [domain] : []), ...(notebook ? [notebook] : [])], [], { viewer: true })).then((r) => r.proposals);
+export const docProposal = (id: string) => run<{ proposal: DocProposal }>(doc(["proposal"], [id], [], { viewer: true })).then((r) => r.proposal);
+export const docAccept = (id: string) => run<DocReceipt>(doc(["accept"], [id]));
+/** Write the user's merge of a proposal and settle it as accepted, in one Living Memory operation, against the page's
+ *  revision the merge was made from (null: the page must not exist). Needs `docs.accept_edited` (Codex review of
+ *  32fee20, D3). */
+export const docAcceptEdited = (id: string, body: string, expected: string | null) =>
+  runBody<DocReceipt>(doc(["accept"], [id], ["--edited", ...(expected ? ["--expected-revision", expected] : [])]), body);
+export const docReject = (id: string, reason?: string) => run<DocReceipt>(doc(["reject"], [id], reason ? [`--reason=${reason}`] : []));
 export const domainCreateNotebook = (name: string) => run<{ domain: string; kind: string }>(["domain", "create", name, "--notebook-only"]);
-/** Register a folder notebook outside the store, or change how far agents reach into it. `isPrivate` undefined keeps
- *  what Living Memory has: a folder that was private before it was removed stays private when it is added again. */
-export const docFolderSet = (path: string, domain: string, visibility: Visibility, isPrivate?: boolean) =>
-  run<unknown>(["doc", "folder", "set", path, "--domain", domain, "--visibility", visibility,
-    ...(isPrivate === undefined ? [] : [isPrivate ? "--private" : "--no-private"])]);
+/** Register a folder notebook outside the store, or change how far agents reach into it. A field left undefined keeps
+ *  what Living Memory holds: a folder registered again keeps the visibility and private flag kept for it, and a new one
+ *  is searchable (Codex review of 32fee20, P1). */
+export const docFolderSet = (path: string, domain: string, change: { visibility?: Visibility; private?: boolean } = {}) =>
+  run<unknown>(doc(["folder", "set"], [path], [
+    "--domain", domain,
+    ...(change.visibility ? ["--visibility", change.visibility] : []),
+    ...(change.private === undefined ? [] : [change.private ? "--private" : "--no-private"]),
+  ], { priv: false }));
 /** Living Memory forgets a folder notebook; a hidden or private one stays out of reach. */
-export const docFolderUnset = (path: string) => run<unknown>(["doc", "folder", "unset", path]);
+export const docFolderUnset = (path: string) => run<unknown>(doc(["folder", "unset"], [path], [], { priv: false }));

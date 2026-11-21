@@ -87,7 +87,8 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "draft_delete": drafts.delete(a.key as string); return null;
       case "lm":
       case "lm_body": {
-        const argv = a.argv as string[], page = argv[4];
+        // Options come first, then `--` and the operands: the page is the last one.
+        const argv = a.argv as string[], page = argv[argv.length - 1];
         // Web Crypto settles outside fake timers, so the test computes the revisions it needs first (`lmRevision`).
         const rev = (t: string) => lmRevs.get(t) ?? "unknown";
         const ok = (result: unknown) => ({ exit_code: 0, result, error: null });
@@ -114,6 +115,7 @@ const docs = await import("./store");
 const { retargetAll, startDocumentSync } = await import("./sync");
 const { draftKeyOf } = await import("./keys");
 const { forgetMoved } = await import("../lib/drafts");
+type FileRef = { notebook: string; path: string };
 
 const ref = (path: string) => ({ notebook: "nb-1", path });
 const key = (path: string) => docs.keyOf(ref(path));
@@ -131,13 +133,14 @@ describe("documents store", () => {
   beforeEach(() => {
     // The drafts module caches the drafts this run wrote; in the app the cache and the store always agree, so it forgets
     // them when the fake store is cleared.
-    for (const d of drafts.values()) forgetMoved("nb-1", (d as { target: { path: string } }).target.path);
+    for (const d of drafts.values()) forgetMoved((d as { target: FileRef }).target.notebook, (d as { target: FileRef }).target.path);
     files.clear(); lmPages.clear(); drafts.clear(); gates.clear(); calls.length = 0;
     flags.failDrafts = false; flags.readError.clear(); flags.deleteError = ""; flags.convertible.clear(); flags.legacy.clear(); flags.locked.clear(); flags.draftGetError = false; converted.length = 0;
     files.set("A.md", "one");
     useWorkspace.setState({ panes: [{ id: "p0", tabs: [], active: null }], focused: "p0", dirty: {}, reveal: null });
     useApp.setState({ route: { page: "notes" }, back: [] });
     docs.useDocuments.setState({ docs: {}, refs: {} });
+    docs.setLmStore("C:/stores/a");
     stop = startDocumentSync();
   });
   afterEach(() => stop());
@@ -950,6 +953,56 @@ describe("documents store", () => {
       open();
       await vi.advanceTimersByTimeAsync(5500);
       expect(lmPages.get("A.md")).toBe("five\r\n");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("D1 (review of 32fee20): a Living Memory page saves only into the store it was read from, and its draft stays with it", async () => {
+    lmPages.set("A.md", "one\n");
+    await lmRevision("one\n", "two\n");
+    const lm = { notebook: "lm:demo:plans", path: "A.md" }, k = docs.keyOf(lm);
+    ws().openTab({ kind: "file", file: lm });
+    await docs.open(lm);
+    docs.edit(k, "two\n");
+    // The settings are being saved: no page saves while the store may change.
+    docs.pauseLmStore();
+    expect((await docs.save(k))?.status).toBe("dirty");
+    expect(lmPages.get("A.md")).toBe("one\n");
+    // Hivemind connects to another store holding a page of the same name and bytes: the tab shows that page, read-only,
+    // with the edits beside it, and the draft names the store they belong to.
+    docs.setLmStore("C:/stores/b");
+    await until(() => docs.useDocuments.getState().docs[k]?.status === "readOnly");
+    expect(docs.useDocuments.getState().docs[k].kept?.text).toBe("two\n");
+    expect(await docs.save(k)).toMatchObject({ status: "readOnly" });
+    expect(lmPages.get("A.md")).toBe("one\n");
+    expect(drafts.get(await draftKeyOf(k))).toMatchObject({ store: "C:/stores/a", mine: "two\n" });
+    // Back in its own store the page takes the edits again and saves them there.
+    docs.setLmStore("C:\\Stores\\A\\");
+    await until(() => docs.useDocuments.getState().docs[k]?.status === "dirty");
+    expect((await docs.save(k))?.status).toBe("clean");
+    expect(lmPages.get("A.md")).toBe("two\n");
+  });
+
+  it("D6 (review of 32fee20): a Living Memory page closed before its autosave saves once it is open again", async () => {
+    lmPages.set("A.md", "one\n");
+    await lmRevision("one\n", "two\n");
+    const lm = { notebook: "lm:demo:plans", path: "A.md" }, k = docs.keyOf(lm);
+    ws().openTab({ kind: "file", file: lm });
+    await docs.open(lm);
+    // Only the clocks are faked, so Web Crypto still settles when the page opens again.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      docs.edit(k, "two\n");
+      ws().closeTab("p0", ws().panes[0].tabs[0].id);
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(lmPages.get("A.md")).toBe("one\n");
+      expect(drafts.get(await draftKeyOf(k))).toMatchObject({ mine: "two\n" });
+      ws().openTab({ kind: "file", file: lm });
+      await docs.open(lm);
+      expect(docs.useDocuments.getState().docs[k]).toMatchObject({ status: "dirty", text: "two\n" });
+      await vi.advanceTimersByTimeAsync(5500);
+      expect(lmPages.get("A.md")).toBe("two\n");
     } finally {
       vi.useRealTimers();
     }
