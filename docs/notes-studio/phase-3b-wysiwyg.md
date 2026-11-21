@@ -57,4 +57,35 @@ All four corpus assertions pass; Rich edits on real pages produce minimal diffs;
 
 ## 6. Shipped
 
-(Filled in when the phase lands.)
+Code landed on 2026-11-21: Hivemind `2392f6b` (the phase), then `b0afec0`, `ad6c5c5` and `2cc08d7` (fixes from three Codex review rounds) and `2720fbc` (fixes from the UI pass). No Living Memory or Rust change was needed.
+
+**What differs from sections 2 and 3 and the survey above.**
+- `@tiptap/react` is not installed: the editor is Tiptap core with DOM node views (`views.ts`, not `views.tsx`), and React draws only the toolbar, the slash menu, the popovers (`popovers.tsx`) and the block handle. `@tiptap/extension-code` and `extension-code-block` are direct dependencies so the code mark and block can be configured, and `micromark-util-chunked` is direct since the round 2 fix.
+- Editing helpers (input rules for `[[`, `![[` and `$`, the slash menu plugin, block moves, picture markers, paste and copy) are in `editing.ts` and `slash.ts`; the tree comparison is `canon.ts`.
+- Lists hold `listItem` and `taskItem` together; there is no task list node, so a list can mix tasks and plain items as Markdown does.
+- A list of more than 32 items is written item by item, each item's text remembered with its node, and the whole list is written at once only when its items would not keep one marker. This replaces "editing one item of a list rewrites that whole list" for long lists (UI pass).
+- The 1 MB corpus page is a generated page in `roundtrip.test.ts`, not a file in `corpus/`.
+
+**Verified**
+- `npm test` (104 files, 960 tests, one skipped: the NS-3A 1 MB timing check), `npx tsc --noEmit` and `npm run build` (the Rich editor is a lazy chunk of 501 KB, 159 KB gzipped). `npm audit`: 0 vulnerabilities.
+- The corpus (seven hand-made pages, this repository's `docs/` and the note fixtures, in LF, CRLF, BOM, no-final-newline and combined variants; 3,218 blocks, none shown as a source box): identity, locality, per-block fidelity and the mode switch, as section 4 asks.
+- Three read-only Codex reviews (15, 9 and 5 findings), each finding checked before it was fixed, each fix with a regression test checked to fail without it: [reviews/ns3b-codex-review.md](reviews/ns3b-codex-review.md).
+
+**UI pass (2026-11-21).** The dev app ran against a scratch store and a folder notebook outside any bound folder, driven over WebView2 remote debugging:
+- The NS-3A page with every construct opened in Rich without changing the file: pictures in both syntaxes through the grant, the Mermaid diagram, inline and display math, the `![[Embedded#Goals]]` section, both callouts, the footnote reference, the highlight and the comment.
+- Text typed at the end of one paragraph and Ctrl+S changed that line only; the file kept its CRLF line endings. `*rich*` typed became italic through the input rule and was written `*rich*`.
+- A block dragged by its grip above the table, and another moved with Alt+Shift+Up: the saved diff was the move alone. Two Undos gave back the file as it was before the moves.
+- Markdown pasted from the clipboard (a synthetic paste event) became a heading, two task items and a table, written as Markdown; ticking a task saved `- [x]`.
+- The HTML corpus page showed eight source boxes and nine inline source runs, all editable, with the file unchanged. The 1.1 MB page showed the banner and opened as source.
+- Ctrl+E inside Rich kept the tab in Rich. A memory note opened, took edits and was checked by Living Memory's capture rules on Save, as before.
+- Not driven: a picture dropped from Explorer (it needs a real desktop drag; the drop target and the attach path have tests).
+
+The pass found four problems, fixed in `2720fbc`: callout type menus showed open on load (their display rule beat the `hidden` attribute), task items drew the bullet, checkbox and text on three lines (Tiptap 3's task item view sets `data-checked` but not `data-type`), every node view was drawn twice when Rich opened, and typing in a 3,000-item list took about 640 ms per key because each key rewrote the whole list. The same list now takes about 71 ms per key in the dev build; a short page takes about 12 ms.
+
+**Known limits**
+- Opening a page near the 1 MB limit in Rich is slow. A 950 KB page of 17,000 headings and 17,000 tables (34,706 blocks) took 10.8 s in the dev build: about 3 s to parse and check it with micromark's development build, 1.5 s to build the editor, all done twice because React's StrictMode mounts the editor twice in development. A production build mounts once and uses micromark's production build; it was not measured.
+- micromark is quadratic on a long paragraph full of `**` or `~~` runs that never pair (16,000 runs took about 3 and 5 s), and Rich inherits this up to its limit. The `==` and `%%` constructs are Hivemind's own and are linear.
+- Editing one item of a list of up to 32 items rewrites that list in the page's style; a longer list rewrites the edited items only.
+- Tables hold one paragraph per cell, so merging cells is not offered; a pasted HTML table with a cell spanning columns is written as the Markdown of its cells.
+- A `^block-id` stays text, and `![[Page]]` resolves within the page's own notebook until NS-4A.
+- A page over 1,000,000 characters opens in Source.
