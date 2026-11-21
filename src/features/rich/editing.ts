@@ -206,13 +206,14 @@ export async function attachPictures(editor: Editor, ctx: RichContext, pos: numb
     } catch (e) {
       ctx.fail(`${names[i]} was not attached: ${e instanceof Error ? e.message : String(e)}`);
     }
+    // Undo cancelled this one: no link, here or on the clipboard (Codex review of b0afec0, R2-8).
+    if (cancelled.delete(ids[i])) continue;
     if (editor.isDestroyed) {
       if (link) unlinked.push({ name: names[i], link });
       continue;
     }
     const at = pendingPos(editor.state, ids[i]);
     const tr = editor.state.tr.setMeta(pendingKey, { remove: [ids[i]] } satisfies PendingMeta);
-    if (cancelled.delete(ids[i])) continue;
     if (at === null || !link) {
       editor.view.dispatch(tr.setMeta("addToHistory", false));
       if (link) ctx.fail(`${names[i]} was attached, but the place for its link was removed, so the page has no link to it.`);

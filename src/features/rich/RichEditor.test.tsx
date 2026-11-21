@@ -4,6 +4,7 @@
 import type { Editor } from "@tiptap/core";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { TextSelection } from "@tiptap/pm/state";
+import { CellSelection } from "@tiptap/pm/tables";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -316,6 +317,55 @@ describe("Codex review of 2392f6b", () => {
     await act(async () => { expect(press(editor, { key: "z", ctrlKey: true })).toBe(true); });
     await act(async () => { finish("![shot](shot.png)"); await new Promise((r) => setTimeout(r, 0)); });
     expect(changes[changes.length - 1]).toBe("Startx\n");
+    expect(fail).not.toHaveBeenCalled();
+  });
+});
+
+describe("Codex review of b0afec0", () => {
+  const cells = (editor: Editor) => {
+    const out: number[] = [];
+    editor.state.doc.descendants((n, pos) => { if (n.type.name === "tableCell" || n.type.name === "tableHeader") out.push(pos); return true; });
+    return out;
+  };
+  const click = async (el: HTMLElement, label: string) => {
+    await act(async () => { el.querySelector(`[aria-label="${label}"]`)!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); });
+  };
+
+  it.each([
+    ["Delete column", ["right"]],
+    ["Add column right", ["left", "center", null, "right"]],
+  ] as const)("%s acts on every selected column's alignment (R2-5)", async (label, align) => {
+    const { editor, el, changes } = await mount("| a | b | c |\n|:--|:-:|--:|\n| 1 | 2 | 3 |\n");
+    const [first, second] = cells(editor);
+    await act(async () => { editor.view.dispatch(editor.state.tr.setSelection(CellSelection.create(editor.state.doc, first, second))); });
+    await click(el, label);
+    const table = parse(changes[changes.length - 1]).children[0] as { align: unknown[] };
+    expect(table.align).toEqual(align);
+  });
+
+  it("keeps the alignment of a last column that cannot be deleted (R2-7)", async () => {
+    const { editor, el, changes } = await mount("| a |\n|--:|\n| 1 |\n");
+    await act(async () => { editor.commands.setTextSelection(cells(editor)[0] + 2); });
+    await click(el, "Delete column");
+    expect(changes).toEqual([]);
+  });
+
+  it("drops a picture cancelled by Undo also when the page closed meanwhile (R2-8)", async () => {
+    let finish: (link: string) => void = () => {};
+    const attach = vi.fn(() => new Promise<string>((r) => { finish = r; }));
+    const fail = vi.fn();
+    const { editor } = await mount("Start\n", { ctx: context({ attach, fail }) });
+    await act(async () => {
+      editor.commands.setTextSelection(endOf(editor.state.doc, 0));
+      const file = Object.assign(new File([new Uint8Array([1])], "shot.png", { type: "image/png" }), { arrayBuffer: async () => new Uint8Array([1]).buffer });
+      const clipboardData = { getData: () => "", files: [file], types: [] };
+      editor.view.someProp("handlePaste", (f) => f(editor.view, Object.assign(new Event("paste"), { clipboardData }) as unknown as ClipboardEvent, editor.state.doc.slice(0, 0)));
+    });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    await act(async () => { editor.view.someProp("handleKeyDown", (f) => f(editor.view, new KeyboardEvent("keydown", { key: "z", ctrlKey: true }))); });
+    await act(async () => root?.unmount());
+    root = null;
+    await act(async () => { finish("![shot](shot.png)"); await new Promise((r) => setTimeout(r, 0)); });
     expect(fail).not.toHaveBeenCalled();
   });
 });

@@ -2,10 +2,12 @@
 // blocks plainly where that reads back the same, keeping the page's own choices.
 import { GFM, parser as lezer } from "@lezer/markdown";
 import type { Nodes } from "mdast";
+import type { Construct, Event, Token, TokenizeContext } from "micromark-util-types";
 import { describe, expect, it } from "vitest";
 import { richSyntax } from "../editor/rich/syntax";
 import { loadPage } from "./fromMarkdown";
 import { DEFAULT_STYLE, parse, stringify } from "./markdown";
+import { obsidian } from "./micromark/obsidian";
 import { serialize } from "./preserve";
 import { richSchema } from "./schema";
 import { writeBlock } from "./toMarkdown";
@@ -125,11 +127,21 @@ describe("Codex review of 2392f6b", () => {
     expect(doc.child(0).type.name).toBe("paragraph");
   });
 
-  it("parses long runs of == that never pair in linear time (R1-15)", () => {
-    const t = performance.now();
-    parse("a== ".repeat(16000));
-    // About 0.3 s here; the scan over earlier runs took about 6 s.
-    expect(performance.now() - t).toBeLessThan(2000);
+  it("matches runs of == that never pair in linear work (R1-15)", () => {
+    // The resolver's reads of the event list are counted, not timed, so a busy machine cannot decide it (Codex review
+    // of b0afec0, R2-9). The scan back over earlier runs read about n * n / 2 events.
+    const highlight = (obsidian().text as Record<number, Construct>)[61];
+    const n = 4000;
+    const events: Event[] = [];
+    const context = { parser: { constructs: { insideSpan: { null: undefined } } } } as unknown as TokenizeContext;
+    for (let i = 0; i < n; i++) {
+      const token = { type: "obsidianHighlightTemporary", _open: false, _close: true, start: {}, end: {} } as unknown as Token;
+      events.push(["enter", token, context], ["exit", token, context]);
+    }
+    let reads = 0;
+    const counted = new Proxy(events, { get(target, key, receiver) { if (typeof key === "string" && /^\d+$/.test(key)) reads++; return Reflect.get(target, key, receiver); } });
+    highlight.resolveAll!(counted, context);
+    expect(reads).toBeLessThan(10 * events.length);
   });
 
   it("parts two blocks with a blank line once one changes type (R1-2)", () => {
@@ -177,5 +189,44 @@ describe("Codex review of 2392f6b", () => {
 
   it("shows the alias of a link whose pipe is escaped in a table (R1-6)", () => {
     expect(wikiParts("Page\\|alias")).toEqual({ target: "Page", shown: "alias" });
+  });
+});
+
+describe("Codex review of b0afec0", () => {
+  const schema = richSchema();
+  const page = (text: string) => loadPage(schema, text);
+  const blocks = (text: string) => parse(text).children.map((c) => c.type);
+
+  it("gives a new list the other marker rather than an original list, so the next list stays apart (R2-P1)", () => {
+    const { doc, original } = page("1. a\n2. b\n\n1) c\n");
+    const fresh = doc.child(0).type.create({ ...doc.child(0).attrs, srcId: null, marker: "." }, doc.child(0).content);
+    const out = serialize(doc.type.create(null, [fresh, doc.child(0), doc.child(1)]), original);
+    expect(blocks(out)).toEqual(["list", "list", "list"]);
+    expect(out.endsWith("1. a\n2. b\n\n1) c\n")).toBe(true);
+  });
+
+  it("opens a comment holding thousands of code spans (R2-2)", () => {
+    const { doc } = page(`%%${"`a` ".repeat(21000)}%%\n`);
+    expect(doc.child(0).type.name).toBe("paragraph");
+  });
+
+  it("keeps an indented paragraph moved below a list shown as a source box out of the list (R2-3)", () => {
+    const { doc, original } = page("  Para\n\n- [x\n  y][r]\n\n[r]: https://x\n");
+    expect(doc.child(1).type.name).toBe("rawBlock");
+    const out = serialize(doc.type.create(null, [doc.child(1), doc.child(0), doc.child(2)]), original);
+    expect(blocks(out)).toEqual(["list", "paragraph", "definition"]);
+  });
+
+  it("reads back the pipes of math and embeds in a table cell as written (R2-4)", () => {
+    const { doc } = page("| a | b | c |\n|---|---|---|\n| $\\|x\\|$ | ![[pic.png\\|60]] | [[Page\\|alias]] |\n");
+    const values: string[] = [];
+    doc.descendants((n) => { if (n.attrs.value !== undefined && n.isAtom) values.push(n.attrs.value); return true; });
+    expect(values).toEqual(["|x|", "pic.png|60", "Page|alias"]);
+    const out = writeBlock(doc.child(0), DEFAULT_STYLE, []);
+    expect(out).toContain("$\\|x\\|$");
+    const again = page(`${out}\n`).doc;
+    const back: string[] = [];
+    again.descendants((n) => { if (n.attrs.value !== undefined && n.isAtom) back.push(n.attrs.value); return true; });
+    expect(back).toEqual(values);
   });
 });

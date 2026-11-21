@@ -5,6 +5,7 @@ import {
   AlignCenter, AlignLeft, AlignRight, Bold, Code, Columns2, Heading1, Heading2, Heading3, Highlighter, Image, Italic, Link,
   List, ListOrdered, ListTodo, MessageSquareText, Minus, Quote, Rows2, Sigma, SquareCode, Strikethrough, Table, Trash2,
 } from "lucide-react";
+import { selectedRect } from "@tiptap/pm/tables";
 import { useRef, type ReactNode } from "react";
 import { pictureExt } from "../editor/rich/attach";
 import type { RichContext } from "../editor/rich/context";
@@ -41,18 +42,23 @@ function align(editor: Editor, to: "left" | "center" | "right") {
   editor.view.dispatch(editor.state.tr.setNodeMarkup(at.table, undefined, { ...table.attrs, align: next }));
 }
 
-/** Add a column after the cell's, or delete the cell's column, with the table's alignments moving along in the same
- *  step: `align` is by position (Codex review of 2392f6b, R1-10). */
+/** Add a column after the selected ones, or delete the selected columns, with the table's alignments moving along in
+ *  the same step: `align` is by position (Codex reviews of 2392f6b, R1-10, and b0afec0, R2-5). The columns are the
+ *  table commands' own selection rectangle; a command that changed nothing (the last column) leaves `align` (R2-7). */
 function column(editor: Editor, add: boolean) {
-  const at = cellColumn(editor);
-  if (!at) return;
+  let rect: ReturnType<typeof selectedRect>;
+  try { rect = selectedRect(editor.state); } catch { return; }
+  const start = rect.tableStart - 1;
+  const width = rect.map.width;
   editor.chain().focus()[add ? "addColumnAfter" : "deleteColumn"]().command(({ tr }) => {
-    const pos = tr.mapping.map(at.table);
+    const pos = tr.mapping.map(start);
     const table = tr.doc.nodeAt(pos);
     if (!table || table.type.name !== "table") return true;
-    const next = [...((table.attrs.align as (string | null)[] | null) ?? [])];
-    if (add) next.splice(at.col + 1, 0, null);
-    else next.splice(at.col, 1);
+    const now = table.firstChild?.childCount ?? 0;
+    if (now === width) return true;
+    const next = Array.from({ length: width }, (_, i) => (table.attrs.align as (string | null)[] | null)?.[i] ?? null);
+    if (add) next.splice(rect.right, 0, null);
+    else next.splice(rect.left, rect.right - rect.left);
     tr.setNodeMarkup(pos, undefined, { ...table.attrs, align: next });
     return true;
   }).run();

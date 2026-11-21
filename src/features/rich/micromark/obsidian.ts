@@ -8,6 +8,7 @@
 //   a block too), or to the end of its container;
 // - `[[target]]` and `![[target]]` are single tokens (no line break, `[` or `]` inside).
 import { markdownLineEnding, markdownLineEndingOrSpace, asciiDigit } from "micromark-util-character";
+import { splice } from "micromark-util-chunked";
 import type { Code, Construct, Effects, Event, Extension, State, Token, TokenizeContext } from "micromark-util-types";
 
 declare module "micromark-util-types" {
@@ -283,7 +284,8 @@ function pairing({ marker, span, flanking }: Pairing): Construct {
             ["enter", text, context], ...resolved, ["exit", text, context],
             ["enter", e[1], context], ["exit", e[1], context], ["exit", whole, context],
           ];
-          events.splice(open - 1, index - open + 3, ...next);
+          // In chunks: a long comment has more events than a call takes arguments (Codex review of b0afec0, R2-2).
+          splice(events, open - 1, index - open + 3, next);
           index = open - 1 + next.length - 1;
           continue;
         }

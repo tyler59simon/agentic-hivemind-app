@@ -31,6 +31,11 @@ declare module "mdast" {
 type Ctx = CompileContext;
 const top = (cx: Ctx) => cx.stack[cx.stack.length - 1] as unknown as Record<string, unknown>;
 
+/** In a table cell a `|` inside a link, an embed or math is written `\|` (GFM reads `\|` in a cell as `|`): the value
+ *  holds the plain pipe, and the writer escapes it again (Codex reviews of 2392f6b, R1-6, and b0afec0, R2-4). */
+const inCell = (cx: Ctx) => cx.stack.some((n) => n.type === "tableCell");
+const unpipe = (cx: Ctx, value: string) => (inCell(cx) ? value.split("\\|").join("|") : value);
+
 const obsidianFromMarkdown: FromExtension = {
   canContainEols: ["highlight"],
   enter: {
@@ -41,10 +46,10 @@ const obsidianFromMarkdown: FromExtension = {
     obsidianInlineMath(this: Ctx, token: Token) {
       const raw = this.sliceSerialize(token);
       const dollars = raw.startsWith("$$") ? 2 : 1;
-      this.enter({ type: "inlineMath", value: raw.slice(dollars, -dollars), dollars } as never, token);
+      this.enter({ type: "inlineMath", value: unpipe(this, raw.slice(dollars, -dollars)), dollars } as never, token);
     },
-    obsidianWiki(this: Ctx, token: Token) { this.enter({ type: "wikiLink", value: this.sliceSerialize(token).slice(2, -2) } as never, token); },
-    obsidianEmbed(this: Ctx, token: Token) { this.enter({ type: "embed", value: this.sliceSerialize(token).slice(3, -2) } as never, token); },
+    obsidianWiki(this: Ctx, token: Token) { this.enter({ type: "wikiLink", value: unpipe(this, this.sliceSerialize(token).slice(2, -2)) } as never, token); },
+    obsidianEmbed(this: Ctx, token: Token) { this.enter({ type: "embed", value: unpipe(this, this.sliceSerialize(token).slice(3, -2)) } as never, token); },
     obsidianHighlight(this: Ctx, token: Token) { this.enter({ type: "highlight", children: [] } as never, token); },
     // The inside of a comment is parsed (so its line endings split the paragraph's lines as usual) and then dropped:
     // the node keeps the source as written.
@@ -104,12 +109,12 @@ export const DEFAULT_STYLE: Style = {
 
 const peek = (mark: string) => () => mark;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-/** A node written as its source. Inside a table cell an unescaped `|` would end the cell, so it is escaped there, as
- *  Obsidian writes `[[Page\|alias]]` in tables (Codex review of 2392f6b, R1-6). */
-const literal = (wrap: (v: string, node: any) => string, mark: string): Handle => Object.assign(
+/** A node written as its source. `piped` nodes write each `|` as `\|` inside a table cell, where it would end the
+ *  cell, as Obsidian writes `[[Page\|alias]]` in tables; comments and source keep their text as written. */
+const literal = (wrap: (v: string, node: any) => string, mark: string, piped = false): Handle => Object.assign(
   (node: Literal, _parent: unknown, state: Parameters<Handle>[2]) => {
-    const out = wrap(node.value, node);
-    return state.stack.includes("tableCell") ? out.replace(/(^|[^\\])\|/g, "$1\\|").replace(/(^|[^\\])\|/g, "$1\\|") : out;
+    const value = piped && state.stack.includes("tableCell") ? node.value.split("|").join("\\|") : node.value;
+    return wrap(value, node);
   },
   { peek: peek(mark) },
 ) as unknown as Handle;
@@ -127,9 +132,9 @@ const highlight: Handle = Object.assign(
 
 const handlers: Record<string, Handle> = {
   math: literal((v, node: MathBlock) => `$$${v}${node.closed ? "$$" : ""}`, "$"),
-  inlineMath: literal((v, node: InlineMath) => `${"$".repeat(node.dollars)}${v}${"$".repeat(node.dollars)}`, "$"),
-  wikiLink: literal((v) => `[[${v}]]`, "["),
-  embed: literal((v) => `![[${v}]]`, "!"),
+  inlineMath: literal((v, node: InlineMath) => `${"$".repeat(node.dollars)}${v}${"$".repeat(node.dollars)}`, "$", true),
+  wikiLink: literal((v) => `[[${v}]]`, "[", true),
+  embed: literal((v) => `![[${v}]]`, "!", true),
   comment: literal((v) => v, "%"),
   raw: literal((v) => v, ""),
   highlight,
