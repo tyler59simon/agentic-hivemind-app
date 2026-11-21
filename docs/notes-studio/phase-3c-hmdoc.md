@@ -60,4 +60,40 @@ vitest: envelope validation (good, unknown version, unknown node, bad JSON), sta
 
 ## 6. Shipped
 
-(Filled in when the phase lands.)
+Code landed on 2026-11-21: Hivemind `9dda8ae` (the phase), then `694c928`, `74048b0` and `bf9bcf6` (fixes from three Codex review rounds) and `8736cc8` (fixes from the UI pass). Two small commits came before the phase: `0530c90` fixes a clippy lint that a newer clippy reports in `src-tauri/src/lib.rs`, and `c972680` stubs `Range` layout in the NS-3B Rich editor tests, which failed now and then with "target.getClientRects is not a function". No Living Memory or Rust change beyond `PAGE_EXT` was needed.
+
+**What differs from sections 2 and 3 and the survey above.**
+- The `.hmdoc` editor opens from `src/features/notes/FileTab.tsx`, not `Workspace.tsx`. Files not named in section 3: `palette.ts`, `rules.ts` (the attribute rules the validator checks), `sanitise.ts`, `convert.ts`, `outline.ts`, `HmdocTools.tsx` (page settings and the sort and filter dialog) and `src/features/notes/richActions.tsx` (the export report).
+- Pasted content is cleaned before it reaches the page (`sanitise.ts`, through a `PasteGuard` extension and the plain-text Markdown paste path). Tiptap reads any attribute that has no `parseHTML` rule straight from the pasted element, so `<table align="center">` gave the page an attribute the validator refuses.
+- New rich page is in the notebook's menu and the tree's context menu (with New rich subpage and New rich page here). Ctrl+N and the + button still make Markdown pages.
+- Export to Markdown does not open the new page; the report has an "Open the Markdown page" button. Save both is not offered for a file opened from outside a notebook.
+- Filters, like sorts, are not offered on a table with a cell spanning rows (review R1-7).
+- With `Plan.md` and `Plan.hmdoc` side by side, `[[Plan]]` is the Markdown page and the `Plan/` folder of subpages belongs to it; the rich twin has no subpage commands. Following a missing `[[Name.hmdoc]]` makes a valid rich page (review R1-6, R1-15, R1-16).
+- An edit that would take the written page past 5,000,000 characters is refused, and the page stays editable (review R1-11).
+- A column width of 0 (unset) is valid in a merged cell's widths, and list starts run from -1,000,000 to 999,999,999 (review R1-3, R1-12, R2-1).
+- From the UI pass: the outline beside the page lists a rich page's headings and moves the cursor to the one clicked; rich pages have their own icon in the tree and on their tabs; tables draw each column's alignment.
+
+**Verified**
+- `npm test` (115 files, 1,190 tests, one skipped: the NS-3A 1 MB timing check), `npx tsc --noEmit` and `npm run build` (the `.hmdoc` editor is a lazy chunk of about 22 KB on top of the NS-3B Rich editor chunk). `cargo test notebooks` and `cargo clippy --all-targets -- -D warnings` in `src-tauri`.
+- Every page of the NS-3B corpus and this repository's `docs/` converts to a rich page that opens for editing, is written again byte for byte, and exports without failing (`convert.test.ts`). The three extraction fixtures in `fixtures/` give their `.txt` and are written in the stable order (`extract.test.ts`).
+- Three read-only Codex reviews (19, 4 and 4 findings), each finding checked before it was fixed, each fix with a regression test checked to fail without it: [reviews/ns3c-codex-review.md](reviews/ns3c-codex-review.md).
+
+**UI pass (2026-11-21).** The dev app ran against a scratch store and a folder notebook outside any bound folder, driven over WebView2 remote debugging:
+- A rich page with a cover, wide width, text colour and highlight, two columns, a closed toggle, a callout with an icon and two tables (one with a merged header and an out-of-range reference) opened without changing the file. The formulas showed 22, 1.41666666667 and `#REF!`.
+- Text typed at the end and Ctrl+S saved stable JSON; the file kept its CRLF line endings. The first save added the default cell attributes the hand-written file left out, as the survey says for files not in the stable form.
+- Clicking a formula's value showed `=SUM(B2:B4)`; editing it to `=SUM(B2:B4)*2` showed 44. The toggle opened. Sorting by Qty showed the read-only sorted copy with its bar, and Clear sort brought the editable table back.
+- A file that is not valid JSON and a file of schema version 2 opened as read-only JSON with their reasons ("Made by a newer Hivemind (schema version 2)").
+- Convert to rich page on a Markdown page made `Plan.hmdoc` beside it with the table, callout and lists. Export to Markdown wrote `Kitchen.md` and its report listed ten kinds of loss with counts.
+- A cover named `100% complete.png` was drawn. A real mouse drag on the edge of the merged header stored `[0, 86.5]`, and the page reopened for editing after a reload.
+- With unsaved edits and the file changed by another program, the banner offered Keep mine, Keep theirs and Save both. Keep mine saved over the outside change; Save both wrote `Kitchen (my edits).hmdoc` and showed the disk version. A clean page followed an outside change on its own.
+- New rich page made `Untitled.hmdoc`. The Memory page opened as before.
+- Not driven: a picture pasted or dropped as a cover (the attach path has tests).
+
+The pass found five problems, fixed in `8736cc8`: the outline beside the page said "No headings." on a rich page, `Plan.md` and `Plan.hmdoc` looked the same in the tree and the tabs, tables did not draw column alignment, the sorted copy's bar put one of its buttons on a line of its own, and the sort and filter dialog said "The rows of the table are never reordered", which read as if sorting did nothing. Checking the outline fix in the app showed the clicked heading scrolled under the sticky toolbar; it now scrolls to the middle of the pane.
+
+**Known limits**
+- The Rust twin of extraction is NS-4A's; the fixtures it must match are in `fixtures/`.
+- Export reuses NS-3B's writer. The NS-3B notes record, as a hypothesis not measured here, that the writer is roughly quadratic on long paragraphs of alternating bold runs (about 9 s for 20,000 nodes).
+- Math drawn in a sorted copy is not tested; pictures and links in it are.
+- A page whose JSON is valid but holds something the schema refuses lists its headings in the outline, and clicking one does nothing, since the page is shown as JSON.
+- A list numbered from 1,000,001 draws its number to the left of the page column. A new page, rich or Markdown, opens without the cursor in it.
