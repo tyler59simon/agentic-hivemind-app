@@ -13,16 +13,6 @@ import { domainForFolder, forgetFolder, REACH_TEXT, setFolderReach, stricter, ty
 
 interface Reach { visibility: Visibility; private: boolean }
 
-/** The fields the user changed that differ from `current` (what Living Memory or the sidecar says now). Each field is
- *  recorded as it is touched, so one refreshed while the dialog is open is never sent back as it was (Codex re-review of
- *  75ce884, R2-P1). */
-export function reachChange(current: Reach, edits: Partial<Reach>): Partial<Reach> {
-  const change: Partial<Reach> = {};
-  if (edits.visibility !== undefined && edits.visibility !== current.visibility) change.visibility = edits.visibility;
-  if (edits.private !== undefined && edits.private !== current.private) change.private = edits.private;
-  return change;
-}
-
 /** Agent reach and Private, for both notebook kinds (NS-2C). `onChange` gets only the field the user touched (R2-P1). */
 export function ReachFields({ value, onChange }: { value: Reach; onChange: (v: Partial<Reach>) => void }) {
   return (
@@ -95,7 +85,9 @@ export function NotebookSettings({ notebook, onClose }: { notebook: Notebook; on
       // Only what the user changed goes to Living Memory, so a privacy decision made elsewhere while this dialog was open
       // stays (Codex review of 32fee20, P3). A folder never registered keeps what Living Memory holds for it, or becomes
       // searchable.
-      const change: ReachChange = reachChange(current, edits);
+      // Every field the user touched is sent, even one set back to what the dialog showed: what Living Memory holds may
+      // have changed since (Codex review of dd4c1b0, R3-P1). Untouched fields are never sent (R2-P1).
+      const change: ReachChange = edits;
       if (docs && (Object.keys(change).length || domain !== null || unregistered(notebook))) {
         if (!chosenDomain) throw new Error("Pick the memory domain agents find this notebook from.");
         await setFolderReach(notebook, chosenDomain, change);
@@ -177,7 +169,7 @@ export function LmNotebookSettings({ nb, onClose }: { nb: DocNotebook; onClose: 
   const save = async () => {
     const patch: { title?: string; visibility?: Visibility; private?: boolean } = {};
     if (title.trim() && title.trim() !== nb.title) patch.title = title.trim();
-    Object.assign(patch, reachChange({ visibility: nb.visibility, private: nb.private }, edits));
+    Object.assign(patch, edits);
     if (!Object.keys(patch).length) { onClose(); return; }
     setBusy(true);
     try {

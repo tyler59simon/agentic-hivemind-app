@@ -105,6 +105,8 @@ fn settle_move(outcome: Result<Reply, String>, from: &str, to: &str, list: impl 
     let lost = match outcome {
         Ok(reply) if reply.exit_code == 0 => return Moved::Yes,
         Ok(reply) => return Moved::No(failure(&reply)),
+        // Refused before it was sent: nothing moved (Codex review of dd4c1b0, R3-D6).
+        Err(e) if e == crate::bridge::STORE_CHANGED => return Moved::No(e),
         Err(e) => e,
     };
     // `list` gives files only: a section's folder can stay behind, empty, after its pages moved (Codex re-review of
@@ -145,8 +147,10 @@ pub fn move_with_drafts(bridge: &Bridge, generation: Option<u64>, drafts_dir: &P
     if to.starts_with(&format!("{from}/")) {
         return Err("A section cannot move into itself".into());
     }
-    if crate::drafts::any_under(drafts_dir, store, container, to) {
-        return Err(format!("{to} has unsaved edits kept as a draft; open it and save or discard them first"));
+    // Every store's drafts count here: a draft at the destination has the key the moved one would take, so moving would
+    // replace it (Codex review of dd4c1b0, R3-D3).
+    if crate::drafts::any_under(drafts_dir, None, container, to) {
+        return Err(format!("{to} has unsaved edits kept as a draft, in this or another Living Memory store; open it there and save or discard them first"));
     }
     let moves = crate::drafts::moving(drafts_dir, store, container, from, to);
     crate::drafts::copy_moved(drafts_dir, &moves)?;
@@ -264,12 +268,23 @@ pub fn clear_open_copies() {
     clear_copies_in(&open_copies());
 }
 
+/// Only plain files in plain folders are touched: a link or junction, at the top or inside, is left alone and never
+/// followed, so cleanup cannot reach files outside the copies (Codex review of dd4c1b0, R3-P2).
 fn clear_copies_in(dir: &Path) {
+    let plain_dir = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink());
+    if !plain_dir(dir) {
+        return;
+    }
     let Ok(read) = std::fs::read_dir(dir) else { return };
     for sub in read.flatten() {
+        if !plain_dir(&sub.path()) {
+            continue;
+        }
         if let Ok(files) = std::fs::read_dir(sub.path()) {
             for file in files.flatten() {
-                remove_copy(&file.path());
+                if std::fs::symlink_metadata(file.path()).is_ok_and(|m| m.is_file() && !m.file_type().is_symlink()) {
+                    remove_copy(&file.path());
+                }
             }
         }
         std::fs::remove_dir(sub.path()).ok();
@@ -340,6 +355,9 @@ mod tests {
         assert_eq!(settle_move(lost(), "S", "T/S", list(&["S", "S/a.md"])), Moved::No("Living Memory stopped".into()));
         assert_eq!(settle_move(lost(), "A.md", "B.md", || Err("still down".into())), Moved::Unknown("Living Memory stopped".into()));
         assert_eq!(settle_move(lost(), "A.md", "B.md", list(&["C.md"])), Moved::Unknown("Living Memory stopped".into()));
+        // Codex review of dd4c1b0, R3-D6: refused at the bridge before it was sent, so nothing moved.
+        let refused = Err::<Reply, String>(crate::bridge::STORE_CHANGED.into());
+        assert_eq!(settle_move(refused, "A.md", "B.md", || unreachable!()), Moved::No(crate::bridge::STORE_CHANGED.into()));
     }
 
     /// Codex re-review of 75ce884, R2-D4: the move committed and its reply was lost before the empty source folder was
@@ -370,6 +388,50 @@ mod tests {
         std::fs::set_permissions(&one, perms).unwrap();
         clear_copies_in(&dir);
         assert!(!one.exists() && !dir.join("a1").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Codex review of dd4c1b0, R3-P2: a junction in the copies folder leads outside it; cleanup neither follows it nor
+    /// changes the file behind it.
+    #[cfg(windows)]
+    #[test]
+    fn cleanup_does_not_follow_a_junction() {
+        let base = std::env::temp_dir().join(format!("hm-open-link-{}", uuid::Uuid::new_v4().simple()));
+        let (copies, outside) = (base.join("copies"), base.join("outside"));
+        std::fs::create_dir_all(&copies).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let precious = outside.join("keep.txt");
+        std::fs::write(&precious, "x").unwrap();
+        let mut perms = std::fs::metadata(&precious).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&precious, perms).unwrap();
+        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(copies.join("j1")).arg(&outside).output().unwrap();
+        assert!(made.status.success(), "{made:?}");
+        clear_copies_in(&copies);
+        assert!(precious.exists());
+        assert!(std::fs::metadata(&precious).unwrap().permissions().readonly());
+        std::fs::remove_dir(copies.join("j1")).ok();
+        let mut perms = std::fs::metadata(&precious).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        std::fs::set_permissions(&precious, perms).ok();
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// Codex review of dd4c1b0, R3-D3: store A keeps a draft for B.md; in store B, moving A.md to B.md would give B's
+    /// draft that key. The move is refused before anything is copied, and A's draft keeps its bytes.
+    #[test]
+    fn a_move_onto_another_stores_draft_is_refused() {
+        let dir = std::env::temp_dir().join(format!("hm-move-onto-{}", uuid::Uuid::new_v4().simple()));
+        let nb = "lm:demo:plans";
+        let draft = |path: &str, store: &str| serde_json::json!({ "key": crate::drafts::file_key(nb, path), "kind": "file", "target": { "notebook": nb, "path": path }, "mine": store, "store": store });
+        crate::drafts::put(&dir, &crate::drafts::file_key(nb, "B.md"), &draft("B.md", "C:/stores/a")).unwrap();
+        crate::drafts::put(&dir, &crate::drafts::file_key(nb, "A.md"), &draft("A.md", "C:/stores/b")).unwrap();
+        let bridge = Bridge::new(crate::settings::Launch { program: "py".into(), args: vec![], script: "no-such.py".into(), root: None });
+        let err = move_with_drafts(&bridge, None, &dir, Some(Path::new("C:/stores/b")), nb, "A.md", "B.md").unwrap_err();
+        assert!(err.contains("another Living Memory store"), "{err}");
+        assert_eq!(crate::drafts::get(&dir, &crate::drafts::file_key(nb, "B.md")).unwrap().unwrap()["mine"], "C:/stores/a");
+        assert_eq!(crate::drafts::get(&dir, &crate::drafts::file_key(nb, "A.md")).unwrap().unwrap()["mine"], "C:/stores/b");
         std::fs::remove_dir_all(&dir).ok();
     }
 

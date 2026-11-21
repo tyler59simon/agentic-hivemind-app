@@ -31,12 +31,13 @@ export async function createSection(notebook: string, path: string): Promise<str
   return page;
 }
 
-export const moveDoc = (notebook: string, from: string, to: string) =>
-  lmdoc.isLm({ notebook }) ? lmdoc.movePage(notebook, from, to) : files.renameFile(notebook, from, to);
+/** `at`: for a Living Memory page, the bridge generation the action began in (R3-D1). */
+export const moveDoc = (notebook: string, from: string, to: string, at?: number) =>
+  lmdoc.isLm({ notebook }) ? lmdoc.movePage(notebook, from, to, at) : files.renameFile(notebook, from, to);
 
-export const deleteDoc = (notebook: string, path: string, pre?: Stamp) => {
+export const deleteDoc = (notebook: string, path: string, pre?: Stamp, at?: number) => {
   const lm = lmdoc.parseLm(notebook);
-  return lm ? lmdoc.deletePage(lm, path, pre) : files.deleteFile(notebook, path, pre);
+  return lm ? lmdoc.deletePage(lm, path, pre, at) : files.deleteFile(notebook, path, pre);
 };
 
 /** A notebook's sections and pages, under the query key the page actions refresh. */

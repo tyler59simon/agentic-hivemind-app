@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -70,6 +71,10 @@ pub struct Bridge {
     /// Counts reconfigures. It changes only while `proc` is locked, and `call_at` checks it under that lock, so a request
     /// made for one store never runs in the next (Codex re-review of 75ce884, R2-D1).
     generation: AtomicU64,
+    /// The store root `connect` verified for this generation. A process started later in the same generation is given it
+    /// with `--root`, so a default store that changed meanwhile (Living Memory's setup picked another) is never served
+    /// under the old generation (Codex review of dd4c1b0, R3-D7). Cleared by `reconfigure`.
+    pinned: Mutex<Option<PathBuf>>,
 }
 
 /// The error of a request made before the bridge switched stores.
@@ -77,7 +82,7 @@ pub const STORE_CHANGED: &str = "Living Memory switched to another store while t
 
 impl Bridge {
     pub fn new(launch: Launch) -> Self {
-        Bridge { launch: Mutex::new(launch), proc: Mutex::new(None), generation: AtomicU64::new(0) }
+        Bridge { launch: Mutex::new(launch), proc: Mutex::new(None), generation: AtomicU64::new(0), pinned: Mutex::new(None) }
     }
 
     /// Point at a different interpreter/script/store; the next call starts a fresh process. Requests bound to the
@@ -85,8 +90,26 @@ impl Bridge {
     pub fn reconfigure(&self, launch: Launch) {
         let mut proc = self.proc.lock().unwrap();
         *self.launch.lock().unwrap() = launch;
+        *self.pinned.lock().unwrap() = None;
         self.generation.fetch_add(1, Ordering::SeqCst);
         *proc = None;
+    }
+
+    /// Keep `root` as the store of `generation` (when that is still the current one and Settings name no root).
+    pub fn pin_root(&self, generation: u64, root: PathBuf) {
+        let _proc = self.proc.lock().unwrap();
+        if generation == self.generation() && self.launch.lock().unwrap().root.is_none() {
+            *self.pinned.lock().unwrap() = Some(root);
+        }
+    }
+
+    /// The launch a new process uses: the configured one, with the pinned root when Settings name none.
+    fn effective_launch(&self) -> Launch {
+        let mut launch = self.launch();
+        if launch.root.is_none() {
+            launch.root = self.pinned.lock().unwrap().clone();
+        }
+        launch
     }
 
     /// The current generation, which `connect` reports and the webview sends back with document requests.
@@ -202,7 +225,7 @@ impl Bridge {
             return Err(STORE_CHANGED.into());
         }
         if guard.is_none() {
-            let mut proc = Self::spawn(&self.launch())?;
+            let mut proc = Self::spawn(&self.effective_launch())?;
             Self::handshake(&mut proc)?;
             *guard = Some(proc);
         }
@@ -253,6 +276,24 @@ mod tests {
         assert_eq!(bridge.call_at(Some(before), &argv, None).unwrap_err(), STORE_CHANGED);
         assert!(bridge.call_at(Some(bridge.generation()), &argv, None).unwrap_err().contains("not installed"));
         assert!(bridge.call(&argv, None).unwrap_err().contains("not installed"), "an unbound request is not checked");
+    }
+
+    /// Codex review of dd4c1b0, R3-D7: the root `connect` verified is used by every process of its generation, unless
+    /// Settings name one; a reconfigure drops it, and a pin for an earlier generation is ignored.
+    #[test]
+    fn the_verified_root_is_pinned_for_its_generation() {
+        let launch = |root: Option<&str>| Launch { program: "py".into(), args: vec![], script: "x.py".into(), root: root.map(PathBuf::from) };
+        let bridge = Bridge::new(launch(None));
+        let g = bridge.generation();
+        bridge.pin_root(g, PathBuf::from("C:/stores/a"));
+        assert_eq!(bridge.effective_launch().root, Some(PathBuf::from("C:/stores/a")));
+        bridge.reconfigure(launch(None));
+        assert_eq!(bridge.effective_launch().root, None);
+        bridge.pin_root(g, PathBuf::from("C:/stores/a"));
+        assert_eq!(bridge.effective_launch().root, None, "a pin for an earlier generation");
+        bridge.reconfigure(launch(Some("C:/stores/b")));
+        bridge.pin_root(bridge.generation(), PathBuf::from("C:/stores/a"));
+        assert_eq!(bridge.effective_launch().root, Some(PathBuf::from("C:/stores/b")), "Settings name the root");
     }
 
     #[test]

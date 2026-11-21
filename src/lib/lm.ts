@@ -36,10 +36,15 @@ export function setTransport(fn: Invoke) { call = fn; }
 let generation: number | undefined;
 export function setBridgeGeneration(next: number | undefined) { generation = next; }
 export const bridgeGeneration = () => generation;
-const bound = (argv: string[]) => (argv[0] === "doc" && generation !== undefined ? { generation } : {});
+/** `at`: the generation an action began in, so work it does after waiting is still refused in another store (Codex
+ *  review of dd4c1b0, R3-D1). */
+const bound = (argv: string[], at?: number) => {
+  const g = at ?? generation;
+  return argv[0] === "doc" && g !== undefined ? { generation: g } : {};
+};
 
-export async function run<T>(argv: string[], stdin?: string): Promise<T> {
-  const reply = (await call("lm", { argv, stdin: stdin ?? null, ...bound(argv) })) as Reply<T>;
+export async function run<T>(argv: string[], stdin?: string, at?: number): Promise<T> {
+  const reply = (await call("lm", { argv, stdin: stdin ?? null, ...bound(argv, at) })) as Reply<T>;
   if (reply.exit_code !== 0) {
     const error = reply.error ?? { code: "invalid", message: `Exit code ${reply.exit_code}` };
     throw new LmError(error.code, error.message, reply.exit_code);
@@ -682,13 +687,13 @@ export const docNotebookUpdate = (domain: string, notebook: string, patch: { tit
   ]));
 export const docList = (domain: string, notebook: string) =>
   run<{ title: string; entries: DocEntry[] }>(doc(["list"], [domain, notebook], [], { viewer: true }));
-export const docRead = (domain: string, notebook: string, path: string) => run<DocPage>(doc(["read"], [domain, notebook, path], [], { viewer: true }));
+export const docRead = (domain: string, notebook: string, path: string, at?: number) => run<DocPage>(doc(["read"], [domain, notebook, path], [], { viewer: true }), undefined, at);
 export const docWrite = (domain: string, notebook: string, path: string, body: string, expected: string) =>
   runBody<DocReceipt>(doc(["write"], [domain, notebook, path], ["--expected-revision", expected]), body);
 export const docCreate = (domain: string, notebook: string, path: string, body: string) =>
   runBody<DocReceipt>(doc(["create"], [domain, notebook, path]), body);
-export const docDelete = (domain: string, notebook: string, path: string, expected: string) =>
-  run<DocReceipt>(doc(["delete"], [domain, notebook, path], ["--expected-revision", expected]));
+export const docDelete = (domain: string, notebook: string, path: string, expected: string, at?: number) =>
+  run<DocReceipt>(doc(["delete"], [domain, notebook, path], ["--expected-revision", expected]), undefined, at);
 export const docHistory = (domain: string, notebook: string, path: string, limit = 50) =>
   run<{ history: DocHistoryRow[] }>(doc(["history"], [domain, notebook, path], ["--limit", String(limit)], { viewer: true })).then((r) => r.history);
 /** The page as operation `op` left it. */

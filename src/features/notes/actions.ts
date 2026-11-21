@@ -2,12 +2,12 @@
 // a Rust command; open tabs, documents and drafts follow renames, and tabs of a deleted page close.
 import type { QueryClient } from "@tanstack/react-query";
 import { movedPath, type FileRef } from "../../documents/keys";
-import { beforeMove, discard, edit, hold, keyOf, open, refresh, unsavedUnder, useDocuments } from "../../documents/store";
+import { beforeMove, connectedStore, discard, edit, hold, keyOf, open, refresh, unsavedUnder, useDocuments } from "../../documents/store";
 import { retargetAll } from "../../documents/sync";
 import { lmContainer } from "../../documents/adapters/lmdoc";
 import { docsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
-import { lmNotebooksQuery } from "../../lib/lm";
+import { bridgeGeneration, lmNotebooksQuery } from "../../lib/lm";
 import { forgetMoved } from "../../lib/drafts";
 import { createDoc, createSection, deleteDoc, moveDoc } from "../../documents/io";
 import { fileName, folderOf, isMarkdown, notebooksQuery, pageTitle } from "../../lib/notebooks";
@@ -67,6 +67,8 @@ export async function newSection(client: QueryClient, notebook: string, folder: 
  *  done, so nothing lands under the old name (Codex review of 32fd236, S2 and D7). */
 export async function movePath(client: QueryClient, notebook: string, from: string, to: string) {
   if (from === to) return;
+  // The store the move was asked in: Hivemind may switch stores while the move waits (Codex review of dd4c1b0, R3-D1).
+  const at = bridgeGeneration();
   const done = await beforeMove(notebook, from);
   // The destination is held too: a page opened there before its draft arrives would load without it (Codex review of
   // 52051c8, F2), and one open there takes no edits the move would replace (final review of a34fafd, F2a).
@@ -74,7 +76,7 @@ export async function movePath(client: QueryClient, notebook: string, from: stri
   try {
     // A page at the destination with unsaved edits would be overwritten by the move (Codex re-review of fa08348, F2).
     if (unsavedUnder(notebook, to).length) throw new Error(`${to} has unsaved edits; save or discard them first`);
-    await moveDoc(notebook, from, to);
+    await moveDoc(notebook, from, to, at);
     forgetMoved(notebook, from);
     retargetAll(notebook, from, to);
   } finally {
@@ -162,19 +164,20 @@ export function closeTabsUnder(notebook: string, path: string) {
  *  pages are held: one opened from the tree meanwhile shows the delete instead of an editor, and a failed delete
  *  gives every page back with its edits (Codex re-reviews of c496e1c and b82e9ab, D8). */
 export async function trashPath(client: QueryClient, notebook: string, path: string) {
+  const at = bridgeGeneration(), store = connectedStore();
   const done = await hold(notebook, path, "delete");
   try {
     const doc = useDocuments.getState().docs[keyOf({ notebook, path })];
     const closed = closeTabsUnder(notebook, path);
     try {
-      await deleteDoc(notebook, path, doc?.base?.stamp);
+      await deleteDoc(notebook, path, doc?.base?.stamp, at);
     } catch (e) {
       for (const ref of closed.values()) openPage(ref);
       throw e;
     }
     closeTabsUnder(notebook, path);
     for (const [key, ref] of Object.entries(useDocuments.getState().refs)) {
-      if (ref.notebook === notebook && movedPath(ref.path, path, path) !== null) discard(key);
+      if (ref.notebook === notebook && movedPath(ref.path, path, path) !== null) discard(key, store);
     }
   } finally {
     done();

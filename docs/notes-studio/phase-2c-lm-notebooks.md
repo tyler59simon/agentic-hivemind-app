@@ -66,6 +66,12 @@ The re-review of `75ce884` (same record, round 2) changed these on 2026-11-21:
 - **Attachments (R2-P2, R2-P3, R2-P4).** Opened copies are cleared at the next start; SVG is not opened outside Hivemind; a notebook folder reached through any link below the store gets no grant.
 - **Argument lists (R2-C1).** A `doc` command without operands has no `--`.
 
+The review of `dd4c1b0` (round 3, the last) changed these on 2026-11-21:
+
+- **Parked pages (R3-D2, R3-U2).** A page whose latest edits are not in a draft when Hivemind switches stores is parked: read-only, its edits shown to save as a copy or discard, and nothing reaches the new store from it. It comes back editable, and autosaves, when its store returns; its edits are reported lost if its tab closes first.
+- **One store, one name (R3-D7, R3-D8).** `connect` reports the store root as the filesystem names it, and roots are compared exactly. The bridge keeps the verified root for the rest of the generation, so a restarted process never lands in another default store.
+- **Actions keep their store (R3-D1, R3-D4).** A move or delete runs against the generation it started in, and a delete drops only the pages and drafts of the store it ran in.
+
 ## 1. What the user sees
 
 - The notebook column lists Living Memory notebooks under a **Living Memory** heading, grouped by domain, below folder notebooks. **New notebook** offers "Folder on disk" or "Living Memory" (pick a domain, or **New notebook-only domain**, which asks for a name).

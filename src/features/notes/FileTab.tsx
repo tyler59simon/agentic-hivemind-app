@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ellipsis, Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { convertToUtf8, discardKept, edit, isArriving, isDeleting, keyOf, open, reload, resolveMerge, save, useDocuments } from "../../documents/store";
+import { convertToUtf8, discardKept, edit, inOwnStore, isArriving, isDeleting, keyOf, open, reload, resolveMerge, save, useDocuments } from "../../documents/store";
 import { isUnsaved, mergeable, type DocState } from "../../documents/session";
 import { classify } from "../../lib/errors";
 import { assetLink, attachFile, openAttachment, parseLm } from "../../documents/adapters/lmdoc";
@@ -227,7 +227,9 @@ export function FileTab({ tab }: { tab: Tab }) {
   // Pictures load from the notebook's root (a page's folder inside it) or a loose file's folder.
   // Every mount asks again, and nothing is kept once the page closes: a grant withdrawn meanwhile gets a new id (Codex
   // review of 52051c8, A3, and its re-review: the app's 30-second staleTime would otherwise reuse the old one).
-  const pictures = useQuery({ queryKey: ["asset-base", ref.notebook, ref.path], queryFn: () => assetBase(ref.notebook, ref.path), refetchOnMount: "always", gcTime: 0, enabled: markdown });
+  // A parked page of another store shows no attachments: they would come from the store connected now (R3-P3).
+  const own = inOwnStore(key);
+  const pictures = useQuery({ queryKey: ["asset-base", ref.notebook, ref.path], queryFn: () => assetBase(ref.notebook, ref.path), refetchOnMount: "always", gcTime: 0, enabled: markdown && own });
   const mode: Mode = markdown ? (tab.mode === "history" ? "reading" : tab.mode ?? "live") : "source";
   const titles = useCallback(() => pages.filter(isMarkdown).map(pageTitle), [pages]);
 
@@ -246,6 +248,7 @@ export function FileTab({ tab }: { tab: Tab }) {
   const recreate = () => {
     const d = useDocuments.getState().docs[key];
     if (!d) return;
+    if (!inOwnStore(key)) { toast("This page belongs to another Living Memory store, so it was not created here.", "warn"); return; }
     // A Living Memory page comes back with the line endings and byte order mark it had (Codex review of 32fee20, D5).
     createDoc(ref.notebook, ref.path, d.text, d.base?.format).then(() => reloadPage(key), (e) => toast(classify(e).message, "error"));
   };
@@ -253,7 +256,7 @@ export function FileTab({ tab }: { tab: Tab }) {
    *  cannot take the link is said before anything is copied (Codex review of 32fee20, U2). */
   const takesLink = () => {
     const d = useDocuments.getState().docs[key];
-    return !!d && d.status !== "readOnly" && d.status !== "loading" && d.status !== "error" && !arriving;
+    return !!d && d.status !== "readOnly" && d.status !== "loading" && d.status !== "error" && !arriving && inOwnStore(key);
   };
   const attach = () => {
     if (!takesLink()) { toast("This page cannot take a link now, so nothing was attached.", "warn"); return; }
@@ -268,9 +271,10 @@ export function FileTab({ tab }: { tab: Tab }) {
   };
   /** A relative link in a Living Memory page: an attachment opens in its own program, a page opens in a tab. */
   const openLinked = useCallback((path: string) => {
+    if (!inOwnStore(key)) { toast("This page belongs to another Living Memory store, so its links do not open here.", "warn"); return; }
     if (/^assets\//.test(path)) openAttachment(ref.notebook, path).catch((e) => toast(classify(e).message, "error"));
     else if (isMarkdown(path)) openPage({ notebook: ref.notebook, path });
-  }, [ref.notebook]);
+  }, [ref.notebook, key]);
   const remove = () => setDialog(
     <DeleteConfirm notebook={ref.notebook} path={ref.path} section={false}
       onAnswer={(yes) => {

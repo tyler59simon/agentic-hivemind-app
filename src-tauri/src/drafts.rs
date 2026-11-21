@@ -80,7 +80,9 @@ pub struct Moving {
 /// the store it was written in, and one of another store stays where it is: that store's page did not move (Codex
 /// re-review of 75ce884, R2-D7). A draft that names no store, or a call without one (folder notebooks), matches.
 fn of_store(draft: &Value, store: Option<&Path>) -> bool {
-    let id = |root: &str| root.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    // Exact apart from separators: `connect` reports the root as the filesystem names it, so letter case tells two
+    // stores in a case-sensitive folder apart (Codex review of dd4c1b0, R3-D8).
+    let id = |root: &str| root.replace('\\', "/").trim_end_matches('/').to_string();
     match (draft.get("store").and_then(Value::as_str), store) {
         (Some(named), Some(store)) => id(named) == id(&store.to_string_lossy()),
         _ => true,
@@ -318,11 +320,13 @@ mod tests {
         let nb = "lm:demo:plans";
         let draft = json!({ "key": file_key(nb, "A.md"), "kind": "file", "target": { "notebook": nb, "path": "A.md" }, "mine": "x", "store": "C:\\stores\\a" });
         put(&dir, &file_key(nb, "A.md"), &draft).unwrap();
-        let (a, b) = (Path::new("c:/Stores/A/"), Path::new("C:\\stores\\b"));
+        let (a, b) = (Path::new("C:/stores/a/"), Path::new("C:\\stores\\b"));
         assert!(moving(&dir, Some(b), nb, "A.md", "B.md").is_empty());
         assert!(!any_under(&dir, Some(b), nb, "A.md"));
         assert_eq!(moving(&dir, Some(a), nb, "A.md", "B.md").len(), 1, "the same store, written another way");
         assert!(any_under(&dir, Some(a), nb, "A.md"));
+        // Codex review of dd4c1b0, R3-D8: two stores whose names differ only in letter case are two stores.
+        assert!(moving(&dir, Some(Path::new("C:/stores/A")), nb, "A.md", "B.md").is_empty());
         std::fs::remove_dir_all(dir).ok();
     }
 

@@ -159,6 +159,18 @@ async fn lmdoc_attach(app: AppHandle, notebook: String, generation: Option<u64>)
     .await
 }
 
+/// The store root as the filesystem names it: links resolved, letter case as on disk, and no `\\?\` prefix. One store
+/// always gets one name and two stores never share one, so the webview and the drafts can compare roots exactly
+/// (Codex review of dd4c1b0, R3-D8). A root that cannot be resolved keeps its text.
+fn store_identity(root: &str) -> String {
+    let Ok(path) = std::fs::canonicalize(root) else { return root.to_string() };
+    let text = path.display().to_string();
+    if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{unc}");
+    }
+    text.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(text)
+}
+
 /// Start (or restart) the bridge, report what it connected to, and watch the store for changes.
 #[tauri::command]
 async fn connect(app: AppHandle, state: State<'_, AppState>) -> Result<ConnectInfo, String> {
@@ -167,15 +179,19 @@ async fn connect(app: AppHandle, state: State<'_, AppState>) -> Result<ConnectIn
     if launch != state.bridge.launch() {
         state.bridge.reconfigure(launch);
     }
+    // Both probes are bound to the generation reported, so a reconfigure in between fails the connect instead of pairing
+    // one store's generation with another's root (Codex review of dd4c1b0, R3-D9).
     let generation = state.bridge.generation();
     let bridge = state.bridge.clone();
     let (version, doctor) = blocking(move || {
-        let version = bridge.call(&["version".into()], None)?;
-        let doctor = bridge.call(&["doctor".into(), "--actor".into(), "viewer".into()], None)?;
+        let version = bridge.call_at(Some(generation), &["version".into()], None)?;
+        let doctor = bridge.call_at(Some(generation), &["doctor".into(), "--actor".into(), "viewer".into()], None)?;
         Ok((version, doctor))
     })
     .await?;
-    let root = doctor.result.get("root").and_then(Value::as_str).ok_or("Living Memory did not report its store root")?.to_string();
+    let reported = doctor.result.get("root").and_then(Value::as_str).ok_or("Living Memory did not report its store root")?.to_string();
+    state.bridge.pin_root(generation, PathBuf::from(&reported));
+    let root = store_identity(&reported);
     let (notes, store, docs) = (app.clone(), app.clone(), app.clone());
     let debouncer = watcher::watch_all(
         &PathBuf::from(&root),
@@ -1952,6 +1968,21 @@ pub fn run() {
 mod tests {
     use super::*;
     use term::launch::{Cli, NO_CODEX};
+
+    /// Codex review of dd4c1b0, R3-D8: a store written in another letter case or with another separator gets the name
+    /// the filesystem gives it, without the `\\?\` prefix; a root that does not exist keeps its text.
+    #[cfg(windows)]
+    #[test]
+    fn a_store_root_is_named_as_the_filesystem_names_it() {
+        let dir = std::env::temp_dir().join(format!("HM-Store-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let canonical = store_identity(&dir.display().to_string());
+        assert!(!canonical.starts_with(r"\\?\"), "{canonical}");
+        assert_eq!(store_identity(&dir.display().to_string().to_lowercase().replace('\\', "/")), canonical);
+        assert!(canonical.contains("HM-Store-"), "{canonical}");
+        assert_eq!(store_identity("Z:/no/such/store"), "Z:/no/such/store");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn engines_report_what_was_found() {

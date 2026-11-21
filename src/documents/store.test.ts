@@ -89,6 +89,13 @@ vi.mock("@tauri-apps/api/core", () => ({
         if (flags.draftGetError) throw new Error("The draft store could not be read");
         return drafts.get(a.key as string) ?? null;
       case "draft_delete": drafts.delete(a.key as string); return null;
+      case "lmdoc_move": {
+        if (a.generation !== undefined && a.generation !== bridge.generation) throw new Error("Living Memory switched to another store while this request waited, so Hivemind did not send it");
+        const pages = lmStores[bridge.store], from = a.from as string;
+        pages.set(a.to as string, pages.get(from)!);
+        pages.delete(from);
+        return null;
+      }
       case "lm":
       case "lm_body": {
         if (a.generation !== undefined && a.generation !== bridge.generation) throw new Error("Living Memory switched to another store while this request waited, so Hivemind did not send it");
@@ -102,6 +109,11 @@ vi.mock("@tauri-apps/api/core", () => ({
         if (argv[1] === "read") {
           const text = lmPages.get(page)!;
           return ok({ text, revision: rev(text), size: text.length, updated: "2026-11-21T00:00:00Z", truncated: false });
+        }
+        if (argv[1] === "delete") {
+          if (rev(lmPages.get(page)!) !== argv[argv.indexOf("--expected-revision") + 1]) return { exit_code: 6, result: null, error: { code: "stale", message: "Stale revision" } };
+          lmPages.delete(page);
+          return ok({ path: page });
         }
         if (argv[1] === "write") {
           if (rev(lmPages.get(page)!) !== argv[argv.indexOf("--expected-revision") + 1]) return { exit_code: 6, result: null, error: { code: "stale", message: "Stale revision" } };
@@ -991,10 +1003,10 @@ describe("documents store", () => {
     expect(await docs.save(k)).toMatchObject({ status: "readOnly" });
     expect([lmPages.get("A.md"), lmStores.b.get("A.md")]).toEqual(["one\n", "one\n"]);
     expect(drafts.get(await draftKeyOf(k))).toMatchObject({ store: "C:/stores/a", mine: "two\n" });
-    // Back in its own store (written another way) the page takes the edits again and saves them there.
+    // Back in its own store (written with other separators) the page takes the edits again and saves them there.
     switchBridge("a");
     setBridgeGeneration(bridge.generation);
-    docs.setLmStore("C:\\Stores\\A\\");
+    docs.setLmStore("C:\\stores\\a\\");
     await until(() => docs.useDocuments.getState().docs[k]?.status === "dirty");
     expect((await docs.save(k))?.status).toBe("clean");
     expect([lmPages.get("A.md"), lmStores.b.get("A.md")]).toEqual(["two\n", "one\n"]);
@@ -1027,22 +1039,112 @@ describe("documents store", () => {
       expect(drafts.get(await draftKeyOf(k))).toMatchObject({ store: "C:/stores/a", mine: "two\n" });
     });
 
-    it("R2-D2: edits whose draft could not be written stay on screen when Hivemind switches stores", async () => {
+    it("R2-D2, R3-D2 and R3-U2: edits not in a draft are parked read-only on a store switch, and come back and save with their store", async () => {
       await opened("one\n", "other\n");
-      // Text no draft of this page ever held: the store module remembers what earlier tests kept.
       flags.failDrafts = true;
       docs.edit(k, "kept nowhere\n");
       docs.pauseLmStore();
       switchBridge("b");
       connected();
-      await until(() => !!page()?.draftError);
-      await new Promise((r) => setTimeout(r, 10));
-      expect(page()).toMatchObject({ status: "dirty", text: "kept nowhere\n" });
-      // Back on their store they save there.
+      await until(() => page()?.status === "readOnly");
+      expect(page()).toMatchObject({ text: "kept nowhere\n", kept: { text: "kept nowhere\n" } });
+      expect(docs.inOwnStore(k)).toBe(false);
+      expect(await docs.save(k)).toMatchObject({ status: "readOnly" });
+      // Back on their store they are edits again, and the autosave saves them without another keystroke.
+      flags.failDrafts = false;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        switchBridge("a");
+        connected();
+        expect(page()).toMatchObject({ status: "dirty", text: "kept nowhere\n" });
+        await vi.advanceTimersByTimeAsync(5500);
+      } finally {
+        vi.useRealTimers();
+      }
+      expect([lmPages.get("A.md"), lmStores.b.get("A.md")]).toEqual(["kept nowhere\n", "other\n"]);
+    });
+
+    it("R3-D4: deleting the same path in store B leaves a parked page of store A and A's older draft", async () => {
+      await opened("one\n", "one\n");
+      docs.edit(k, "older\n");
+      await docs.flushDraft(k);
+      flags.failDrafts = true;
+      docs.edit(k, "kept nowhere\n");
+      docs.pauseLmStore();
+      switchBridge("b");
+      connected();
+      await until(() => page()?.status === "readOnly");
+      const lost: string[] = [];
+      docs.onDraftLost((line) => lost.push(line));
+      const { trashPath } = await import("../features/notes/actions");
+      try {
+        await trashPath({ invalidateQueries: () => {} } as never, lm.notebook, "A.md");
+        await until(() => !page());
+      } finally {
+        docs.onDraftLost(() => {});
+      }
+      expect(lmStores.b.has("A.md")).toBe(false);
+      expect(drafts.get(await draftKeyOf(k))).toMatchObject({ store: "C:/stores/a", mine: "older\n" });
+      // The parked edits went with the tab, and the user is told.
+      expect(lost).toEqual([expect.stringMatching(/^A\.md: its unsaved edits belonged to another Living Memory store/)]);
+    });
+
+    it("R3-D1: a move asked in store A that waits for a save while Hivemind switches to B is refused, not run in B", async () => {
+      await opened("one\n", "one\n");
+      docs.edit(k, "two\n");
+      const release = gate("lm_body undefined");
+      void docs.save(k);
+      const { movePath } = await import("../features/notes/actions");
+      const moving = movePath({ invalidateQueries: () => {} } as never, lm.notebook, "A.md", "B.md");
+      docs.pauseLmStore();
+      switchBridge("b");
+      connected();
+      release();
+      await expect(moving).rejects.toThrow(/switched to another store/);
+      expect([...lmStores.b.keys()]).toEqual(["A.md"]);
+      expect([...lmPages.keys()]).toEqual(["A.md"]);
+    });
+
+    it("R3-D8: two store roots that differ only in letter case are two stores", async () => {
+      await opened("one\n", "one\n");
+      expect(docs.inOwnStore(k)).toBe(true);
+      docs.setLmStore("C:/STORES/A");
+      expect(docs.inOwnStore(k)).toBe(false);
+      docs.setLmStore("C:\\stores\\a\\");
+    });
+
+    it("R3-D5: what an earlier session drafted does not count as kept for this one", async () => {
+      await opened("one\n", "other\n");
+      docs.edit(k, "x\n");
+      await docs.flushDraft(k);
+      switchBridge("b");
+      connected();
+      await until(() => page()?.status === "readOnly");
+      await docs.discardKept(k);
+      await until(() => page()?.status === "clean" && page().text === "other\n");
+      // B's edit equals the text A's discarded draft held, and its own draft cannot be written.
+      flags.failDrafts = true;
+      docs.edit(k, "x\n");
       switchBridge("a");
       connected();
-      expect((await docs.save(k))?.status).toBe("clean");
-      expect([lmPages.get("A.md"), lmStores.b.get("A.md")]).toEqual(["kept nowhere\n", "other\n"]);
+      await until(() => page()?.status === "readOnly");
+      expect(page()).toMatchObject({ text: "x\n", kept: { text: "x\n" } });
+    });
+
+    it("R3-U1: a draft of another store whose text equals this store's page is shown, and can be discarded", async () => {
+      lmStores.b.set("A.md", "same\n");
+      await lmRevision("same\n");
+      switchBridge("b");
+      connected();
+      const draftKey = await draftKeyOf(k);
+      drafts.set(draftKey, { key: draftKey, kind: "file", target: lm, precondition: { sha256: "x", size: 1, mtimeMs: 1 }, mine: "same\n", savedAt: "2026-11-21T00:00:00Z", store: "C:/stores/a" });
+      forgetMoved(lm.notebook, "A.md");
+      ws().openTab({ kind: "file", file: lm });
+      await docs.open(lm);
+      expect(page()).toMatchObject({ status: "readOnly", kept: { text: "same\n" } });
+      await docs.discardKept(k);
+      await until(() => page()?.status === "clean");
+      expect(drafts.has(draftKey)).toBe(false);
     });
 
     it("R2-D3: a page held by a move, or still loading, when Hivemind switches stores follows the switch afterwards", async () => {

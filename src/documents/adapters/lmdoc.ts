@@ -116,14 +116,14 @@ export async function createPage(where: LmNotebookRef, path: string, text: strin
 }
 
 /** Delete a page. Without `pre` (the page is not open) it is deleted as it is now. */
-export async function deletePage(where: LmNotebookRef, path: string, pre?: Stamp): Promise<string> {
-  const revision = pre?.sha256 ?? (await docRead(where.domain, where.notebook, path).catch((e) => { throw missing(e); })).revision;
-  await docDelete(where.domain, where.notebook, path, revision);
+export async function deletePage(where: LmNotebookRef, path: string, pre?: Stamp, at?: number): Promise<string> {
+  const revision = pre?.sha256 ?? (await docRead(where.domain, where.notebook, path, at).catch((e) => { throw missing(e); })).revision;
+  await docDelete(where.domain, where.notebook, path, revision, at);
   return path;
 }
 
 /** Move a page or section. Rust moves the drafts of the pages with it, as `file_rename` does (NS-2C). */
-export const movePage = (container: string, from: string, to: string) => invoke<void>("lmdoc_move", { notebook: container, from, to, generation: bridgeGeneration() });
+export const movePage = (container: string, from: string, to: string, at = bridgeGeneration()) => invoke<void>("lmdoc_move", { notebook: container, from, to, generation: at });
 
 /** Ask for a file with the native dialog and copy it into the notebook's `assets/`; null when the user cancelled. */
 export const attachFile = (container: string) => invoke<string | null>("lmdoc_attach", { notebook: container, generation: bridgeGeneration() });
