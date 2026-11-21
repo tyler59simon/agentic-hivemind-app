@@ -9,6 +9,7 @@ import { createDoc, lmAssets, treeQuery } from "../../documents/io";
 import { lmNotebooksQuery } from "../../lib/lm";
 import { fileName, folderOf, isMarkdown, isRichDoc, notebooksQuery, pageTitle, revealFile, type Notebook } from "../../lib/notebooks";
 import { assetBase, isLoose, recentQuery, recentRef } from "../../lib/opens";
+import { useWhitePaper } from "../../lib/paper";
 import { Menu } from "../../ui/Menu";
 import { Confirm, Modal } from "../../ui/Modal";
 import { Tabs } from "../../ui/Page";
@@ -236,6 +237,7 @@ export function FileTab({ tab }: { tab: Tab }) {
   const deleting = useDocuments((s) => isDeleting(s.held, ref));
   const arriving = useDocuments((s) => isArriving(s.held, ref));
   const updateTab = useWorkspace((s) => s.updateTab);
+  const white = useWhitePaper(tab);
   const reveal = useWorkspace((s) => (s.reveal?.tabId === tab.id ? s.reveal : null));
   const client = useQueryClient();
   const notebooks = useQuery(notebooksQuery());
@@ -381,7 +383,8 @@ export function FileTab({ tab }: { tab: Tab }) {
           <Menu label="Page actions" align="right" button={<Ellipsis size="1.3em" aria-hidden />} className="icon-menu">
             {(close) => {
               const item = (label: string, act: () => void, cls = "") => <li><button role="menuitem" className={cls} onClick={() => { close(); act(); }}>{label}</button></li>;
-              if (lm) return <>{item("Attach file…", () => void attach())}{item("Delete page…", remove, "danger-text")}</>;
+              const paper = item(white ? "Theme background" : "White background", () => updateTab(tab.id, { paper: !white }));
+              if (lm) return <>{item("Attach file…", () => void attach())}{paper}{item("Delete page…", remove, "danger-text")}</>;
               return (
                 <>
                   {item("Show in Explorer", () => revealFile(ref.notebook, ref.path).catch((e) => toast(classify(e).message, "error")))}
@@ -392,6 +395,7 @@ export function FileTab({ tab }: { tab: Tab }) {
                   })}
                   {!loose && markdown && item("Convert to rich page", () => convertToRich(client, ref, doc.text).catch((e) => toast(classify(e).message, "error")))}
                   {!loose && richDoc && item("Export to Markdown…", () => runExport(client, ref, setDialog, doc.text))}
+                  {paper}
                   {!loose && item("Delete page…", remove, "danger-text")}
                 </>
               );

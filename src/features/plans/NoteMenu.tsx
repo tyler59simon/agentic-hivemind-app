@@ -19,7 +19,7 @@ import { DirectDialog } from "./DirectDialog";
 import { PlanDialog } from "./PlanDialog";
 
 /** Lifecycle actions for a note. Delete and merge are reviewed Living Memory plans; the rest are direct, journaled writes with Undo. */
-export function NoteMenu({ refId }: { refId: string }) {
+export function NoteMenu({ refId, paper }: { refId: string; paper?: { white: boolean; flip: () => void } }) {
   const note = useQuery(noteQuery(refId));
   const changesOn = useChangesEnabled();
   const restoreOn = useRestoreEnabled();
@@ -77,6 +77,7 @@ export function NoteMenu({ refId }: { refId: string }) {
         toast(`Skill proposal ${p.name} is waiting in Review`, "info", { label: "Open Review", run: () => openReview() });
       }, (e) => toast(classify(e).message, "error"));
     } },
+    { label: paper?.white ? "Theme background" : "White background", show: !!paper, act: () => { setOpen(false); paper?.flip(); } },
     { label: "Copy reference", show: true, act: () => { setOpen(false); navigator.clipboard.writeText(refId).then(() => toast(`Copied ${refId}`)); } },
     { label: "Delete…", show: true, danger: true, act: () => run(
       <PlanDialog title={`Delete “${n.title}”`} make={() => plan("delete", refId)} applyLabel="Delete" danger onClose={close}

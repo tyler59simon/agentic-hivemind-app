@@ -4,6 +4,7 @@ import { ENGINE_LABELS, ENGINES, enginesText, shownEngines, type Engine } from "
 import { pauseLmStore } from "../../documents/store";
 import { useProjectsEnabled } from "../../lib/connection";
 import { captureStatus, getSettings, saveSettings, type CaptureStatus, type Settings } from "../../lib/lm";
+import { applyPaperDefault, PAPER_DEFAULTS, usePaperDefault, type PaperDefault } from "../../lib/paper";
 import { prefs } from "../../lib/prefs";
 import { applyTheme, THEMES, useTheme, type Theme } from "../../lib/theme";
 import { useHidden } from "../../shell/hidden";
@@ -23,6 +24,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
   const [mode, setMode] = useState<Mode>(prefs.defaultMode());
   const [error, setError] = useState<string | null>(null);
   const theme = useTheme();
+  const paper = usePaperDefault();
   const sections = useAvailableSections().filter((s) => s.page !== "overview");
   const hidden = useHidden((s) => s.hidden);
   const setShown = useHidden((s) => s.setShown);
@@ -157,7 +159,13 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
           {THEMES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
         </select>
       </label>
-      <p className="muted small">The theme changes at once and is kept on this computer; it does not need Save.</p>
+      <label className="field">
+        <span>Document background</span>
+        <select value={paper} onChange={(e) => applyPaperDefault(e.target.value as PaperDefault)}>
+          {PAPER_DEFAULTS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+        </select>
+      </label>
+      <p className="muted small">The theme and the document background change at once and are kept on this computer; they do not need Save. White shows documents as dark text on white paper while the rest of Hivemind keeps its theme. A document's page menu can switch that one tab.</p>
 
       <h3>Sidebar</h3>
       {sections.map((s) => (

@@ -82,6 +82,49 @@ describe("themes", () => {
   });
 });
 
+describe("white document paper", () => {
+  /** Every token a rule sets, over all rules that list `selector` (the palette has its own block). */
+  const tokens = (selector: string) => {
+    const found = rules.filter((r) => r.selectors.includes(selector) && /^\s*--/m.test(r.body));
+    return new Map(found.flatMap((r) => [...r.body.matchAll(/(--[a-z0-9-]+):\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()] as [string, string])));
+  };
+  const paper = tokens("[data-paper]");
+  const light_ = tokens(':root[data-theme="emerald-light"]');
+
+  it("sets the same tokens, with the same values, as Emerald Light, including the rich page palette", () => {
+    expect(paper.size).toBeGreaterThan(100);
+    expect([...paper.keys()].sort()).toEqual([...light_.keys()].sort());
+    expect(paper).toEqual(light_);
+    expect([...paper.keys()].filter((t) => t.startsWith("--pal-")).length).toBe(16);
+    // Every colour token of the app theme is covered, so nothing inside the pane keeps a dark value.
+    expect(purple.filter((t) => !paper.has(t))).toEqual([]);
+  });
+
+  it("puts light text on the pane and a white page behind it", () => {
+    const rule = rules.find((r) => r.selectors.includes("[data-paper]") && /color:\s*var\(--fg\)/.test(r.body));
+    expect(rule?.body).toMatch(/background:\s*var\(--bg-alt\)/);
+    expect(light.get("--bg-alt")).toBe("#ffffff");
+  });
+
+  it("is the only place besides the sidebar and terminal that sets tokens on something other than the root", () => {
+    const setters = rules.filter((r) => /^\s*--(bg|fg):/m.test(r.body)).flatMap((r) => r.selectors).sort();
+    expect(setters).toEqual([
+      ":root", ":root[data-theme=\"emerald\"]", ":root[data-theme=\"emerald-light\"]", ":root[data-theme=\"emerald-light\"] .sidebar",
+      ":root[data-theme=\"emerald-light\"] .sidebar .overlay", ":root[data-theme=\"emerald-light\"] .term-box", "[data-paper]",
+    ].sort());
+  });
+
+  it("darkens the note-type colours on the pane as the light theme does", () => {
+    const shadesOf = (scope: string) => new Map(rules.flatMap((r) => {
+      const shade = r.body.match(/color:\s*(#[0-9a-f]{6});/)?.[1];
+      return shade ? r.selectors.filter((sel) => sel.startsWith(scope + " .type-")).map((sel) => [sel.slice(scope.length + 1), shade] as [string, string]) : [];
+    }));
+    const light = shadesOf(':root[data-theme="emerald-light"]');
+    expect(light.size).toBe(14); // the 13 rules of the test above, one of them for two types
+    expect(shadesOf("[data-paper]")).toEqual(light);
+  });
+});
+
 describe("saved theme", () => {
   const store = new Map<string, string>();
   const g = globalThis as { localStorage?: unknown };

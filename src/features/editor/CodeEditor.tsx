@@ -9,7 +9,8 @@ import { tags as t } from "@lezer/highlight";
 import { useEffect, useMemo, useRef, type MutableRefObject } from "react";
 import { registerDropTarget } from "../notes/drops";
 import { livePreview } from "./livePreview";
-import { dropPictures, RICH_LIMIT, richEditing, richLanguage, richPreview, richRefresh, slashSource, type RichContext } from "./rich";
+import { documentIsDark, onDocumentLook } from "../../lib/paper";
+import { dropPictures, RICH_LIMIT, richDark, richEditing, richLanguage, richLook, richPreview, richRefresh, slashSource, type RichContext } from "./rich";
 import { richContext as richContextFacet } from "./rich/context";
 import { Toolbar } from "./toolbar";
 
@@ -131,7 +132,7 @@ const gutterExt = (on: boolean): Extension => (on ? [lineNumbers(), highlightAct
 
 /** Everything the editor is made of. For a note (markdown, not read-only, no line numbers) this is the same list, in
  * the same order, as the note editor has always had. */
-export function editorExtensions(props: CodeEditorProps, latest: MutableRefObject<CodeEditorProps>, sw: Switches): Extension[] {
+export function editorExtensions(props: CodeEditorProps, latest: MutableRefObject<CodeEditorProps>, sw: Switches, dark?: () => boolean): Extension[] {
   const rich = props.rich && props.language === "markdown" ? latestRich(latest) : null;
   const markdownOnly = props.language === "markdown"
     ? [
@@ -151,6 +152,7 @@ export function editorExtensions(props: CodeEditorProps, latest: MutableRefObjec
       ...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab,
     ]),
     sw.preview.of(props.live && props.language === "markdown" ? livePreview : []),
+    ...(rich && dark ? [richDark.of(dark)] : []),
     ...(rich ? [...richEditing(rich), sw.rich.of(richOn(props) ? richPreview : [])] : []),
     ...(props.placeholder ? [placeholder(props.placeholder)] : []),
     theme,
@@ -180,13 +182,21 @@ export function CodeEditor(props: CodeEditorProps) {
   useEffect(() => {
     const v = new EditorView({
       parent: host.current!,
-      state: EditorState.create({ doc: props.doc, extensions: editorExtensions(props, latest, sw.current) }),
+      state: EditorState.create({ doc: props.doc, extensions: editorExtensions(props, latest, sw.current, () => documentIsDark(host.current)) }),
     });
     view.current = v;
+    // Diagrams draw in the colours of the document, so a change of theme or of the pane's background draws them again.
+    let dark = documentIsDark(host.current);
+    const stopLook = onDocumentLook(() => {
+      const now = documentIsDark(host.current);
+      if (now === dark || !latest.current.rich) return;
+      dark = now;
+      v.dispatch({ effects: richLook.of(null) });
+    });
     // Pictures dropped on a page are attached where they land (NS-3A).
     const ctx = v.state.facet(richContextFacet);
     const unregister = ctx ? registerDropTarget(v.dom, async (drop) => dropPictures(v, ctx, drop)) : () => {};
-    return () => { unregister(); v.destroy(); view.current = null; };
+    return () => { stopLook(); unregister(); v.destroy(); view.current = null; };
     // The editor is created once; later prop changes flow through the effects below.
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 

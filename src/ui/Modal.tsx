@@ -1,6 +1,8 @@
 import { useEffect, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
-/** A centered dialog. Escape and the backdrop call onClose unless `locked` (e.g. while a write runs). */
+/** A centered dialog. Escape and the backdrop call onClose unless `locked` (e.g. while a write runs). It is drawn in
+ *  `document.body`, so it never inherits the colours of where it was opened from (a white document pane, the dark sidebar). */
 export function Modal({ title, children, onClose, wide, locked }: {
   title: string; children: ReactNode; onClose: () => void; wide?: boolean; locked?: boolean;
 }) {
@@ -9,13 +11,14 @@ export function Modal({ title, children, onClose, wide, locked }: {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose, locked]);
-  return (
+  return createPortal(
     <div className="overlay center-overlay" onMouseDown={() => !locked && onClose()}>
       <div className={`modal ${wide ? "wide" : ""}`} role="dialog" aria-label={title} onMouseDown={(e) => e.stopPropagation()}>
         <header className="modal-head"><h2>{title}</h2><button className="ghost" onClick={onClose} disabled={locked} aria-label="Close">×</button></header>
         <div className="modal-body">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

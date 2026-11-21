@@ -8,6 +8,7 @@ import { NewFileTab } from "../features/notes/NewFileTab";
 import { keyOf } from "../documents/store";
 import { newPageHere } from "../features/notes/actions";
 import { fileName, isMarkdown, isRichDoc, pageTitle } from "../lib/notebooks";
+import { announceDocumentLook, useWhitePaper } from "../lib/paper";
 import { useApp } from "../store";
 import { Confirm } from "../ui/Modal";
 import { MAX_PANES, railShown, useWorkspace, type Pane, type Tab } from "./store";
@@ -87,6 +88,14 @@ function PaneView({ pane, focused, first, last, onClose }: {
   const rail = useWorkspace(railShown);
   const active = pane.tabs.find((t) => t.id === pane.active) ?? pane.tabs[0];
   const strip = useRef<HTMLDivElement>(null);
+  // The whole document area is white paper when the tab says so (App.css); views that draw dark or light colours redraw.
+  const white = useWhitePaper(active);
+  const shownWhite = useRef(white);
+  useEffect(() => {
+    if (shownWhite.current === white) return;
+    shownWhite.current = white;
+    announceDocumentLook();
+  }, [white]);
   useEffect(() => {
     strip.current?.querySelector(".note-tab-pill.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [active?.id, pane.tabs.length]);
@@ -107,7 +116,7 @@ function PaneView({ pane, focused, first, last, onClose }: {
           </>
         )}
       </div>
-      <div className="pane-body">
+      <div className="pane-body" data-paper={white ? "" : undefined}>
         {active ? TAB_VIEWS[active.kind](active) : (
           <div className="center muted"><p>Open a note or page here: Ctrl+click a link, or press <kbd>Ctrl</kbd>+<kbd>O</kbd>.</p></div>
         )}

@@ -2,6 +2,7 @@
 // editor stays as it was.
 import { Facet, StateEffect } from "@codemirror/state";
 import type { FileFormat, Loaded, SaveOutcome, Stamp } from "../../../lib/notebooks";
+import { documentIsDark } from "../../../lib/paper";
 
 /** Pages longer than this (in characters, about 1 MB) keep the plain live preview, with a banner. */
 export const RICH_LIMIT = 1_000_000;
@@ -54,3 +55,10 @@ export const richContext = Facet.define<RichContext, RichContext | null>({ combi
 
 /** Rebuild every rich decoration: the picture grant arrived, or the pages an embed can name changed. */
 export const richRefresh = StateEffect.define<null>();
+
+/** Whether diagrams are drawn in dark colours: where the editor is (a white pane is light under any theme). The editor
+ *  supplies it, because only its element knows which pane it is in; without one it asks as for no element. */
+export const richDark = Facet.define<() => boolean, () => boolean>({ combine: (values) => values[0] ?? (() => documentIsDark(null)) });
+
+/** The colours the page is drawn in changed (the theme, or the pane's background): the diagrams draw again. */
+export const richLook = StateEffect.define<null>();

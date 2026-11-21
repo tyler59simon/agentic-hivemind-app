@@ -8,7 +8,7 @@ import { syntaxHighlighting } from "@codemirror/language";
 import type { AnyExtension } from "@tiptap/core";
 import { systemDiagram } from "../../../lib/architecture";
 import { read as readNote } from "../../../lib/lm";
-import { currentTheme, onThemeChange } from "../../../lib/theme";
+import { documentIsDark, onDocumentLook } from "../../../lib/paper";
 import { useWorkspace } from "../../../workspace/store";
 import { code, darkTheme, lightTheme } from "../../review/CodeDiff";
 import { loadLanguage } from "../../review/language";
@@ -135,7 +135,9 @@ const codeRange = embedView((box, node, env, props) => {
   box.append(head, note, host);
 
   const theme = new Compartment();
-  const themeNow = () => (currentTheme() === "emerald-light" ? lightTheme : darkTheme);
+  // Light or dark follows the document (a white pane is light under any theme); the box is not in the page yet while it
+  // is built, so the theme is set again once it is.
+  const themeNow = () => (documentIsDark(box) ? darkTheme : lightTheme);
   const language = new Compartment();
   let view: EditorView | null = null;
   let gone = false;
@@ -154,7 +156,9 @@ const codeRange = embedView((box, node, env, props) => {
     loadLanguage(a.file).then((support) => { if (!gone && support) view?.dispatch({ effects: language.reconfigure(support) }); });
   };
   show(a.text);
-  const stop = onThemeChange(() => view?.dispatch({ effects: theme.reconfigure(themeNow()) }));
+  const restyle = () => view?.dispatch({ effects: theme.reconfigure(themeNow()) });
+  queueMicrotask(() => { if (!gone) restyle(); });
+  const stop = onDocumentLook(restyle);
 
   const apply = (state: RangeState) => {
     if (gone) return;

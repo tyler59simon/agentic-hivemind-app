@@ -42,8 +42,8 @@ describe("tray Quit", () => {
     await act(async () => { await handlers.get("quit-requested")!(); });
     await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     expect(invoked).not.toContain("app_quit");
-    expect(el.textContent).toContain("Quit with an unsaved new text file?");
-    const quit = [...el.querySelectorAll("button")].find((b) => b.textContent === "Quit")!;
+    expect(document.body.textContent).toContain("Quit with an unsaved new text file?");
+    const quit = [...document.querySelectorAll("button")].find((b) => b.textContent === "Quit")!;
     await act(async () => { quit.click(); });
     await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     expect(invoked).toContain("app_quit");

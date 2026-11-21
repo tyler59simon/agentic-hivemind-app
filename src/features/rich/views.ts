@@ -7,7 +7,7 @@ import { EditorView as CodeView, keymap as cmKeymap } from "@codemirror/view";
 import type { AnyExtension, Editor, NodeViewRendererProps } from "@tiptap/core";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { NodeSelection } from "@tiptap/pm/state";
-import { currentTheme } from "../../lib/theme";
+import { documentIsDark, onDocumentLook } from "../../lib/paper";
 import { renderMath } from "../../ui/Math";
 import { diagramClick, drawMermaid, skipReason } from "../../ui/Mermaid";
 import type { RichContext } from "../editor/rich/context";
@@ -325,6 +325,8 @@ const codeBlock: Make = (props) => {
   box.append(bar, pre, preview);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let drawn = "";
+  // The colours the diagram was drawn in; they follow the document, so a white pane gets the light ones.
+  let drawnDark: boolean | null = null;
   const draw = () => {
     const isMermaid = (node.attrs.language ?? "").toLowerCase() === "mermaid";
     preview.hidden = !isMermaid;
@@ -336,10 +338,17 @@ const codeBlock: Make = (props) => {
       drawn = source;
       const skip = skipReason(source);
       if (skip) { preview.textContent = skip; return; }
-      drawMermaid(source, currentTheme() !== "emerald-light").then((svg) => { if (drawn === source) preview.innerHTML = svg; }, () => { preview.textContent = "Diagram did not render."; });
+      const dark = drawnDark = documentIsDark(box);
+      drawMermaid(source, dark).then((svg) => { if (drawn === source && drawnDark === dark) preview.innerHTML = svg; }, () => { preview.textContent = "Diagram did not render."; });
     }, drawn ? 500 : 0);
   };
   draw();
+  // A change of theme or of the pane's background redraws a diagram that was drawn in the other colours.
+  const stopLook = onDocumentLook(() => {
+    if (drawnDark === null || drawnDark === documentIsDark(box)) return;
+    drawn = "";
+    draw();
+  });
   return {
     dom: box,
     contentDOM: code,
@@ -350,7 +359,7 @@ const codeBlock: Make = (props) => {
       draw();
       return true;
     },
-    destroy() { clearTimeout(timer); },
+    destroy() { clearTimeout(timer); stopLook(); },
     stopEvent: (e) => bar.contains(e.target as globalThis.Node) || preview.contains(e.target as globalThis.Node),
     ignoreMutation: (m) => !code.contains((m as MutationRecord).target),
   };

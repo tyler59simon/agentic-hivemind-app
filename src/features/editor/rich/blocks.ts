@@ -11,8 +11,7 @@ import { syntaxTree } from "@codemirror/language";
 import { MapMode, StateField, type ChangeDesc, type EditorState, type Range, type Transaction } from "@codemirror/state";
 import { Decoration, EditorView, type DecorationSet, type WidgetType } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
-import { currentTheme } from "../../../lib/theme";
-import { richContext, richRefresh, type RichContext } from "./context";
+import { richContext, richDark, richLook, richRefresh, type RichContext } from "./context";
 import { parseCallout, parseEmbed } from "./parse";
 import { CalloutTitleWidget, EmbedWidget, MathWidget, MermaidWidget, PictureWidget, TableWidget, toggleCallout } from "./widgets";
 
@@ -148,7 +147,7 @@ function draw(d: Draw, node: SyntaxNode, { from, to }: Block, out: Range<Decorat
 }
 
 const drawing = (state: EditorState, toggled: readonly number[], stamp: number): Draw =>
-  ({ state, ctx: state.facet(richContext), dark: currentTheme() !== "emerald-light", toggled, stamp });
+  ({ state, ctx: state.facet(richContext), dark: state.facet(richDark)(), toggled, stamp });
 
 /** Every block decoration of the page. */
 function full(state: EditorState, toggled: readonly number[], stamp: number): Blocks {
@@ -211,6 +210,7 @@ function update(value: Blocks, tr: Transaction): Blocks {
       toggled = toggled.includes(e.value) ? toggled.filter((p) => p !== e.value) : [...toggled, e.value];
       dirty.push([e.value, e.value]);
     } else if (e.is(richRefresh)) { stamp++; everything = true; }
+    else if (e.is(richLook)) everything = true; // embeds keep their stamp, so only the diagrams are new widgets
   }
   if (everything) return full(tr.state, toggled, stamp);
   if (!tr.docChanged && !dirty.length) {

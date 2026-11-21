@@ -217,9 +217,11 @@
   --term-blue: #7fb0ff;
 }
 /* Emerald Enterprise Light: light grey and white surfaces with deep green text, the dark Emerald sidebar and a dark terminal.
-   #7ecf1c stays a fill with dark text; where green or teal is text, a link or a focus ring it is darkened to reach WCAG AA. */
+   #7ecf1c stays a fill with dark text; where green or teal is text, a link or a focus ring it is darkened to reach WCAG AA.
+   A document pane on white paper (data-paper, set by the workspace) takes the same colours under any theme. */
 :root[data-theme="emerald-light"],
-:root[data-theme="emerald-light"] .sidebar .overlay {
+:root[data-theme="emerald-light"] .sidebar .overlay,
+[data-paper] {
   color-scheme: light;
   --bg: #f5f5f5;
   --bg-alt: #ffffff;
@@ -321,6 +323,8 @@
   --term-bright-black: #426461;
   --term-blue: #7fb0ff;
 }
+/* The whole document pane (header, toolbars, page and status line) is paper: Light's page white and its text colour. */
+[data-paper] { color: var(--fg); background: var(--bg-alt); }
 /* The sidebar and the terminal box keep the Emerald dark colours (they share its token block above); the sidebar's
    background is the page colour of Emerald dark. Their text colour is recomputed from the dark tokens, and a dialog
    opened from the sidebar recomputes it from the light ones. */
@@ -753,14 +757,14 @@ input[type="checkbox"] { accent-color: var(--success); }
 .type-research { color: #22d3ee; } .type-policy { color: #eab308; } .type-map { color: #fb923c; } .type-runbook { color: #f472b6; }
 .type-brief { color: #818cf8; } .type-custom { color: #a1a1aa; } /* every custom type shares the neutral grey */
 .type-article { color: var(--accent); } /* a page of the agent-written wiki; a token, so each theme keeps its own contrast */
-/* Emerald Enterprise Light: the same hues, dark enough for 4.5:1 on its surfaces. */
-:root[data-theme="emerald-light"] .type-knowledge, :root[data-theme="emerald-light"] .type-context { color: #475569; }
-:root[data-theme="emerald-light"] .type-decision { color: #1d4ed8; } :root[data-theme="emerald-light"] .type-preference { color: #7e22ce; }
-:root[data-theme="emerald-light"] .type-status { color: #0f766e; } :root[data-theme="emerald-light"] .type-bug { color: #b91c1c; }
-:root[data-theme="emerald-light"] .type-plan { color: #166534; } :root[data-theme="emerald-light"] .type-risk { color: #92400e; }
-:root[data-theme="emerald-light"] .type-research { color: #155e75; } :root[data-theme="emerald-light"] .type-policy { color: #854d0e; }
-:root[data-theme="emerald-light"] .type-map { color: #9a3412; } :root[data-theme="emerald-light"] .type-runbook { color: #be185d; }
-:root[data-theme="emerald-light"] .type-brief { color: #4338ca; } :root[data-theme="emerald-light"] .type-custom { color: #52525b; }
+/* Emerald Enterprise Light: the same hues, dark enough for 4.5:1 on its surfaces, and on a white document pane. */
+:root[data-theme="emerald-light"] .type-knowledge, [data-paper] .type-knowledge, :root[data-theme="emerald-light"] .type-context, [data-paper] .type-context { color: #475569; }
+:root[data-theme="emerald-light"] .type-decision, [data-paper] .type-decision { color: #1d4ed8; } :root[data-theme="emerald-light"] .type-preference, [data-paper] .type-preference { color: #7e22ce; }
+:root[data-theme="emerald-light"] .type-status, [data-paper] .type-status { color: #0f766e; } :root[data-theme="emerald-light"] .type-bug, [data-paper] .type-bug { color: #b91c1c; }
+:root[data-theme="emerald-light"] .type-plan, [data-paper] .type-plan { color: #166534; } :root[data-theme="emerald-light"] .type-risk, [data-paper] .type-risk { color: #92400e; }
+:root[data-theme="emerald-light"] .type-research, [data-paper] .type-research { color: #155e75; } :root[data-theme="emerald-light"] .type-policy, [data-paper] .type-policy { color: #854d0e; }
+:root[data-theme="emerald-light"] .type-map, [data-paper] .type-map { color: #9a3412; } :root[data-theme="emerald-light"] .type-runbook, [data-paper] .type-runbook { color: #be185d; }
+:root[data-theme="emerald-light"] .type-brief, [data-paper] .type-brief { color: #4338ca; } :root[data-theme="emerald-light"] .type-custom, [data-paper] .type-custom { color: #52525b; }
 .status-archived, .status-superseded, .status-resolved, .status-retired, .status-cancelled { color: var(--muted); }
 .status-running { color: var(--running); }
 .status-failed { color: var(--error); }
@@ -1374,8 +1378,8 @@ sup.wiki-cite .removed { color: var(--muted); text-decoration: line-through; }
 /* ---- Executive ---- */
 .exec .split-main { display: flex; flex-direction: column; gap: 1.3rem; }
 .exec-form { display: flex; flex-direction: column; gap: .7rem; min-width: 0; }
-.exec textarea, .modal .exec-capture-text, .exec-item textarea { background: var(--bg-input); border: 1px solid var(--border-strong); border-radius: .45rem; padding: .4rem .55rem; resize: vertical; }
-.exec textarea:focus, .modal .exec-capture-text:focus, .exec-item textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.exec textarea, .modal .exec-capture-text, .modal .exec-form textarea, .exec-item textarea { background: var(--bg-input); border: 1px solid var(--border-strong); border-radius: .45rem; padding: .4rem .55rem; resize: vertical; }
+.exec textarea:focus, .modal .exec-capture-text:focus, .modal .exec-form textarea:focus, .exec-item textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .exec-row { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem; min-width: 0; }
 .exec-row .field { margin: 0; }
 .exec-capture-text { width: 100%; min-height: 14rem; font-family: inherit; }
@@ -1510,7 +1514,8 @@ button.icon { border: none; padding: .25rem; }
   --pal-purple-fg: #cba4ff; --pal-purple-bg: #452b6c;
   --pal-pink-fg: #ff9fcd; --pal-pink-bg: #5d2643;
 }
-:root[data-theme="emerald-light"] {
+:root[data-theme="emerald-light"],
+[data-paper] {
   --pal-gray-fg: #4f5a68; --pal-gray-bg: #e3e6ea;
   --pal-red-fg: #b42318; --pal-red-bg: #fde3e0;
   --pal-orange-fg: #b54708; --pal-orange-bg: #ffe8d0;

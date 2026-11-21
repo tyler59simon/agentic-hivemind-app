@@ -1,7 +1,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { isValidElement, useEffect, useState, type MouseEvent, type ReactNode } from "react";
+import { isValidElement, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import type { Components } from "react-markdown";
-import { useTheme } from "../lib/theme";
+import { documentIsDark, onDocumentLook } from "../lib/paper";
 
 /** The diagram source when a Markdown `pre` holds one ```mermaid code block, else null. */
 export function mermaidSource(children: ReactNode): string | null {
@@ -58,13 +58,22 @@ export function diagramClick(e: Event) {
 /** A Mermaid diagram drawn as SVG. The mermaid package loads on first use, so it stays out of the main bundle.
  *  Until it has drawn, and when it cannot be drawn, the source shows as a code block. */
 export function Mermaid({ source }: { source: string }) {
-  const dark = useTheme() !== "emerald-light";
+  // Dark or light follows the document the diagram is in (a white pane is light under any theme), so the answer waits for
+  // the element to be in the page; nothing is drawn before it.
+  const root = useRef<HTMLElement | null>(null);
+  const mark = (el: HTMLElement | null) => { root.current = el; };
+  const [dark, setDark] = useState<boolean | null>(null);
+  useLayoutEffect(() => {
+    const sync = () => setDark(documentIsDark(root.current));
+    sync();
+    return onDocumentLook(sync);
+  }, []);
   const skip = skipReason(source);
   // Each result remembers what it was drawn from, so a changed source never shows the previous picture.
   const [drawn, setDrawn] = useState<{ key: string; svg: string | null }>({ key: "", svg: null });
   const key = `${dark}:${source}`;
   useEffect(() => {
-    if (skip) return;
+    if (skip || dark === null) return;
     let live = true;
     drawMermaid(source, dark)
       .then((svg) => { if (live) setDrawn({ key, svg }); })
@@ -73,12 +82,12 @@ export function Mermaid({ source }: { source: string }) {
   }, [key, skip]); // eslint-disable-line react-hooks/exhaustive-deps
   const current = drawn.key === key ? drawn : null;
   if (!skip && current?.svg) {
-    return <div className="mermaid-diagram" onClickCapture={onDiagramClick} dangerouslySetInnerHTML={{ __html: current.svg }} />;
+    return <div className="mermaid-diagram" ref={mark} onClickCapture={onDiagramClick} dangerouslySetInnerHTML={{ __html: current.svg }} />;
   }
   const note = skip ?? (current ? "Diagram did not render." : null);
   return (
     <>
-      <pre><code className="language-mermaid">{source}</code></pre>
+      <pre ref={mark}><code className="language-mermaid">{source}</code></pre>
       {note && <p className="muted">{note}</p>}
     </>
   );

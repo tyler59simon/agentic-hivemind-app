@@ -6,9 +6,11 @@ import "@fontsource-variable/jetbrains-mono";
 import App from "./App";
 import "./App.css";
 import { QuickCapture } from "./features/capture/QuickCapture";
+import { initPaperDefault } from "./lib/paper";
 import { initTheme } from "./lib/theme";
 
 initTheme();
+initPaperDefault();
 
 const client = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1, staleTime: 30_000 } },

@@ -12,7 +12,7 @@ import { richContext, type RichContext } from "./context";
 import { richInline, richLinks } from "./inline";
 import { richSyntax } from "./syntax";
 
-export { RICH_LIMIT, richRefresh, type RichContext } from "./context";
+export { RICH_LIMIT, richDark, richLook, richRefresh, type RichContext } from "./context";
 export { dropPictures } from "./attach";
 export { slashSource } from "./slash";
 

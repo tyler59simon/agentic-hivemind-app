@@ -19,6 +19,7 @@ export interface Tab {
   file?: FileRef;         // file tabs: a page of a folder notebook, or a loose file (notebook "@<grant>")
   mode?: Mode;            // note and file tabs
   title?: string;         // last known title, for the tab strip
+  paper?: boolean;        // true: white paper, false: the theme's colours; undefined follows the setting (documents only)
   init?: { title?: string; type?: NoteType; domain?: string; tags?: string[] }; // new-note tabs
 }
 export interface Pane { id: string; tabs: Tab[]; active: string | null }
@@ -203,7 +204,8 @@ export function notesOnly(stored: { panes?: Pane[]; focused?: string; panel?: st
 export function knownKinds(stored: Partial<WorkspaceState> | undefined): Partial<WorkspaceState> {
   if (!stored?.panes) return stored ?? {};
   const panes = stored.panes.map((p) => {
-    const tabs = p.tabs.filter((t) => KINDS.includes(t.kind) && (t.kind !== "file" || !!t.file));
+    const tabs = p.tabs.filter((t) => KINDS.includes(t.kind) && (t.kind !== "file" || !!t.file))
+      .map((t) => (t.paper === undefined || typeof t.paper === "boolean" ? t : { ...t, paper: undefined }));
     return { ...p, tabs, active: tabs.some((t) => t.id === p.active) ? p.active : tabs[0]?.id ?? null };
   });
   return { ...stored, panes };

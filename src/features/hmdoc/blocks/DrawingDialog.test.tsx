@@ -73,7 +73,7 @@ async function mount(s: ReturnType<typeof setup>, existing: { scene: string; pre
   // The editor and the scene load asynchronously.
   await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 }
-const button = (text: string) => [...el.querySelectorAll("button")].find((b) => b.textContent === text) as HTMLButtonElement | undefined;
+const button = (text: string) => [...document.querySelectorAll("button")].find((b) => b.textContent === text) as HTMLButtonElement | undefined;
 const click = async (b: Element | undefined) => { await act(async () => { (b as HTMLElement).click(); await new Promise((r) => setTimeout(r, 0)); }); };
 
 describe("what Excalidraw is given", () => {

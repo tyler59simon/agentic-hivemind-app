@@ -1,6 +1,7 @@
 // Per-device conveniences kept in localStorage (shared by the main and capture windows).
 import type { Mode } from "../workspace/store";
 import type { Theme } from "./theme";
+import type { PaperDefault } from "./paper";
 
 const get = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };
 const set = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* not kept */ } };
@@ -20,4 +21,7 @@ export const prefs = {
     return saved === "emerald" || saved === "emerald-light" ? saved : "purple";
   },
   setTheme: (theme: Theme) => set("hivemind.theme", theme),
+  paperKey: "hivemind.documentBackground",
+  paper: (): PaperDefault => (get("hivemind.documentBackground") === "white" ? "white" : "theme"),
+  setPaper: (paper: PaperDefault) => set("hivemind.documentBackground", paper),
 };

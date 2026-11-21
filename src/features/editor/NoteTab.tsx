@@ -4,6 +4,7 @@ import { useState } from "react";
 import { classify } from "../../lib/errors";
 import { usePinEnabled, useRuleEnabled, useViewsEnabled } from "../../lib/connection";
 import { confirm, ruleAllowed, setPin, setRule } from "../../lib/lm";
+import { useWhitePaper } from "../../lib/paper";
 import { recordOperation } from "../../lib/oplog";
 import { startSession } from "../../store";
 import { toast } from "../../ui/toast";
@@ -25,6 +26,7 @@ export function NoteTab({ tab }: { tab: Tab }) {
   const client = useQueryClient();
   const updateTab = useWorkspace((s) => s.updateTab);
   const dirty = useWorkspace((s) => !!s.dirty[tab.id]);
+  const white = useWhitePaper(tab);
   const note = useQuery(noteQuery(refId));
   // The editor draws its title field and Save button here, where the reading view has the title.
   const [head, setHead] = useState<HTMLDivElement | null>(null);
@@ -96,7 +98,7 @@ export function NoteTab({ tab }: { tab: Tab }) {
             </button>
           )}
           {viewsOn && n && !editing && <DashboardToggle refId={refId} title={n.title} />}
-          <NoteMenu refId={refId} />
+          <NoteMenu refId={refId} paper={{ white, flip: () => updateTab(tab.id, { paper: !white }) }} />
         </div>
         {editing ? <div ref={setHead} /> : n && (
           <>
