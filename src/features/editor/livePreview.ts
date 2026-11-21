@@ -4,6 +4,8 @@ import { syntaxTree } from "@codemirror/language";
 import type { EditorState, Range } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
 import { wikilinks } from "../../lib/note";
+import { richContext } from "./rich/context";
+import { isPicture } from "./rich/parse";
 
 const hide = Decoration.replace({});
 
@@ -100,9 +102,12 @@ function build(view: EditorView): DecorationSet {
     });
     // [[links]] are not Markdown syntax, so they are found by the same pattern LM uses.
     const text = state.sliceDoc(from, to);
+    // The rich page editor draws `![[picture.png]]` itself (NS-3A).
+    const rich = state.facet(richContext) !== null;
     for (const link of wikilinks(text)) {
       const a = from + link.from, b = from + link.to;
       if (CODE.has(tree.resolveInner(a, 1).name)) continue;
+      if (rich && text[link.from - 1] === "!" && isPicture(link.target)) continue;
       if (touches(a, b)) { deco.push(Decoration.mark({ class: "cm-wikilink-source" }).range(a, b)); continue; }
       const inner = text.slice(link.from + 2, link.to - 2);
       const pipe = inner.indexOf("|");

@@ -428,6 +428,69 @@ pub fn asset_base(state: State<'_, AppState>, notebook: String, path: String) ->
     Ok(crate::assets::base_url(&state.assets.grant(&root)))
 }
 
+/// A picture pasted into a page (NS-3A). The bytes are the raw request body; the notebook, the page, the picture's name
+/// and the bridge generation come as percent-encoded headers. Returns the attachment's path from the notebook's root.
+#[tauri::command]
+pub async fn file_attach_bytes(state: State<'_, AppState>, request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let header = |key: &str| {
+        let value = request.headers().get(key).and_then(|v| v.to_str().ok());
+        value.and_then(crate::assets::decode).ok_or_else(|| format!("The picture came without its {key}"))
+    };
+    let (notebook, page, name) = (header("notebook")?, header("page")?, header("name")?);
+    let generation = request.headers().get("generation").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok());
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("The picture came without its bytes".into()) };
+    crate::attach::check_size(bytes.len() as u64)?;
+    attach_picture(&state, notebook, page, name, bytes.clone(), generation).await
+}
+
+/// A picture dropped on a page (NS-3A): the file at `index` of the drop `token`, attached like a pasted one.
+#[tauri::command]
+pub async fn file_attach_dropped(state: State<'_, AppState>, token: String, index: usize, notebook: String, page: String, generation: Option<u64>) -> Result<String, String> {
+    let file = state.dropped_files.file(&token, index)?;
+    let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    crate::attach::clean_name(&name)?;
+    let shown = name.clone();
+    let bytes = blocking(move || {
+        let name = shown;
+        let meta = std::fs::symlink_metadata(&file).map_err(|e| format!("{name} cannot be read: {e}"))?;
+        if !meta.is_file() {
+            return Err(format!("{name} is not a file Hivemind attaches"));
+        }
+        crate::attach::check_size(meta.len())?;
+        let bytes = std::fs::read(&file).map_err(|e| format!("{name} cannot be read: {e}"))?;
+        crate::attach::check_size(bytes.len() as u64)?;
+        Ok(bytes)
+    })
+    .await?;
+    attach_picture(&state, notebook, page, name, bytes, generation).await
+}
+
+/// Save a picture as an attachment of `page`: through `doc attach` for a Living Memory notebook, or as a new file in a
+/// folder notebook's attachments folder (`attach::folder_for`), never replacing a file. A loose file takes none.
+async fn attach_picture(state: &AppState, notebook: String, page: String, name: String, bytes: Vec<u8>, generation: Option<u64>) -> Result<String, String> {
+    let name = crate::attach::clean_name(&name)?;
+    if crate::lmdoc::parse(&notebook).is_some() {
+        let (bridge, staging) = (state.bridge.clone(), state.lm_staging.clone());
+        return blocking(move || crate::lmdoc::attach_bytes(&bridge, generation, &staging, &notebook, &name, &bytes)).await;
+    }
+    let (root, protected) = root_of(state, &notebook)?;
+    visible(&page)?;
+    let fallback = meta_fallback(state, &notebook);
+    blocking(move || {
+        let meta = sidecar::read(&root, &fallback);
+        let rel = crate::attach::folder_for(meta.get("attachments").and_then(Value::as_str), &page)?;
+        let dir = if rel.is_empty() { root.clone() } else { inside(&root, &protected, &rel, true)? };
+        std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create the attachments folder {rel}: {e}"))?;
+        // Checked again once it exists: a link put in its place meanwhile is refused before anything is written.
+        if !rel.is_empty() {
+            inside(&root, &protected, &rel, true)?;
+        }
+        let used = crate::attach::write_unique(&dir, &name, &bytes)?;
+        Ok(if rel.is_empty() { used } else { format!("{rel}/{used}") })
+    })
+    .await
+}
+
 /// How long a dropped folder can still be added as a notebook.
 const DROP_PATIENCE: std::time::Duration = std::time::Duration::from_secs(120);
 

@@ -9,7 +9,7 @@ const props = (over: Partial<CodeEditorProps> = {}): CodeEditorProps => ({
   onChange: () => {}, onSave: () => {}, titles: () => [], onOpenLink: () => {}, ...over,
 });
 const stateOf = (p: CodeEditorProps) => {
-  const sw = { preview: new Compartment(), readOnly: new Compartment(), gutter: new Compartment() };
+  const sw = { preview: new Compartment(), readOnly: new Compartment(), gutter: new Compartment(), rich: new Compartment() };
   return EditorState.create({ doc: p.doc, extensions: editorExtensions(p, { current: p }, sw) });
 };
 const wraps = (s: EditorState) => s.facet(EditorView.contentAttributes).some((a) => typeof a === "object" && String(a.class ?? "").includes("cm-lineWrapping"));

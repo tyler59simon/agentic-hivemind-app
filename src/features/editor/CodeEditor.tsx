@@ -6,8 +6,12 @@ import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { Annotation, Compartment, EditorState, Transaction, type Extension, type TransactionSpec } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, keymap, lineNumbers, placeholder } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
-import { useEffect, useRef, type MutableRefObject } from "react";
+import { useEffect, useMemo, useRef, type MutableRefObject } from "react";
+import { registerDropTarget } from "../notes/drops";
 import { livePreview } from "./livePreview";
+import { dropPictures, RICH_LIMIT, richEditing, richLanguage, richPreview, richRefresh, slashSource, type RichContext } from "./rich";
+import { richContext as richContextFacet } from "./rich/context";
+import { Toolbar } from "./toolbar";
 
 const style = HighlightStyle.define([
   { tag: t.heading1, fontSize: "1.55em", fontWeight: "700" },
@@ -68,10 +72,15 @@ export interface CodeEditorProps {
   onOpenLink: (target: string, split: boolean) => void;
   reveal?: { line: number; at: number } | null;
   placeholder?: string;
+  /** A notebook page's rich editing (NS-3A): toolbar, slash menu, pasted and dropped pictures, and in Live the
+   *  rendered blocks. Read through `latest`, so the page may pass a new object on every render. Memory notes pass none. */
+  rich?: RichContext;
+  /** Changes when what the rich view shows from outside changed (the picture grant, the page list): it redraws. */
+  richStamp?: unknown;
 }
 
 /** The pieces a caller can switch after the editor exists. */
-export interface Switches { preview: Compartment; readOnly: Compartment; gutter: Compartment }
+export interface Switches { preview: Compartment; readOnly: Compartment; gutter: Compartment; rich: Compartment }
 
 /** Marks a change that came from the document store (another pane), so it is not reported back as an edit. */
 const fromStore = Annotation.define<boolean>();
@@ -93,18 +102,36 @@ export function followSpec(current: string, next: string): TransactionSpec | nul
 export const isOwnEdit = (tr: Transaction) => tr.docChanged && !tr.annotation(fromStore);
 
 const readOnlyExt = (on: boolean): Extension => (on ? [EditorState.readOnly.of(true)] : []);
+/** Live rendering of rich blocks: a page in Live under the size limit. */
+const richOn = (p: CodeEditorProps) => !!p.rich && p.live && p.language === "markdown" && p.doc.length <= RICH_LIMIT;
+
+/** The page's rich context, read from the latest props at the time of each call. */
+function latestRich(latest: MutableRefObject<CodeEditorProps>): RichContext {
+  const rich = () => latest.current.rich;
+  return {
+    pictureUrl: (src, wiki) => rich()?.pictureUrl(src, wiki) ?? null,
+    readEmbed: (target) => rich()?.readEmbed(target) ?? Promise.resolve(null),
+    renderEmbed: (el, page, target) => rich()?.renderEmbed(el, page, target) ?? (() => {}),
+    openPage: (target, split) => rich()?.openPage(target, split),
+    openHref: (href, split) => rich()?.openHref(href, split),
+    get attach() { return rich()?.attach; },
+    get attachDropped() { return rich()?.attachDropped; },
+    fail: (message) => rich()?.fail(message),
+  };
+}
 const gutterExt = (on: boolean): Extension => (on ? [lineNumbers(), highlightActiveLine()] : []);
 
 /** Everything the editor is made of. For a note (markdown, not read-only, no line numbers) this is the same list, in
  * the same order, as the note editor has always had. */
 export function editorExtensions(props: CodeEditorProps, latest: MutableRefObject<CodeEditorProps>, sw: Switches): Extension[] {
+  const rich = props.rich && props.language === "markdown" ? latestRich(latest) : null;
   const markdownOnly = props.language === "markdown"
     ? [
       EditorView.lineWrapping,
-      markdown({ base: markdownLanguage }),
+      rich ? richLanguage() : markdown({ base: markdownLanguage }),
       syntaxHighlighting(style),
       highlightSelectionMatches(),
-      autocompletion({ override: [wikilinkSource(() => latest.current.titles())], icons: false }),
+      autocompletion({ override: [wikilinkSource(() => latest.current.titles()), ...(rich ? [slashSource] : [])], icons: false }),
     ]
     : [highlightSelectionMatches()];
   return [
@@ -116,6 +143,7 @@ export function editorExtensions(props: CodeEditorProps, latest: MutableRefObjec
       ...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab,
     ]),
     sw.preview.of(props.live && props.language === "markdown" ? livePreview : []),
+    ...(rich ? [...richEditing(rich), sw.rich.of(richOn(props) ? richPreview : [])] : []),
     ...(props.placeholder ? [placeholder(props.placeholder)] : []),
     theme,
     sw.readOnly.of(readOnlyExt(props.readOnly)),
@@ -137,7 +165,7 @@ export function editorExtensions(props: CodeEditorProps, latest: MutableRefObjec
 export function CodeEditor(props: CodeEditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
-  const sw = useRef<Switches>({ preview: new Compartment(), readOnly: new Compartment(), gutter: new Compartment() });
+  const sw = useRef<Switches>({ preview: new Compartment(), readOnly: new Compartment(), gutter: new Compartment(), rich: new Compartment() });
   const latest = useRef(props);
   latest.current = props;
 
@@ -147,7 +175,10 @@ export function CodeEditor(props: CodeEditorProps) {
       state: EditorState.create({ doc: props.doc, extensions: editorExtensions(props, latest, sw.current) }),
     });
     view.current = v;
-    return () => { v.destroy(); view.current = null; };
+    // Pictures dropped on a page are attached where they land (NS-3A).
+    const ctx = v.state.facet(richContextFacet);
+    const unregister = ctx ? registerDropTarget(v.dom, async (drop) => dropPictures(v, ctx, drop)) : () => {};
+    return () => { unregister(); v.destroy(); view.current = null; };
     // The editor is created once; later prop changes flow through the effects below.
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -158,6 +189,17 @@ export function CodeEditor(props: CodeEditorProps) {
   useEffect(() => {
     view.current?.dispatch({ effects: sw.current.readOnly.reconfigure(readOnlyExt(props.readOnly)) });
   }, [props.readOnly]);
+
+  // The rich view is set up only for a page that has it from the start; past the size limit Live falls back to the
+  // plain preview, and comes back when the page is short enough again.
+  const rendered = richOn(props);
+  useEffect(() => {
+    if (props.rich) view.current?.dispatch({ effects: sw.current.rich.reconfigure(rendered ? richPreview : []) });
+  }, [rendered]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (props.rich) view.current?.dispatch({ effects: richRefresh.of(null) });
+  }, [props.richStamp]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     view.current?.dispatch({ effects: sw.current.gutter.reconfigure(gutterExt(props.lineNumbers)) });
@@ -186,5 +228,13 @@ export function CodeEditor(props: CodeEditorProps) {
     v.focus();
   }, [props.reveal]);
 
-  return <div className={props.language === "markdown" ? "md-editor" : "md-editor text-editor"} ref={host} />;
+  const toolbarRich = useMemo(() => latestRich(latest), []);
+  const editor = <div className={props.language === "markdown" ? "md-editor" : "md-editor text-editor"} ref={host} />;
+  if (!props.rich || props.language !== "markdown") return editor;
+  return (
+    <>
+      <Toolbar view={() => view.current} rich={toolbarRich} readOnly={props.readOnly} />
+      {editor}
+    </>
+  );
 }

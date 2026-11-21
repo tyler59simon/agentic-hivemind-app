@@ -83,7 +83,7 @@ fn content_type(ext: &str) -> Option<&'static str> {
 }
 
 /// Percent-decode once. Invalid escapes or bytes that are not UTF-8 refuse the request.
-fn decode(path: &str) -> Option<String> {
+pub(crate) fn decode(path: &str) -> Option<String> {
     let bytes = path.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;

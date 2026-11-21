@@ -1,6 +1,8 @@
 // Reads and writes of notebook pages, by container (NS-2C): a Living Memory notebook (`lm:<domain>:<notebook>`) goes
 // through the `doc` commands, a folder notebook or a loose file through Rust's file commands. The document store, the
 // tree and the page actions call these, so they work the same for both kinds.
+import { invoke } from "@tauri-apps/api/core";
+import { bridgeGeneration } from "../lib/lm";
 import * as files from "../lib/notebooks";
 import type { FileFormat, Stamp } from "../lib/notebooks";
 import * as lmdoc from "./adapters/lmdoc";
@@ -45,3 +47,16 @@ export const treeQuery = (id: string) => ({
   queryKey: ["notebook-tree", id],
   queryFn: () => { const lm = lmdoc.parseLm(id); return lm ? lmdoc.pageTree(lm) : files.notebookTree(id); },
 });
+
+/** Save a picture as an attachment of a notebook page (NS-3A); resolves to its path from the notebook's root. The
+ *  bytes go as the raw request body, the names as percent-encoded headers. */
+export const attachBytes = (notebook: string, page: string, name: string, bytes: Uint8Array) => {
+  const generation = bridgeGeneration();
+  const headers: Record<string, string> = { notebook: encodeURIComponent(notebook), page: encodeURIComponent(page), name: encodeURIComponent(name) };
+  if (generation !== undefined) headers.generation = String(generation);
+  return invoke<string>("file_attach_bytes", bytes, { headers });
+};
+
+/** Attach the picture at `index` of a drop the same way. */
+export const attachDropped = (token: string, index: number, notebook: string, page: string) =>
+  invoke<string>("file_attach_dropped", { token, index, notebook, page, generation: bridgeGeneration() ?? null });

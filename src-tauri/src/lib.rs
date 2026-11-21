@@ -8,6 +8,7 @@ mod conductor;
 mod drafts;
 mod executive;
 mod assets;
+mod attach;
 mod files;
 mod opens;
 mod folders;
@@ -76,6 +77,7 @@ struct AppState {
     assets: assets::AssetGrants,
     /// Folders dropped on the window, by token, for "Add as a notebook".
     dropped_folders: Mutex<Vec<(String, PathBuf, std::time::Instant)>>,
+    dropped_files: opens::DroppedFiles,
     /// Large page bodies on their way to Living Memory (`lm_body`, NS-2C).
     lm_staging: PathBuf,
 }
@@ -1883,6 +1885,7 @@ pub fn run() {
                 grants: opens::Grants::new(app.path().app_data_dir()?.join("open-files.json")),
                 assets: assets::AssetGrants::default(),
                 dropped_folders: Mutex::new(Vec::new()),
+                dropped_files: opens::DroppedFiles::default(),
                 lm_staging: app.path().app_data_dir()?.join("lm-staging"),
             });
             lmdoc::clear_staging(&app.state::<AppState>().lm_staging);
@@ -1914,10 +1917,10 @@ pub fn run() {
         })
         // The hidden capture window must not keep the app alive once the main window is really closed.
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, position }) = event
                 && window.label() == "main"
             {
-                opens::dropped(window.app_handle(), paths);
+                opens::dropped(window.app_handle(), paths, (position.x, position.y));
             }
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
                 window.app_handle().exit(0);
@@ -1947,7 +1950,7 @@ pub fn run() {
             system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export, wiki_agent_build, wiki_agent_cancel,
             studio::notebooks_list, studio::notebook_add, studio::notebook_remove, studio::notebook_rename, studio::notebook_tree, studio::notebook_meta_get,
             studio::notebook_meta_set, studio::file_read, studio::file_save, studio::file_create, studio::file_mkdir, studio::file_rename, studio::file_delete,
-            studio::file_reveal, studio::asset_base, studio::notebook_add_dropped, studio::notebook_reach_record, lm_body, lmdoc_move, lmdoc_attach, studio::lmdoc_open_asset, opens::open_dialog, opens::open_pending, opens::open_recent,
+            studio::file_reveal, studio::asset_base, studio::notebook_add_dropped, studio::file_attach_bytes, studio::file_attach_dropped, opens::open_dropped, studio::notebook_reach_record, lm_body, lmdoc_move, lmdoc_attach, studio::lmdoc_open_asset, opens::open_dialog, opens::open_pending, opens::open_recent,
             opens::open_forget, opens::file_save_as
         ])
         .build(context)

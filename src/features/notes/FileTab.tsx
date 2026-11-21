@@ -21,6 +21,8 @@ import { movePath, openPage, renamed, saveCopy, trashPath } from "./actions";
 import { DeleteConfirm } from "./DeleteConfirm";
 import { forgetRecent } from "./opening";
 import { PageView } from "./PageView";
+import { useRichPage } from "./richPage";
+import { RICH_LIMIT } from "../editor/rich/context";
 
 const MODES: { id: Mode; label: string }[] = [{ id: "reading", label: "Reading" }, { id: "live", label: "Live" }, { id: "source", label: "Source" }];
 
@@ -254,10 +256,13 @@ export function FileTab({ tab }: { tab: Tab }) {
   };
   /** Copy a file the user picks into the notebook's attachments and link it at the end of the page (NS-2C). A page that
    *  cannot take the link is said before anything is copied (Codex review of 32fee20, U2). */
-  const takesLink = () => {
+  const takesLink = useCallback(() => {
     const d = useDocuments.getState().docs[key];
     return !!d && d.status !== "readOnly" && d.status !== "loading" && d.status !== "error" && !arriving && inOwnStore(key);
-  };
+  }, [key, arriving]);
+  // Rich editing of a Markdown page (NS-3A); a page of another store shows and attaches nothing from this one.
+  const rich = useRichPage({ ref, files: pages, base: own ? pictures.data : undefined, lm: !!lm, loose, follow, takesLink });
+  const richStamp = useMemo(() => ({}), [pictures.data, pages]);
   const attach = () => {
     if (!takesLink()) { toast("This page cannot take a link now, so nothing was attached.", "warn"); return; }
     return attachFile(ref.notebook).then((asset) => { if (asset) linkAsset(asset); }, (e) => toast(classify(e).message, "error"));
@@ -336,13 +341,18 @@ export function FileTab({ tab }: { tab: Tab }) {
         {markdown && <Tabs items={MODES} value={mode} label="Page view" onChange={(v) => updateTab(tab.id, { mode: v })} />}
       </header>
       <Banners doc={doc} docKey={key} onMerge={merge} onRecreate={recreate} />
+      {markdown && mode === "live" && doc.text.length > RICH_LIMIT && (
+        <div className="banner note-banner">This page is over 1 MB, so Live shows plain Markdown styling without tables, pictures or diagrams.</div>
+      )}
       {mode === "reading"
-        ? <PageView text={doc.text} tabId={tab.id} onLink={follow} onFile={lm ? openLinked : undefined} pictures={{ base: pictures.data, folder: loose ? "" : folderOf(ref.path) }} />
+        ? <PageView text={doc.text} tabId={tab.id} onLink={follow} onFile={lm ? openLinked : undefined}
+          pictures={{ base: own ? pictures.data : undefined, folder: loose ? "" : folderOf(ref.path), files: pages }} embed={loose ? undefined : rich.readEmbed} />
         : (
           <div className="note file-editor">
             <CodeEditor key={key} doc={doc.text} docVersion={doc.version} follow language={markdown ? "markdown" : "text"} live={mode === "live"}
               readOnly={doc.status === "readOnly" || arriving} lineNumbers={!markdown} onChange={(text) => edit(key, text)} onSave={doSave}
-              titles={titles} onOpenLink={follow} reveal={reveal} placeholder={markdown ? "Start writing…" : undefined} />
+              titles={titles} onOpenLink={follow} reveal={reveal} placeholder={markdown ? "Start writing…" : undefined}
+              rich={markdown ? rich : undefined} richStamp={richStamp} />
           </div>
         )}
       <StatusLine doc={doc} />

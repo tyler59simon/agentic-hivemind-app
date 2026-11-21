@@ -32,3 +32,15 @@ export function relativeTarget(src: string, folder: string): string | null {
   }
   return parts.length ? parts.join("/") : null;
 }
+
+const low = (s: string) => s.toLowerCase();
+
+/** The file `![[name]]` names: the path itself, or else the file of that name in the shallowest folder. */
+export function findFile(name: string, files: string[]): string | null {
+  const want = low(name.replace(/\\/g, "/").replace(/^\/+/, ""));
+  const exact = files.find((f) => low(f) === want);
+  if (exact) return exact;
+  const hits = files.filter((f) => low(f).endsWith(`/${want}`));
+  hits.sort((a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b));
+  return hits[0] ?? null;
+}

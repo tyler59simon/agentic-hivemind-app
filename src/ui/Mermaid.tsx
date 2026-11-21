@@ -25,8 +25,9 @@ export function skipReason(source: string): string | null {
 
 let nextId = 0;
 
-/** Draw off-screen so Mermaid's scratch SVG, which it measures labels in, never lengthens the page. */
-async function draw(id: string, source: string, dark: boolean): Promise<string> {
+/** A diagram's SVG, drawn off-screen so Mermaid's scratch SVG, which it measures labels in, never lengthens the page.
+ *  The page editor's widgets call it too (NS-3A); callers check `skipReason` first. */
+export async function drawMermaid(source: string, dark: boolean, id = `mermaid-${++nextId}`): Promise<string> {
   const { default: mermaid } = await import("mermaid");
   mermaid.initialize({
     startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "default", maxTextSize: MAX_SOURCE,
@@ -42,6 +43,11 @@ async function draw(id: string, source: string, dark: boolean): Promise<string> 
 
 /** A diagram link never navigates the app window: web links open in the system browser, others do nothing. */
 function onDiagramClick(e: MouseEvent<HTMLDivElement>) {
+  diagramClick(e.nativeEvent);
+}
+
+/** The same rule for a diagram drawn outside React. */
+export function diagramClick(e: Event) {
   const link = (e.target as Element).closest("a");
   if (!link) return;
   e.preventDefault();
@@ -60,7 +66,7 @@ export function Mermaid({ source }: { source: string }) {
   useEffect(() => {
     if (skip) return;
     let live = true;
-    draw(`mermaid-${++nextId}`, source, dark)
+    drawMermaid(source, dark)
       .then((svg) => { if (live) setDrawn({ key, svg }); })
       .catch(() => { if (live) setDrawn({ key, svg: null }); });
     return () => { live = false; };

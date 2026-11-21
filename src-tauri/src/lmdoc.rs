@@ -75,11 +75,12 @@ pub fn call_with_body(bridge: &Bridge, generation: Option<u64>, staging: &Path, 
     bridge.call_at(generation, &with_options(argv, &["--body-file".into(), file.0.display().to_string()]), None)
 }
 
-/// Remove staging files an earlier run left behind (it stopped between writing one and the reply).
+/// Remove staging files (page bodies and pictures) an earlier run left behind (it stopped between writing one and the
+/// reply).
 pub fn clear_staging(staging: &Path) {
     let Ok(read) = std::fs::read_dir(staging) else { return };
     for entry in read.flatten() {
-        if entry.path().extension().is_some_and(|e| e == "md") {
+        if entry.path().extension().is_some_and(|e| e == "md" || e == "bin") {
             std::fs::remove_file(entry.path()).ok();
         }
     }
@@ -172,6 +173,22 @@ pub fn move_with_drafts(bridge: &Bridge, generation: Option<u64>, drafts_dir: &P
 pub fn attach(bridge: &Bridge, generation: Option<u64>, container: &str, file: &Path) -> Result<String, String> {
     let (domain, notebook) = parsed(container)?;
     let reply = bridge.call_at(generation, &doc_argv("attach", &["--from-file", &file.display().to_string(), "--include-private"], &[&domain, &notebook]), None)?;
+    if reply.exit_code != 0 {
+        return Err(failure(&reply));
+    }
+    reply.result.get("path").and_then(|p| p.as_str()).map(str::to_string).ok_or_else(|| "Living Memory did not say where it put the file".into())
+}
+
+/// Attach bytes the webview sent (a pasted or dropped picture, NS-3A) under `name`: Living Memory reads them from a
+/// staging file, removed after the reply, and names the asset `<sha8>-<name>`. Returns its path in the notebook.
+pub fn attach_bytes(bridge: &Bridge, generation: Option<u64>, staging: &Path, container: &str, name: &str, bytes: &[u8]) -> Result<String, String> {
+    let (domain, notebook) = parsed(container)?;
+    std::fs::create_dir_all(staging).map_err(|e| format!("Could not create {}: {e}", staging.display()))?;
+    let file = Staged(staging.join(format!("{}.bin", uuid::Uuid::new_v4().simple())));
+    std::fs::write(&file.0, bytes).map_err(|e| format!("Could not stage the picture for Living Memory: {e}"))?;
+    let from = file.0.display().to_string();
+    let argv = doc_argv("attach", &["--from-file", &from, "--name", name, "--include-private"], &[&domain, &notebook]);
+    let reply = bridge.call_at(generation, &argv, None)?;
     if reply.exit_code != 0 {
         return Err(failure(&reply));
     }

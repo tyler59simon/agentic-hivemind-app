@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { classify } from "../../lib/errors";
 import type { FileRef } from "../../documents/keys";
+import { routeDrop, type Dropped } from "./drops";
 import { announceAdded } from "./reach";
 import { addDroppedNotebook, LOOSE, openDialog, openForget, openPending, recentQuery } from "../../lib/opens";
 import { Confirm } from "../../ui/Modal";
@@ -29,9 +30,9 @@ export async function forgetRecent(ref: FileRef, client: { invalidateQueries: (q
   }
 }
 
-/** Files from Explorer and drops on the window open as tabs; a dropped folder is offered as a notebook. The listener
- *  is in place before the queue is first drained, so a file that arrives while the app starts is never missed (phase
- *  1B, U2). Returns the dialog to render. */
+/** Files from Explorer and drops on the window open as tabs (a drop on a page or a terminal is routed first, NS-3A);
+ *  a dropped folder is offered as a notebook. The listener is in place before the queue is first drained, so a file
+ *  that arrives while the app starts is never missed (phase 1B, U2). Returns the dialog to render. */
 export function useOpenRequests() {
   const client = useQueryClient();
   const [offer, setOffer] = useState<{ token: string; name: string } | null>(null);
@@ -48,6 +49,7 @@ export function useOpenRequests() {
     const stops = [
       listen("open-requested", () => void drain()),
       listen<{ token: string; name: string }>("folder-dropped", (e) => setOffer(e.payload)),
+      listen<Dropped>("files-dropped", (e) => void routeDrop(e.payload).catch((err) => toast(classify(err).message, "error"))),
     ];
     // An effect that ended before its listeners were in place (Strict Mode runs effects twice) leaves the queue to the
     // one that follows it.

@@ -285,16 +285,68 @@ struct FolderDropped {
     name: String,
 }
 
+/// How long the files of a drop wait for the webview to say what to do with them.
+const DROP_PATIENCE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// The files of recent drops, by the token the webview got for them (NS-3A). The webview names a file only by its
+/// token and its index in the drop, so it can read or open only what the user dropped.
+#[derive(Default)]
+pub struct DroppedFiles {
+    inner: Mutex<Vec<(String, Vec<PathBuf>, std::time::Instant)>>,
+}
+
+impl DroppedFiles {
+    /// Keep a drop's files; returns its token. Drops older than two minutes go.
+    pub fn keep(&self, files: Vec<PathBuf>) -> String {
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.retain(|(_, _, at)| at.elapsed() < DROP_PATIENCE);
+        inner.push((token.clone(), files, std::time::Instant::now()));
+        token
+    }
+
+    /// The file at `index` of the drop `token`.
+    pub fn file(&self, token: &str, index: usize) -> Result<PathBuf, String> {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let (_, files, _) = inner.iter().find(|(t, _, at)| t == token && at.elapsed() < DROP_PATIENCE).ok_or("Those files were dropped too long ago; drop them again")?;
+        files.get(index).cloned().ok_or_else(|| "That file was not part of the drop".to_string())
+    }
+
+    /// Take the drop's files at `indexes` (each at most once) and forget the drop.
+    pub fn take(&self, token: &str, indexes: &[usize]) -> Result<Vec<PathBuf>, String> {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.retain(|(_, _, at)| at.elapsed() < DROP_PATIENCE);
+        let at = inner.iter().position(|(t, ..)| t == token).ok_or("Those files were dropped too long ago; drop them again")?;
+        let files = inner.remove(at).1;
+        let mut picked: Vec<usize> = indexes.iter().copied().filter(|i| *i < files.len()).collect();
+        picked.sort_unstable();
+        picked.dedup();
+        Ok(picked.into_iter().map(|i| files[i].clone()).collect())
+    }
+}
+
+/// Files dropped on the window, for the webview to route by where they landed (NS-3A). The position is in physical
+/// pixels, as Tauri reports it.
+#[derive(Serialize, Clone)]
+struct FilesDropped {
+    token: String,
+    names: Vec<String>,
+    x: f64,
+    y: f64,
+}
+
 /// Files and folders dropped on the main window, seen here in Rust (Tauri's drop event), so the webview never names a
-/// path itself. Files queue to open like files from Explorer; each folder is offered as a new notebook by a token that
-/// `notebook_add_dropped` accepts for two minutes.
-pub fn dropped(app: &AppHandle, paths: &[PathBuf]) {
+/// path itself. Files are kept under a token and offered to the webview, which attaches pictures dropped on a page,
+/// leaves a drop on a terminal to the terminal, and opens the rest with `open_dropped` (NS-3A). Each folder is offered
+/// as a new notebook by a token that `notebook_add_dropped` accepts for two minutes.
+pub fn dropped(app: &AppHandle, paths: &[PathBuf], position: (f64, f64)) {
     let state = app.state::<AppState>();
     let (folders, found): (Vec<PathBuf>, Vec<PathBuf>) = paths.iter().filter_map(|p| p.canonicalize().ok()).partition(|p| p.is_dir());
     let found: Vec<PathBuf> = found.iter().filter(|p| p.is_file()).map(|p| PathBuf::from(crate::folders::plain(p))).take(MAX_PATHS).collect();
     if !found.is_empty() {
-        state.open_queue.push(None, found);
-        let _ = app.emit("open-requested", ());
+        let names = found.iter().map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).collect();
+        let token = state.dropped_files.keep(found);
+        let _ = app.emit("files-dropped", FilesDropped { token, names, x: position.0, y: position.1 });
     }
     for folder in folders.into_iter().take(4) {
         let token = uuid::Uuid::new_v4().simple().to_string();
@@ -304,9 +356,33 @@ pub fn dropped(app: &AppHandle, paths: &[PathBuf]) {
     }
 }
 
+/// Open the files of a drop at `indexes` like files from Explorer: the ones the webview did not attach or leave to a
+/// terminal (NS-3A).
+#[tauri::command]
+pub fn open_dropped(app: AppHandle, state: State<'_, AppState>, token: String, indexes: Vec<usize>) -> Result<(), String> {
+    let files = state.dropped_files.take(&token, &indexes)?;
+    if !files.is_empty() {
+        state.open_queue.push(None, files);
+        let _ = app.emit("open-requested", ());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod prune_tests {
     use super::*;
+
+    #[test]
+    fn a_drop_hands_out_only_its_own_files_once() {   // NS-3A
+        let drops = DroppedFiles::default();
+        let token = drops.keep(vec![PathBuf::from(r"C:/drops/a.png"), PathBuf::from(r"C:/drops/b.txt")]);
+        assert_eq!(drops.file(&token, 1).unwrap(), PathBuf::from(r"C:/drops/b.txt"));
+        assert!(drops.file(&token, 2).is_err(), "an index past the drop names nothing");
+        assert!(drops.file("other", 0).is_err(), "another token names nothing");
+        assert_eq!(drops.take(&token, &[1, 1, 7]).unwrap(), vec![PathBuf::from(r"C:/drops/b.txt")]);
+        assert!(drops.take(&token, &[0]).is_err(), "a drop is opened once");
+        assert!(drops.file(&token, 0).is_err());
+    }
 
     #[test]
     fn knock_paths_touch_nothing_and_keep_only_usable_paths() {   // Codex review of 52051c8, I2
