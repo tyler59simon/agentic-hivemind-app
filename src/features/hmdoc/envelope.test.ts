@@ -68,7 +68,10 @@ describe("opening a file", () => {
     expect(reason(file(list(999_999_999)))).toBeNull();
     expect(reason(file(list(0)))).toBeNull();
     expect(reason(file(list(1_000_000_000)))).toContain('"start"');
-    expect(reason(file(list(-1)))).toContain('"start"');
+    // R2-1: HTML allows a negative start, and a page that took one from a paste must still open.
+    expect(reason(file(list(-3)))).toBeNull();
+    expect(reason(file(list(-1_000_000)))).toBeNull();
+    expect(reason(file(list(-1_000_001)))).toContain('"start"');
   });
 
   it("a document that breaks the schema's structure, or a malformed table, opens read-only", () => {

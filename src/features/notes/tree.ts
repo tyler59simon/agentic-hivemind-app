@@ -43,7 +43,8 @@ export function buildTree(entries: Entry[], meta?: NotebookMeta): Node[] {
     for (const n of here.filter((x) => x.kind === "page")) {
       const key = low(n.name.replace(PAGE, ""));
       const had = pages.get(key);
-      if (!had || (RICH.test(had.name) && !RICH.test(n.name))) pages.set(key, n);
+      // The later page wins between two of a kind, as it always did; a rich page never takes the folder from a Markdown one.
+      if (!had || !(RICH.test(n.name) && !RICH.test(had.name))) pages.set(key, n);
     }
     const out: Node[] = [];
     for (const node of here) {

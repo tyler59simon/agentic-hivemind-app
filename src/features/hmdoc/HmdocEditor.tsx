@@ -1,10 +1,10 @@
 // The editor of a `.hmdoc` page (NS-3C): NS-3B's Rich editor over the rich page's schema. The page is the file's JSON:
 // the editor is built from the document session's text and hands the whole file back after every change, written in the
 // stable key order. Opening a file never writes it: only an edit, or a change to the page's settings, does.
-import { Editor } from "@tiptap/core";
+import { Editor, Extension } from "@tiptap/core";
 import { Placeholder } from "@tiptap/extension-placeholder";
 import type { Node as PMNode } from "@tiptap/pm/model";
-import { EditorState as PMState, Selection } from "@tiptap/pm/state";
+import { EditorState as PMState, Plugin, Selection } from "@tiptap/pm/state";
 import { TableMap } from "@tiptap/pm/tables";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { pastedPictures } from "../editor/rich/attach";
@@ -97,6 +97,9 @@ function Editing(props: HmdocEditorProps & { checked: Valid; own: { current: str
   const last = props.own;
   /** The last state and settings that were written: what a change the page cannot take goes back to. */
   const good = useRef<{ state: PMState; meta: Meta } | null>(null);
+  /** The state just before the latest transaction, kept by a plugin: a refused change goes back to exactly it, so the
+   *  cursor and the selection moves made since the last accepted change stay (R2-3). */
+  const before = useRef<PMState | null>(null);
   const latest = useRef(props);
   latest.current = props;
   const slashKeys = useRef<((key: string) => boolean) | null>(null);
@@ -114,7 +117,7 @@ function Editing(props: HmdocEditorProps & { checked: Valid; own: { current: str
     if (text.length > SIZE_LIMIT && good.current) {
       // A file over the limit would open as read-only JSON, and take Undo with it: the change is not made (R1-11).
       meta.current = good.current.meta;
-      editor.view.updateState(good.current.state);
+      editor.view.updateState(before.current ?? good.current.state);
       setTick((t) => t + 1);
       latest.current.ctx.fail(`A page can hold ${SIZE_LIMIT.toLocaleString("en-US")} characters of text and settings, and this change would go past that, so it was not made.`);
       return;
@@ -177,6 +180,10 @@ function Editing(props: HmdocEditorProps & { checked: Valid; own: { current: str
         Placeholder.configure({ placeholder: "Start writing…", showOnlyCurrent: true }),
         RichInputRules, PendingPictures, slashPlugin(slashKeys),
         richKeys(() => latest.current.onSave()),
+        Extension.create({
+          name: "hmdocBeforeState",
+          addProseMirrorPlugins: () => [new Plugin({ view: () => ({ update: (_view, prev) => { before.current = prev; } }) })],
+        }),
         tableViews(() => meta.current.views ?? {}, {
           // A sorted table is drawn as a copy by an editor of the same kind that cannot be edited (R1-10).
           render: (doc) => {

@@ -68,6 +68,13 @@ describe("pasted HTML", () => {
     expect(verdict(editor)).toBe("ok");
   });
 
+  it("R2-1: a negative list number, which HTML allows, is kept", () => {
+    const editor = make();
+    paste(editor, '<ol start="-3"><li><p>i</p></li></ol>');
+    expect(editor.state.doc.firstChild!.attrs.start).toBe(-3);
+    expect(verdict(editor)).toBe("ok");
+  });
+
   it("good values pass through unchanged", () => {
     const editor = make();
     paste(editor, '<p><span data-text-color="green">a</span></p><table><tr><th data-bg="pink" colspan="1">h</th></tr></table>');

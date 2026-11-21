@@ -365,7 +365,7 @@ describe("new rich page, convert and export", () => {
 });
 
 describe("the tree", () => {
-  const entries = (...paths: string[]) => paths.map((path) => ({ path, kind: /\.(md|hmdoc)$/.test(path) ? "page" as const : "dir" as const, size: 0, mtimeMs: 0 }));
+  const entries = (...paths: string[]) => paths.map((path) => ({ path, kind: /\.(md|markdown|hmdoc)$/.test(path) ? "page" as const : "dir" as const, size: 0, mtimeMs: 0 }));
 
   it("treats Name.hmdoc as a page: titles, subpages, revealing and links", () => {
     expect(isRichDoc("A/Plan.hmdoc")).toBe(true);
@@ -381,6 +381,23 @@ describe("the tree", () => {
     expect(resolvePage("Plan.hmdoc", ref("Other.md"), ["Other.md", "Plan.hmdoc"])).toEqual({ ref: ref("Plan.hmdoc") });
     // A page made by following a missing link is still Markdown.
     expect(resolvePage("New page", ref("Other.md"), ["Other.md"])).toEqual({ missing: "New page.md" });
+  });
+
+  it("R2-4: with Plan.md and Plan.markdown, the subpages stay with Plan.md as before, and revealing one expands it", () => {
+    const list = ["Plan", "Plan.markdown", "Plan.md", "Plan/Sub.md"];
+    for (const order of [list, [...list].reverse()]) {
+      const tree = buildTree(entries(...order));
+      const owner = tree.find((n) => n.children.length > 0)!;
+      expect(owner.name).toBe(order === list ? "Plan.md" : "Plan.markdown");
+    }
+    // As Rust lists them (by lower-case name), Plan.md comes last, so it holds the folder, and ancestors() opens its row.
+    const tree = buildTree(entries(...list));
+    expect(tree.find((n) => n.name === "Plan.md")!.children.map((n) => n.path)).toEqual(["Plan/Sub.md"]);
+    expect(ancestors("Plan/Sub.md")).toContain("plan.md");
+    // A rich page still never takes the folder from a Markdown one, in either order.
+    for (const order of [["Plan.hmdoc", "Plan.markdown", "Plan", "Plan/Sub.md"], ["Plan.markdown", "Plan.hmdoc", "Plan", "Plan/Sub.md"]]) {
+      expect(buildTree(entries(...order)).find((n) => n.children.length > 0)!.name).toBe("Plan.markdown");
+    }
   });
 
   async function menu(path: string, lm?: boolean, paths = ["Note.md", "Plan.hmdoc", "Section"]) {

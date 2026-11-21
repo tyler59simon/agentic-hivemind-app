@@ -15,8 +15,8 @@ const widths = nullOr((v) => Array.isArray(v) && v.every((w) => typeof w === "nu
 /** By `type.attribute`. An attribute with no rule takes any value. */
 export const RULES: Record<string, (v: unknown) => boolean> = {
   "heading.level": int(1, 6),
-  // CommonMark allows up to nine digits in a list number.
-  "orderedList.start": int(0, 999_999_999),
+  // CommonMark allows up to nine digits in a list number; HTML lets `<ol start>` be negative, and earlier pages may hold one.
+  "orderedList.start": int(-1_000_000, 999_999_999),
   "taskItem.checked": flag,
   "textColor.color": isColour,
   "highlight.color": isColour,

@@ -377,6 +377,25 @@ describe("Codex review of 9dda8ae", () => {
     expect(m.changes[m.changes.length - 1]).toBe(text);
   });
 
+  it("R2-3: a refused change leaves the cursor where it was, not where the last accepted change left it", async () => {
+    const ctx = context();
+    const m = await mount(fileOf([p("x".repeat(4_999_000))]), { ctx });
+    const e = () => m.editor();
+    await act(async () => { e().view.dispatch(e().state.tr.insertText("small", 3)); });
+    expect(m.changes).toHaveLength(1);
+    // The cursor moves on with no edit, then a change that cannot be taken is made elsewhere.
+    await act(async () => { e().commands.setTextSelection(1000); });
+    expect(e().state.selection.from).toBe(1000);
+    const before = e().state.doc;
+    await act(async () => { e().view.dispatch(e().state.tr.insertText("y".repeat(2000), 500)); });
+    expect(e().state.doc).toBe(before);
+    expect(ctx.fail).toHaveBeenCalled();
+    expect(e().state.selection.from).toBe(1000);
+    // Undo works as before.
+    await act(async () => { e().commands.undo(); });
+    expect(e().state.doc.textContent.startsWith("xxxsmall")).toBe(false);
+  });
+
   it("R1-12: Markdown pasted as plain text is cleaned like pasted HTML", async () => {
     const sanitise = await import("./sanitise");
     const spy = vi.spyOn(sanitise, "sanitiseSlice");

@@ -148,13 +148,21 @@ class Walk {
       } else if (n.type.name === "mathBlock" || n.type.name === "rawBlock") {
         const text = String(n.attrs.value).trim();
         if (text) lines.push([{ type: "text", text }]);
+      } else if (n.type.name === "table") {
+        // A table in a cell is written once, and what that gives is both the cell's text and what the report counts: its
+        // formulas are values, its merged cells and the rest are counted (R2-2). Each of its cells is a line.
+        for (const row of (this.table(n).content ?? [])) {
+          for (const c of row.content ?? []) {
+            const inline = c.content?.[0]?.content ?? [];
+            if (inline.length) lines.push(inline);
+          }
+        }
       } else {
         // What a block of its own would count, counted here too: the layouts and icons nested in a cell are lost as well
         // (R1-13).
         if (n.type.name === "columns") this.counts.columns++;
         else if (n.type.name === "toggle") this.counts.toggles++;
         else if (n.type.name === "callout" && n.attrs.icon) this.counts.calloutIcons++;
-        else if (n.type.name === "table") this.table(n);
         n.forEach(take);
       }
     };

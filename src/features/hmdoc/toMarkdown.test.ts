@@ -111,6 +111,26 @@ describe("export to Markdown", () => {
     for (const word of ["More", "Hidden", "L", "R", "Hint", "Body"]) expect(out.text).toContain(word);
   });
 
+  it("R2-2: a table nested in a cell is written once: its toggle is counted once and its formula is a value", () => {
+    const toggle = { type: "toggle", attrs: { open: true }, content: [{ type: "toggleSummary", content: [t("More")] }, p(t("Hidden"))] };
+    const inner = { type: "table", attrs: { id: "inner" }, content: [
+      row(cell("tableHeader", [p(t("h"))]), cell("tableHeader", [p(t("v"))])),
+      row(cell("tableCell", [toggle]), cell("tableCell", [p(t("=2+3"))])),
+    ] };
+    const d = doc({ type: "table", attrs: { id: "outer" }, content: [
+      row(cell("tableHeader", [p(t("a"))]), cell("tableHeader", [p(t("b"))])),
+      row(cell("tableCell", [inner]), cell("tableCell", [p(t("x"))])),
+    ] });
+    const out = exportMarkdown(d);
+    expect(counts(out.report).toggles).toBe(1);
+    expect(counts(out.report).formulas).toBe(1);
+    expect(out.text).not.toContain("=2+3");
+    expect(out.text).toMatch(/\b5\b/);
+    for (const word of ["h", "v", "More", "Hidden"]) expect(out.text).toContain(word);
+    // The outer table keeps its shape: header, rule and one row.
+    expect(out.text.split("\n").filter((l) => l.startsWith("|"))).toHaveLength(3);
+  });
+
   it("R1-14: a line break inside a table cell is written as <br>, like the break between paragraphs", () => {
     const d = doc({ type: "table", attrs: { id: "t" }, content: [
       row(cell("tableHeader", [p(t("a"))]), cell("tableHeader", [p(t("b"))])),
