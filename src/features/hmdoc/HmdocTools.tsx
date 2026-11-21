@@ -106,7 +106,7 @@ export function TableViewDialog({ labels, rowSpans, view, onApply, onClose }: {
   };
   return (
     <Modal title="Sort and filter" onClose={onClose}>
-      <p className="muted">These are saved with the page. The rows of the table are never reordered.</p>
+      <p className="muted">Sorting and filtering change only how the table is shown. The rows keep their saved order, and the settings are saved with the page.</p>
       <div className="hm-view-row">
         <span>Sort by</span>
         {columns(sortColumn, setSortColumn, "Sort column")}

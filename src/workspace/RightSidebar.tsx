@@ -3,7 +3,9 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { keyOf, useDocuments } from "../documents/store";
 import { isLoose, recentQuery, recentRef } from "../lib/opens";
 import { useNotebookTitle } from "../features/notes/notebookTitle";
+import { isRichDoc } from "../lib/notebooks";
 import { outline } from "../lib/note";
+import { richOutline } from "../features/hmdoc/outline";
 import { SourceHistory } from "../features/history/HistoryViews";
 import { LinksPanel, LocalGraphPanel } from "../features/links/LinksPanel";
 import { Outline } from "../features/outline/Outline";
@@ -62,7 +64,9 @@ export function PageOutline({ tab }: { tab: Tab }) {
   const current = useDocuments((s) => (tab.file ? s.docs[keyOf(tab.file)]?.text : undefined)) ?? "";
   const text = useSettled(current);
   const revealLine = useWorkspace((s) => s.revealLine);
-  const headings = useMemo(() => outline(text), [text]);
+  // A rich page is JSON, not Markdown: its headings come from its document, and are named by their order (UI-1).
+  const rich = !!tab.file && isRichDoc(tab.file.path);
+  const headings = useMemo(() => (rich ? richOutline(text) : outline(text)), [text, rich]);
   // The list is made once per outline, not on every keystroke that leaves it the same.
   const list = useMemo(() => {
     if (!headings.length) return <p className="muted pad">No headings.</p>;

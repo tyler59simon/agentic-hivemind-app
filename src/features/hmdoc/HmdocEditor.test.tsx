@@ -434,3 +434,62 @@ describe("Codex review of 9dda8ae", () => {
     expect(parsed(m.changes[m.changes.length - 1]).meta).toEqual({ width: "full", cover: "assets/new.png" });
   });
 });
+
+describe("UI pass of NS-3C", () => {
+  const aligned = (views?: Record<string, unknown>) => fileOf([{ type: "table", attrs: { id: "t1", align: ["left", "right", "center"] }, content: [
+    { type: "tableRow", content: [cell("a", "tableHeader"), cell("b", "tableHeader"), cell("c", "tableHeader")] },
+    { type: "tableRow", content: [cell("1"), cell("2"), cell("3")] },
+    { type: "tableRow", content: [cell("0"), cell("9"), cell("8")] },
+  ] }, p("after")], views ? { views } : {});
+
+  it("UI-1: the outline's request moves the cursor to the heading of that order and scrolls to it", async () => {
+    const heading = (text: string) => ({ type: "heading", attrs: { level: 2 }, content: [{ type: "text", text }] });
+    const columns = { type: "columns", content: [{ type: "column", content: [heading("Second")] }, { type: "column", content: [p("x")] }] };
+    const text = fileOf([heading("First"), p("body"), columns, heading("Third")]);
+    const m = await mount(text);
+    const withReveal = async (line: number, at: number) => {
+      await act(async () => root!.render(
+        <HmdocEditor text={text} version={1} readOnly={false} onChange={() => {}} onSave={() => {}} ctx={context()} pictures={[]} invalid={() => null} reveal={{ line, at }} />,
+      ));
+    };
+    const headingAt = (n: number) => { let seen = -1, found = -1; m.editor().state.doc.descendants((node, pos) => { if (node.type.name === "heading" && ++seen === n) found = pos; return found < 0; }); return found; };
+    // jsdom has no scrolling: the heading's element is asked to scroll to the middle, clear of the sticky toolbar.
+    const scrolled: [Element, unknown][] = [];
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+    Element.prototype.scrollIntoView = function (this: Element, arg?: unknown) { scrolled.push([this, arg]); };
+    try {
+      await withReveal(2, 1);
+      expect(m.editor().state.selection.from).toBe(headingAt(2) + 1);
+      expect(scrolled).toEqual([[m.editor().view.nodeDOM(headingAt(2)), { block: "center" }]]);
+      scrolled.length = 0;
+      await withReveal(1, 2);
+      expect(m.editor().state.selection.from).toBe(headingAt(1) + 1);
+      expect(scrolled).toEqual([[m.editor().view.nodeDOM(headingAt(1)), { block: "center" }]]);
+    } finally {
+      if (original) Object.defineProperty(Element.prototype, "scrollIntoView", original); else delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+    expect(m.editor().state.selection.$from.parent.textContent).toBe("Second");
+    expect(m.changes).toEqual([]);
+  });
+
+  it("UI-3: a table draws each column's alignment, and so does its sorted copy", async () => {
+    const m = await mount(aligned());
+    const cells = (root: ParentNode, row: number) => [...root.querySelectorAll("tr")[row].children].map((c) => c.className);
+    expect(cells(m.el, 1).map((c) => /hm-align-(\w+)/.exec(c)?.[1])).toEqual(["left", "right", "center"]);
+    expect(cells(m.el, 0).map((c) => /hm-align-(\w+)/.exec(c)?.[1])).toEqual(["left", "right", "center"]);
+    await act(async () => root!.unmount());
+    document.body.innerHTML = "";
+    const sorted = await mount(aligned({ t1: { sort: { column: 1, dir: "asc" } } }));
+    const copy = sorted.el.querySelector(".hm-sorted")!;
+    expect([...copy.querySelectorAll("tbody tr")].map((r) => r.children[0].textContent)).toEqual(["a", "1", "0"]);
+    expect([...copy.querySelectorAll("tbody tr")[1].children].map((c) => /hm-align-(\w+)/.exec(c.className)?.[1])).toEqual(["left", "right", "center"]);
+  });
+
+  it("UI-5: the sort and filter dialog says that sorting changes only how the table is shown", async () => {
+    const m = await mount(aligned({ t1: { sort: { column: 1, dir: "asc" } } }));
+    await click(byText(m.el, ".hm-sorted-bar button", "Sort and filter…"));
+    const dialog = m.el.ownerDocument.querySelector('[role="dialog"][aria-label="Sort and filter"]')!;
+    expect(dialog.textContent).toContain("Sorting and filtering change only how the table is shown. The rows keep their saved order, and the settings are saved with the page.");
+    expect(dialog.textContent).not.toContain("never reordered");
+  });
+});

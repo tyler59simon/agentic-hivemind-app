@@ -95,3 +95,42 @@ describe("the page outline (NS-3A UI pass)", () => {
     }
   });
 });
+
+describe("the outline of a rich page (NS-3C UI-1)", () => {
+  const heading = (level: number, text: string) => ({ type: "heading", attrs: { level }, content: [{ type: "text", text }] });
+  const para = { type: "paragraph", content: [{ type: "text", text: "body" }] };
+  const page = (...blocks: unknown[]) => JSON.stringify({ schemaVersion: 1, format: "hivemind-rich", meta: {}, content: { type: "doc", content: blocks } });
+
+  async function outlineOf(text: string, path = "Plan.hmdoc") {
+    const { PageOutline } = await import("./RightSidebar");
+    const { useDocuments, keyOf } = await import("../documents/store");
+    const file = { notebook: "nb-1", path };
+    useWorkspace.getState().openTab({ kind: "file", file, mode: "source" });
+    const tab = useWorkspace.getState().panes[0].tabs[0];
+    useDocuments.setState((s) => ({ docs: { ...s.docs, [keyOf(file)]: { text } as never } }));
+    const el = document.createElement("div");
+    document.body.append(el);
+    root = createRoot(el);
+    await act(async () => root!.render(<PageOutline tab={tab} />));
+    return { el, tab };
+  }
+
+  it("lists the headings of the page, at any depth and indented by level, and not the Markdown 'No headings.'", async () => {
+    const columns = { type: "columns", content: [{ type: "column", content: [heading(2, "In a column")] }, { type: "column", content: [para] }] };
+    const toggle = { type: "toggle", attrs: { open: true }, content: [{ type: "toggleSummary", content: [{ type: "text", text: "T" }] }, heading(3, "In a toggle")] };
+    const { el } = await outlineOf(page(heading(1, "Title"), para, columns, toggle, heading(2, "Last")));
+    expect([...el.querySelectorAll("li button")].map((b) => b.textContent)).toEqual(["Title", "In a column", "In a toggle", "Last"]);
+    expect(el.textContent).not.toContain("No headings");
+  });
+
+  it("clicking a heading asks the rich editor for it by its order in the page", async () => {
+    const { el, tab } = await outlineOf(page(heading(1, "One"), heading(2, "Two"), heading(2, "Three")));
+    await act(async () => { (el.querySelectorAll("li button")[2] as HTMLElement).click(); });
+    expect(useWorkspace.getState().reveal).toMatchObject({ tabId: tab.id, line: 2 });
+  });
+
+  it("a file that is not a page the editor opens has no headings", async () => {
+    const { el } = await outlineOf("{ not json");
+    expect(el.textContent).toContain("No headings.");
+  });
+});

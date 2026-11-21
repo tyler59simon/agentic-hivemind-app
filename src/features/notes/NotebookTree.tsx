@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Ellipsis, File, FileText, Folder, FolderPlus, Inbox, Plus } from "lucide-react";
+import { ChevronDown, ChevronRight, Ellipsis, File, FileText, Folder, FolderPlus, Inbox, LayoutPanelTop, Plus } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { classify } from "../../lib/errors";
 import { treeQuery } from "../../documents/io";
@@ -200,7 +200,8 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals }: {
           {tree.error && <p className="error pad">{classify(tree.error).message}</p>}
           {tree.data && !rows.length && !naming && <p className="muted pad">No pages yet. <button className="link" onClick={() => create(null)}>Create one</button></p>}
           {rows.map(({ node, depth, open: isOpen }) => {
-            const Icon = node.kind === "dir" ? Folder : node.kind === "page" ? FileText : File;
+            // A rich page has its own icon, so it is told from the Markdown page of the same name (UI-2).
+            const Icon = node.kind === "dir" ? Folder : node.kind === "page" ? (isRichDoc(node.path) ? LayoutPanelTop : FileText) : File;
             const branch = node.kind === "dir" || node.children.length > 0;
             const target = drag && drag.over && low(drag.over) === low(node.path) && dropTarget(drag.path, node);
             return (

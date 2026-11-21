@@ -415,7 +415,7 @@ export function FileTab({ tab }: { tab: Tab }) {
               : (
                 <Suspense fallback={<div className="center muted">Loading the page editor…</div>}>
                   <HmdocEditor key={key} text={doc.text} version={doc.version} readOnly={doc.status === "readOnly" || arriving} onChange={(text) => edit(key, text)}
-                    onSave={doSave} ctx={rich} ctxStamp={richStamp} pictures={pictureFiles} invalid={readOnlyJson} />
+                    onSave={doSave} ctx={rich} ctxStamp={richStamp} reveal={reveal} pictures={pictureFiles} invalid={readOnlyJson} />
                 </Suspense>
               )}
           </div>

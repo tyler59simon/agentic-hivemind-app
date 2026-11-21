@@ -1558,8 +1558,9 @@ button.icon { border: none; padding: .25rem; }
 .hm-formula-error { color: var(--error); font-weight: 600; }
 .hm-sorted { margin: .6rem 0; white-space: normal; }
 .hm-sorted-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: 0 0 .2rem; }
-.hm-sorted-note { color: var(--muted); font-size: .85rem; margin-right: auto; }
-.hm-sorted-bar button { font-size: .8rem; padding: .1rem .5rem; }
+/* The note and both buttons share a line: the note gives way first, and the bar wraps only when the pane is narrow. */
+.hm-sorted-note { flex: 1 1 12rem; min-width: 0; color: var(--muted); font-size: .85rem; }
+.hm-sorted-bar button { flex: none; font-size: .8rem; padding: .1rem .5rem; white-space: nowrap; }
 .hm-copy.rich-doc { min-height: 0; padding-bottom: 0; }
 .hm-sorted table { border-collapse: collapse; table-layout: auto; }
 .hm-sorted th, .hm-sorted td { border: 1px solid var(--border); padding: .25rem .5rem; min-width: 4rem; vertical-align: top; }
@@ -1575,3 +1576,9 @@ button.icon { border: none; padding: .25rem; }
 .hm-toggle-caret { position: absolute; left: 0; top: .05rem; border: none; background: none; color: var(--muted); padding: 0 .2rem; cursor: pointer; }
 .hm-toggle-summary { font-weight: 600; min-height: 1.4em; }
 .hm-toggle.closed .hm-toggle-content > :not(.hm-toggle-summary) { display: none; }
+
+/* Column alignment of a rich page table, and the icon that tells a rich page from a Markdown page of the same name. */
+.rich-doc .hm-align-left { text-align: left; }
+.rich-doc .hm-align-center { text-align: center; }
+.rich-doc .hm-align-right { text-align: right; }
+.tab-icon { flex: none; opacity: .75; }

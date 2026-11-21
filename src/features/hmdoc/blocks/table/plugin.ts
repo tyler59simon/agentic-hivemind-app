@@ -136,9 +136,12 @@ function build(doc: PMNode, views: Views, active: number, host: Partial<CopyHost
         const [or, oc] = g.grid.origin(r, c);
         if (or !== r || oc !== c) continue;
         const { node: cell, pos: rel } = g.grid.cell(r, c);
+        const at = pos + 1 + rel;
+        // The table's alignment of a column, drawn on each cell that starts in it (UI-3).
+        const align = (table.attrs.align as (string | null)[] | null | undefined)?.[c];
+        if (align === "left" || align === "center" || align === "right") decos.push(Decoration.node(at, at + cell.nodeSize, { class: `hm-align-${align}` }));
         const text = cell.textContent;
         if (!isFormula(text)) continue;
-        const at = pos + 1 + rel;
         if (at === active) continue;
         const result = g.sheet.at(r, c)!;
         const shown = showResult(result);

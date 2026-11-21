@@ -4,7 +4,7 @@
 import { Editor, Extension } from "@tiptap/core";
 import { Placeholder } from "@tiptap/extension-placeholder";
 import type { Node as PMNode } from "@tiptap/pm/model";
-import { EditorState as PMState, Plugin, Selection } from "@tiptap/pm/state";
+import { EditorState as PMState, Plugin, Selection, TextSelection } from "@tiptap/pm/state";
 import { TableMap } from "@tiptap/pm/tables";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { pastedPictures } from "../editor/rich/attach";
@@ -38,6 +38,8 @@ export interface HmdocEditorProps {
   ctx: RichContext;
   /** Changes when pictures must be drawn again. */
   ctxStamp?: unknown;
+  /** Move to a heading, from the outline: `line` is its order among the page's headings, from 0 (UI-1). */
+  reveal?: { line: number; at: number } | null;
   /** The notebook's pictures, for the cover. */
   pictures: string[];
   /** What to show for a file the editor cannot hold: the reason it is read-only. */
@@ -196,7 +198,7 @@ function Editing(props: HmdocEditorProps & { checked: Valid; own: { current: str
             const dom = document.createElement("div");
             const copy = new Editor({
               element: dom, editable: false, content: doc.toJSON(),
-              extensions: withViews(hmdocExtensions(), { ctx, edit: () => {} }),
+              extensions: [...withViews(hmdocExtensions(), { ctx, edit: () => {} }), tableViews(() => ({}))],
               editorProps: { attributes: { class: "rich-doc markdown hmdoc-doc hm-copy" } },
             });
             return { dom, destroy: () => copy.destroy() };
@@ -262,6 +264,24 @@ function Editing(props: HmdocEditorProps & { checked: Valid; own: { current: str
     const editor = editorRef.current;
     if (editor && props.text !== last.current) load(editor, props.checked, props.text);
   }, [props.text]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The outline names a heading by its order; the cursor goes to it and it scrolls to the middle of the pane. The
+  // selection's own scrollIntoView only brings it inside the scroll area, where the sticky toolbar can cover it.
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || !props.reveal) return;
+    let seen = -1, at = -1;
+    editor.state.doc.descendants((node, pos) => {
+      if (at >= 0) return false;
+      if (node.type.name === "heading" && ++seen === props.reveal!.line) at = pos;
+      return at < 0;
+    });
+    if (at < 0) return;
+    editor.view.dispatch(editor.state.tr.setSelection(TextSelection.near(editor.state.doc.resolve(at + 1))));
+    editor.view.focus();
+    const dom = editor.view.nodeDOM(at);
+    if (dom instanceof HTMLElement) dom.scrollIntoView({ block: "center" });
+  }, [props.reveal]);
 
   // Views follow a change of read-only and of the picture grant, as in NS-3B.
   const drawnFor = useRef({ stamp: props.ctxStamp, readOnly: props.readOnly });

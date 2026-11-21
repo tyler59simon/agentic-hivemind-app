@@ -1,4 +1,4 @@
-import { Columns2, Library, PanelRight, Plus, X } from "lucide-react";
+import { Columns2, LayoutPanelTop, Library, PanelRight, Plus, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NewNote } from "../features/editor/NewNote";
@@ -7,7 +7,7 @@ import { FileTab, saveFileTab } from "../features/notes/FileTab";
 import { NewFileTab } from "../features/notes/NewFileTab";
 import { keyOf } from "../documents/store";
 import { newPageHere } from "../features/notes/actions";
-import { fileName, isMarkdown, pageTitle } from "../lib/notebooks";
+import { fileName, isMarkdown, isRichDoc, pageTitle } from "../lib/notebooks";
 import { useApp } from "../store";
 import { Confirm } from "../ui/Modal";
 import { MAX_PANES, railShown, useWorkspace, type Pane, type Tab } from "./store";
@@ -49,6 +49,7 @@ function TabPill({ tab, active, onPick, onClose }: { tab: Tab; active: boolean; 
   return (
     <div role="tab" aria-selected={active} className={`note-tab-pill ${active ? "on" : ""}`} title={label(tab)}
       onClick={onPick} onAuxClick={(e) => { if (e.button === 1) onClose(); }}>
+      {tab.kind === "file" && isRichDoc(tab.file?.path ?? "") && <LayoutPanelTop size="1em" aria-hidden className="tab-icon" />}
       <span className="tab-label">{label(tab)}</span>
       {dirty && <span className="dot" aria-label="unsaved">●</span>}
       <button className="tab-close" aria-label="Close tab" onClick={(e) => { e.stopPropagation(); onClose(); }}><X size="1em" aria-hidden /></button>

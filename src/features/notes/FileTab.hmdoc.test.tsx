@@ -400,6 +400,18 @@ describe("the tree", () => {
     }
   });
 
+  it("UI-2: a rich page has its own icon in the tree, so it differs from a Markdown page of the same name", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    client.setQueryData(["notebook-tree", "nb-1"], { entries: entries("Plan.hmdoc", "Plan.md"), truncated: false });
+    const el = await mount(<NotebookTree notebook={{ id: "nb-1", path: "C:\nb", title: "Notebook", added: "" }} onSettings={() => {}} />, client);
+    await settle();
+    const icon = (path: string) => el.querySelector(`[data-tree-path="${path}"] svg.tree-icon`)!.getAttribute("class") ?? "";
+    expect(icon("Plan.hmdoc")).toContain("layout-panel-top");
+    expect(icon("Plan.md")).not.toContain("layout-panel-top");
+    expect(icon("Plan.md")).toContain("file-text");
+    expect([...el.querySelectorAll(".tree-label")].map((l) => l.textContent)).toEqual(["Plan", "Plan"]);
+  });
+
   async function menu(path: string, lm?: boolean, paths = ["Note.md", "Plan.hmdoc", "Section"]) {
     const notebook = lm ? { id: "lm:demo:plans", path: "demo", title: "Plans", added: "" } : { id: "nb-1", path: "C:\\nb", title: "Notebook", added: "" };
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
