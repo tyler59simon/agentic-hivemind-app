@@ -94,6 +94,14 @@ export function useRichPage(page: RichPage): RichContext {
         checked();
         return linkTo(await attachDropped(token, index, ref.notebook, ref.path));
       },
+      attachPath: loose ? undefined : async (bytes, name) => {
+        checked();
+        return attachBytes(ref.notebook, ref.path, name, bytes);
+      },
+      attachDroppedPath: loose ? undefined : async (token, index) => {
+        checked();
+        return attachDropped(token, index, ref.notebook, ref.path);
+      },
       fail: (message) => toast(message, "error"),
     };
   }, [ref, files, base, lm, loose, followHere, takesLink, own]);

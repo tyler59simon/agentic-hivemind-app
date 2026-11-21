@@ -4,12 +4,13 @@ import type { QueryClient } from "@tanstack/react-query";
 import { movedPath, type FileRef } from "../../documents/keys";
 import { beforeMove, connectedStore, discard, edit, hold, keyOf, open, refresh, unsavedUnder, useDocuments } from "../../documents/store";
 import { retargetAll } from "../../documents/sync";
-import { lmContainer } from "../../documents/adapters/lmdoc";
+import { isLm, lmContainer } from "../../documents/adapters/lmdoc";
 import { docsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { bridgeGeneration, lmNotebooksQuery } from "../../lib/lm";
 import { forgetMoved } from "../../lib/drafts";
-import { createDoc, createSection, deleteDoc, moveDoc } from "../../documents/io";
+import { createDoc, createSection, deleteDoc, moveDoc, readDoc } from "../../documents/io";
+import { newPageText } from "../hmdoc/envelope";
 import { fileName, folderOf, isMarkdown, notebooksQuery, pageTitle } from "../../lib/notebooks";
 import { isLoose, saveAs } from "../../lib/opens";
 import { untitledText } from "./untitled";
@@ -33,12 +34,14 @@ export function currentNotebook(fallback?: string): { notebook?: string; folder:
   return { notebook: fallback, folder: "" };
 }
 
-/** Try `Name.md`, `Name 2.md`, ... until one does not exist yet. */
-async function createUnique(notebook: string, folder: string, base: string, text: string): Promise<string> {
+/** Try `Name.md`, `Name 2.md`, ... until one does not exist yet. `text` may depend on the name that was free (a rich
+ *  page keeps its name as its title). */
+async function createUnique(notebook: string, folder: string, base: string, text: string | ((name: string) => string), ext = "md"): Promise<string> {
   for (let n = 1; n < 100; n++) {
-    const path = join(folder, `${n === 1 ? base : `${base} ${n}`}.md`);
+    const name = n === 1 ? base : `${base} ${n}`;
+    const path = join(folder, `${name}.${ext}`);
     try {
-      await createDoc(notebook, path, text);
+      await createDoc(notebook, path, typeof text === "function" ? text(name) : text);
       return path;
     } catch (e) {
       if (!/exists/i.test(String(e))) throw e;
@@ -51,6 +54,59 @@ export async function newPage(client: QueryClient, notebook: string, folder = ""
   const path = await createUnique(notebook, folder, title, "");
   client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
   openPage({ notebook, path });
+  return path;
+}
+
+/** Rich pages are files of folder notebooks: Living Memory keeps Markdown pages only. */
+function folderOnly(notebook: string) {
+  if (isLm({ notebook })) throw new Error("Living Memory notebooks hold Markdown pages only");
+}
+
+/** A new rich page (NS-3C): `Untitled.hmdoc` with one empty paragraph, under a free name. */
+export async function newRichPage(client: QueryClient, notebook: string, folder = "", title = "Untitled") {
+  folderOnly(notebook);
+  const path = await createUnique(notebook, folder, title, newPageText, "hmdoc");
+  client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
+  openPage({ notebook, path });
+  return path;
+}
+
+/** The text of a page as it is now: an open page's, unsaved edits included, else the file's. */
+async function currentText(ref: FileRef): Promise<string> {
+  const open = useDocuments.getState().docs[keyOf(ref)];
+  return open && open.status !== "loading" && open.status !== "error" ? open.text : (await readDoc(ref)).text;
+}
+
+/** Convert a Markdown page to a rich page beside it (the Markdown page is not changed) and open it. `text` is the text to
+ *  convert when the caller has it (an open page). */
+export async function convertToRich(client: QueryClient, ref: FileRef, text?: string) {
+  folderOnly(ref.notebook);
+  const source = text ?? await currentText(ref);
+  const { convertMarkdown } = await import("../hmdoc/convert");
+  const converted = convertMarkdown(source, pageTitle(ref.path));
+  const path = await createUnique(ref.notebook, folderOf(ref.path), pageTitle(ref.path), converted, "hmdoc");
+  client.invalidateQueries({ queryKey: ["notebook-tree", ref.notebook] });
+  openPage({ notebook: ref.notebook, path });
+  return path;
+}
+
+/** Export a rich page to a Markdown page beside it. Returns where it went and what the Markdown could not keep. */
+export async function exportToMarkdown(client: QueryClient, ref: FileRef, text?: string) {
+  folderOnly(ref.notebook);
+  const source = text ?? await currentText(ref);
+  const { exportText } = await import("../hmdoc/toMarkdown");
+  const out = exportText(source);
+  if (!out.ok) throw new Error(out.reason);
+  const path = await createUnique(ref.notebook, folderOf(ref.path), pageTitle(ref.path), out.markdown);
+  client.invalidateQueries({ queryKey: ["notebook-tree", ref.notebook] });
+  return { path, report: out.report };
+}
+
+/** A conflict on a rich page: the user's version goes to `Name (my edits).hmdoc` beside it, under a free name. */
+export async function saveBothVersions(client: QueryClient, ref: FileRef, text: string) {
+  folderOnly(ref.notebook);
+  const path = await createUnique(ref.notebook, folderOf(ref.path), `${pageTitle(ref.path)} (my edits)`, text, "hmdoc");
+  client.invalidateQueries({ queryKey: ["notebook-tree", ref.notebook] });
   return path;
 }
 

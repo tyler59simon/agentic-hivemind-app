@@ -65,7 +65,8 @@ function column(editor: Editor, add: boolean) {
   }).run();
 }
 
-export function RichToolbar({ editor, ctx, readOnly, onLink, onEdit }: { editor: Editor; ctx: RichContext; readOnly: boolean; onLink: () => void; onEdit: (pos: number) => void }) {
+/** `extra`: more controls after the table ones, for the rich page's own blocks (NS-3C). */
+export function RichToolbar({ editor, ctx, readOnly, onLink, onEdit, extra }: { editor: Editor; ctx: RichContext; readOnly: boolean; onLink: () => void; onEdit: (pos: number) => void; extra?: ReactNode }) {
   const picker = useRef<HTMLInputElement>(null);
   const items: Item[] = [
     { label: "Bold", keys: "Ctrl+B", icon: <Bold size="1em" />, run: (e) => e.chain().focus().toggleBold().run(), active: (e) => e.isActive("bold") },
@@ -129,6 +130,7 @@ export function RichToolbar({ editor, ctx, readOnly, onLink, onEdit }: { editor:
       )}
       {inTable && <span className="rich-toolbar-sep" aria-hidden />}
       {inTable && tableItems.map(button)}
+      {extra}
     </div>
   );
 }

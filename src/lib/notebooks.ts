@@ -61,5 +61,7 @@ export const metaQuery = (id: string) => ({ queryKey: ["notebook-meta", id], que
 export const isMarkdown = (path: string) => /\.(md|markdown)$/i.test(path);
 export const fileName = (path: string) => path.split("/").pop() ?? path;
 export const folderOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
-/** A page's title: its file name without the Markdown extension. */
-export const pageTitle = (path: string) => fileName(path).replace(/\.(md|markdown)$/i, "");
+/** A rich page (NS-3C): a JSON file of folder notebooks, edited in its own editor with no modes. */
+export const isRichDoc = (path: string) => /\.hmdoc$/i.test(path);
+/** A page's title: its file name without the Markdown or rich page extension. */
+export const pageTitle = (path: string) => fileName(path).replace(/\.(md|markdown|hmdoc)$/i, "");

@@ -11,7 +11,7 @@ export interface Node {
 }
 
 const low = (s: string) => s.toLowerCase();
-const PAGE = /\.(md|markdown)$/i;
+const PAGE = /\.(md|markdown|hmdoc)$/i;
 
 /** Sort one folder's children: the sidecar's order first, then folders, then by name. */
 function sorted(nodes: Node[], order: string[] | undefined): Node[] {
@@ -90,7 +90,7 @@ export function ancestors(path: string): string[] {
   const out: string[] = [];
   for (let i = 1; i < parts.length; i++) {
     const folder = parts.slice(0, i).join("/");
-    out.push(folder, `${folder}.md`);
+    out.push(folder, `${folder}.md`, `${folder}.hmdoc`);
   }
   return out.map(low);
 }

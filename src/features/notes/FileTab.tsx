@@ -7,7 +7,7 @@ import { classify } from "../../lib/errors";
 import { assetLink, attachFile, openAttachment, parseLm } from "../../documents/adapters/lmdoc";
 import { createDoc, lmAssets, treeQuery } from "../../documents/io";
 import { lmNotebooksQuery } from "../../lib/lm";
-import { fileName, folderOf, isMarkdown, notebooksQuery, pageTitle, revealFile, type Notebook } from "../../lib/notebooks";
+import { fileName, folderOf, isMarkdown, isRichDoc, notebooksQuery, pageTitle, revealFile, type Notebook } from "../../lib/notebooks";
 import { assetBase, isLoose, recentQuery, recentRef } from "../../lib/opens";
 import { Menu } from "../../ui/Menu";
 import { Confirm, Modal } from "../../ui/Modal";
@@ -17,17 +17,22 @@ import { useWorkspace, type Mode, type Tab } from "../../workspace/store";
 import { CodeEditor } from "../editor/CodeEditor";
 import { PageMergeDialog } from "../editor/MergeDialog";
 import { resolvePage } from "../links/resolve";
-import { movePath, openPage, renamed, saveCopy, trashPath } from "./actions";
+import { convertToRich, movePath, openPage, renamed, saveBothVersions, saveCopy, trashPath } from "./actions";
 import { DeleteConfirm } from "./DeleteConfirm";
 import { forgetRecent } from "./opening";
 import { PageView } from "./PageView";
 import { useRichPage } from "./richPage";
 import { RICH_LIMIT } from "../editor/rich/context";
+import { isPicture } from "../editor/rich/parse";
+import { oversizeReason } from "../hmdoc/envelope";
+import { runExport } from "./richActions";
 
 const MODES: { id: Mode; label: string }[] = [{ id: "reading", label: "Reading" }, { id: "live", label: "Live" }, { id: "rich", label: "Rich" }, { id: "source", label: "Source" }];
 
 /** Rich mode (NS-3B) loads its editor, Tiptap and the Markdown parser only when a page first opens in it. */
 const RichEditor = lazy(() => import("../rich/RichEditor"));
+/** A `.hmdoc` page (NS-3C) loads its editor, the rich page schema and Tiptap only when one first opens. */
+const HmdocEditor = lazy(() => import("../hmdoc/HmdocEditor"));
 
 /** The pages of the tab's notebook, for `[[link]]` completion and resolution. */
 function usePages(notebook: string) {
@@ -84,7 +89,10 @@ const openOutside = (ref: { notebook: string; path: string }) => revealFile(ref.
 /** Save the text of a page that cannot be written in place as a new UTF-8 file, and open that file. */
 const copyAs = (text: string, name: string) => saveCopy(text, name).catch((e) => toast(classify(e).message, "error"));
 
-function Banners({ doc, docKey, onMerge, onRecreate }: { doc: DocState; docKey: string; onMerge: () => void; onRecreate: () => void }) {
+/** A rich page is never merged line by line: the user keeps one version, or both (NS-3C). */
+interface Conflict { mine: () => void; both?: () => void }
+
+function Banners({ doc, docKey, onMerge, onRecreate, conflict }: { doc: DocState; docKey: string; onMerge: () => void; onRecreate: () => void; conflict?: Conflict }) {
   const ref = useDocuments((s) => s.refs[docKey]);
   const dismiss = () => useDocuments.getState().dispatch(docKey, { type: "dismiss" });
   useEffect(() => {
@@ -135,7 +143,15 @@ function Banners({ doc, docKey, onMerge, onRecreate }: { doc: DocState; docKey: 
     out.push(
       <div key="changed" className="banner warn note-banner">
         {doc.status === "stale" ? "Not saved: this page changed on disk after you opened it." : "This page changed on disk while you were editing."}
-        <div className="actions"><button className="primary" onClick={onMerge}>Merge</button><button onClick={() => reloadPage(docKey)}>Reload (drop my edits)</button></div>
+        {conflict
+          ? (
+            <div className="actions">
+              <button className="primary" onClick={conflict.mine} title="Save my version over the one on disk">Keep mine</button>
+              <button onClick={() => reloadPage(docKey)} title="Drop my edits and show the version on disk">Keep theirs</button>
+              {conflict.both && <button onClick={conflict.both} title="Save my version as a new page beside this one, then show the version on disk">Save both</button>}
+            </div>
+          )
+          : <div className="actions"><button className="primary" onClick={onMerge}>Merge</button><button onClick={() => reloadPage(docKey)}>Reload (drop my edits)</button></div>}
       </div>,
     );
   }
@@ -229,6 +245,8 @@ export function FileTab({ tab }: { tab: Tab }) {
   const [dialog, setDialog] = useState<ReactNode>(null);
   const follow = useFollow(tab, pages, setDialog);
   const markdown = isMarkdown(ref.path);
+  // A rich page (NS-3C): JSON edited in its own editor, with no modes.
+  const richDoc = isRichDoc(ref.path);
   const loose = isLoose(ref);
   const full = useLoosePath(ref);
   // Pictures load from the notebook's root (a page's folder inside it) or a loose file's folder.
@@ -236,9 +254,9 @@ export function FileTab({ tab }: { tab: Tab }) {
   // review of 52051c8, A3, and its re-review: the app's 30-second staleTime would otherwise reuse the old one).
   // A parked page of another store shows no attachments: they would come from the store connected now (R3-P3).
   const own = inOwnStore(key);
-  const pictures = useQuery({ queryKey: ["asset-base", ref.notebook, ref.path], queryFn: () => assetBase(ref.notebook, ref.path), refetchOnMount: "always", gcTime: 0, enabled: markdown && own });
+  const pictures = useQuery({ queryKey: ["asset-base", ref.notebook, ref.path], queryFn: () => assetBase(ref.notebook, ref.path), refetchOnMount: "always", gcTime: 0, enabled: (markdown || richDoc) && own });
   const mode: Mode = markdown ? (tab.mode === "history" ? "reading" : tab.mode ?? "live") : "source";
-  const titles = useCallback(() => pages.filter(isMarkdown).map(pageTitle), [pages]);
+  const titles = useCallback(() => pages.filter((p) => isMarkdown(p) || isRichDoc(p)).map(pageTitle), [pages]);
 
   useEffect(() => { void open(ref); }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { updateTab(tab.id, { title: pageTitle(ref.path) }); }, [ref.path, tab.id, updateTab]);
@@ -251,6 +269,17 @@ export function FileTab({ tab }: { tab: Tab }) {
     const shown = d.theirs;
     setDialog(<PageMergeDialog base={d.base.text} mine={d.text} theirs={shown.text}
       onCancel={() => setDialog(null)} onResolve={(text) => { setDialog(null); void resolveMerge(key, text, shown); }} />);
+  };
+  /** Keep my version of a rich page over the one on disk: the result is my text, saved against the version shown. */
+  const keepMine = () => {
+    const d = useDocuments.getState().docs[key];
+    if (!d?.base || !d.theirs || !mergeable(d.theirs, !!d.convert)) return;
+    void resolveMerge(key, d.text, d.theirs);
+  };
+  const saveBoth = () => {
+    const d = useDocuments.getState().docs[key];
+    if (!d) return;
+    saveBothVersions(client, ref, d.text).then((path) => { toast(`Your version was saved as ${fileName(path)}`); reloadPage(key); }, (e) => toast(classify(e).message, "error"));
   };
   const recreate = () => {
     const d = useDocuments.getState().docs[key];
@@ -290,6 +319,7 @@ export function FileTab({ tab }: { tab: Tab }) {
     if (/^assets\//.test(path)) openAttachment(ref.notebook, path).catch((e) => toast(classify(e).message, "error"));
     else if (isMarkdown(path)) openPage({ notebook: ref.notebook, path });
   }, [ref.notebook, key]);
+  const pictureFiles = useMemo(() => files.filter(isPicture), [files]);
   const remove = () => setDialog(
     <DeleteConfirm notebook={ref.notebook} path={ref.path} section={false}
       onAnswer={(yes) => {
@@ -319,6 +349,15 @@ export function FileTab({ tab }: { tab: Tab }) {
     );
   }
   const unsaved = doc.status === "dirty" || doc.status === "stale";
+  const oversize = richDoc ? oversizeReason(doc.text) : null;
+  /** A rich page the editor cannot hold shows as JSON that cannot be edited, with the reason above it. */
+  const readOnlyJson = (reason: string) => (
+    <>
+      <div className="banner note-banner">{reason}</div>
+      <CodeEditor key={key} doc={doc.text} docVersion={doc.version} follow language="text" live={false} readOnly lineNumbers
+        onChange={() => {}} onSave={doSave} titles={titles} onOpenLink={follow} />
+    </>
+  );
   return (
     <div className="note-page file-page">
       <header className="note-header">
@@ -342,6 +381,8 @@ export function FileTab({ tab }: { tab: Tab }) {
                     const copied = loose ? full ?? ref.path : notebook ? `${notebook.path}\\${ref.path.replace(/\//g, "\\")}` : ref.path;
                     navigator.clipboard.writeText(copied).then(() => toast("Path copied"), () => toast(copied));
                   })}
+                  {!loose && markdown && item("Convert to rich page", () => convertToRich(client, ref, doc.text).catch((e) => toast(classify(e).message, "error")))}
+                  {!loose && richDoc && item("Export to Markdown…", () => runExport(client, ref, setDialog, doc.text))}
                   {!loose && item("Delete page…", remove, "danger-text")}
                 </>
               );
@@ -350,14 +391,27 @@ export function FileTab({ tab }: { tab: Tab }) {
         </div>
         {markdown && <Tabs items={MODES} value={mode} label="Page view" onChange={(v) => updateTab(tab.id, { mode: v })} />}
       </header>
-      <Banners doc={doc} docKey={key} onMerge={merge} onRecreate={recreate} />
+      <Banners doc={doc} docKey={key} onMerge={merge} onRecreate={recreate} conflict={richDoc ? { mine: keepMine, both: loose ? undefined : saveBoth } : undefined} />
       {markdown && mode === "live" && doc.text.length > RICH_LIMIT && (
         <div className="banner note-banner">This page is over 1 MB, so Live shows plain Markdown styling without tables, pictures or diagrams.</div>
       )}
       {markdown && mode === "rich" && doc.text.length > RICH_LIMIT && (
         <div className="banner note-banner">This page is over 1 MB, so it opens as Markdown source instead of in Rich mode.</div>
       )}
-      {markdown && mode === "rich" && doc.text.length <= RICH_LIMIT
+      {richDoc
+        ? (
+          <div className="note file-editor">
+            {oversize
+              ? readOnlyJson(oversize)
+              : (
+                <Suspense fallback={<div className="center muted">Loading the page editor…</div>}>
+                  <HmdocEditor key={key} text={doc.text} version={doc.version} readOnly={doc.status === "readOnly" || arriving} onChange={(text) => edit(key, text)}
+                    onSave={doSave} ctx={rich} ctxStamp={richStamp} pictures={pictureFiles} invalid={readOnlyJson} />
+                </Suspense>
+              )}
+          </div>
+        )
+        : markdown && mode === "rich" && doc.text.length <= RICH_LIMIT
         ? (
           <div className="note file-editor">
             <Suspense fallback={<div className="center muted">Loading the Rich editor…</div>}>

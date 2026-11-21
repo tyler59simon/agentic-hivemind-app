@@ -1,0 +1,209 @@
+{
+  "content": {
+    "content": [
+      {
+        "content": [
+          {
+            "text": "Line one",
+            "type": "text"
+          },
+          {
+            "type": "hardBreak"
+          },
+          {
+            "text": "line two",
+            "type": "text"
+          },
+          {
+            "text": " ",
+            "type": "text"
+          },
+          {
+            "marks": [
+              {
+                "type": "code"
+              }
+            ],
+            "text": "code()",
+            "type": "text"
+          },
+          {
+            "text": " ",
+            "type": "text"
+          },
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "color": "red"
+                },
+                "type": "textColor"
+              }
+            ],
+            "text": "red",
+            "type": "text"
+          },
+          {
+            "text": " ",
+            "type": "text"
+          },
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "color": "blue"
+                },
+                "type": "highlight"
+              }
+            ],
+            "text": "lit",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "content": [
+          {
+            "attrs": {
+              "alt": "A cat",
+              "src": "cat.png",
+              "title": null
+            },
+            "type": "image"
+          },
+          {
+            "text": " ",
+            "type": "text"
+          },
+          {
+            "attrs": {
+              "dollars": 1,
+              "value": "a+b"
+            },
+            "type": "mathInline"
+          },
+          {
+            "text": " ",
+            "type": "text"
+          },
+          {
+            "attrs": {
+              "value": "Other#Part"
+            },
+            "type": "embed"
+          },
+          {
+            "attrs": {
+              "identifier": "1",
+              "label": null
+            },
+            "type": "footnoteRef"
+          },
+          {
+            "text": " ",
+            "type": "text"
+          },
+          {
+            "attrs": {
+              "kind": "html",
+              "value": "<kbd>K</kbd>"
+            },
+            "type": "rawInline"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "attrs": {
+          "start": 3
+        },
+        "content": [
+          {
+            "content": [
+              {
+                "content": [
+                  {
+                    "text": "three",
+                    "type": "text"
+                  }
+                ],
+                "type": "paragraph"
+              },
+              {
+                "content": [
+                  {
+                    "content": [
+                      {
+                        "content": [
+                          {
+                            "text": "nested",
+                            "type": "text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "listItem"
+                  }
+                ],
+                "type": "bulletList"
+              }
+            ],
+            "type": "listItem"
+          },
+          {
+            "content": [
+              {
+                "content": [
+                  {
+                    "text": "four",
+                    "type": "text"
+                  }
+                ],
+                "type": "paragraph"
+              }
+            ],
+            "type": "listItem"
+          }
+        ],
+        "type": "orderedList"
+      },
+      {
+        "content": [
+          {
+            "content": [
+              {
+                "text": "quoted",
+                "type": "text"
+              }
+            ],
+            "type": "paragraph"
+          }
+        ],
+        "type": "blockquote"
+      },
+      {
+        "attrs": {
+          "identifier": "1"
+        },
+        "content": [
+          {
+            "content": [
+              {
+                "text": "The note.",
+                "type": "text"
+              }
+            ],
+            "type": "paragraph"
+          }
+        ],
+        "type": "footnoteDef"
+      }
+    ],
+    "type": "doc"
+  },
+  "format": "hivemind-rich",
+  "meta": {},
+  "schemaVersion": 1
+}

@@ -218,7 +218,7 @@ export default function RichEditor(props: RichEditorProps) {
 
 /** A grip beside the block under the pointer: drag it to move the block, click it to select the block. Pointer
  *  events, because Tauri's file drop handler keeps HTML drag and drop from reaching the page. */
-function BlockHandle({ editor, wrap }: { editor: Editor; wrap: React.RefObject<HTMLDivElement | null> }) {
+export function BlockHandle({ editor, wrap }: { editor: Editor; wrap: React.RefObject<HTMLDivElement | null> }) {
   const [hover, setHover] = useState<{ index: number; top: number } | null>(null);
   const [drop, setDrop] = useState<number | null>(null);
   const drag = useRef<{ from: number; moved: boolean } | null>(null);

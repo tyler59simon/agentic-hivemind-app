@@ -5,7 +5,7 @@ import { fileName, folderOf } from "../../lib/notebooks";
 
 export type Resolved = { ref: FileRef } | { missing: string } | { ambiguous: FileRef[] };
 
-const MD = /\.(md|markdown)$/i;
+const MD = /\.(md|markdown|hmdoc)$/i;
 const low = (s: string) => s.toLowerCase();
 /** A link names a Markdown page without its extension, or any file with its full name. */
 const nameOf = (path: string) => (MD.test(path) ? fileName(path).replace(MD, "") : fileName(path));

@@ -25,6 +25,10 @@ export interface RichContext {
   attach?: (bytes: Uint8Array, name: string) => Promise<string>;
   /** Attach the file at `index` of the drop `token` the same way. */
   attachDropped?: (token: string, index: number, name: string) => Promise<string>;
+  /** Like `attach`, but resolves to the saved file's path from the notebook's root: a rich page's cover (NS-3C). */
+  attachPath?: (bytes: Uint8Array, name: string) => Promise<string>;
+  /** Like `attachDropped`, resolving to the path from the notebook's root. */
+  attachDroppedPath?: (token: string, index: number, name: string) => Promise<string>;
   /** Tell the user something failed. */
   fail(message: string): void;
 }

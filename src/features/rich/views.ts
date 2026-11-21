@@ -215,6 +215,9 @@ const CALLOUT_ICON: Record<string, string> = {
   failure: "✕", danger: "‼", bug: "✱", example: "☰", quote: "❝",
 };
 
+/** Icons a rich page's callout can show in place of its type's own. */
+const CALLOUT_PICK = ["★", "♥", "→", "⚑", "☀", "✦", "✱", "☰"];
+
 /** A callout: its type chip opens a menu of types and folding; the title and body are edited in place. */
 const callout: Make = (props) => {
   let node = props.node;
@@ -228,7 +231,7 @@ const callout: Make = (props) => {
     const c = parseCallout(`> ${node.attrs.marker}`);
     const type = c?.type ?? "note";
     box.className = `rich-callout callout callout-${type}`;
-    chip.textContent = `${CALLOUT_ICON[type] ?? "✎"} ${c?.label ?? type}${c?.fold === "-" ? " ▸" : c?.fold === "+" ? " ▾" : ""}`;
+    chip.textContent = `${node.attrs.icon || CALLOUT_ICON[type] || "✎"} ${c?.label ?? type}${c?.fold === "-" ? " ▸" : c?.fold === "+" ? " ▾" : ""}`;
     chip.title = "Callout type and folding";
   };
   draw();
@@ -261,6 +264,21 @@ const callout: Make = (props) => {
     b.addEventListener("mousedown", (e) => e.preventDefault());
     b.addEventListener("click", () => set(node.attrs.marker.replace(/\]([+-]?)$/, `]${fold}`)));
     menu.append(b);
+  }
+  // A rich page (NS-3C) lets a callout carry an icon of its own: the choices follow the folding ones.
+  if (props.node.type.spec.attrs && "icon" in props.node.type.spec.attrs) {
+    for (const icon of [null, ...CALLOUT_PICK]) {
+      const b = el("button", "", icon ?? "Type's own icon");
+      b.type = "button";
+      b.addEventListener("mousedown", (e) => e.preventDefault());
+      b.addEventListener("click", () => {
+        menu.hidden = true;
+        const pos = posOf(props);
+        if (pos === undefined || !props.editor.isEditable) return;
+        props.editor.view.dispatch(props.editor.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, icon }));
+      });
+      menu.append(b);
+    }
   }
   box.append(menu);
   return {

@@ -1496,3 +1496,79 @@ button.icon { border: none; padding: .25rem; }
 .rich-popover { position: absolute; z-index: 30; width: min(26rem, 100%); padding: .7rem; display: grid; gap: .5rem; }
 .rich-popover label { display: grid; gap: .2rem; }
 .rich-popover textarea { font-family: var(--font-mono); }
+
+/* Rich pages (NS-3C): the palette, power tables, columns, toggles, page width and cover. Colours are stored by name and
+   drawn through these variables, so one page reads in every theme: a foreground for text, a background for highlights
+   and cells. Dark values are the default; the light theme overrides them. */
+:root {
+  --pal-gray-fg: #b6bdc6; --pal-gray-bg: #3b414a;
+  --pal-red-fg: #ff8d8d; --pal-red-bg: #5c2632;
+  --pal-orange-fg: #ffb36b; --pal-orange-bg: #5a381b;
+  --pal-yellow-fg: #f6d84e; --pal-yellow-bg: #5c4712;
+  --pal-green-fg: #72de9d; --pal-green-bg: #1e4b35;
+  --pal-blue-fg: #7db9ff; --pal-blue-bg: #203e64;
+  --pal-purple-fg: #cba4ff; --pal-purple-bg: #452b6c;
+  --pal-pink-fg: #ff9fcd; --pal-pink-bg: #5d2643;
+}
+:root[data-theme="emerald-light"] {
+  --pal-gray-fg: #4f5a68; --pal-gray-bg: #e3e6ea;
+  --pal-red-fg: #b42318; --pal-red-bg: #fde3e0;
+  --pal-orange-fg: #b54708; --pal-orange-bg: #ffe8d0;
+  --pal-yellow-fg: #8a6100; --pal-yellow-bg: #fff0b3;
+  --pal-green-fg: #19703c; --pal-green-bg: #d6f2e1;
+  --pal-blue-fg: #1d56b3; --pal-blue-bg: #dae8ff;
+  --pal-purple-fg: #6a3fb5; --pal-purple-bg: #eadeff;
+  --pal-pink-fg: #b0286f; --pal-pink-bg: #ffdbec;
+}
+.hm-tc-gray { color: var(--pal-gray-fg); } .hm-tc-red { color: var(--pal-red-fg); } .hm-tc-orange { color: var(--pal-orange-fg); } .hm-tc-yellow { color: var(--pal-yellow-fg); }
+.hm-tc-green { color: var(--pal-green-fg); } .hm-tc-blue { color: var(--pal-blue-fg); } .hm-tc-purple { color: var(--pal-purple-fg); } .hm-tc-pink { color: var(--pal-pink-fg); }
+.rich-doc mark.hm-hl { color: inherit; border-radius: .2rem; padding: 0 .1rem; }
+.rich-doc .hm-hl-gray, .rich-doc .hm-bg-gray, .hm-swatch.hm-bg-gray { background: var(--pal-gray-bg); }
+.rich-doc .hm-hl-red, .rich-doc .hm-bg-red, .hm-swatch.hm-bg-red { background: var(--pal-red-bg); }
+.rich-doc .hm-hl-orange, .rich-doc .hm-bg-orange, .hm-swatch.hm-bg-orange { background: var(--pal-orange-bg); }
+.rich-doc .hm-hl-yellow, .rich-doc .hm-bg-yellow, .hm-swatch.hm-bg-yellow { background: var(--pal-yellow-bg); }
+.rich-doc .hm-hl-green, .rich-doc .hm-bg-green, .hm-swatch.hm-bg-green { background: var(--pal-green-bg); }
+.rich-doc .hm-hl-blue, .rich-doc .hm-bg-blue, .hm-swatch.hm-bg-blue { background: var(--pal-blue-bg); }
+.rich-doc .hm-hl-purple, .rich-doc .hm-bg-purple, .hm-swatch.hm-bg-purple { background: var(--pal-purple-bg); }
+.rich-doc .hm-hl-pink, .rich-doc .hm-bg-pink, .hm-swatch.hm-bg-pink { background: var(--pal-pink-bg); }
+.hm-swatch { display: inline-block; width: .9em; height: .9em; margin-right: .5em; border: 1px solid var(--border-strong); border-radius: .2em; vertical-align: -.1em; }
+.menu-list button:has(.hm-swatch) { display: flex; align-items: center; }
+
+/* Page width and cover. */
+.hmdoc-page { width: 100%; margin: 0 auto; }
+.hmdoc-width-normal .hmdoc-page { max-width: 48rem; }
+.hmdoc-width-wide .hmdoc-page { max-width: 76rem; }
+.hmdoc-width-full .hmdoc-page { max-width: none; }
+.hmdoc-cover { position: relative; display: flex; align-items: center; justify-content: flex-end; min-height: 1.6rem; margin: .3rem 0 .6rem; border-radius: .4rem; overflow: hidden; }
+.hmdoc-cover.has-cover { min-height: 8rem; max-height: 16rem; justify-content: center; background: var(--bg-alt); }
+.hmdoc-cover img { display: block; width: 100%; max-height: 16rem; object-fit: cover; }
+.hmdoc-cover-button { position: absolute; right: .4rem; top: .2rem; border: none; background: transparent; color: var(--muted); font-size: .85rem; opacity: .75; }
+.hmdoc-cover.has-cover .hmdoc-cover-button { background: var(--bg-alt); opacity: .9; }
+.hmdoc-cover-button:hover { opacity: 1; color: var(--fg); }
+.hmdoc-cover:focus-visible { outline: 2px solid var(--accent); }
+
+/* Power tables. */
+.hmdoc-doc th, .hmdoc-doc td { white-space: normal; }
+.hmdoc-doc .tableWrapper { overflow-x: auto; }
+.hmdoc-doc .column-resize-handle { position: absolute; right: -2px; top: 0; bottom: 0; width: 4px; background: var(--accent); pointer-events: none; }
+.hmdoc-doc.resize-cursor { cursor: col-resize; }
+.hmdoc-doc .hm-row-hidden, .hmdoc-doc .hm-table-hidden { display: none; }
+.hmdoc-doc .hm-formula-src { display: none; }
+.hm-formula { font-variant-numeric: tabular-nums; cursor: text; }
+.hm-formula-error { color: var(--error); font-weight: 600; }
+.hm-sorted { margin: .6rem 0; white-space: normal; }
+.hm-sorted-note { margin: 0 0 .2rem; color: var(--muted); font-size: .85rem; }
+.hm-sorted table { border-collapse: collapse; table-layout: auto; }
+.hm-sorted th, .hm-sorted td { border: 1px solid var(--border); padding: .25rem .5rem; min-width: 4rem; vertical-align: top; }
+.hm-sorted th { background: var(--bg-alt); font-weight: 700; }
+.hm-sorted td p, .hm-sorted th p { margin: 0; }
+.hm-view-row { display: flex; align-items: center; gap: .5rem; margin: .5rem 0; flex-wrap: wrap; }
+.hm-view-row > span { min-width: 8rem; }
+
+/* Columns and toggles. */
+.hm-columns { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 1rem; margin: .6rem 0; }
+.hm-column { min-width: 0; padding: .1rem .6rem; border: 1px dashed var(--border); border-radius: .3rem; }
+.hm-toggle { position: relative; margin: .5rem 0; padding-left: 1.4rem; }
+.hm-toggle-caret { position: absolute; left: 0; top: .05rem; border: none; background: none; color: var(--muted); padding: 0 .2rem; cursor: pointer; }
+.hm-toggle-summary { font-weight: 600; min-height: 1.4em; }
+.hm-toggle.closed .hm-toggle-content > :not(.hm-toggle-summary) { display: none; }

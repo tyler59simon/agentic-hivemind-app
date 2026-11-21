@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// Text files a notebook shows as editable pages or text files. Everything else opens with the system app.
-const PAGE_EXT: &[&str] = &["md", "markdown"];
+const PAGE_EXT: &[&str] = &["md", "markdown", "hmdoc"];
 const TEXT_EXT: &[&str] = &[
     "txt", "log", "json", "yaml", "yml", "toml", "ini", "cfg", "conf", "csv", "tsv", "xml", "html", "css", "js", "ts", "tsx", "jsx", "py", "rs", "go",
     "java", "c", "h", "cpp", "cs", "ps1", "sh", "bat", "sql", "env",
@@ -314,7 +314,7 @@ mod tests {
         for dir in [".git", ".hivemind/trash", ".obsidian", "node_modules/x", "Projects/Roadmap"] {
             std::fs::create_dir_all(root.join(dir)).unwrap();
         }
-        for file in ["Inbox.md", "Projects/Roadmap.md", "Projects/Roadmap/Q1.markdown", "notes.txt", "photo.png", ".hidden.md", ".Inbox.md.hm-0a.tmp"] {
+        for file in ["Inbox.md", "Projects/Roadmap.md", "Projects/Roadmap/Q1.markdown", "Projects/Roadmap/Plan.hmdoc", "notes.txt", "photo.png", ".hidden.md", ".Inbox.md.hm-0a.tmp"] {
             std::fs::write(root.join(file), "x").unwrap();
         }
         let tree = walk(&root);
@@ -328,6 +328,7 @@ mod tests {
                 ("Projects", &Kind::Dir),
                 ("Projects/Roadmap", &Kind::Dir),
                 ("Projects/Roadmap.md", &Kind::Page),
+                ("Projects/Roadmap/Plan.hmdoc", &Kind::Page),
                 ("Projects/Roadmap/Q1.markdown", &Kind::Page),
             ]
         );

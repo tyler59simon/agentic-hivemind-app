@@ -48,6 +48,7 @@ describe("notebook tree", () => {
   });
 
   it("lists the rows to open to reveal a page", () => {
-    expect(ancestors("Plan/Sub/Page.md")).toEqual(["plan", "plan.md", "plan/sub", "plan/sub.md"]);
+    // A page holding subpages may be Markdown or a rich page (NS-3C).
+    expect(ancestors("Plan/Sub/Page.md")).toEqual(["plan", "plan.md", "plan.hmdoc", "plan/sub", "plan/sub.md", "plan/sub.hmdoc"]);
   });
 });

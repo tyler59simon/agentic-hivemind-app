@@ -1,0 +1,17 @@
+Plan
+Hello world and Other page|alias.
+one
+two
+Tip
+Remember this
+More
+Hidden text
+Left
+Right
+side
+let a = 1;
+let b = 2;
+x^2
+---
+title: X
+---

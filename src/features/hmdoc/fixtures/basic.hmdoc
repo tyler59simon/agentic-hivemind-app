@@ -1,0 +1,219 @@
+{
+  "content": {
+    "content": [
+      {
+        "attrs": {
+          "level": 1
+        },
+        "content": [
+          {
+            "text": "Plan",
+            "type": "text"
+          }
+        ],
+        "type": "heading"
+      },
+      {
+        "content": [
+          {
+            "text": "Hello ",
+            "type": "text"
+          },
+          {
+            "marks": [
+              {
+                "type": "bold"
+              }
+            ],
+            "text": "world",
+            "type": "text"
+          },
+          {
+            "text": " and ",
+            "type": "text"
+          },
+          {
+            "attrs": {
+              "value": "Other page|alias"
+            },
+            "type": "wikiLink"
+          },
+          {
+            "text": ".",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "content": [
+          {
+            "content": [
+              {
+                "content": [
+                  {
+                    "text": "one",
+                    "type": "text"
+                  }
+                ],
+                "type": "paragraph"
+              }
+            ],
+            "type": "listItem"
+          },
+          {
+            "attrs": {
+              "checked": true
+            },
+            "content": [
+              {
+                "content": [
+                  {
+                    "text": "two",
+                    "type": "text"
+                  }
+                ],
+                "type": "paragraph"
+              }
+            ],
+            "type": "taskItem"
+          }
+        ],
+        "type": "bulletList"
+      },
+      {
+        "attrs": {
+          "icon": "★",
+          "marker": "[!tip]"
+        },
+        "content": [
+          {
+            "content": [
+              {
+                "text": "Tip",
+                "type": "text"
+              }
+            ],
+            "type": "calloutTitle"
+          },
+          {
+            "content": [
+              {
+                "text": "Remember this",
+                "type": "text"
+              }
+            ],
+            "type": "paragraph"
+          }
+        ],
+        "type": "callout"
+      },
+      {
+        "attrs": {
+          "open": false
+        },
+        "content": [
+          {
+            "content": [
+              {
+                "text": "More",
+                "type": "text"
+              }
+            ],
+            "type": "toggleSummary"
+          },
+          {
+            "content": [
+              {
+                "text": "Hidden text",
+                "type": "text"
+              }
+            ],
+            "type": "paragraph"
+          }
+        ],
+        "type": "toggle"
+      },
+      {
+        "content": [
+          {
+            "content": [
+              {
+                "content": [
+                  {
+                    "text": "Left",
+                    "type": "text"
+                  }
+                ],
+                "type": "paragraph"
+              }
+            ],
+            "type": "column"
+          },
+          {
+            "content": [
+              {
+                "content": [
+                  {
+                    "text": "Right",
+                    "type": "text"
+                  },
+                  {
+                    "type": "hardBreak"
+                  },
+                  {
+                    "text": "side",
+                    "type": "text"
+                  }
+                ],
+                "type": "paragraph"
+              }
+            ],
+            "type": "column"
+          }
+        ],
+        "type": "columns"
+      },
+      {
+        "attrs": {
+          "language": "js"
+        },
+        "content": [
+          {
+            "text": "let a = 1;\nlet b = 2;",
+            "type": "text"
+          }
+        ],
+        "type": "codeBlock"
+      },
+      {
+        "type": "horizontalRule"
+      },
+      {
+        "attrs": {
+          "closed": true,
+          "value": "\nx^2\n"
+        },
+        "type": "mathBlock"
+      },
+      {
+        "attrs": {
+          "kind": "frontmatter",
+          "value": "---\ntitle: X\n---"
+        },
+        "type": "rawBlock"
+      },
+      {
+        "content": [],
+        "type": "paragraph"
+      }
+    ],
+    "type": "doc"
+  },
+  "format": "hivemind-rich",
+  "meta": {
+    "title": "Basic",
+    "width": "wide"
+  },
+  "schemaVersion": 1
+}

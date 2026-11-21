@@ -4,17 +4,18 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { classify } from "../../lib/errors";
 import { treeQuery } from "../../documents/io";
 import type { DocNotebook } from "../../lib/lm";
-import { metaQuery, revealFile, type Notebook } from "../../lib/notebooks";
+import { isMarkdown, isRichDoc, metaQuery, revealFile, type Notebook } from "../../lib/notebooks";
 import { Menu } from "../../ui/Menu";
 import { toast } from "../../ui/toast";
 import { activeTab, useWorkspace } from "../../workspace/store";
-import { movePath, newPage, newSection, openPage, renamed, trashPath } from "./actions";
+import { convertToRich, movePath, newPage, newRichPage, newSection, openPage, renamed, trashPath } from "./actions";
+import { runExport } from "./richActions";
 import { ancestors, buildTree, dropTarget, loadOpen, saveOpen, visibleRows, type Node } from "./tree";
 import { DeleteConfirm } from "./DeleteConfirm";
 import { REACH_TEXT, stricter } from "./reach";
 
 const low = (s: string) => s.toLowerCase();
-const PAGE = /\.(md|markdown)$/i;
+const PAGE = /\.(md|markdown|hmdoc)$/i;
 const label = (node: Node) => (node.kind === "page" ? node.name.replace(PAGE, "") : node.name);
 
 /** Pointer-event dragging (HTML5 drag and drop is unreliable in WebView2 with Tauri's own drop handling). `over` is a
@@ -135,6 +136,11 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals }: {
     const folder = folderFor(node);
     newPage(client, notebook.id, folder).then(() => { if (node) toggle(node.path, true); }, fail);
   };
+  /** A rich page (NS-3C) is a file of a folder notebook: Living Memory notebooks have none. */
+  const createRich = (node: Node | null) => {
+    const folder = folderFor(node);
+    newRichPage(client, notebook.id, folder).then(() => { if (node) toggle(node.path, true); }, fail);
+  };
   const commitRename = () => {
     const r = renaming;
     setRenaming(null);
@@ -169,6 +175,7 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals }: {
         <Menu label="Notebook actions" align="right" button={<Ellipsis size="1.1em" aria-hidden />} className="icon-menu">
           {(close) => (
             <>
+              {!lm && <li><button role="menuitem" onClick={() => { close(); createRich(null); }}>New rich page</button></li>}
               <li><button role="menuitem" onClick={() => { close(); onSettings(); }}>Notebook settings…</button></li>
               {lm
                 ? <li><button role="menuitem" onClick={() => { close(); onProposals?.(); }}>Agent proposals…</button></li>
@@ -237,6 +244,9 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals }: {
               <>
                 {n.kind !== "dir" && item("Open beside", () => openPage({ notebook: notebook.id, path: n.path }, { split: true }))}
                 {n.kind !== "other" && item(n.kind === "dir" ? "New page here" : "New subpage", () => create(n))}
+                {!lm && n.kind !== "other" && item(n.kind === "dir" ? "New rich page here" : "New rich subpage", () => createRich(n))}
+                {!lm && n.kind === "page" && isMarkdown(n.path) && item("Convert to rich page", () => convertToRich(client, { notebook: notebook.id, path: n.path }).catch(fail))}
+                {!lm && n.kind === "page" && isRichDoc(n.path) && item("Export to Markdown…", () => runExport(client, { notebook: notebook.id, path: n.path }, setDialog))}
                 {n.kind === "dir" && item("New section here", () => { toggle(n.path, true); setNaming({ folder: n.path, value: "" }); })}
                 {item("Rename", () => setRenaming({ path: n.path, value: label(n) }))}
                 {!lm && item("Show in Explorer", () => revealFile(notebook.id, n.path).catch(fail))}
