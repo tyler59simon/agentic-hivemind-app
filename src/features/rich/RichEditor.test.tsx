@@ -11,6 +11,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RichContext } from "../editor/rich/context";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+// ProseMirror measures the selection through ranges when it scrolls to it, and jsdom does not lay them out; without
+// these a test that scrolls throws after it ends, so the run fails only some of the time.
+Range.prototype.getClientRects = function () { return [] as unknown as DOMRectList; };
+Range.prototype.getBoundingClientRect = function () { return new DOMRect(); };
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
 
 const { default: RichEditor } = await import("./RichEditor");
