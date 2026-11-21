@@ -46,7 +46,9 @@ const obsidianFromMarkdown: FromExtension = {
     obsidianWiki(this: Ctx, token: Token) { this.enter({ type: "wikiLink", value: this.sliceSerialize(token).slice(2, -2) } as never, token); },
     obsidianEmbed(this: Ctx, token: Token) { this.enter({ type: "embed", value: this.sliceSerialize(token).slice(3, -2) } as never, token); },
     obsidianHighlight(this: Ctx, token: Token) { this.enter({ type: "highlight", children: [] } as never, token); },
-    obsidianComment(this: Ctx, token: Token) { this.enter({ type: "comment", value: this.sliceSerialize(token) } as never, token); },
+    // The inside of a comment is parsed (so its line endings split the paragraph's lines as usual) and then dropped:
+    // the node keeps the source as written.
+    obsidianComment(this: Ctx, token: Token) { this.enter({ type: "comment", value: this.sliceSerialize(token), children: [] } as never, token); },
   },
   exit: {
     obsidianMath(this: Ctx, token: Token) {
@@ -63,7 +65,10 @@ const obsidianFromMarkdown: FromExtension = {
     obsidianWiki(this: Ctx, token: Token) { this.exit(token); },
     obsidianEmbed(this: Ctx, token: Token) { this.exit(token); },
     obsidianHighlight(this: Ctx, token: Token) { this.exit(token); },
-    obsidianComment(this: Ctx, token: Token) { this.exit(token); },
+    obsidianComment(this: Ctx, token: Token) {
+      delete top(this).children;
+      this.exit(token);
+    },
   },
 };
 
@@ -99,7 +104,15 @@ export const DEFAULT_STYLE: Style = {
 
 const peek = (mark: string) => () => mark;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const literal = (wrap: (v: string, node: any) => string, mark: string): Handle => Object.assign((node: Literal) => wrap(node.value, node), { peek: peek(mark) }) as unknown as Handle;
+/** A node written as its source. Inside a table cell an unescaped `|` would end the cell, so it is escaped there, as
+ *  Obsidian writes `[[Page\|alias]]` in tables (Codex review of 2392f6b, R1-6). */
+const literal = (wrap: (v: string, node: any) => string, mark: string): Handle => Object.assign(
+  (node: Literal, _parent: unknown, state: Parameters<Handle>[2]) => {
+    const out = wrap(node.value, node);
+    return state.stack.includes("tableCell") ? out.replace(/(^|[^\\])\|/g, "$1\\|").replace(/(^|[^\\])\|/g, "$1\\|") : out;
+  },
+  { peek: peek(mark) },
+) as unknown as Handle;
 
 const highlight: Handle = Object.assign(
   (node: Highlight, _parent: unknown, state: Parameters<Handle>[2], info: Parameters<Handle>[3]) => {

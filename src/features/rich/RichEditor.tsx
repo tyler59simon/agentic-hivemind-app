@@ -62,6 +62,8 @@ export default function RichEditor(props: RichEditorProps) {
 
   /** Build the document from `text`; the undo history starts again. */
   const load = (editor: Editor, text: string) => {
+    // A popover holds a position in the old document (R1-12).
+    setPopover(null);
     const page = loadPage(editor.schema, text);
     original.current = page.original;
     last.current = text;
@@ -90,6 +92,8 @@ export default function RichEditor(props: RichEditorProps) {
             void attachPictures(editor, c, view.state.selection.from, pictures.map((p) => p.name), async (i) => attach(new Uint8Array(await pictures[i].file.arrayBuffer()), pictures[i].name));
             return true;
           }
+          // Text pasted into a code block is the code itself (Codex review of 2392f6b, R1-7).
+          if (view.state.selection.$from.parent.type.spec.code) return false;
           if (event.clipboardData?.getData("text/html")) return false;
           const text = event.clipboardData?.getData("text/plain");
           const slice = text ? pastedSlice(view.state.schema, text) : null;
@@ -122,6 +126,8 @@ export default function RichEditor(props: RichEditorProps) {
     });
     editorRef.current = editor;
     load(editor, latest.current.text);
+    // The toolbar and the block handle need the editor: render again now that it exists (R1-8).
+    setTick((t) => t + 1);
     // Pictures dropped on the page are attached where they land (as in Live).
     const unregister = registerDropTarget(editor.view.dom, async (drop) => {
       const c = ctx();
@@ -142,16 +148,19 @@ export default function RichEditor(props: RichEditorProps) {
     if (editor && props.text !== last.current) load(editor, props.text);
   }, [props.text]);
 
-  useEffect(() => { editorRef.current?.setEditable(!props.readOnly); }, [props.readOnly]);
-
-  // Pictures and embeds draw again when the page's grant or files change: the views are rebuilt.
+  // Pictures and embeds draw again when the page's grant or files change, and source boxes and code language fields
+  // follow a change of read-only (R1-11): the views are rebuilt.
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor) return;
+    if (editor.isEditable === props.readOnly) {
+      editor.setEditable(!props.readOnly);
+      setPopover(null);
+    }
     // New view functions make ProseMirror draw every node again.
     const views = Object.fromEntries(Object.entries(editor.view.props.nodeViews ?? {}).map(([k, f]) => [k, (...a: Parameters<typeof f>) => f(...a)]));
     editor.view.setProps({ nodeViews: views });
-  }, [props.ctxStamp]);
+  }, [props.ctxStamp, props.readOnly]);
 
   useEffect(() => {
     const editor = editorRef.current;

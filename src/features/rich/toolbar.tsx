@@ -41,6 +41,23 @@ function align(editor: Editor, to: "left" | "center" | "right") {
   editor.view.dispatch(editor.state.tr.setNodeMarkup(at.table, undefined, { ...table.attrs, align: next }));
 }
 
+/** Add a column after the cell's, or delete the cell's column, with the table's alignments moving along in the same
+ *  step: `align` is by position (Codex review of 2392f6b, R1-10). */
+function column(editor: Editor, add: boolean) {
+  const at = cellColumn(editor);
+  if (!at) return;
+  editor.chain().focus()[add ? "addColumnAfter" : "deleteColumn"]().command(({ tr }) => {
+    const pos = tr.mapping.map(at.table);
+    const table = tr.doc.nodeAt(pos);
+    if (!table || table.type.name !== "table") return true;
+    const next = [...((table.attrs.align as (string | null)[] | null) ?? [])];
+    if (add) next.splice(at.col + 1, 0, null);
+    else next.splice(at.col, 1);
+    tr.setNodeMarkup(pos, undefined, { ...table.attrs, align: next });
+    return true;
+  }).run();
+}
+
 export function RichToolbar({ editor, ctx, readOnly, onLink, onEdit }: { editor: Editor; ctx: RichContext; readOnly: boolean; onLink: () => void; onEdit: (pos: number) => void }) {
   const picker = useRef<HTMLInputElement>(null);
   const items: Item[] = [
@@ -65,12 +82,12 @@ export function RichToolbar({ editor, ctx, readOnly, onLink, onEdit }: { editor:
   ];
   const tableItems: Item[] = [
     { label: "Add row below", icon: <Rows2 size="1em" />, run: (e) => e.chain().focus().addRowAfter().run() },
-    { label: "Add column right", icon: <Columns2 size="1em" />, run: (e) => e.chain().focus().addColumnAfter().run() },
+    { label: "Add column right", icon: <Columns2 size="1em" />, run: (e) => column(e, true) },
     { label: "Align column left", icon: <AlignLeft size="1em" />, run: (e) => align(e, "left") },
     { label: "Align column center", icon: <AlignCenter size="1em" />, run: (e) => align(e, "center") },
     { label: "Align column right", icon: <AlignRight size="1em" />, run: (e) => align(e, "right") },
     { label: "Delete row", icon: <Rows2 size="1em" className="danger-text" />, run: (e) => e.chain().focus().deleteRow().run() },
-    { label: "Delete column", icon: <Columns2 size="1em" className="danger-text" />, run: (e) => e.chain().focus().deleteColumn().run() },
+    { label: "Delete column", icon: <Columns2 size="1em" className="danger-text" />, run: (e) => column(e, false) },
     { label: "Delete table", icon: <Trash2 size="1em" className="danger-text" />, run: (e) => e.chain().focus().deleteTable().run() },
   ];
   const pick = async (files: FileList | null) => {

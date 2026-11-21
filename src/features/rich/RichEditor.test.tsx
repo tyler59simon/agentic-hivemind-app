@@ -228,3 +228,94 @@ describe("the page around the editor", () => {
     expect(changes[changes.length - 1]).toBe("Text\n\n## Sub\n");
   });
 });
+
+describe("Codex review of 2392f6b", () => {
+  const posOf = (editor: Editor, type: string) => {
+    let at = -1;
+    editor.state.doc.descendants((n, pos) => { if (at < 0 && n.type.name === type) at = pos; return at < 0; });
+    return at;
+  };
+  /** Where the text `text` starts. */
+  const textAt = (editor: Editor, text: string) => {
+    let at = -1;
+    editor.state.doc.descendants((n, pos) => { if (at < 0 && n.isText && n.text!.includes(text)) at = pos + n.text!.indexOf(text); return at < 0; });
+    return at;
+  };
+  const press = (editor: Editor, init: KeyboardEventInit) => editor.view.someProp("handleKeyDown", (f) => f(editor.view, new KeyboardEvent("keydown", init)));
+  const paste = (editor: Editor, text: string) => {
+    const clipboardData = { getData: (t: string) => (t === "text/plain" ? text : ""), files: [], types: [] };
+    const event = Object.assign(new Event("paste"), { clipboardData }) as unknown as ClipboardEvent;
+    return editor.view.someProp("handlePaste", (f) => f(editor.view, event, editor.state.doc.slice(0, 0)));
+  };
+
+  it("shows the toolbar as soon as Rich opens (R1-8)", async () => {
+    const { el } = await mount("Text\n");
+    expect(el.querySelector(".rich-toolbar")).not.toBeNull();
+  });
+
+  it("pastes plain text into a code block as code (R1-7)", async () => {
+    const { editor } = await mount("```\ncode\n```\n");
+    await act(async () => { editor.commands.setTextSelection(2); });
+    expect(paste(editor, "- option\n- second")).toBeFalsy();
+  });
+
+  it.each([
+    ["Delete column", ["right"]],
+    ["Add column right", ["left", null, "right"]],
+  ] as const)("%s keeps each column's alignment (R1-10)", async (label, align) => {
+    const { editor, el, changes } = await mount("| a | b |\n|:--|--:|\n| 1 | 2 |\n");
+    await act(async () => { editor.commands.setTextSelection(textAt(editor, "a")); });
+    const button = el.querySelector(`[aria-label="${label}"]`)!;
+    await act(async () => { button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); });
+    const table = parse(changes[changes.length - 1]).children[0] as { type: string; align: unknown[] };
+    expect(table.type).toBe("table");
+    expect(table.align).toEqual(align);
+  });
+
+  it("locks and unlocks source boxes with the page (R1-11)", async () => {
+    const { el, render } = await mount("<div>x</div>\n");
+    const content = () => el.querySelector(".rich-raw .cm-content")!.getAttribute("contenteditable");
+    expect(content()).toBe("true");
+    await render("<div>x</div>\n", true);
+    expect(content()).toBe("false");
+    await render("<div>x</div>\n", false);
+    expect(content()).toBe("true");
+  });
+
+  it("closes an open popover when the text is reloaded (R1-12)", async () => {
+    const { editor, el, render } = await mount("See [[Old]] here.\n");
+    const pos = posOf(editor, "wikiLink");
+    await act(async () => { editor.view.someProp("handleDoubleClickOn", (f) => f(editor.view, pos, editor.state.doc.nodeAt(pos)!, pos, new MouseEvent("dblclick"), true)); });
+    expect(el.querySelector(".rich-popover")).not.toBeNull();
+    await render("[[Other]] first.\n");
+    expect(el.querySelector(".rich-popover")).toBeNull();
+  });
+
+  it("opens only the current target of a wiki link after it changes (R1-13)", async () => {
+    const openPage = vi.fn();
+    const { editor, el } = await mount("See [[Old]] here.\n", { ctx: context({ openPage }) });
+    const pos = posOf(editor, "wikiLink");
+    await act(async () => { editor.view.dispatch(editor.state.tr.setNodeMarkup(pos, undefined, { ...editor.state.doc.nodeAt(pos)!.attrs, value: "New" })); });
+    el.querySelector(".rich-wikilink")!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, ctrlKey: true }));
+    expect(openPage).toHaveBeenCalledTimes(1);
+    expect(openPage).toHaveBeenCalledWith("New", false);
+  });
+
+  it("Undo while a picture is saving cancels its link and keeps earlier edits (R1-14)", async () => {
+    let finish: (link: string) => void = () => {};
+    const attach = vi.fn(() => new Promise<string>((r) => { finish = r; }));
+    const fail = vi.fn();
+    const { editor, changes } = await mount("Start\n", { ctx: context({ attach, fail }) });
+    await act(async () => { editor.commands.setTextSelection(endOf(editor.state.doc, 0)); editor.commands.insertContent("x"); });
+    await act(async () => {
+      const file = Object.assign(new File([new Uint8Array([1])], "shot.png", { type: "image/png" }), { arrayBuffer: async () => new Uint8Array([1]).buffer });
+      const clipboardData = { getData: () => "", files: [file], types: [] };
+      editor.view.someProp("handlePaste", (f) => f(editor.view, Object.assign(new Event("paste"), { clipboardData }) as unknown as ClipboardEvent, editor.state.doc.slice(0, 0)));
+    });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    await act(async () => { expect(press(editor, { key: "z", ctrlKey: true })).toBe(true); });
+    await act(async () => { finish("![shot](shot.png)"); await new Promise((r) => setTimeout(r, 0)); });
+    expect(changes[changes.length - 1]).toBe("Startx\n");
+    expect(fail).not.toHaveBeenCalled();
+  });
+});

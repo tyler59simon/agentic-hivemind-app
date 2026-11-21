@@ -152,7 +152,8 @@ export function Workspace() {
       }
       else if (e.key === "Tab") { e.preventDefault(); ws.cycle(e.shiftKey ? -1 : 1); }
       else if (e.key === "\\") { e.preventDefault(); ws.split(); }
-      else if (e.key.toLowerCase() === "e") {
+      // An editor that used the key (Rich mode's inline code) has the last word (Codex review of 2392f6b, R1-9).
+      else if (e.key.toLowerCase() === "e" && !e.defaultPrevented) {
         e.preventDefault();
         const tab = pane?.tabs.find((t) => t.id === pane.active);
         if (tab?.kind === "note") ws.updateTab(tab.id, { mode: tab.mode === "live" ? "reading" : "live" });

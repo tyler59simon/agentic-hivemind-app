@@ -25,6 +25,7 @@ declare module "micromark-util-types" {
     obsidianComment: "obsidianComment";
     obsidianCommentSequence: "obsidianCommentSequence";
     obsidianCommentTemporary: "obsidianCommentTemporary";
+    obsidianCommentText: "obsidianCommentText";
   }
   interface Token {
     /** Display math whose closing `$$` was found. */
@@ -259,32 +260,34 @@ function pairing({ marker, span, flanking }: Pairing): Construct {
         return more(code);
       };
     },
+    // Each closing run pairs with the nearest open run before it, found on a stack, so runs that never pair cost
+    // nothing (Codex review of 2392f6b, R1-15). The inside of a span keeps its events, line endings included, so a
+    // comment over two lines of a paragraph parses (R1-P1).
     resolveAll(events: Event[], context: TokenizeContext): Event[] {
-      let index = -1;
-      while (++index < events.length) {
-        const close = events[index];
-        if (close[0] !== "enter" || close[1].type !== temporary || !close[1]._close) continue;
-        let open = index;
-        while (open--) {
+      const openers: number[] = [];
+      for (let index = 0; index < events.length; index++) {
+        const e = events[index];
+        if (e[1].type !== temporary) continue;
+        if (e[0] === "enter" && e[1]._close && openers.length) {
+          const open = openers.pop()!;
           const o = events[open];
-          if (o[0] !== "exit" || o[1].type !== temporary || !o[1]._open) continue;
           o[1].type = sequence;
-          close[1].type = sequence;
-          const whole: Token = { type: span, start: { ...o[1].start }, end: { ...close[1].end } };
+          e[1].type = sequence;
+          const whole: Token = { type: span, start: { ...o[1].start }, end: { ...e[1].end } };
           const inner = events.slice(open + 1, index);
           const insideSpan = context.parser.constructs.insideSpan.null;
           const resolved = insideSpan ? resolveAllOf(insideSpan, inner, context) : inner;
-          const text: Token = { type: span === "obsidianHighlight" ? "obsidianHighlightText" : "data", start: { ...o[1].end }, end: { ...close[1].start } };
+          const text: Token = { type: span === "obsidianHighlight" ? "obsidianHighlightText" : "obsidianCommentText", start: { ...o[1].end }, end: { ...e[1].start } };
           const next: Event[] = [
             ["enter", whole, context], ["enter", o[1], context], ["exit", o[1], context],
-            ...(span === "obsidianHighlight" ? [["enter", text, context] as Event, ...resolved, ["exit", text, context] as Event] : []),
-            ["enter", close[1], context], ["exit", close[1], context], ["exit", whole, context],
+            ["enter", text, context], ...resolved, ["exit", text, context],
+            ["enter", e[1], context], ["exit", e[1], context], ["exit", whole, context],
           ];
-          // A comment keeps its inside as written: its events are dropped and the node takes the source slice.
           events.splice(open - 1, index - open + 3, ...next);
           index = open - 1 + next.length - 1;
-          break;
+          continue;
         }
+        if (e[0] === "exit" && e[1]._open) openers.push(index);
       }
       for (const e of events) if (e[1].type === temporary) e[1].type = "data";
       return events;

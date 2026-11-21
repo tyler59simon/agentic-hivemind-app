@@ -259,7 +259,13 @@ export function loadPage(schema: Schema, source: string): { doc: PMNode; origina
   const gaps: string[] = [];
   let end = 0;
   const nodes = root.children.map((n, i) => {
-    const from = n.position!.start.offset!, to = n.position!.end.offset!;
+    const to = n.position!.end.offset!;
+    // The indentation before a block's first line belongs to the block: an indented fence strips it from its body,
+    // so a moved block must take it along (Codex review of 2392f6b, R1-5).
+    let from = n.position!.start.offset!;
+    let lead = from;
+    while (lead > end && (source[lead - 1] === " " || source[lead - 1] === "\t")) lead--;
+    if (lead === 0 || source[lead - 1] === "\n") from = lead;
     gaps.push(source.slice(end, from));
     slices.push({ from, to });
     end = to;

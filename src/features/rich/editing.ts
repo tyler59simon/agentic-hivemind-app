@@ -132,8 +132,25 @@ export function slashPlugin(keys: { current: ((key: string) => boolean) | null }
 const pendingKey = new PluginKey<DecorationSet>("richPending");
 type PendingMeta = { add?: { id: number; pos: number; name: string }[]; remove?: number[] };
 
+/** Pictures whose marker Undo took away: their attachments get no link, and no message. */
+const cancelled = new Set<number>();
+
+/** Undo while pictures are being saved cancels their links and undoes nothing else, as in Live (Codex review of
+ *  2392f6b, R1-14). The markers never enter the history, so the history's own Undo would skip them. */
+function cancelPendingUndo(view: EditorView): boolean {
+  const ids = (pendingKey.getState(view.state)?.find() ?? []).map((d) => (d.spec as { id: number }).id);
+  if (!ids.length) return false;
+  for (const id of ids) cancelled.add(id);
+  view.dispatch(view.state.tr.setMeta(pendingKey, { remove: ids } satisfies PendingMeta).setMeta("addToHistory", false));
+  return true;
+}
+
 export const PendingPictures = Extension.create({
   name: "richPending",
+  priority: 1000,
+  addKeyboardShortcuts() {
+    return { "Mod-z": () => cancelPendingUndo(this.editor.view) };
+  },
   addProseMirrorPlugins() {
     return [new Plugin({
       key: pendingKey,
@@ -154,7 +171,16 @@ export const PendingPictures = Extension.create({
           return next;
         },
       },
-      props: { decorations: (state) => pendingKey.getState(state) },
+      props: {
+        decorations: (state) => pendingKey.getState(state),
+        handleDOMEvents: {
+          beforeinput: (view, e) => {
+            if (e.inputType !== "historyUndo" || !cancelPendingUndo(view)) return false;
+            e.preventDefault();
+            return true;
+          },
+        },
+      },
     })];
   },
 });
@@ -186,6 +212,7 @@ export async function attachPictures(editor: Editor, ctx: RichContext, pos: numb
     }
     const at = pendingPos(editor.state, ids[i]);
     const tr = editor.state.tr.setMeta(pendingKey, { remove: [ids[i]] } satisfies PendingMeta);
+    if (cancelled.delete(ids[i])) continue;
     if (at === null || !link) {
       editor.view.dispatch(tr.setMeta("addToHistory", false));
       if (link) ctx.fail(`${names[i]} was attached, but the place for its link was removed, so the page has no link to it.`);

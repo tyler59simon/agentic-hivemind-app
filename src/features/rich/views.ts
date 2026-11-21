@@ -112,8 +112,9 @@ const embed = atomView((box, node, env) => {
 
 /** `[[target#heading|alias]]`: the alias (or the target) shown as a link. */
 export function wikiParts(value: string) {
+  // In a table cell the pipe is written `\|` (R1-6).
   const pipe = value.indexOf("|");
-  const target = (pipe >= 0 ? value.slice(0, pipe) : value).trim();
+  const target = (pipe >= 0 ? value.slice(0, pipe) : value).replace(/\\$/, "").trim();
   const alias = pipe >= 0 ? value.slice(pipe + 1).trim() : "";
   return { target, shown: alias || target };
 }
@@ -122,12 +123,15 @@ const wikiLink = atomView((box, node, env) => {
   const { target, shown } = wikiParts(node.attrs.value);
   box.textContent = shown;
   box.title = `${target} (Ctrl+click to open, Ctrl+Shift+click in a split)`;
-  box.addEventListener("mousedown", (e) => {
+  const open = (e: MouseEvent) => {
     if (!(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
     e.stopPropagation();
     env.ctx().openPage(target.replace(/#.*$/, "") || target, e.shiftKey);
-  });
+  };
+  box.addEventListener("mousedown", open);
+  // A redraw for a new target removes this one's listener (Codex review of 2392f6b, R1-13).
+  return () => box.removeEventListener("mousedown", open);
 }, "span", "rich-wikilink");
 
 const math = (display: boolean) => atomView((box, node) => {
@@ -177,7 +181,7 @@ const rawBlock: Make = (props, _env) => {
       CodeView.editable.of(props.editor.isEditable),
       cmKeymap.of([{ key: "Escape", run: () => { props.editor.commands.focus(); return true; } }]),
       CodeView.updateListener.of((u) => {
-        if (!u.docChanged || updating) return;
+        if (!u.docChanged || updating || !props.editor.isEditable) return;
         const pos = posOf(props);
         if (pos === undefined) return;
         const value = u.state.doc.toString();
@@ -238,7 +242,7 @@ const callout: Make = (props) => {
   const set = (marker: string) => {
     menu.hidden = true;
     const pos = posOf(props);
-    if (pos === undefined) return;
+    if (pos === undefined || !props.editor.isEditable) return;
     props.editor.view.dispatch(props.editor.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, marker }));
   };
   for (const t of CALLOUT_TYPES) {
@@ -287,7 +291,7 @@ const codeBlock: Make = (props) => {
   lang.readOnly = !props.editor.isEditable;
   lang.addEventListener("change", () => {
     const pos = posOf(props);
-    if (pos === undefined) return;
+    if (pos === undefined || !props.editor.isEditable) return;
     const language = lang.value.trim() || null;
     if (language === (node.attrs.language ?? null)) return;
     props.editor.view.dispatch(props.editor.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, language }));
