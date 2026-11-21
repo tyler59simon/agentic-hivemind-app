@@ -184,6 +184,17 @@ describe("code range", () => {
     expect(update(editor).hidden).toBe(true);
   });
 
+  it("UI-5: a title that is the range's label is shown once; another title is shown beside it", async () => {
+    const files = context({ read: vi.fn(async () => loaded(text)) as never });
+    const same = mount([{ ...block, attrs: { ...block.attrs, title: "src/a.ts:2-3" } }], files);
+    await settle();
+    const head = same.view.dom.querySelector(".hm-code-range .hm-embed-head")!;
+    expect(head.textContent!.match(/src\/a\.ts:2-3/g)).toHaveLength(1);
+    const other = mount([{ ...block, attrs: { ...block.attrs, title: "Adding" } }], files);
+    await settle();
+    expect(other.view.dom.querySelector(".hm-code-range .hm-embed-head")!.textContent).toContain("src/a.ts:2-3Adding");
+  });
+
   it("a missing file shows the stored lines and says so", async () => {
     const editor = mount([block], context());
     await settle();

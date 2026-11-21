@@ -8,6 +8,19 @@ import { blockHeight, frontZ, GRID, MIN_BLOCK_H, moved, newFrame, resized, type 
 
 const NUMBERS = ["x", "y", "w", "h", "z"] as const;
 
+/** The width frames may use in a block's canvas, or undefined when it has none (not laid out). The layout width is
+ *  fractional when the pane's is, and `clientWidth` rounds it up: a frame that fits the rounded width overflows the real one
+ *  by a fraction of a pixel and the block shows a scrollbar, so the width is the floor of the measured box. */
+export function canvasWidth(canvas: Element | null | undefined): number | undefined {
+  if (!canvas) return undefined;
+  const box = Math.floor(canvas.getBoundingClientRect().width);
+  return box > 0 ? box : (canvas as HTMLElement).clientWidth || undefined;
+}
+
+/** Gives up the drag in progress, in whichever frame it is: only one drag can be going on, and a new one first lets go of
+ *  one whose end was never seen. */
+let giveUp: (() => void) | null = null;
+
 /** A frame's attributes as a `Frame`. */
 const frameOf = (node: PMNode): Frame => ({ x: node.attrs.x, y: node.attrs.y, w: node.attrs.w, h: node.attrs.h, z: node.attrs.z });
 
@@ -118,34 +131,65 @@ export const FrameBlock = Node.create({
       draw();
       const at = () => (typeof getPos === "function" ? getPos() : undefined);
 
-      // One drag is one change: the frame follows the pointer by its style, and the page changes when the pointer is let go.
-      let drag: { pointer: number; x: number; y: number; from: Frame; now: Frame; size: boolean } | null = null;
+      /** The width the frame may use: its block's canvas, when it has one (a block not laid out has none). */
+      const widthOf = () => canvasWidth(dom.parentElement);
+
+      // One drag is one change: the frame follows the pointer by its style, and the page changes when the pointer is let
+      // go. The drag follows the window, not the handle, and starts from the frame as the document holds it, so a pointer
+      // released elsewhere, a view drawn again meanwhile (the drag then ends in the document alone) or a drag that never ended cannot leave the frame drawn where the
+      // document does not have it: every drag ends in one change to the document or in the style put back.
+      let drag: { pointer: number; x: number; y: number; pos: number; from: Frame; now: Frame; size: boolean; width: number | undefined; stop: () => void } | null = null;
+      const abandon = () => finish(false);
+      const finish = (keep: boolean) => {
+        const done = drag;
+        if (!done) return;
+        drag = null;
+        done.stop();
+        if (giveUp === abandon) giveUp = null;
+        const current = editor.state.doc.nodeAt(done.pos);
+        const intact = current?.type.name === "frame" && JSON.stringify(frameOf(current)) === JSON.stringify(done.from);
+        if (keep && intact && JSON.stringify(done.now) !== JSON.stringify(done.from)) setFrame(editor, done.pos, done.now, true);
+        // Whatever happened, the style is the document's again.
+        draw();
+      };
       const track = (el: HTMLElement, size: boolean) => {
         el.addEventListener("pointerdown", (e) => {
           if (!editor.isEditable || e.button !== 0 || (e.target as HTMLElement).closest(".hm-frame-remove")) return;
+          const pos = at();
+          const current = pos === undefined ? null : editor.state.doc.nodeAt(pos);
+          if (pos === undefined || current?.type.name !== "frame") return;
           e.preventDefault();
           e.stopPropagation();
-          const from = frameOf(node);
-          drag = { pointer: e.pointerId, x: e.clientX, y: e.clientY, from, now: from, size };
-          el.setPointerCapture?.(e.pointerId);
+          // A drag whose end was never seen, in this frame or another, is given up before this one starts.
+          giveUp?.();
+          const from = frameOf(current);
+          const pointer = e.pointerId;
+          const onMove = (m: PointerEvent) => {
+            if (!drag || m.pointerId !== pointer) return;
+            // The button was let go outside the window: that is the end of the drag.
+            if (m.buttons === 0 && m.pointerType === "mouse") { finish(true); return; }
+            const dx = m.clientX - drag.x, dy = m.clientY - drag.y;
+            drag.now = size ? resized(from, dx, dy, drag.width) : moved(from, dx, dy, drag.width);
+            show(drag.now);
+          };
+          const onUp = (u: PointerEvent) => { if (u.pointerId === pointer) finish(true); };
+          const onCancel = (u: PointerEvent) => { if (u.pointerId === pointer) finish(false); };
+          const onBlur = () => finish(false);
+          window.addEventListener("pointermove", onMove, true);
+          window.addEventListener("pointerup", onUp, true);
+          window.addEventListener("pointercancel", onCancel, true);
+          window.addEventListener("blur", onBlur);
+          const stop = () => {
+            window.removeEventListener("pointermove", onMove, true);
+            window.removeEventListener("pointerup", onUp, true);
+            window.removeEventListener("pointercancel", onCancel, true);
+            window.removeEventListener("blur", onBlur);
+            try { el.releasePointerCapture?.(pointer); } catch { /* the capture was already gone */ }
+          };
+          giveUp = abandon;
+          drag = { pointer, x: e.clientX, y: e.clientY, pos, from, now: from, size, width: widthOf(), stop };
+          try { el.setPointerCapture?.(pointer); } catch { /* the window listeners carry the drag */ }
         });
-        el.addEventListener("pointermove", (e) => {
-          if (!drag || drag.pointer !== e.pointerId) return;
-          const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-          drag.now = size ? resized(drag.from, dx, dy) : moved(drag.from, dx, dy);
-          show(drag.now);
-        });
-        const end = (keep: boolean) => (e: PointerEvent) => {
-          if (!drag || drag.pointer !== e.pointerId) return;
-          const done = drag;
-          drag = null;
-          el.releasePointerCapture?.(e.pointerId);
-          const pos = at();
-          if (keep && pos !== undefined && JSON.stringify(done.now) !== JSON.stringify(done.from)) setFrame(editor, pos, done.now, true);
-          else draw();
-        };
-        el.addEventListener("pointerup", end(true));
-        el.addEventListener("pointercancel", end(false));
       };
       track(handle, false);
       track(corner, true);
@@ -155,7 +199,7 @@ export const FrameBlock = Node.create({
         if (!step || pos === undefined || !editor.isEditable) return;
         e.preventDefault();
         const from = frameOf(node);
-        setFrame(editor, pos, e.shiftKey ? resized(from, step[0], step[1]) : moved(from, step[0], step[1]), true);
+        setFrame(editor, pos, e.shiftKey ? resized(from, step[0], step[1], widthOf()) : moved(from, step[0], step[1], widthOf()), true);
       });
       remove.addEventListener("mousedown", (e) => e.preventDefault());
       remove.addEventListener("click", () => {
@@ -206,7 +250,8 @@ export function addFrame(editor: Editor, blockPos: number): boolean {
   if (block?.type.name !== "freeform") return false;
   const frames: Frame[] = [];
   block.forEach((f) => frames.push(frameOf(f)));
-  const next = newFrame(frames);
+  const canvas = (editor.view.nodeDOM(blockPos) as HTMLElement | null)?.querySelector?.(".hm-freeform-canvas");
+  const next = newFrame(frames, canvasWidth(canvas));
   const at = blockPos + block.nodeSize - 1;
   const tr = editor.state.tr.insert(at, schema.nodes.frame.create(next, schema.nodes.paragraph.create()));
   tr.setNodeMarkup(blockPos, undefined, { ...block.attrs, height: blockHeight([...frames, next]) });
@@ -249,7 +294,7 @@ export function inFrame(editor: Editor): boolean {
 export function insertFreeform(editor: Editor): boolean {
   if (inFrame(editor)) return false;
   const { schema } = editor.state;
-  const frame = newFrame([]);
+  const frame = newFrame([], canvasWidth(editor.view.dom));
   const node = schema.nodes.freeform.create({ height: blockHeight([frame]) }, [schema.nodes.frame.create(frame, schema.nodes.paragraph.create())]);
   const { $from } = editor.state.selection;
   const empty = $from.parent.type.name === "paragraph" && $from.parent.content.size === 0 && $from.depth >= 1;

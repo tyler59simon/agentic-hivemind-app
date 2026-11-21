@@ -38,7 +38,7 @@ describe("moving and resizing a frame", () => {
     expect(steps).toBe(1);
     expect(framesOf(editor)[0]).toMatchObject({ x: 40, y: 400, w: 160, h: 64 });
     // The block grew to hold the frame, with its margin.
-    expect(heightOf(editor)).toBe(400 + 64 + 16);
+    expect(heightOf(editor)).toBe(400 + 64 + 32);
     // Moving it back up shrinks the block to its minimum.
     setFrame(editor, FRAME, { y: 16 });
     expect(heightOf(editor)).toBe(240);
@@ -47,7 +47,7 @@ describe("moving and resizing a frame", () => {
   it("one Undo takes back the frame and the block's height together", () => {
     const editor = make(doc(free(240, frame(16, 16))));
     setFrame(editor, FRAME, { y: 400 });
-    expect(heightOf(editor)).toBe(480);
+    expect(heightOf(editor)).toBe(496);
     editor.commands.undo();
     expect(framesOf(editor)[0].y).toBe(16);
     expect(heightOf(editor)).toBe(240);
@@ -157,7 +157,7 @@ describe("adding and removing frames", () => {
     const frames = framesOf(editor);
     expect(frames).toHaveLength(2);
     expect(frames[1]).toMatchObject({ x: 16, y: 224, w: 320, h: 96, z: 2 });
-    expect(heightOf(editor)).toBe(224 + 96 + 16);
+    expect(heightOf(editor)).toBe(224 + 96 + 32);
     expect(editor.state.doc.firstChild!.child(1).firstChild!.type.name).toBe("paragraph");
     expect(editor.state.selection.$from.parent.type.name).toBe("paragraph");
     expect(inFrame(editor)).toBe(true);

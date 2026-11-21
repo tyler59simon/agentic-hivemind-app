@@ -26,7 +26,7 @@ describe("the block's height", () => {
   it("grows to fit the lowest frame, and shrinks back to the minimum", () => {
     expect(blockHeight([])).toBe(MIN_BLOCK_H);
     expect(blockHeight([{ y: 16, h: 64 }])).toBe(MIN_BLOCK_H);
-    expect(blockHeight([{ y: 16, h: 64 }, { y: 400, h: 100 }])).toBe(516);
+    expect(blockHeight([{ y: 16, h: 64 }, { y: 400, h: 100 }])).toBe(532);
     expect(blockHeight([{ y: 16, h: 64 }, { y: 24, h: 100 }])).toBe(MIN_BLOCK_H);
   });
 });

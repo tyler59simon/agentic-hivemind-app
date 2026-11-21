@@ -119,8 +119,10 @@ const codeRange = embedView((box, node, env, props) => {
   const a = node.attrs as { file: string; from: number; to: number; sha256: string; text: string; title: string };
   box.classList.add("hm-code-range");
   const head = el("div", "hm-embed-head");
-  head.append(el("code", "hm-range-label", rangeLabel(a.file, a.from, a.to)));
-  if (a.title) head.append(el("span", "muted", a.title));
+  const label = rangeLabel(a.file, a.from, a.to);
+  head.append(el("code", "hm-range-label", label));
+  // A title that is the label (what an untitled range may be given) is not said twice.
+  if (a.title && a.title !== label) head.append(el("span", "muted", a.title));
   const badge = el("span", "hm-range-badge");
   badge.hidden = true;
   const update = el("button", "link", "Update");

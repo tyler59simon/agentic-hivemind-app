@@ -5,7 +5,7 @@ export const MIN_FRAME_W = 64;
 export const MIN_FRAME_H = 32;
 /** The block never draws shorter than this, and keeps this margin below its lowest frame. */
 export const MIN_BLOCK_H = 240;
-export const BLOCK_MARGIN = 16;
+export const BLOCK_MARGIN = 32;
 /** The largest a stored number may be (the same bound `rules.ts` holds). */
 const LIMIT = 100_000;
 
@@ -14,15 +14,22 @@ export interface Frame { x: number; y: number; w: number; h: number; z: number }
 export const snap = (v: number): number => Math.round(v / GRID) * GRID;
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
+/** The largest multiple of the grid that is at most `v`: a limit that is not on the grid is rounded down to it, so a frame
+ *  stopped at the block's edge is still on the grid. */
+const down = (v: number) => Math.floor(v / GRID) * GRID;
 
-/** A frame moved by `dx`, `dy` from `from`: snapped, and never left of or above the block. */
-export function moved(from: Frame, dx: number, dy: number): Frame {
-  return { ...from, x: clamp(snap(from.x + dx), 0, LIMIT), y: clamp(snap(from.y + dy), 0, LIMIT) };
+/** A frame moved by `dx`, `dy` from `from`: snapped, and never left of or above the block, nor, when the block's `width`
+ *  is known, past its right edge (a frame wider than the block goes to its left edge). */
+export function moved(from: Frame, dx: number, dy: number, width?: number): Frame {
+  const right = width ? Math.max(0, down(width - from.w)) : LIMIT;
+  return { ...from, x: clamp(snap(from.x + dx), 0, right), y: clamp(snap(from.y + dy), 0, LIMIT) };
 }
 
-/** A frame whose bottom right corner moved by `dx`, `dy`: snapped, and never smaller than the minimum. */
-export function resized(from: Frame, dx: number, dy: number): Frame {
-  return { ...from, w: clamp(snap(from.w + dx), MIN_FRAME_W, LIMIT), h: clamp(snap(from.h + dy), MIN_FRAME_H, LIMIT) };
+/** A frame whose bottom right corner moved by `dx`, `dy`: snapped, never smaller than the minimum, and when the block's
+ *  `width` is known never past its right edge. */
+export function resized(from: Frame, dx: number, dy: number, width?: number): Frame {
+  const wide = width ? Math.max(MIN_FRAME_W, down(width - from.x)) : LIMIT;
+  return { ...from, w: clamp(snap(from.w + dx), MIN_FRAME_W, wide), h: clamp(snap(from.h + dy), MIN_FRAME_H, LIMIT) };
 }
 
 /** The height a block needs for these frames: it grows to fit the lowest one and shrinks back when that one moves up. */
@@ -44,8 +51,9 @@ export function frameOrder(frames: readonly Pick<Frame, "x" | "y">[]): number[] 
 }
 
 /** A place for a new frame: below the lowest one, or at the top left of an empty block. */
-export function newFrame(frames: readonly Pick<Frame, "y" | "h" | "z">[]): Frame {
+export function newFrame(frames: readonly Pick<Frame, "y" | "h" | "z">[], width?: number): Frame {
   const bottom = frames.reduce((low, f) => Math.max(low, f.y + f.h), 0);
   const z = frames.reduce((m, f) => Math.max(m, f.z), 0) + 1;
-  return { x: GRID * 2, y: frames.length ? snap(bottom + GRID) : GRID * 2, w: 320, h: 96, z: Math.min(z, LIMIT) };
+  const x = GRID * 2;
+  return { x, y: frames.length ? snap(bottom + GRID) : GRID * 2, w: width ? clamp(down(width - x), MIN_FRAME_W, 320) : 320, h: 96, z: Math.min(z, LIMIT) };
 }
