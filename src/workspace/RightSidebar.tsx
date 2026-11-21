@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { keyOf, useDocuments } from "../documents/store";
 import { isLoose, recentQuery, recentRef } from "../lib/opens";
 import { useNotebookTitle } from "../features/notes/notebookTitle";
@@ -36,22 +36,50 @@ export function NoteRail() {
   );
 }
 
-/** Headings of an open page, from its current text (unsaved edits included). */
-function PageOutline({ tab }: { tab: Tab }) {
-  const text = useDocuments((s) => (tab.file ? s.docs[keyOf(tab.file)]?.text : undefined)) ?? "";
+/** The most headings the outline lists; a longer page says how many more it has. */
+export const OUTLINE_MAX = 500;
+
+/** Pages longer than this update their outline once typing pauses. */
+const OUTLINE_SETTLE_OVER = 100_000;
+const OUTLINE_SETTLE_MS = 400;
+
+/** `value`, or for a long text its value once it has stopped changing for a moment. */
+function useSettled(value: string): string {
+  const [settled, setSettled] = useState(value);
+  const long = value.length > OUTLINE_SETTLE_OVER;
+  useEffect(() => {
+    if (!long) return;
+    const timer = setTimeout(() => setSettled(value), OUTLINE_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [value, long]);
+  return long ? settled : value;
+}
+
+/** Headings of an open page, from its current text (unsaved edits included). A long page's outline follows once typing
+ *  pauses, and the list is capped, so typing never waits for it (NS-3A UI pass: a 950 KB page with 17,000 headings
+ *  took about 0.7 s per key). */
+export function PageOutline({ tab }: { tab: Tab }) {
+  const current = useDocuments((s) => (tab.file ? s.docs[keyOf(tab.file)]?.text : undefined)) ?? "";
+  const text = useSettled(current);
   const revealLine = useWorkspace((s) => s.revealLine);
-  const headings = outline(text);
-  if (!headings.length) return <p className="muted pad">No headings.</p>;
-  const top = Math.min(...headings.map((h) => h.level));
-  return (
-    <ul className="outline">
-      {headings.map((h) => (
-        <li key={h.line} style={{ paddingLeft: (h.level - top) * 12 }}>
-          <button onClick={() => revealLine(tab.id, h.line)}>{h.text}</button>
-        </li>
-      ))}
-    </ul>
-  );
+  const headings = useMemo(() => outline(text), [text]);
+  // The list is made once per outline, not on every keystroke that leaves it the same.
+  const list = useMemo(() => {
+    if (!headings.length) return <p className="muted pad">No headings.</p>;
+    const top = headings.reduce((m, h) => Math.min(m, h.level), 6);
+    const more = headings.length - OUTLINE_MAX;
+    return (
+      <ul className="outline">
+        {headings.slice(0, OUTLINE_MAX).map((h) => (
+          <li key={h.line} style={{ paddingLeft: (h.level - top) * 12 }}>
+            <button onClick={() => revealLine(tab.id, h.line)}>{h.text}</button>
+          </li>
+        ))}
+        {more > 0 && <li className="muted">{more.toLocaleString()} more {more === 1 ? "heading" : "headings"}</li>}
+      </ul>
+    );
+  }, [headings, revealLine, tab.id]);
+  return list;
 }
 
 /** The rail beside a notebook page: its outline and where the file is. */

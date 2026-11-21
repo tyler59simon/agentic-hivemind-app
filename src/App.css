@@ -627,7 +627,8 @@ input[type="checkbox"] { accent-color: var(--success); }
 .md-editor .cm-footnote-def { color: var(--fg-soft); font-size: .92em; }
 .md-editor .cm-rich-embed, .markdown .page-embed { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: .4rem; padding: .3rem .8rem .5rem; background: var(--bg-alt); }
 .md-editor .cm-rich-embed-head, .markdown .page-embed-head { display: flex; justify-content: space-between; gap: 1rem; font-size: .85rem; color: var(--muted); padding-bottom: .2rem; }
-.md-editor .cm-rich-embed-body { max-height: 28rem; overflow: auto; }
+/* The editor sets pre-wrap; the embedded page is rendered HTML, whose line breaks between blocks must not show. */
+.md-editor .cm-rich-embed-body { max-height: 28rem; overflow: auto; white-space: normal; }
 .md-editor .cm-rich-table { overflow-x: auto; }
 .md-editor .cm-rich-table table { border-collapse: collapse; }
 .md-editor .cm-rich-table th, .md-editor .cm-rich-table td { border: 1px solid var(--border); padding: 0; position: relative; }

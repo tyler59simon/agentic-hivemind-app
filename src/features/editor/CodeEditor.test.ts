@@ -2,7 +2,8 @@ import { language } from "@codemirror/language";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
-import { editorExtensions, followSpec, isOwnEdit, type CodeEditorProps } from "./CodeEditor";
+import { tags } from "@lezer/highlight";
+import { editorExtensions, editorHighlight, followSpec, isOwnEdit, type CodeEditorProps } from "./CodeEditor";
 
 const props = (over: Partial<CodeEditorProps> = {}): CodeEditorProps => ({
   doc: "# Title", docVersion: 0, language: "markdown", live: false, readOnly: false, lineNumbers: false,
@@ -46,5 +47,13 @@ describe("two panes of one page", () => {
     expect(isOwnEdit(typed)).toBe(true);
     expect(typed.state.doc.toString()).toBe("alpha one\nbeta\ngam!ma\n");
     expect(followSpec("same", "same")).toBeNull();
+  });
+});
+
+describe("highlighting", () => {
+  it("colors code inside a page's fences, not only Markdown (NS-3A UI pass)", () => {
+    for (const tag of [tags.keyword, tags.string, tags.number, tags.comment, tags.typeName, tags.function(tags.variableName)]) {
+      expect(editorHighlight.style([tag])).toBeTruthy();
+    }
   });
 });

@@ -13,7 +13,7 @@ import { dropPictures, RICH_LIMIT, richEditing, richLanguage, richPreview, richR
 import { richContext as richContextFacet } from "./rich/context";
 import { Toolbar } from "./toolbar";
 
-const style = HighlightStyle.define([
+export const editorHighlight = HighlightStyle.define([
   { tag: t.heading1, fontSize: "1.55em", fontWeight: "700" },
   { tag: t.heading2, fontSize: "1.3em", fontWeight: "700" },
   { tag: t.heading3, fontSize: "1.15em", fontWeight: "700" },
@@ -25,6 +25,14 @@ const style = HighlightStyle.define([
   { tag: t.link, color: "var(--accent)" },
   { tag: t.url, color: "var(--muted)" },
   { tag: [t.processingInstruction, t.contentSeparator, t.quote], color: "var(--muted)" },
+  // Code inside a page's fences (NS-3A), colored as in the diff view. Without these the nested languages parse but
+  // draw nothing.
+  { tag: [t.keyword, t.modifier], color: "var(--accent)", fontWeight: "600" },
+  { tag: [t.string, t.regexp], color: "var(--syntax-string)" },
+  { tag: t.comment, color: "var(--muted)" },
+  { tag: [t.number, t.bool, t.null, t.atom], color: "var(--teal)" },
+  { tag: [t.typeName, t.className, t.namespace], color: "var(--syntax-type)" },
+  { tag: [t.function(t.variableName), t.function(t.propertyName), t.propertyName, t.tagName, t.attributeName], color: "var(--syntax-fn)" },
 ]);
 
 const theme = EditorView.theme({
@@ -129,7 +137,7 @@ export function editorExtensions(props: CodeEditorProps, latest: MutableRefObjec
     ? [
       EditorView.lineWrapping,
       rich ? richLanguage() : markdown({ base: markdownLanguage }),
-      syntaxHighlighting(style),
+      syntaxHighlighting(editorHighlight),
       highlightSelectionMatches(),
       autocompletion({ override: [wikilinkSource(() => latest.current.titles()), ...(rich ? [slashSource] : [])], icons: false }),
     ]

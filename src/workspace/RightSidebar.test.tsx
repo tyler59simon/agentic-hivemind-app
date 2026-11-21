@@ -54,3 +54,44 @@ describe("the notebook named beside a page", () => {
     expect(notebookTitle("nb-2", [], [lmRow])).toBeUndefined();
   });
 });
+
+describe("the page outline (NS-3A UI pass)", () => {
+  async function outlineOf(text: string) {
+    const { PageOutline, OUTLINE_MAX } = await import("./RightSidebar");
+    const { useDocuments, keyOf } = await import("../documents/store");
+    const file = { notebook: "nb-1", path: "Long.md" };
+    useWorkspace.getState().openTab({ kind: "file", file, mode: "live" });
+    const tab = useWorkspace.getState().panes[0].tabs[0];
+    const set = (t: string) => useDocuments.setState((s) => ({ docs: { ...s.docs, [keyOf(file)]: { ...(s.docs[keyOf(file)] ?? {}), text: t } as never } }));
+    set(text);
+    const el = document.createElement("div");
+    document.body.append(el);
+    root = createRoot(el);
+    await act(async () => root!.render(<PageOutline tab={tab} />));
+    return { el, set, OUTLINE_MAX };
+  }
+
+  it("lists at most OUTLINE_MAX headings and says how many more there are", async () => {
+    const { OUTLINE_MAX } = await import("./RightSidebar");
+    const { el } = await outlineOf(Array.from({ length: OUTLINE_MAX + 120 }, (_, i) => `## H${i}\n`).join("\n"));
+    expect(el.querySelectorAll("li button").length).toBe(OUTLINE_MAX);
+    expect(el.textContent).toContain("120 more headings");
+  });
+
+  it("follows a long page once typing pauses, and a short one at once", async () => {
+    vi.useFakeTimers();
+    try {
+      const long = `# A\n${"x".repeat(150_000)}\n`;
+      const { el, set } = await outlineOf(long);
+      expect(el.textContent).toBe("A");
+      await act(async () => set(`${long}# B\n`));
+      expect(el.textContent).toBe("A");
+      await act(async () => { vi.advanceTimersByTime(500); });
+      expect(el.textContent).toBe("AB");
+      await act(async () => set("# Short\n"));
+      expect(el.textContent).toBe("Short");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
