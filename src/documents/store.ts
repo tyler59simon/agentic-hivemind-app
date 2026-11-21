@@ -129,7 +129,10 @@ async function load(key: string, ref: FileRef, attempt: number, convertNow = fal
     // A draft written after Convert to UTF-8 comes back converted, whether the file is unchanged, still undecodable
     // or changed since; the file's own encoding no longer decides (Codex review of 52051c8, D3).
     const convert = (convertNow || !!draft?.convert) && !loaded.binary && (!loaded.readOnly || !!loaded.convertible);
-    if (!draft || loaded.binary || (loaded.readOnly && !convert)) { dispatch(key, { type: "loaded", loaded }); return; }
+    if (!draft || loaded.binary || (loaded.readOnly && !convert)) {
+      dispatch(key, { type: "loaded", loaded, draft: draft ? { text: draft.mine, at: draft.savedAt } : undefined });
+      return;
+    }
     if (draft.precondition.sha256 === loaded.stamp.sha256) {
       dispatch(key, { type: "loaded", loaded, draft: { text: draft.mine, at: draft.savedAt }, convert });
       return;
@@ -256,7 +259,10 @@ export function draftsPending(): boolean {
 export async function convertToUtf8(key: string) {
   const ref = useDocuments.getState().refs[key];
   if (ref && get(key)?.status === "readOnly") {
-    const draft = await getFileDraft(await draftKeyOf(key)).catch(() => null);
+    // A draft that could not be looked up may exist, and converting would write over it (Codex re-review of fa08348, D3).
+    const draft = await getFileDraft(await draftKeyOf(key)).catch((e) => {
+      throw new Error(`Hivemind could not check this file for unsaved edits, so it did not convert it: ${String(e)}`);
+    });
     if (get(key)?.status !== "readOnly") return;
     if (draft) { await startLoad(key, ref, true); return; }
   }
@@ -349,7 +355,13 @@ async function recheck(key: string) {
 /** Another program changed files: the open documents showing them follow or warn. */
 export async function refresh(notebook: string, paths: string[]) {
   const wanted = new Set(paths.map((p) => keyOf({ notebook, path: p })));
-  for (const key of Object.keys(useDocuments.getState().refs)) if (wanted.has(key)) await recheck(key);
+  for (const key of Object.keys(useDocuments.getState().refs)) {
+    if (!wanted.has(key)) continue;
+    // A load in flight may have read the old bytes: it finishes first, then the page is checked against the disk (Codex
+    // re-review of fa08348, D2).
+    await loads.get(key);
+    await recheck(key);
+  }
 }
 
 /** Before a page or folder moves or is deleted: write pending drafts, let loads, saves and draft writes finish, and

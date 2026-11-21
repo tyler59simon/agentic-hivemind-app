@@ -1,28 +1,15 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Save } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { classify } from "../../lib/errors";
 import { recentQuery } from "../../lib/opens";
 import { toast } from "../../ui/toast";
 import { useWorkspace, type Tab } from "../../workspace/store";
 import { CodeEditor } from "../editor/CodeEditor";
 import { saveUntitled } from "./actions";
+import { setUntitledText, untitledText } from "./untitled";
 
 const none = () => [];
-
-// The text of each untitled tab. A pane shows only its active tab, so this view unmounts on every tab switch; the text
-// lives here as long as the tab does (Codex review of 52051c8, D1).
-const buffers = new Map<string, string>();
-export const untitledText = (tabId: string) => buffers.get(tabId) ?? "";
-export function setUntitledText(tabId: string, text: string) {
-  if (text) buffers.set(tabId, text);
-  else buffers.delete(tabId);
-}
-useWorkspace.subscribe((s) => {
-  if (!buffers.size) return;
-  const untitled = new Set(s.panes.flatMap((p) => p.tabs.filter((t) => t.kind === "new-file").map((t) => t.id)));
-  for (const id of buffers.keys()) if (!untitled.has(id)) buffers.delete(id);
-});
 
 /** An untitled text file (NS-1B). The first save asks where; the tab then shows the saved file like any other. */
 export function NewFileTab({ tab }: { tab: Tab }) {
@@ -33,11 +20,17 @@ export function NewFileTab({ tab }: { tab: Tab }) {
   const setDirty = useWorkspace((s) => s.setDirty);
   useEffect(() => { setDirty(tab.id, text !== ""); }, [text, tab.id, setDirty]);
   const change = useCallback((next: string) => { setText(next); setUntitledText(tab.id, next); }, [tab.id]);
+  // One Save as at a time: a second Ctrl+S while the dialog is open does nothing (Codex re-review of fa08348, N3).
+  const busy = useRef(false);
   const save = useCallback(async () => {
+    if (busy.current) return;
+    busy.current = true;
     try {
       if (await saveUntitled(tab.id, text, tab.title ? `${tab.title}.txt` : "Untitled.txt")) client.invalidateQueries({ queryKey: recentQuery().queryKey });
     } catch (e) {
       toast(classify(e).message, "error");
+    } finally {
+      busy.current = false;
     }
   }, [text, tab.id, tab.title, client]);
   return (

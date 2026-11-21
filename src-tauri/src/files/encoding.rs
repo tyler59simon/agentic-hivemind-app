@@ -48,10 +48,14 @@ pub fn decode(bytes: &[u8]) -> Decoded {
     // characters each. It counts as UTF-8 only when its valid multi-byte characters outnumber its runs of invalid
     // bytes, so a legacy file that happens to hold one UTF-8-looking pair is still guessed as legacy (Codex review of
     // 52051c8, D5). A file that does not decode opens read-only either way.
-    let (mut multibyte, mut invalid) = (0usize, 0usize);
+    let (mut multibyte, mut invalid, mut in_run) = (0usize, 0usize, false);
     for chunk in bytes.utf8_chunks() {
         multibyte += chunk.valid().chars().filter(|c| !c.is_ascii()).count();
-        invalid += usize::from(!chunk.invalid().is_empty());
+        // Invalid bytes with nothing valid between them are one run (Codex re-review of fa08348, D5).
+        if !chunk.invalid().is_empty() && !(in_run && chunk.valid().is_empty()) {
+            invalid += 1;
+        }
+        in_run = !chunk.invalid().is_empty();
     }
     if multibyte > invalid {
         return decode_with(bytes, UTF_8, false, Confidence::Guess);
@@ -189,6 +193,8 @@ mod tests {
         let damaged = decode(b"caf\xc3\xa9 na\xc3\xafve \xff\n");
         assert_eq!(damaged.encoding, "UTF-8");
         assert!(damaged.read_only.unwrap().contains("not valid UTF-8"));
+        // Two bad bytes side by side are one run, so two accented letters still make it UTF-8 (re-review of fa08348).
+        assert_eq!(decode(b"caf\xc3\xa9 na\xc3\xafve \xff\xff\n").encoding, "UTF-8");
     }
 
     const SAMPLES: &[(&str, &str)] = &[

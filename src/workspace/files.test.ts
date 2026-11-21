@@ -13,12 +13,14 @@ const options = () => useWorkspace.persist.getOptions();
 describe("workspace with notebook pages", () => {
   beforeEach(reset);
 
-  it("opens a page once, whatever its letter case, and re-focuses it", () => {
+  it("opens a page once and re-focuses it; another letter case is another file (Codex re-review of fa08348, W1)", () => {
     ws().openTab(page("Plan.md"));
     ws().openNote("d:1");
-    ws().openTab(page("plan.md"));
+    ws().openTab(page("Plan.md"));
     expect(ws().panes[0].tabs).toHaveLength(2);
     expect(activeTab(ws())?.file?.path).toBe("Plan.md");
+    ws().openTab(page("plan.md"));
+    expect(ws().panes[0].tabs).toHaveLength(3);
   });
 
   it("never mistakes a page for a note", () => {

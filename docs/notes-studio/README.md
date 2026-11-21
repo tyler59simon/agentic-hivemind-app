@@ -100,7 +100,7 @@ export interface DocRef { domain: string; notebook: string; path: string }  // a
 // Tab gains: file?: FileRef | GrantRef; doc?: DocRef
 ```
 
-- `docKey(tab)` (pure, `src/documents/keys.ts`): `note:<ref>`, `file:<notebook>:<lowercased path>`, `grant:<grant>`, `doc:<domain>:<notebook>:<lowercased path>`. `sameTab` compares kind family and `docKey`; note behaviour is unchanged.
+- `docKey(tab)` (pure, `src/documents/keys.ts`): `note:<ref>`, `file:<notebook>:<path>`, `doc:<domain>:<notebook>:<lowercased path>`. A file key keeps the path's letter case, as on disk: in a case-sensitive folder `A.md` and `a.md` are two files (changed in the NS-1B code review, W1; `drafts::file_key` matches). A loose file's notebook is `@<grant id>` (NS-1B). Living Memory page names are unique ignoring case, so `doc:` keys stay lowercased. `sameTab` compares kind family and `docKey`; note behaviour is unchanged.
 - A file the user opens from disk that lies inside a registered notebook becomes a `FileRef`, never a `GrantRef`, so one file has one key.
 - `showTab(tab)` replaces `showNotes()`: if the current route already shows the workspace (Notes, or Memory with view `notes`), stay; otherwise note kinds go to Memory exactly as today and file and doc kinds go to Notes.
 - Persistence: `hivemind.workspace` version 3. Version 1 migrates through `notesOnly` as today; version 2 is kept; tabs of unknown kinds are dropped on load; `new-note` and `new-file` tabs are not persisted. A build that only knows version 2 runs `notesOnly` on version 3 data and keeps the notes.

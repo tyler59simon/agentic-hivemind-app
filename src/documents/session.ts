@@ -30,6 +30,8 @@ export interface DocState {
   draftError?: string;
   /** The user chose Convert to UTF-8: the next save writes UTF-8 over bytes that did not decode (NS-1B). */
   convert?: boolean;
+  /** A draft the file cannot take now (it opened read-only or is not text): kept, and offered as a copy. */
+  kept?: { text: string; at: string };
 }
 
 export type DocEvent =
@@ -63,7 +65,11 @@ export function reduce(s: DocState, e: DocEvent): DocState {
       // A draft written after Convert to UTF-8 comes back converted (Codex review of 52051c8, D3).
       const convert = !!e.convert && !!e.draft && canConvert(e.loaded);
       const loaded = convert ? converted(e.loaded) : e.loaded;
-      if (loaded.readOnly || loaded.binary) return { status: "readOnly", base: loaded, text: loaded.text, version: s.version + 1 };
+      if (loaded.readOnly || loaded.binary) {
+        // Its draft stays where it is and is shown, so it can be saved elsewhere (Codex re-review of fa08348, D3).
+        const kept = e.draft && e.draft.text !== loaded.text ? e.draft : undefined;
+        return { status: "readOnly", base: loaded, text: loaded.text, version: s.version + 1, kept };
+      }
       if (e.draft && (e.draft.text !== loaded.text || convert)) {
         return { status: "dirty", base: loaded, text: e.draft.text, version: s.version + 1, banner: { kind: "restored", at: e.draft.at }, convert: convert || undefined };
       }

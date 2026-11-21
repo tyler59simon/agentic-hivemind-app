@@ -87,11 +87,20 @@ function Banners({ doc, docKey, onMerge, onRecreate }: { doc: DocState; docKey: 
     out.push(
       <div key="ro" className="banner note-banner">{doc.base.binary ? "This is not a text file, so it opens read-only." : `Read-only: ${doc.base.readOnly}.`}
         <div className="actions">
-          {doc.base.convertible && <button onClick={() => void convertToUtf8(docKey)}>Convert to UTF-8 and edit</button>}
+          {doc.base.convertible && <button onClick={() => void convertToUtf8(docKey).catch((e) => toast(classify(e).message, "error"))}>Convert to UTF-8 and edit</button>}
           {/* Binary files open in their own program until NS-6B's viewer; text Hivemind may not write can be saved elsewhere. */}
           {doc.base.binary && ref && <button onClick={() => void openOutside(ref)}>Open with default app</button>}
           {!doc.base.binary && !doc.base.convertible && ref && <button onClick={() => void copyAs(doc.text, fileName(ref.path))}>Save a copy as…</button>}
         </div>
+      </div>,
+    );
+  }
+  if (doc.status === "readOnly" && doc.kept && ref) {
+    const kept = doc.kept;
+    const back = doc.base?.convertible ? " Convert to UTF-8 brings them back." : "";
+    out.push(
+      <div key="kept" className="banner note-banner">Unsaved edits from a draft (kept {new Date(kept.at).toLocaleString()}) cannot be saved to this file.{back}
+        {!doc.base?.convertible && <div className="actions"><button onClick={() => void copyAs(kept.text, fileName(ref.path))}>Save the edits as a copy…</button></div>}
       </div>,
     );
   }
@@ -144,7 +153,7 @@ function Banners({ doc, docKey, onMerge, onRecreate }: { doc: DocState; docKey: 
     out.push(
       <div key="error" className="banner error note-banner">{doc.error}
         <div className="actions">
-          {unmappable && <button className="primary" onClick={() => void convertToUtf8(docKey)}>Convert to UTF-8</button>}
+          {unmappable && <button className="primary" onClick={() => void convertToUtf8(docKey).catch((e) => toast(classify(e).message, "error"))}>Convert to UTF-8</button>}
           <button onClick={dismiss}>OK</button>
         </div>
       </div>,
@@ -204,8 +213,9 @@ export function FileTab({ tab }: { tab: Tab }) {
   const loose = isLoose(ref);
   const full = useLoosePath(ref);
   // Pictures load from the notebook's root (a page's folder inside it) or a loose file's folder.
-  // Asked again on every mount: a grant withdrawn while the tab was closed gets a new id (Codex review of 52051c8, A3).
-  const pictures = useQuery({ queryKey: ["asset-base", ref.notebook, ref.path], queryFn: () => assetBase(ref.notebook, ref.path), enabled: markdown });
+  // Every mount asks again, and nothing is kept once the page closes: a grant withdrawn meanwhile gets a new id (Codex
+  // review of 52051c8, A3, and its re-review: the app's 30-second staleTime would otherwise reuse the old one).
+  const pictures = useQuery({ queryKey: ["asset-base", ref.notebook, ref.path], queryFn: () => assetBase(ref.notebook, ref.path), refetchOnMount: "always", gcTime: 0, enabled: markdown });
   const mode: Mode = markdown ? (tab.mode === "history" ? "reading" : tab.mode ?? "live") : "source";
   const titles = useCallback(() => pages.filter(isMarkdown).map(pageTitle), [pages]);
 

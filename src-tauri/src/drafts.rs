@@ -45,7 +45,8 @@ pub fn delete(dir: &Path, key: &str) -> Result<(), String> {
 /// The draft key of a notebook page, as `src/documents/keys.ts` computes it: `file-` and the sha256 of its document key.
 pub fn file_key(notebook: &str, path: &str) -> String {
     use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(format!("file:{notebook}:{}", path.to_lowercase()).as_bytes());
+    // The path keeps its letter case, as the webview's keys do (Codex re-review of fa08348, W1).
+    let digest = Sha256::digest(format!("file:{notebook}:{path}").as_bytes());
     format!("file-{}", digest.iter().map(|b| format!("{b:02x}")).collect::<String>())
 }
 
@@ -53,13 +54,10 @@ pub fn file_key(notebook: &str, path: &str) -> String {
 /// edits follow the file even if the app stops before the webview catches up.
 pub fn retarget(dir: &Path, notebook: &str, from: &str, to: &str) {
     let moved = |path: &str| {
-        let (low, f) = (path.to_lowercase(), from.to_lowercase());
-        if low == f {
+        if path == from {
             Some(to.to_string())
-        } else if low.starts_with(&format!("{f}/")) {
-            Some(format!("{to}{}", &path[from.len()..]))
         } else {
-            None
+            path.strip_prefix(from).filter(|rest| rest.starts_with('/')).map(|rest| format!("{to}{rest}"))
         }
     };
     for mut draft in list(dir) {
@@ -87,6 +85,15 @@ pub fn list(dir: &Path) -> Vec<Value> {
         .filter_map(|e| std::fs::read(e.path()).ok())
         .filter_map(|bytes| serde_json::from_slice(&bytes).ok())
         .collect()
+}
+
+/// Whether a page draft of `notebook` is kept for `path` or anything below it.
+pub fn any_under(dir: &Path, notebook: &str, path: &str) -> bool {
+    list(dir).iter().any(|draft| {
+        draft.get("kind").and_then(Value::as_str) == Some("file")
+            && draft["target"]["notebook"].as_str() == Some(notebook)
+            && draft["target"]["path"].as_str().is_some_and(|p| p == path || p.strip_prefix(path).is_some_and(|rest| rest.starts_with('/')))
+    })
 }
 
 #[cfg(test)]
@@ -120,16 +127,31 @@ mod tests {
         let moved = get(&dir, &file_key("nb-1", "Archive/Projects/A.md")).unwrap().unwrap();
         assert_eq!(moved["target"]["path"], "Archive/Projects/A.md");
         assert!(get(&dir, &file_key("nb-1", "Other.md")).unwrap().is_some());
-        // A case-only rename keeps the key.
+        // A case-only rename moves the draft to the new spelling's key.
         retarget(&dir, "nb-1", "Other.md", "other.md");
         assert_eq!(get(&dir, &file_key("nb-1", "other.md")).unwrap().unwrap()["target"]["path"], "other.md");
+        assert_eq!(get(&dir, &file_key("nb-1", "Other.md")).unwrap(), None);
         std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
     fn the_file_key_matches_the_webview() {
-        // sha256 of "file:nb-1:projects/a.md", computed outside Rust; src/documents/keys.test.ts checks the same value.
-        assert_eq!(file_key("nb-1", "Projects/A.md"), "file-ee426da86755468a9c6ed248410253426f97a9dbb18eee94b3a5e0e10fa30c67");
+        // sha256 of "file:nb-1:Projects/A.md", computed outside Rust; src/documents/keys.test.ts checks the same value.
+        assert_eq!(file_key("nb-1", "Projects/A.md"), "file-16d2a638270cf6584f1fae6209b8cae20d85327e77e3f1371b6172d17e4f491c");
+        assert_ne!(file_key("nb-1", "A.txt"), file_key("nb-1", "a.txt"), "two files in a case-sensitive folder");
+    }
+
+    #[test]
+    fn a_draft_at_or_below_a_path_is_found() {   // Codex re-review of fa08348, F2
+        let dir = std::env::temp_dir().join(format!("hivemind-drafts-under-{}", std::process::id()));
+        let draft = |path: &str| json!({ "key": file_key("nb-1", path), "kind": "file", "target": { "notebook": "nb-1", "path": path }, "mine": "x" });
+        put(&dir, &file_key("nb-1", "Area/B.md"), &draft("Area/B.md")).unwrap();
+        assert!(any_under(&dir, "nb-1", "Area/B.md"));
+        assert!(any_under(&dir, "nb-1", "Area"));
+        assert!(!any_under(&dir, "nb-1", "Are"));
+        assert!(!any_under(&dir, "nb-2", "Area"));
+        assert!(!any_under(&dir, "nb-1", "area/b.md"), "letter case counts, as in the keys");
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

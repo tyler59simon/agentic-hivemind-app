@@ -51,7 +51,7 @@ fn loose_in(grants: &crate::opens::Grants, protected: &Protected, id: &str, name
     if linked || !contain::unmoved(folder) {
         return Err(format!("{} was replaced by a link; open the file again", grant.path));
     }
-    let locked = protected.check(&full).err();
+    let locked = protected.check(&full).err().or_else(|| files::guard::reserved(&full));
     // An interrupted save is put back only where Hivemind may write.
     if locked.is_none() && std::fs::symlink_metadata(&full).is_err() {
         files::recover(&full);
@@ -83,7 +83,8 @@ fn ref_in(notebooks: &notebooks::Registry, grants: &crate::opens::Grants, path: 
         }
     }
     let grant = grants.add(&real, now)?;
-    let name = real.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    // The name the grant was made with: after a case-only rename the file keeps its grant, and so its tab and draft.
+    let name = Path::new(&grant.path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     Ok(OpenRef { notebook: format!("{LOOSE}{}", grant.id), path: name })
 }
 
@@ -314,6 +315,11 @@ pub async fn file_rename(state: State<'_, AppState>, notebook: String, from: Str
         if source.is_dir() {
             crate::files::guard::check_no_vault_inside(&source)?;
         }
+        // The moved drafts would overwrite unsaved edits kept for a page at the destination (Codex re-review of fa08348,
+        // F2).
+        if crate::drafts::any_under(&drafts_dir, &notebook, &to) {
+            return Err(format!("{to} has unsaved edits kept as a draft; open it and save or discard them first"));
+        }
         files::rename(&source, &inside(&root, &protected, &to, true)?)?;
         crate::drafts::retarget(&drafts_dir, &notebook, &from, &to);
         Ok(())
@@ -504,6 +510,32 @@ mod tests {
         let list = std::sync::Mutex::new(vec![("t2".to_string(), PathBuf::from(crate::folders::plain(&base.join("docs-moved"))), std::time::Instant::now())]);
         assert!(take_dropped(&list, "t2").is_ok());
         assert!(take_dropped(&list, "t2").is_err(), "a token is taken once");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_loose_file_in_a_reserved_folder_is_read_only() {   // Codex re-review of fa08348, P1
+        let base = temp_dir();
+        std::fs::create_dir_all(base.join(".git")).unwrap();
+        std::fs::write(base.join(".git/config"), "[core]\n").unwrap();
+        let grants = crate::opens::Grants::new(base.join("open-files.json"));
+        let grant = grants.add(&base.join(".git").join("config"), "t").unwrap();
+        let (_, locked) = loose_in(&grants, &Protected::new(None), &grant.id, "config").unwrap();
+        assert!(locked.unwrap().contains(".git folder"));
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_case_only_rename_keeps_a_loose_files_grant_and_tab() {   // Codex re-review of fa08348, N5
+        let base = temp_dir();
+        std::fs::write(base.join("note.txt"), "x").unwrap();
+        let registry = notebooks::Registry::new(base.join("app/notebooks.json"));
+        let grants = crate::opens::Grants::new(base.join("app/open-files.json"));
+        let first = ref_in(&registry, &grants, &base.join("note.txt"), "t").unwrap();
+        std::fs::rename(base.join("note.txt"), base.join("Note.txt")).unwrap();
+        let again = ref_in(&registry, &grants, &base.join("Note.txt"), "t").unwrap();
+        assert_eq!(again, first, "the same grant and name, so the same tab and draft");
+        assert_eq!(grants.list().len(), 1);
         std::fs::remove_dir_all(&base).unwrap();
     }
 

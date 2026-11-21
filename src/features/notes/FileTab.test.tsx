@@ -41,7 +41,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 const { EditorView } = await import("@codemirror/view");
 const { FileTab } = await import("./FileTab");
-const { NewFileTab, untitledText } = await import("./NewFileTab");
+const { NewFileTab } = await import("./NewFileTab");
+const { untitledText } = await import("./untitled");
 const { useRowDrag } = await import("./NotebookTree");
 const { useWorkspace } = await import("../../workspace/store");
 const { useApp } = await import("../../store");
@@ -117,7 +118,8 @@ describe("notebook pages, mounted", () => {
   it("A3: a page asks for its picture address each time it opens, so a withdrawn grant is never reused", async () => {   // Codex review of 52051c8
     files.set("Pic.md", "![x](a.png)\n");
     ws().openTab({ kind: "file", file: ref("Pic.md"), mode: "source" });
-    const client = new QueryClient();
+    // The app's own defaults (src/main.tsx), whose 30-second staleTime would reuse a withdrawn grant (re-review of fa08348).
+    const client = new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1, staleTime: 30_000 } } });
     const show = async () => {
       const el = document.createElement("div");
       document.body.append(el);

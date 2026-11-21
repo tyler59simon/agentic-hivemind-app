@@ -1,11 +1,12 @@
-// One key per open document, whatever tab shows it (README 5.1). Notes keep their ref; file keys lowercase the path,
-// because Windows file names are case-insensitive and a case-only rename is the same file.
+// One key per open document, whatever tab shows it (README 5.1). Notes keep their ref. File keys keep the path's
+// letter case: in a case-sensitive folder `A.md` and `a.md` are two files (Codex re-review of fa08348, W1). The tree,
+// the dialogs and the watcher give paths in the case on disk, and a rename in Hivemind moves the document to its new key.
 export interface FileRef { notebook: string; path: string }
 
 interface Keyed { kind: string; ref?: string; file?: FileRef }
 
 export function docKey(tab: Keyed): string {
-  if (tab.kind === "file" && tab.file) return `file:${tab.file.notebook}:${tab.file.path.toLowerCase()}`;
+  if (tab.kind === "file" && tab.file) return `file:${tab.file.notebook}:${tab.file.path}`;
   return `${tab.kind}:${tab.ref ?? ""}`;
 }
 
@@ -14,9 +15,8 @@ export const sameDoc = (a: Keyed, b: Keyed) => a.kind === b.kind && a.kind !== "
 
 /** `path` moved from `from` to `to` (a file, or a folder and everything in it); null when the move does not touch it. */
 export function movedPath(path: string, from: string, to: string): string | null {
-  const low = path.toLowerCase(), f = from.toLowerCase();
-  if (low === f) return to;
-  if (low.startsWith(`${f}/`)) return to + path.slice(from.length);
+  if (path === from) return to;
+  if (path.startsWith(`${from}/`)) return to + path.slice(from.length);
   return null;
 }
 

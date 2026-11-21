@@ -110,6 +110,12 @@ describe("document session", () => {
     expect(mergeable({ ...file("x"), readOnly: "This file is read-only on disk" }, true)).toBe(false);
   });
 
+  it("a draft the file can no longer take is kept beside the read-only page (Codex re-review of fa08348, D3)", () => {
+    const locked = { ...file("disk"), readOnly: "This file is read-only on disk" };
+    expect(run({ type: "loaded", loaded: locked, draft: { text: "my edits", at: "t" } })).toMatchObject({ status: "readOnly", text: "disk", kept: { text: "my edits", at: "t" } });
+    expect(run({ type: "loaded", loaded: locked, draft: { text: "disk", at: "t" } }).kept).toBeUndefined();
+  });
+
   it("read-only files ignore edits", () => {
     const s = run({ type: "loaded", loaded: { ...file("x"), readOnly: "This file is not UTF-8" } });
     expect(s.status).toBe("readOnly");

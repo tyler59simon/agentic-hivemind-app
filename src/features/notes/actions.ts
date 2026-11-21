@@ -2,12 +2,13 @@
 // a Rust command; open tabs, documents and drafts follow renames, and tabs of a deleted page close.
 import type { QueryClient } from "@tanstack/react-query";
 import { movedPath, type FileRef } from "../../documents/keys";
-import { beforeMove, discard, hold, keyOf, refresh, useDocuments } from "../../documents/store";
+import { beforeMove, discard, edit, hold, keyOf, open, refresh, unsavedUnder, useDocuments } from "../../documents/store";
 import { retargetAll } from "../../documents/sync";
 import { classify } from "../../lib/errors";
 import { forgetMoved } from "../../lib/drafts";
 import { createFile, deleteFile, fileName, folderOf, isMarkdown, makeFolder, notebooksQuery, pageTitle, renameFile } from "../../lib/notebooks";
 import { isLoose, saveAs } from "../../lib/opens";
+import { untitledText } from "./untitled";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
 
@@ -65,6 +66,8 @@ export async function movePath(client: QueryClient, notebook: string, from: stri
   // 52051c8, F2).
   const doneTo = await hold(notebook, to, "move");
   try {
+    // A page at the destination with unsaved edits would be overwritten by the move (Codex re-review of fa08348, F2).
+    if (unsavedUnder(notebook, to).length) throw new Error(`${to} has unsaved edits; save or discard them first`);
     await renameFile(notebook, from, to);
     forgetMoved(notebook, from);
     retargetAll(notebook, from, to);
@@ -87,9 +90,16 @@ async function saveAsAndRefresh(text: string, suggested: string): Promise<FileRe
 export async function saveUntitled(tabId: string, text: string, suggested: string): Promise<FileRef | null> {
   const ref = await saveAsAndRefresh(text, suggested);
   if (!ref) return null;
+  // Typing went on while the dialog and the write ran: the newer text stays as unsaved edits of the saved file (Codex
+  // re-review of fa08348, N3). It is read before the tab changes kind, which drops the buffer.
+  const latest = untitledText(tabId);
   const ws = useWorkspace.getState();
   ws.setDirty(tabId, false);
   ws.updateTab(tabId, { kind: "file", file: ref, title: pageTitle(ref.path), mode: isMarkdown(ref.path) ? "live" : "source" });
+  if (latest !== text) {
+    await open(ref);
+    edit(keyOf(ref), latest);
+  }
   return ref;
 }
 

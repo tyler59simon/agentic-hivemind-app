@@ -6,7 +6,7 @@ const files = new Map<string, string>();
 const drafts = new Map<string, unknown>();
 const gates = new Map<string, Promise<void>>();
 const calls: string[] = [];
-const flags = { failDrafts: false, readError: new Map<string, string>(), deleteError: "", convertible: new Set<string>(), legacy: new Set<string>() };
+const flags = { failDrafts: false, readError: new Map<string, string>(), deleteError: "", convertible: new Set<string>(), legacy: new Set<string>(), locked: new Set<string>(), draftGetError: false };
 const converted: string[] = [];
 function gate(name: string) {
   let open = () => {};
@@ -28,6 +28,7 @@ vi.mock("@tauri-apps/api/core", () => ({
           return { ...loaded(files.get(path)!), format: { encoding: "windows-1252", bom: false, eol: "lf" }, readOnly: "This file contains bytes that are not valid windows-1252", convertible: true };
         }
         if (flags.legacy.has(path)) return { ...loaded(files.get(path)!), format: { encoding: "windows-1252", bom: false, eol: "lf" } };
+        if (flags.locked.has(path)) return { ...loaded(files.get(path)!), readOnly: "This file is read-only on disk" };
         return loaded(files.get(path)!);
       case "file_rename": {
         const from = a.from as string, to = a.to as string;
@@ -41,7 +42,7 @@ vi.mock("@tauri-apps/api/core", () => ({
           const target = (d as { target: { path: string } }).target;
           const moved = target.path === from ? to : target.path.startsWith(`${from}/`) ? to + target.path.slice(from.length) : null;
           if (moved === null) continue;
-          const next = await dk(`file:nb-1:${moved.toLowerCase()}`);
+          const next = await dk(`file:nb-1:${moved}`);
           drafts.delete(k);
           drafts.set(next, { ...(d as object), key: next, target: { ...target, path: moved } });
         }
@@ -67,7 +68,9 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "draft_put":
         if (flags.failDrafts) throw new Error("The draft is larger than 32 MB");
         drafts.set(a.key as string, a.value); return null;
-      case "draft_get": return drafts.get(a.key as string) ?? null;
+      case "draft_get":
+        if (flags.draftGetError) throw new Error("The draft store could not be read");
+        return drafts.get(a.key as string) ?? null;
       case "draft_delete": drafts.delete(a.key as string); return null;
     }
     throw new Error(`unexpected ${cmd}`);
@@ -87,13 +90,19 @@ const state = (path: string) => docs.useDocuments.getState().docs[key(path)];
 const ws = () => useWorkspace.getState();
 let stop = () => {};
 
+/** Wait, a macrotask at a time, until `ok()` holds. */
+async function until(ok: () => boolean) {
+  for (let i = 0; i < 200 && !ok(); i++) await new Promise((r) => setTimeout(r, 0));
+  expect(ok()).toBe(true);
+}
+
 describe("documents store", () => {
   beforeEach(() => {
     // The drafts module caches the drafts this run wrote; in the app the cache and the store always agree, so it forgets
     // them when the fake store is cleared.
     for (const d of drafts.values()) forgetMoved("nb-1", (d as { target: { path: string } }).target.path);
     files.clear(); drafts.clear(); gates.clear(); calls.length = 0;
-    flags.failDrafts = false; flags.readError.clear(); flags.deleteError = ""; flags.convertible.clear(); flags.legacy.clear(); converted.length = 0;
+    flags.failDrafts = false; flags.readError.clear(); flags.deleteError = ""; flags.convertible.clear(); flags.legacy.clear(); flags.locked.clear(); flags.draftGetError = false; converted.length = 0;
     files.set("A.md", "one");
     useWorkspace.setState({ panes: [{ id: "p0", tabs: [], active: null }], focused: "p0", dirty: {}, reveal: null });
     useApp.setState({ route: { page: "notes" }, back: [] });
@@ -641,21 +650,110 @@ describe("documents store", () => {
     expect(currentNotebook("nb-1")).toEqual({ notebook: "nb-1", folder: "Area" });
   });
 
-  it("F2: a page opened at a rename's destination waits for the rename and its draft", async () => {   // Codex review of 52051c8
+  it("F2: a page opened at a rename's destination waits for the rename and gets the moved draft", async () => {   // Codex review of 52051c8 and its re-review
     const { QueryClient } = await import("@tanstack/react-query");
     const { movePath } = await import("../features/notes/actions");
+    // A closed page whose unsaved edits exist only as a draft on disk.
     ws().openTab({ kind: "file", file: ref("A.md") });
     await docs.open(ref("A.md"));
     docs.edit(key("A.md"), "one, edited");
+    await docs.flushAllDrafts();
+    ws().closeTab("p0", ws().panes[0].tabs[0].id);
+    docs.release(key("A.md"));
     const slow = gate("file_rename undefined");
     const moving = movePath(new QueryClient(), "nb-1", "A.md", "B.md");
-    for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+    await until(() => calls.includes("file_rename "));
+    ws().openTab({ kind: "file", file: ref("B.md") });
     const opening = docs.open(ref("B.md"));
     await Promise.resolve();
     expect(calls).not.toContain("file_read B.md");
     slow();
     await Promise.all([moving, opening]);
     expect(state("B.md")).toMatchObject({ status: "dirty", text: "one, edited" });
+  });
+
+  it("F2: a rename onto a page with unsaved edits is refused, and both keep their text", async () => {   // Codex re-review of fa08348
+    const { QueryClient } = await import("@tanstack/react-query");
+    const { movePath } = await import("../features/notes/actions");
+    files.set("B.md", "b");
+    ws().openTab({ kind: "file", file: ref("B.md") });
+    await docs.open(ref("B.md"));
+    docs.edit(key("B.md"), "b, mine");
+    files.delete("B.md");   // another program deleted it
+    await expect(movePath(new QueryClient(), "nb-1", "A.md", "B.md")).rejects.toThrow("unsaved edits");
+    expect(calls).not.toContain("file_rename ");
+    expect(files.get("A.md")).toBe("one");
+    expect(state("B.md")).toMatchObject({ text: "b, mine" });
+  });
+
+  it("D2: Save as over a page that is still loading shows the new text once the load ends", async () => {   // Codex re-review of fa08348
+    const { saveCopy } = await import("../features/notes/actions");
+    files.set("B.md", "old");
+    ws().openTab({ kind: "file", file: ref("B.md") });
+    const slow = gate("draft_get undefined");
+    const opening = docs.open(ref("B.md"));
+    await until(() => calls.includes("draft_get "));
+    const saving = saveCopy("new from Save as", "B.md");
+    await until(() => calls.includes("file_save_as "));
+    slow();
+    await Promise.all([opening, saving]);
+    expect(state("B.md")).toMatchObject({ status: "clean", text: "new from Save as" });
+  });
+
+  it("D3: Convert refuses when the draft lookup fails, so it never writes over a draft it could not see", async () => {   // Codex re-review of fa08348
+    files.set("L.txt", "caf?");
+    flags.convertible.add("L.txt");
+    ws().openTab({ kind: "file", file: ref("L.txt") });
+    await docs.open(ref("L.txt"));
+    flags.draftGetError = true;
+    await expect(docs.convertToUtf8(key("L.txt"))).rejects.toThrow("did not convert");
+    expect(state("L.txt").status).toBe("readOnly");
+    await docs.flushAllDrafts();
+    expect(calls.filter((c) => c.startsWith("draft_put"))).toEqual([]);
+  });
+
+  it("D3: a draft the file can no longer take is kept and shown beside the read-only page", async () => {   // Codex re-review of fa08348
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    docs.edit(key("A.md"), "one, mine");
+    await docs.flushAllDrafts();
+    ws().closeTab("p0", ws().panes[0].tabs[0].id);
+    docs.release(key("A.md"));
+    flags.locked.add("A.md");
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    expect(state("A.md")).toMatchObject({ status: "readOnly", text: "one", kept: { text: "one, mine" } });
+    expect(drafts.size).toBe(1);
+  });
+
+  it("W1: two pages whose names differ only in letter case are two documents", async () => {   // Codex re-review of fa08348
+    files.set("Plan.md", "same");
+    files.set("plan.md", "same");
+    ws().openTab({ kind: "file", file: ref("Plan.md") });
+    ws().openTab({ kind: "file", file: ref("plan.md") });
+    await Promise.all([docs.open(ref("Plan.md")), docs.open(ref("plan.md"))]);
+    docs.edit(key("Plan.md"), "the upper one's edit");
+    await docs.save(key("Plan.md"));
+    expect(files.get("Plan.md")).toBe("the upper one's edit");
+    expect(files.get("plan.md")).toBe("same");
+    expect(state("plan.md")).toMatchObject({ status: "clean", text: "same" });
+  });
+
+  it("N3: text typed during an untitled file's Save as stays as unsaved edits of the saved file", async () => {   // Codex re-review of fa08348
+    const { saveUntitled } = await import("../features/notes/actions");
+    const { setUntitledText } = await import("../features/notes/untitled");
+    ws().openTab({ kind: "new-file" });
+    const tab = ws().panes[0].tabs[0];
+    setUntitledText(tab.id, "first");
+    const slow = gate("file_save_as undefined");
+    const saving = saveUntitled(tab.id, "first", "U.txt");
+    await until(() => calls.includes("file_save_as "));
+    setUntitledText(tab.id, "first and more");
+    slow();
+    await saving;
+    expect(ws().panes[0].tabs[0]).toMatchObject({ kind: "file", file: ref("U.txt") });
+    expect(files.get("U.txt")).toBe("first");
+    expect(state("U.txt")).toMatchObject({ status: "dirty", text: "first and more" });
   });
 
   it("U2: renaming a section keeps every dot of the new name", async () => {

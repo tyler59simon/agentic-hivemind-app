@@ -289,6 +289,9 @@ pub fn save(path: &Path, text: &str, pre: &Stamp, format: &FileFormat, convert: 
         Err(e) if atomic::in_use(&e) => return Err(format!("{} is in use by another program; try again", path.display())),
         Err(e) => return Err(format!("Could not read {}: {e}", path.display())),
     };
+    if held.file.metadata().is_ok_and(|m| m.len() > MAX_READ) {
+        return Err(format!("{} is now larger than 64 MB, so Hivemind does not replace it", path.display()));
+    }
     let mut current = Vec::new();
     std::io::Read::read_to_end(&mut held.file, &mut current).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
     let sha = sha256(&current);
@@ -332,11 +335,29 @@ pub fn create(path: &Path, text: &str) -> Result<Stamp, String> {
 /// kept), against the version on disk now, and never when it is not text (Codex review of 52051c8, D2 and W2).
 pub fn save_as(path: &Path, text: &str) -> Result<(), String> {
     let lf = text.replace("\r\n", "\n");
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return create(path, &lf).map(|_| ()),
+    let fresh = |lf: &str| {
+        between_check_and_act();
+        create(path, lf).map(|_| ())
+    };
+    // A link is refused, since the held replace would move the file it points to; so is a file too large to read
+    // (Codex re-review of fa08348, N1 and N2).
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return fresh(&lf),
         Err(e) => return Err(format!("Could not read {}: {e}", path.display())),
     };
+    if meta.file_type().is_symlink() {
+        return Err(format!("{} is a link; choose another name", path.display()));
+    }
+    if meta.len() > MAX_READ {
+        return Err(format!("{} is larger than 64 MB, so Hivemind does not replace it", path.display()));
+    }
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return fresh(&lf),
+        Err(e) => return Err(format!("Could not read {}: {e}", path.display())),
+    };
+    between_check_and_act();
     let format = FileFormat { encoding: "UTF-8".into(), bom: false, eol: Eol::Lf, confidence: Default::default() };
     match save(path, &lf, &stamp(&bytes, path), &format, true)? {
         SaveOutcome::Saved(_) => Ok(()),
@@ -618,6 +639,66 @@ mod tests {
         std::fs::write(&picture, b"\x89PNG\r\n\x1a\n\x00\x00").unwrap();
         assert!(save_as(&picture, "text").is_err());
         assert_eq!(std::fs::read(&picture).unwrap(), b"\x89PNG\r\n\x1a\n\x00\x00");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn save_as_never_replaces_what_appeared_or_changed_after_it_looked() {   // Codex re-review of fa08348, D2 and W2
+        let dir = scratch();
+        let fresh = dir.join("Fresh.txt");
+        let racer = fresh.clone();
+        between(move || {
+            if !racer.exists() {
+                std::fs::write(&racer, "theirs\n").unwrap();
+            }
+        });
+        assert!(save_as(&fresh, "mine\n").unwrap_err().contains("already exists"));
+        assert_eq!(std::fs::read_to_string(&fresh).unwrap(), "theirs\n");
+        let old = dir.join("Old.txt");
+        std::fs::write(&old, "before\n").unwrap();
+        let racer = old.clone();
+        between(move || {
+            if std::fs::read_to_string(&racer).unwrap() == "before\n" {
+                std::fs::write(&racer, "theirs\n").unwrap();
+            }
+        });
+        let err = save_as(&old, "mine\n").unwrap_err();
+        no_between();
+        assert!(err.contains("changed"), "{err}");
+        assert_eq!(std::fs::read_to_string(&old).unwrap(), "theirs\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn neither_save_nor_save_as_reads_a_file_over_64_mb() {   // Codex re-review of fa08348, N2
+        let dir = scratch();
+        let path = dir.join("big.log");
+        std::fs::write(&path, "small\n").unwrap();
+        let stamp = read(&path).unwrap().stamp;
+        std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(MAX_READ + 1).unwrap();
+        let utf8 = FileFormat { encoding: "UTF-8".into(), bom: false, eol: Eol::Lf, confidence: Default::default() };
+        assert!(save(&path, "x", &stamp, &utf8, false).unwrap_err().contains("64 MB"));
+        // Refused before reading it ("is larger"), not after reading it all through the held save ("is now larger").
+        assert!(save_as(&path, "x").unwrap_err().contains("is larger than 64 MB"));
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), MAX_READ + 1);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn save_as_refuses_a_link() {   // Codex re-review of fa08348, N1
+        let dir = scratch();
+        std::fs::write(dir.join("target.txt"), "kept\n").unwrap();
+        if let Err(e) = std::os::windows::fs::symlink_file(dir.join("target.txt"), dir.join("link.txt")) {
+            // A file symlink needs Developer Mode or admin rights; a junction is the same kind of link to this check.
+            eprintln!("a file symlink could not be made ({e}); checking with a junction");
+            std::fs::create_dir_all(dir.join("folder")).unwrap();
+            let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(dir.join("link.txt")).arg(dir.join("folder")).output().unwrap();
+            assert!(made.status.success(), "mklink /J needs no admin rights: {}", String::from_utf8_lossy(&made.stderr));
+        }
+        assert!(save_as(&dir.join("link.txt"), "new\n").unwrap_err().contains("is a link"));
+        assert_eq!(std::fs::read_to_string(dir.join("target.txt")).unwrap(), "kept\n");
+        assert!(std::fs::symlink_metadata(dir.join("link.txt")).unwrap().file_type().is_symlink());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

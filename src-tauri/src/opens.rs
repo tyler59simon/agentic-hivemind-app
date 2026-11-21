@@ -138,8 +138,18 @@ impl Grants {
     /// Grant `path` (or refresh its grant) and put it first. The oldest beyond MAX_GRANTS are forgotten.
     pub fn add(&self, path: &Path, now: &str) -> Result<Grant, String> {
         let _held = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-        let grant = Grant { id: grant_id(path), path: crate::folders::plain(path), opened: now.to_string() };
+        let plain = crate::folders::plain(path);
         let mut grants = self.load();
+        // A case-only rename in a case-insensitive folder keeps the file's grant (and with it its tab and draft): the
+        // stored spelling still resolves to this file. In a case-sensitive folder it is another file, or none (Codex
+        // re-review of fa08348, N5).
+        let same = grants.iter().position(|g| {
+            g.path != plain && g.path.to_lowercase() == plain.to_lowercase() && std::fs::canonicalize(&g.path).is_ok_and(|real| crate::folders::plain(&real) == plain)
+        });
+        let grant = match same {
+            Some(at) => Grant { opened: now.to_string(), ..grants.remove(at) },
+            None => Grant { id: grant_id(path), path: plain, opened: now.to_string() },
+        };
         grants.retain(|g| g.id != grant.id && g.path != grant.path);
         grants.insert(0, grant.clone());
         grants.truncate(MAX_GRANTS);
@@ -251,6 +261,9 @@ pub async fn file_save_as(app: AppHandle, text: String, suggested: String) -> Re
         let path = picked.into_path().map_err(|e| e.to_string())?;
         let state = handle.state::<AppState>();
         protected(&state).check(&path)?;
+        if let Some(why) = files::guard::reserved(&path) {
+            return Err(why);
+        }
         files::save_as(&path, &text)?;
         ref_for(&state, &path, &now()).map(Some)
     })

@@ -8,13 +8,14 @@ import { createRoot } from "react-dom/client";
 
 // Rust hands the queued files over once; later drains find the queue empty. Listeners are in place a little later.
 let queued = [{ notebook: "@0123456789abcdef", path: "From Explorer.md" }];
+let drains = 0;
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => new Promise((resolve) => setTimeout(() => resolve(() => {}), 5))),
 }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string) => {
-    if (cmd === "open_pending") { const refs = queued; queued = []; return refs; }
+    if (cmd === "open_pending") { drains++; const refs = queued; queued = []; return refs; }
     return null;
   }),
 }));
@@ -37,6 +38,8 @@ describe("open requests", () => {
     await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
     const tabs = useWorkspace.getState().panes.flatMap((p) => p.tabs);
     expect(tabs.map((t) => t.file?.path)).toEqual(["From Explorer.md"]);
+    // Only the effect that is still running drains the queue (Codex re-review of fa08348, I1).
+    expect(drains).toBe(1);
     await act(async () => root.unmount());
   });
 });

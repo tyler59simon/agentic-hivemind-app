@@ -85,6 +85,21 @@ pub fn check_no_vault_inside(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+const RESERVED: &[&str] = &[".git", ".obsidian", ".hivemind"];
+
+/// Why `path` lies in a reserved folder (`.git`, `.obsidian`, `.hivemind`), which the file service writes only for the
+/// sidecar and the trash (README 5.3). Loose files there open read-only, and Save As refuses them (Codex re-review of
+/// fa08348, P1).
+pub fn reserved(path: &Path) -> Option<String> {
+    path.components().find_map(|part| match part {
+        std::path::Component::Normal(name) => {
+            let name = name.to_string_lossy().to_lowercase();
+            RESERVED.contains(&name.as_str()).then(|| format!("This is inside a {name} folder, which Hivemind does not edit"))
+        }
+        _ => None,
+    })
+}
+
 impl Protected {
     /// The protected places for the store at `store` (None when Hivemind does not know it).
     pub fn new(store: Option<&Path>) -> Self {
@@ -136,6 +151,13 @@ impl Protected {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reserved_folders_are_named_whatever_their_case() {   // Codex re-review of fa08348, P1
+        assert!(reserved(Path::new(r"C:\code\repo\.git\config")).unwrap().contains(".git folder"));
+        assert!(reserved(Path::new(r"C:\vault\.Obsidian\app.json")).unwrap().contains(".obsidian folder"));
+        assert!(reserved(Path::new(r"C:\code\repo\.github\ci.yml")).is_none());
+    }
 
     #[cfg(windows)]
     #[test]
