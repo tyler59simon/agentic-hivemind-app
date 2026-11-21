@@ -8,7 +8,7 @@ import type { NoteType } from "../lib/lm";
 import { prefs } from "../lib/prefs";
 import { safeStorage, useApp } from "../store";
 
-export type Mode = "reading" | "live" | "source" | "history";
+export type Mode = "reading" | "live" | "rich" | "source" | "history";
 export type TabKind = "note" | "new-note" | "file" | "new-file";
 const KINDS: readonly string[] = ["note", "new-note", "file", "new-file"];
 export type { FileRef };

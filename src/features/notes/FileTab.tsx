@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ellipsis, Save } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { convertToUtf8, discardKept, edit, inOwnStore, isArriving, isDeleting, keyOf, open, reload, resolveMerge, save, useDocuments } from "../../documents/store";
 import { isUnsaved, mergeable, type DocState } from "../../documents/session";
 import { classify } from "../../lib/errors";
@@ -24,7 +24,10 @@ import { PageView } from "./PageView";
 import { useRichPage } from "./richPage";
 import { RICH_LIMIT } from "../editor/rich/context";
 
-const MODES: { id: Mode; label: string }[] = [{ id: "reading", label: "Reading" }, { id: "live", label: "Live" }, { id: "source", label: "Source" }];
+const MODES: { id: Mode; label: string }[] = [{ id: "reading", label: "Reading" }, { id: "live", label: "Live" }, { id: "rich", label: "Rich" }, { id: "source", label: "Source" }];
+
+/** Rich mode (NS-3B) loads its editor, Tiptap and the Markdown parser only when a page first opens in it. */
+const RichEditor = lazy(() => import("../rich/RichEditor"));
 
 /** The pages of the tab's notebook, for `[[link]]` completion and resolution. */
 function usePages(notebook: string) {
@@ -351,7 +354,19 @@ export function FileTab({ tab }: { tab: Tab }) {
       {markdown && mode === "live" && doc.text.length > RICH_LIMIT && (
         <div className="banner note-banner">This page is over 1 MB, so Live shows plain Markdown styling without tables, pictures or diagrams.</div>
       )}
-      {mode === "reading"
+      {markdown && mode === "rich" && doc.text.length > RICH_LIMIT && (
+        <div className="banner note-banner">This page is over 1 MB, so it opens as Markdown source instead of in Rich mode.</div>
+      )}
+      {markdown && mode === "rich" && doc.text.length <= RICH_LIMIT
+        ? (
+          <div className="note file-editor">
+            <Suspense fallback={<div className="center muted">Loading the Rich editor…</div>}>
+              <RichEditor key={key} text={doc.text} readOnly={doc.status === "readOnly" || arriving} onChange={(text) => edit(key, text)}
+                onSave={doSave} ctx={rich} ctxStamp={richStamp} reveal={reveal} placeholder="Start writing…" />
+            </Suspense>
+          </div>
+        )
+        : mode === "reading"
         ? <PageView text={doc.text} tabId={tab.id} onLink={follow} onFile={lm ? openLinked : undefined}
           pictures={{ base: own ? pictures.data : undefined, folder: loose ? "" : folderOf(ref.path), files }} embed={loose ? undefined : rich.readEmbed} />
         : (

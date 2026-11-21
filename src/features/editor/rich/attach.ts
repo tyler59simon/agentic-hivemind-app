@@ -138,7 +138,7 @@ export async function attachAt(view: EditorView, ctx: RichContext, pos: number, 
 }
 
 /** Say that attachments were saved but not linked because the page closed, and put their links on the clipboard. */
-function lost(ctx: RichContext, items: { name: string; link: string }[]) {
+export function lost(ctx: RichContext, items: { name: string; link: string }[]) {
   const names = items.map((it) => it.name).join(", ");
   const links = items.map((it) => it.link).join("\n");
   const one = items.length === 1;
