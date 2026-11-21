@@ -28,6 +28,9 @@ function problemIn(schema: Schema, json: unknown, depth = 0): string | null {
   for (const key of Object.keys(json)) if (!NODE_KEYS.has(key)) return `an unknown field "${key}" in a node`;
   const name = json.type;
   if (typeof name !== "string") return "a node with no type";
+  // ProseMirror drops what does not belong to the kind of node without a word.
+  if (name === "text" && json.content !== undefined) return "a text node with content";
+  if (name !== "text" && json.text !== undefined) return `a node "${name}" with text of its own`;
   const type = schema.nodes[name];
   if (!type) return `an unknown node "${name}"`;
   const bad = attrProblem("node", name, json.attrs, attrsOf(type));

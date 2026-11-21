@@ -13,6 +13,8 @@ Range.prototype.getBoundingClientRect = function () { return new DOMRect(); };
 
 const files = new Map<string, string>();
 const drafts = new Map<string, unknown>();
+/** Holds file_create until a test opens it. */
+const gates = { create: null as Promise<void> | null };
 const sha = (text: string) => `sha-${text.length}-${text.slice(0, 40)}-${text.slice(-40)}`;
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({
@@ -30,6 +32,7 @@ vi.mock("@tauri-apps/api/core", () => ({
         return { status: "saved", sha256: sha(a.text as string), size: 1, mtimeMs: 2 };
       }
       case "file_create":
+        await gates.create;
         if (files.has(path)) throw new Error(`${path} already exists`);
         files.set(path, a.text as string);
         return { sha256: sha(a.text as string), size: 1, mtimeMs: 1 };
@@ -199,6 +202,24 @@ describe("rich pages in their tab", () => {
     expect(docs.useDocuments.getState().docs[docs.keyOf(ref("Plan.hmdoc"))].status).toBe("clean");
   });
 
+  it("R1-4: Save both keeps what was typed while the copy was being made, and does not reload over it", async () => {
+    const el = await conflict();
+    let open = () => {};
+    gates.create = new Promise<void>((resolve) => { open = resolve; });
+    await click(button(el, "Save both"));
+    const editor = typed(el);
+    await act(async () => { editor.view.dispatch(editor.state.tr.insertText(" and more", editor.state.doc.content.size - 1)); });
+    gates.create = null;
+    await act(async () => { open(); });
+    await until(() => files.has("Plan (my edits).hmdoc"), "the copy");
+    await settle();
+    expect(files.get("Plan (my edits).hmdoc")).toBe(hmdoc(para("Hello mine")));
+    const state = docs.useDocuments.getState().docs[docs.keyOf(ref("Plan.hmdoc"))];
+    expect(state.text).toContain("Hello mine and more");
+    expect(typed(el).state.doc.textContent).toBe("Hello mine and more");
+    expect(state.status === "dirty" || state.status === "stale").toBe(true);
+  });
+
   it("Save both puts my version beside the page under a free name, then shows the file", async () => {
     files.set("Plan (my edits).hmdoc", "taken");
     const el = await conflict();
@@ -208,6 +229,41 @@ describe("rich pages in their tab", () => {
     expect(files.get("Plan (my edits).hmdoc")).toBe("taken");
     expect(files.get("Plan.hmdoc")).toBe(hmdoc(para("Hello theirs")));
     await until(() => typed(el).state.doc.textContent === "Hello theirs", "their version");
+  });
+
+  it("R1-16: following a missing [[Plan.hmdoc]] makes a valid rich page, and a missing Markdown page stays empty", async () => {
+    files.set("Index.md", "See [[Plan.hmdoc]] and [[Notes]].\n");
+    ws().openTab({ kind: "file", file: ref("Index.md"), mode: "reading" });
+    const el = await mount(<FileTab tab={ws().panes[0].tabs[0]} />);
+    await until(() => el.querySelector("a.wikilink"), "the links");
+    const link = (name: string) => [...el.querySelectorAll("a.wikilink")].find((a) => a.textContent === name)!;
+    await click(link("Plan.hmdoc"));
+    await click(button(document.body, "Create page"));
+    await until(() => files.has("Plan.hmdoc"), "the rich page");
+    expect(files.get("Plan.hmdoc")).toBe(newPageText("Plan"));
+    const { inspect } = await import("../hmdoc/validate");
+    expect(inspect(files.get("Plan.hmdoc")!).ok).toBe(true);
+    await click(link("Notes"));
+    await click(button(document.body, "Create page"));
+    await until(() => files.has("Notes.md"), "the Markdown page");
+    expect(files.get("Notes.md")).toBe("");
+  });
+
+  it("R1-16: a rich page is not made for a missing link in a Living Memory notebook", async () => {
+    expect(actions.missingPageProblem("lm:demo:plans", "Plan.hmdoc")).toContain("Markdown pages only");
+    expect(actions.missingPageProblem("lm:demo:plans", "Plan.md")).toBeNull();
+    expect(actions.missingPageProblem("nb-1", "Plan.hmdoc")).toBeNull();
+    await expect(actions.createMissingPage("lm:demo:plans", "Plan.hmdoc")).rejects.toThrow("Markdown pages only");
+  });
+
+  it("R1-18: a cover named 100% complete.png is drawn from its literal name", async () => {
+    files.set("100% complete.png", "png");
+    files.set("Plan.hmdoc", stringifyEnvelope({
+      schemaVersion: 1, format: "hivemind-rich", meta: { cover: "100% complete.png" }, content: { type: "doc", content: [para("x")] },
+    } as never));
+    const el = await open("Plan.hmdoc");
+    await until(() => el.querySelector(".hmdoc-cover img"), "the cover");
+    expect(el.querySelector(".hmdoc-cover img")!.getAttribute("src")).toBe("http://hmfile.localhost/g1/100%25%20complete.png");
   });
 
   it("the page's menu exports a rich page to Markdown and reports what was dropped", async () => {
@@ -327,10 +383,10 @@ describe("the tree", () => {
     expect(resolvePage("New page", ref("Other.md"), ["Other.md"])).toEqual({ missing: "New page.md" });
   });
 
-  async function menu(path: string, lm?: boolean) {
+  async function menu(path: string, lm?: boolean, paths = ["Note.md", "Plan.hmdoc", "Section"]) {
     const notebook = lm ? { id: "lm:demo:plans", path: "demo", title: "Plans", added: "" } : { id: "nb-1", path: "C:\\nb", title: "Notebook", added: "" };
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-    client.setQueryData(["notebook-tree", notebook.id], { entries: entries("Note.md", "Plan.hmdoc", "Section"), truncated: false });
+    client.setQueryData(["notebook-tree", notebook.id], { entries: entries(...paths), truncated: false });
     const lmInfo = lm ? { domain: "demo", notebook: "plans", title: "Plans", visibility: "searchable", private: false, revision: "r", pages: 1, assets: 0, asset_bytes: 0, proposals: 0, updated: "" } : undefined;
     const el = await mount(<NotebookTree notebook={notebook} lm={lmInfo as never} onSettings={() => {}} onProposals={() => {}} />, client);
     await settle();
@@ -357,6 +413,23 @@ describe("the tree", () => {
     await act(async () => root?.unmount());
     const section = await menu("Section");
     expect(section.labels).toContain("New rich page here");
+  });
+
+  it("R1-15: a rich page beside a Markdown page of the same name has no subpage commands, and the folder is the Markdown page's", async () => {
+    const paths = ["Plan.hmdoc", "Plan.md", "Plan", "Plan/Sub.md"];
+    for (const list of [paths, [...paths].reverse()]) {
+      const tree = buildTree(entries(...list));
+      expect(tree.map((n) => n.name)).toEqual(["Plan.hmdoc", "Plan.md"]);
+      expect(tree.find((n) => n.name === "Plan.md")!.children.map((n) => n.path)).toEqual(["Plan/Sub.md"]);
+      expect(tree.find((n) => n.name === "Plan.hmdoc")!.children).toEqual([]);
+    }
+    const rich = await menu("Plan.hmdoc", false, paths);
+    expect(rich.labels).toContain("Export to Markdown…");
+    expect(rich.labels.some((l) => /subpage/i.test(l ?? ""))).toBe(false);
+    await act(async () => root?.unmount());
+    const md = await menu("Plan.md", false, paths);
+    expect(md.labels).toContain("New subpage");
+    expect(md.labels).toContain("New rich subpage");
   });
 
   it("a Living Memory notebook offers none of them", async () => {

@@ -13,6 +13,13 @@ const withoutExt = (path: string) => path.replace(MD, "");
 const depth = (path: string) => path.split("/").length;
 const join = (folder: string, rel: string) => (folder ? `${folder}/${rel}` : rel);
 
+/** A bare name that both `Plan.md` and `Plan.hmdoc` answer is the Markdown page (R1-6); `[[Plan.hmdoc]]` names the rich one. */
+function withoutRichTwins(list: string[], pages: string[], explicit: boolean): string[] {
+  if (explicit) return list;
+  const markdown = new Set(pages.filter((p) => /\.(md|markdown)$/i.test(p)).map((p) => low(p.replace(/\.(md|markdown)$/i, ""))));
+  return list.filter((p) => !(/\.hmdoc$/i.test(p) && markdown.has(low(p.replace(/\.hmdoc$/i, "")))));
+}
+
 /** The candidates at the shortest depth: one is the answer, several are a tie for the user to pick. */
 function shortest(from: FileRef, hits: string[]): Resolved {
   const least = Math.min(...hits.map(depth));
@@ -26,19 +33,20 @@ export function resolvePage(target: string, from: FileRef, pages: string[]): Res
   const ref = (path: string): Resolved => ({ ref: { notebook: from.notebook, path } });
   const same = (path: string, want: string) => low(path) === low(want) || low(withoutExt(path)) === low(want);
   if (!clean) return { missing: join(here, "Untitled.md") };
+  const explicit = /\.hmdoc$/i.test(clean);
 
   let hits: string[];
   if (clean.includes("/")) {
     // A path: from the notebook root, then from this page's folder, then any page whose path ends with it.
     for (const base of [clean, join(here, clean)]) {
-      const hit = pages.find((p) => same(p, base));
+      const [hit] = withoutRichTwins(pages.filter((p) => same(p, base)), pages, explicit);
       if (hit) return ref(hit);
     }
     const tail = `/${low(clean)}`;
-    hits = pages.filter((p) => low(p).endsWith(tail) || low(withoutExt(p)).endsWith(tail));
+    hits = withoutRichTwins(pages.filter((p) => low(p).endsWith(tail) || low(withoutExt(p)).endsWith(tail)), pages, explicit);
   } else {
     const name = low(clean);
-    hits = pages.filter((p) => low(nameOf(p)) === name || low(fileName(p)) === name);
+    hits = withoutRichTwins(pages.filter((p) => low(nameOf(p)) === name || low(fileName(p)) === name), pages, explicit);
     const near = hits.filter((p) => low(folderOf(p)) === low(here));
     if (near.length) return ref(near[0]);
   }

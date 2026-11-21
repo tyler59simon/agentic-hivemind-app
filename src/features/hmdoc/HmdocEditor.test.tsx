@@ -273,3 +273,141 @@ describe("page settings and table views", () => {
     expect(parsed(changes[0]).meta).toEqual({});
   });
 });
+
+describe("Codex review of 9dda8ae", () => {
+  const sortedPage = (cells: unknown[] = [cell("b"), cell("2")]) => fileOf([
+    { type: "table", attrs: { id: "t1" }, content: [
+      { type: "tableRow", content: [cell("Name", "tableHeader"), cell("Qty", "tableHeader")] },
+      { type: "tableRow", content: cells }, { type: "tableRow", content: [cell("a"), cell("1")] },
+    ] },
+    p("after"),
+  ], { views: { t1: { sort: { column: 1, dir: "asc" } } } });
+
+  it("R1-1: text that changed without a new version (another pane typing) is read again, not taken from the old parse", async () => {
+    const m = await mount(fileOf([p("A")]));
+    await m.render(fileOf([p("B")]), 1);
+    expect(m.editor().state.doc.textContent).toBe("B");
+    expect(m.changes).toEqual([]);
+    await act(async () => { m.editor().view.dispatch(m.editor().state.tr.insertText("!", endOf(m.editor(), 0))); });
+    const written = parsed(m.changes[m.changes.length - 1]).content.content as { content: { text: string }[] }[];
+    expect(written[0].content[0].text).toBe("B!");
+    // And once more, as the other pane goes on typing.
+    await m.render(fileOf([p("B!?")]), 1);
+    expect(m.editor().state.doc.textContent).toBe("B!?");
+  });
+
+  it("R1-5: the sorted copy has its own Clear sort, which works with the selection outside the table", async () => {
+    const m = await mount(sortedPage());
+    expect(m.el.querySelector(".hm-sorted")).toBeTruthy();
+    await act(async () => { m.editor().commands.setTextSelection(m.editor().state.doc.content.size - 2); });
+    expect(m.editor().isActive("table")).toBe(false);
+    await click(byText(m.el, ".hm-sorted-bar button", "Clear sort"));
+    expect(m.el.querySelector(".hm-sorted")).toBeNull();
+    expect(parsed(m.changes[m.changes.length - 1]).meta).toEqual({});
+  });
+
+  it("R1-5: Clear sort keeps the filter, and Sort and filter opens the dialog from the copy", async () => {
+    const text = fileOf([{ type: "table", attrs: { id: "t1" }, content: [{ type: "tableRow", content: [cell("a", "tableHeader")] }, { type: "tableRow", content: [cell("x")] }] }, p("after")],
+      { views: { t1: { sort: { column: 0, dir: "asc" }, filter: { column: 0, op: "filled", value: "" } } } });
+    const m = await mount(text);
+    await click(byText(m.el, ".hm-sorted-bar button", "Sort and filter…"));
+    expect(m.el.ownerDocument.querySelector('[role="dialog"][aria-label="Sort and filter"]')).toBeTruthy();
+    await click(byText(m.el.ownerDocument, '[role="dialog"] button', "Cancel"));
+    await click(byText(m.el, ".hm-sorted-bar button", "Clear sort"));
+    expect(parsed(m.changes[m.changes.length - 1]).meta).toEqual({ views: { t1: { filter: { column: 0, op: "filled", value: "" } } } });
+  });
+
+  it("R1-7: the dialog offers neither sort nor filter for a table with a cell that spans rows", async () => {
+    const text = fileOf([{ type: "table", attrs: { id: "t1" }, content: [
+      { type: "tableRow", content: [{ type: "tableCell", attrs: { rowspan: 2 }, content: [p("a")] }, cell("keep")] },
+      { type: "tableRow", content: [cell("hide")] },
+    ] }, p("after")], { views: { t1: { filter: { column: 1, op: "contains", value: "keep" } } } });
+    const m = await mount(text);
+    expect(m.el.querySelectorAll("tr.hm-row-hidden")).toHaveLength(0);
+    let inside = 0;
+    m.editor().state.doc.descendants((n, pos) => { if (!inside && n.type.name === "tableCell") inside = pos + 2; return true; });
+    await act(async () => { m.editor().commands.setTextSelection(inside); });
+    await click(m.el.querySelector('[aria-label="Table options"]'));
+    await click(byText(m.el, '[role="menuitem"]', "Sort and filter…"));
+    const dialog = m.el.ownerDocument.querySelector('[role="dialog"][aria-label="Sort and filter"]')!;
+    expect(dialog.querySelector<HTMLSelectElement>('select[aria-label="Filter"]')!.disabled).toBe(true);
+    expect(dialog.querySelector<HTMLSelectElement>('select[aria-label="Sort order"]')!.disabled).toBe(true);
+    expect(dialog.textContent).toContain("Sorting and filtering are not available");
+  });
+
+  it("R1-8: the sort and filter dialog lists every column of the table, not the cells of its first row", async () => {
+    const text = fileOf([{ type: "table", attrs: { id: "t1" }, content: [
+      { type: "tableRow", content: [{ type: "tableHeader", attrs: { colspan: 2 }, content: [p("wide")] }, cell("c", "tableHeader")] },
+      { type: "tableRow", content: [cell("1"), cell("2"), cell("3")] },
+    ] }, p("after")], { views: { t1: { sort: { column: 2, dir: "asc" } } } });
+    const m = await mount(text);
+    await click(byText(m.el, ".hm-sorted-bar button", "Sort and filter…"));
+    const dialog = m.el.ownerDocument.querySelector('[role="dialog"][aria-label="Sort and filter"]')!;
+    expect([...dialog.querySelectorAll('select[aria-label="Sort column"] option')].map((o) => o.textContent)).toEqual(["A (wide)", "B", "C (c)"]);
+  });
+
+  it("R1-10: the sorted copy shows pictures and links as the page does, and cannot be edited", async () => {
+    const ctx = context({ pictureUrl: (src) => (src === "a.png" ? "http://pictures/a.png" : null) });
+    const rich = { type: "tableCell", content: [{ type: "paragraph", content: [{ type: "image", attrs: { src: "a.png", alt: "cat", title: null } }, { type: "wikiLink", attrs: { value: "Other page" } }] }] };
+    const m = await mount(sortedPage([rich, cell("2")]), { ctx });
+    const copy = m.el.querySelector(".hm-sorted")!;
+    expect(copy.querySelector(".rich-image img")!.getAttribute("src")).toBe("http://pictures/a.png");
+    expect(copy.querySelector(".rich-wikilink")!.textContent).toBe("Other page");
+    expect(copy.querySelector(".hm-copy")!.getAttribute("contenteditable")).toBe("false");
+  });
+
+  it("R1-11: a change that would take the written page past 5,000,000 characters is refused, and the page stays editable", async () => {
+    const ctx = context();
+    const text = fileOf([p("x".repeat(4_999_000))]);
+    expect(text.length).toBeLessThan(5_000_000);
+    const m = await mount(text, { ctx });
+    const e = () => m.editor();
+    await act(async () => { e().view.dispatch(e().state.tr.insertText("small", 3)); });
+    expect(m.changes).toHaveLength(1);
+    const before = e().state.doc;
+    await act(async () => { e().view.dispatch(e().state.tr.insertText("y".repeat(2000), 3)); });
+    expect(e().state.doc).toBe(before);
+    expect(m.changes).toHaveLength(1);
+    expect(ctx.fail).toHaveBeenCalledWith(expect.stringContaining("5,000,000"));
+    expect(m.mounted()).toBe(true);
+    // Still editable, and Undo still has its history.
+    await act(async () => { e().view.dispatch(e().state.tr.insertText("!", 3)); });
+    expect(m.changes).toHaveLength(2);
+    await act(async () => { e().commands.undo(); e().commands.undo(); });
+    expect(m.changes[m.changes.length - 1]).toBe(text);
+  });
+
+  it("R1-12: Markdown pasted as plain text is cleaned like pasted HTML", async () => {
+    const sanitise = await import("./sanitise");
+    const spy = vi.spyOn(sanitise, "sanitiseSlice");
+    const m = await mount(fileOf([p("")]));
+    const clipboardData = { getData: (t: string) => (t === "text/plain" ? "- one\n- two" : ""), files: [] };
+    await act(async () => {
+      const event = Object.assign(new Event("paste"), { clipboardData }) as unknown as ClipboardEvent;
+      m.editor().view.someProp("handlePaste", (f) => f(m.editor().view, event, m.editor().state.doc.slice(0, 0)));
+    });
+    expect(spy).toHaveBeenCalled();
+    expect(m.editor().state.doc.firstChild!.type.name).toBe("bulletList");
+    spy.mockRestore();
+  });
+
+  it("R1-17: a cover that finishes attaching after the width changed does not bring the old width back", async () => {
+    let finish: (path: string) => void = () => {};
+    const attachPath = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));
+    const m = await mount(fileOf([p("x")]), { ctx: context({ attachPath }) });
+    await click(byText(m.el, "button", "Add a cover image"));
+    const dialog = m.el.ownerDocument.querySelector('[role="dialog"][aria-label="Page settings"]')!;
+    const input = dialog.querySelector<HTMLInputElement>('input[type="file"]')!;
+    const file = { name: "new.png", type: "image/png", arrayBuffer: async () => new ArrayBuffer(3) };
+    Object.defineProperty(input, "files", { value: [file], configurable: true });
+    await act(async () => { input.dispatchEvent(new Event("change", { bubbles: true })); });
+    const width = dialog.querySelector<HTMLSelectElement>('select[aria-label="Page width"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(width, "full");
+      width.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(parsed(m.changes[m.changes.length - 1]).meta).toEqual({ width: "full" });
+    await act(async () => { finish("assets/new.png"); await new Promise((r) => setTimeout(r, 0)); });
+    expect(parsed(m.changes[m.changes.length - 1]).meta).toEqual({ width: "full", cover: "assets/new.png" });
+  });
+});

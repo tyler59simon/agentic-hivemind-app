@@ -132,6 +132,10 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals }: {
   };
   /** The folder new pages go into from a row: a section itself, or a page's subpage folder. */
   const folderFor = (node: Node | null) => (!node ? "" : node.kind === "dir" ? node.path : node.kind === "page" ? node.path.replace(PAGE, "") : node.path.split("/").slice(0, -1).join("/"));
+  /** A rich page beside a Markdown page of the same name: the folder they share holds the Markdown page's subpages, so the
+   *  rich page has no subpage commands (R1-15). */
+  const sharesFolder = (node: Node) => node.kind === "page" && isRichDoc(node.path)
+    && [".md", ".markdown"].some((ext) => byPath.get(low(node.path.replace(PAGE, "") + ext))?.kind === "page");
   const create = (node: Node | null) => {
     const folder = folderFor(node);
     newPage(client, notebook.id, folder).then(() => { if (node) toggle(node.path, true); }, fail);
@@ -243,8 +247,8 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals }: {
             return (
               <>
                 {n.kind !== "dir" && item("Open beside", () => openPage({ notebook: notebook.id, path: n.path }, { split: true }))}
-                {n.kind !== "other" && item(n.kind === "dir" ? "New page here" : "New subpage", () => create(n))}
-                {!lm && n.kind !== "other" && item(n.kind === "dir" ? "New rich page here" : "New rich subpage", () => createRich(n))}
+                {n.kind !== "other" && !sharesFolder(n) && item(n.kind === "dir" ? "New page here" : "New subpage", () => create(n))}
+                {!lm && n.kind !== "other" && !sharesFolder(n) && item(n.kind === "dir" ? "New rich page here" : "New rich subpage", () => createRich(n))}
                 {!lm && n.kind === "page" && isMarkdown(n.path) && item("Convert to rich page", () => convertToRich(client, { notebook: notebook.id, path: n.path }).catch(fail))}
                 {!lm && n.kind === "page" && isRichDoc(n.path) && item("Export to Markdown…", () => runExport(client, { notebook: notebook.id, path: n.path }, setDialog))}
                 {n.kind === "dir" && item("New section here", () => { toggle(n.path, true); setNaming({ folder: n.path, value: "" }); })}

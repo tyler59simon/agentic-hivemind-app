@@ -7,6 +7,7 @@ import { FORMAT, SCHEMA_VERSION, stringifyEnvelope } from "./envelope";
 import { loadPage } from "../rich/fromMarkdown";
 import { richSchema } from "../rich/schema";
 import { attrsOf, hmdocSchema } from "./schema";
+import { inspect, readContent } from "./validate";
 
 type Json = { type: string; attrs?: Record<string, unknown>; content?: Json[]; marks?: Json[]; text?: string };
 
@@ -31,16 +32,29 @@ function adapt(json: Json, schema = hmdocSchema()): Json {
 
 /** The rich page's document for Markdown `source`. */
 export function markdownToRichDoc(source: string): PMNode {
-  const { doc } = loadPage(richSchema(), source);
-  const rich = hmdocSchema().nodeFromJSON(adapt(doc.toJSON() as Json));
-  rich.check();
-  return withTableIds(rich);
+  const { doc, original } = loadPage(richSchema(), source);
+  let json = adapt(doc.toJSON() as Json);
+  if (!readContent(json).ok) {
+    // Never a page that opens read-only: a block the rich page cannot hold stays as the source it was written as (R1-12).
+    json = { ...json, content: (json.content ?? []).map((block, i) => {
+      const at = original.slices[i];
+      if (!at || readContent({ type: "doc", content: [block] }).ok) return block;
+      return { type: "rawBlock", attrs: { kind: "block", value: source.slice(at.from, at.to) } };
+    }) };
+  }
+  const read = readContent(json);
+  if (!read.ok) throw new Error(`This page cannot be converted: ${read.reason}`);
+  return withTableIds(read.doc);
 }
 
 /** The text of the `.hmdoc` file that Markdown `source` converts to. `title` is the page's name. */
 export function convertMarkdown(source: string, title: string): string {
-  return stringifyEnvelope({
+  const text = stringifyEnvelope({
     schemaVersion: SCHEMA_VERSION, format: FORMAT, meta: { title },
     content: markdownToRichDoc(source).toJSON(),
   });
+  // What is written is what the editor will open: a file that would not is never made.
+  const read = inspect(text);
+  if (!read.ok) throw new Error(`This page cannot be converted: ${read.reason}`);
+  return text;
 }

@@ -8,12 +8,15 @@ const int = (min: number, max: number) => (v: unknown) => typeof v === "number" 
 const nullOr = (ok: (v: unknown) => boolean) => (v: unknown) => v === null || ok(v);
 const text = (v: unknown) => typeof v === "string";
 const flag = (v: unknown) => typeof v === "boolean";
-const widths = nullOr((v) => Array.isArray(v) && v.every((w) => typeof w === "number" && w > 0));
+// 0 is prosemirror-tables' mark for a column of a merged cell whose width is not set: resizing one column of a cell that
+// spans two stores [0, 96].
+const widths = nullOr((v) => Array.isArray(v) && v.every((w) => typeof w === "number" && Number.isFinite(w) && w >= 0));
 
 /** By `type.attribute`. An attribute with no rule takes any value. */
 export const RULES: Record<string, (v: unknown) => boolean> = {
   "heading.level": int(1, 6),
-  "orderedList.start": int(-1_000_000, 1_000_000),
+  // CommonMark allows up to nine digits in a list number.
+  "orderedList.start": int(0, 999_999_999),
   "taskItem.checked": flag,
   "textColor.color": isColour,
   "highlight.color": isColour,

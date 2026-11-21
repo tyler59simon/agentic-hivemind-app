@@ -4,14 +4,15 @@
 import { Editor } from "@tiptap/core";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { TextSelection } from "@tiptap/pm/state";
-import { CellSelection, TableMap } from "@tiptap/pm/tables";
+import { CellSelection, columnResizingPluginKey, TableMap } from "@tiptap/pm/tables";
 import { afterEach, describe, expect, it } from "vitest";
-import { tableSheet, visibleRows, matches, hasRowSpans, effectiveSort } from "./blocks/table/grid";
+import { tableSheet, visibleRows, matches, hasRowSpans, effectiveFilter, effectiveSort } from "./blocks/table/grid";
 import { tableViews, viewsChanged } from "./blocks/table/plugin";
 import { withTableIds } from "./blocks/table/extensions";
 import type { TableView } from "./envelope";
 import { showCell } from "./formulas";
 import { hmdocExtensions, hmdocSchema } from "./schema";
+import { readContent } from "./validate";
 
 const p = (text: string) => ({ type: "paragraph", content: text ? [{ type: "text", text }] : [] });
 const cell = (text: string, attrs?: Record<string, unknown>, type = "tableCell") => ({ type, ...(attrs ? { attrs } : {}), content: [p(text)] });
@@ -135,6 +136,26 @@ describe("merged cells", () => {
     expect(editor.getHTML()).toContain("hm-bg-green");
     editor.commands.setCellAttribute("background", null);
     expect(at(1, 1).attrs.background).toBeNull();
+  });
+});
+
+describe("column widths", () => {
+  it("R1-3: dragging the edge of one column of a merged cell writes widths the validator accepts", () => {
+    const { editor } = make(page(table("t1", row(cell("wide", { colspan: 2 })), row(cell("a"), cell("b")))));
+    const view = editor.view;
+    const at = cellPos(editor.state.doc, 0, 0);
+    // The real path: the plugin's handle is on the merged cell, a mouse down starts the drag, and the mouse up ends it.
+    view.dispatch(view.state.tr.setMeta(columnResizingPluginKey, { setHandle: at }));
+    const plugin = columnResizingPluginKey.get(editor.state)!;
+    const down = new MouseEvent("mousedown", { clientX: 100, button: 0 });
+    plugin.props.handleDOMEvents!.mousedown!.call(plugin, view, down);
+    window.dispatchEvent(new MouseEvent("mouseup", { clientX: 190 }));
+    const merged = tableOf(editor.state.doc).child(0).child(0);
+    expect(merged.attrs.colwidth).toHaveLength(2);
+    // The column left of the dragged one has no width set: prosemirror-tables writes 0 for it.
+    expect(merged.attrs.colwidth).toContain(0);
+    const read = readContent(editor.state.doc.toJSON());
+    expect(read.ok ? "ok" : read.reason).toBe("ok");
   });
 });
 
@@ -266,6 +287,36 @@ describe("sort and filter", () => {
     setViews({ t1: { sort: { column: 1, dir: "asc" } } });
     expect(el.querySelector(".hm-sorted")).toBeNull();
     expect(el.querySelector(".hm-table-hidden")).toBeNull();
+  });
+
+  it("R1-7: a filter is not applied to a table with a cell that spans rows, as a sort is not", () => {
+    const content = page(table("t1", row(cell("a", { rowspan: 2 }), cell("keep")), row(cell("hide")), row(cell("b"), cell("hide"))));
+    const { editor, el, setViews } = make(content);
+    const t = tableOf(editor.state.doc);
+    expect(effectiveFilter(t, { filter: { column: 1, op: "contains", value: "keep" } })).toBeNull();
+    setViews({ t1: { filter: { column: 1, op: "contains", value: "keep" } } });
+    expect(el.querySelectorAll("tr.hm-row-hidden")).toHaveLength(0);
+    expect(visibleRows(t, { filter: { column: 1, op: "contains", value: "keep" } })).toEqual([0, 1, 2]);
+  });
+
+  it("R1-9: a mark or an attribute set inside a sorted table is refused too, though those steps change no content", () => {
+    const { editor, setViews } = make(data());
+    setViews({ t1: { sort: { column: 1, dir: "asc" } } });
+    const before = editor.state.doc;
+    const inside = cellPos(editor.state.doc, 1, 0);
+    editor.view.dispatch(editor.state.tr.addMark(inside + 1, inside + 5, editor.schema.marks.bold.create()));
+    expect(editor.state.doc).toBe(before);
+    editor.view.dispatch(editor.state.tr.setNodeAttribute(inside, "background", "red"));
+    expect(editor.state.doc).toBe(before);
+    editor.view.dispatch(editor.state.tr.addMark(1, editor.state.doc.content.size - 1, editor.schema.marks.bold.create()));
+    expect(editor.state.doc).toBe(before);
+    // The page outside the table takes marks, and the table takes them again once it is not sorted.
+    const after = editor.state.doc.content.size - 6;
+    editor.view.dispatch(editor.state.tr.addMark(after, after + 3, editor.schema.marks.bold.create()));
+    expect(editor.state.doc.lastChild!.child(0).marks.length || editor.state.doc.lastChild!.child(1)?.marks.length).toBeGreaterThan(0);
+    setViews({});
+    editor.view.dispatch(editor.state.tr.setNodeAttribute(inside, "background", "red"));
+    expect(editor.state.doc.firstChild!.child(1).child(0).attrs.background).toBe("red");
   });
 
   it("a view of a column the table does not have is not drawn", () => {

@@ -57,7 +57,8 @@ export function useRichPage(page: RichPage): RichContext {
       pictureUrl: (src, wiki) => {
         if (!wiki) return pictureUrl(src, base, folder);
         const found = loose ? null : findFile(src, files);
-        return found ? pictureUrl(found, base, "") : null;
+        // The file the notebook lists is a literal name: `100% complete.png` must not be read as an escape (R1-18).
+        return found ? pictureUrl(found.split("/").map(encodeURIComponent).join("/"), base, "") : null;
       },
       readEmbed: async (target) => {
         if (loose || !own()) return null;

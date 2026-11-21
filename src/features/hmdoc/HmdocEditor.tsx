@@ -5,6 +5,7 @@ import { Editor } from "@tiptap/core";
 import { Placeholder } from "@tiptap/extension-placeholder";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { EditorState as PMState, Selection } from "@tiptap/pm/state";
+import { TableMap } from "@tiptap/pm/tables";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { pastedPictures } from "../editor/rich/attach";
 import type { RichContext } from "../editor/rich/context";
@@ -21,8 +22,9 @@ import { hasHeaderRow, hasRowSpans } from "./blocks/table/grid";
 import { tableViews, viewsChanged } from "./blocks/table/plugin";
 import { withTableIds } from "./blocks/table/extensions";
 import { insertToggle } from "./blocks/toggle";
-import { stringifyDocument, type Meta, type TableView } from "./envelope";
+import { SIZE_LIMIT, stringifyDocument, type Meta, type TableView } from "./envelope";
 import { columnNames, HmdocTools, PageDialog, TableViewDialog } from "./HmdocTools";
+import { sanitiseSlice } from "./sanitise";
 import { hmdocExtensions } from "./schema";
 import { inspect, type Inspected } from "./validate";
 
@@ -44,7 +46,7 @@ export interface HmdocEditorProps {
 
 type Valid = Extract<Inspected, { ok: true }>;
 type Popover = { kind: "atom"; pos: number } | { kind: "link" } | null;
-type Dialog = { kind: "page" } | { kind: "view"; pos: number } | null;
+type Dialog = { kind: "page" } | { kind: "view"; id: string } | null;
 
 const ITEMS: BlockCommand[] = [
   ...SLASH_ITEMS,
@@ -64,25 +66,37 @@ function tidy(meta: Meta, doc: PMNode): Meta {
 }
 
 /** The table holding the selection, closest first. */
-function tableAt(editor: Editor): { node: PMNode; pos: number } | null {
+function tableAt(editor: Editor): PMNode | null {
   const { $from } = editor.state.selection;
-  for (let d = $from.depth; d > 0; d--) if ($from.node(d).type.name === "table") return { node: $from.node(d), pos: $from.before(d) };
+  for (let d = $from.depth; d > 0; d--) if ($from.node(d).type.name === "table") return $from.node(d);
   return null;
 }
 
-export default function HmdocEditor(props: HmdocEditorProps) {
-  // Checked again only when the text came from outside: the editor's own writes are the document it already holds.
-  const checked = useMemo(() => inspect(props.text), [props.version]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (!checked.ok) return <>{props.invalid(checked.reason)}</>;
-  return <Editing {...props} checked={checked} />;
+/** The table with this id. */
+function tableWithId(doc: PMNode, id: string): PMNode | null {
+  let found: PMNode | null = null;
+  doc.descendants((n) => { if (!found && n.type.name === "table" && n.attrs.id === id) found = n; return !found; });
+  return found;
 }
 
-function Editing(props: HmdocEditorProps & { checked: Valid }) {
+export default function HmdocEditor(props: HmdocEditorProps) {
+  // The text this editor holds: what it wrote or loaded last. Text that is anything else came from outside (R1-1): a
+  // load, a merge, or another pane of the same page typing, which changes the text without a new version.
+  const own = useRef(props.text);
+  const outside = props.text !== own.current;
+  const checked = useMemo(() => inspect(props.text), [props.version, outside ? props.text : null]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!checked.ok) return <>{props.invalid(checked.reason)}</>;
+  return <Editing {...props} checked={checked} own={own} />;
+}
+
+function Editing(props: HmdocEditorProps & { checked: Valid; own: { current: string } }) {
   const host = useRef<HTMLDivElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
   const editorRef = useRef<Editor | null>(null);
   const meta = useRef<Meta>(props.checked.envelope.meta);
-  const last = useRef(props.text);
+  const last = props.own;
+  /** The last state and settings that were written: what a change the page cannot take goes back to. */
+  const good = useRef<{ state: PMState; meta: Meta } | null>(null);
   const latest = useRef(props);
   latest.current = props;
   const slashKeys = useRef<((key: string) => boolean) | null>(null);
@@ -95,8 +109,18 @@ function Editing(props: HmdocEditorProps & { checked: Valid }) {
   const commit = () => {
     const editor = editorRef.current;
     if (!editor) return;
-    meta.current = tidy(meta.current, editor.state.doc);
-    const text = stringifyDocument(editor.state.doc, meta.current);
+    const next = tidy(meta.current, editor.state.doc);
+    const text = stringifyDocument(editor.state.doc, next);
+    if (text.length > SIZE_LIMIT && good.current) {
+      // A file over the limit would open as read-only JSON, and take Undo with it: the change is not made (R1-11).
+      meta.current = good.current.meta;
+      editor.view.updateState(good.current.state);
+      setTick((t) => t + 1);
+      latest.current.ctx.fail(`A page can hold ${SIZE_LIMIT.toLocaleString("en-US")} characters of text and settings, and this change would go past that, so it was not made.`);
+      return;
+    }
+    meta.current = next;
+    good.current = { state: editor.state, meta: next };
     if (text === last.current) return;
     last.current = text;
     latest.current.onChange(text);
@@ -109,6 +133,7 @@ function Editing(props: HmdocEditorProps & { checked: Valid }) {
     last.current = text;
     const doc = withTableIds(c.doc);
     editor.view.updateState(PMState.create({ doc, plugins: editor.state.plugins, selection: Selection.atStart(doc) }));
+    good.current = { state: editor.state, meta: meta.current };
     setTick((t) => t + 1);
   };
 
@@ -122,6 +147,26 @@ function Editing(props: HmdocEditorProps & { checked: Valid }) {
     setTick((t) => t + 1);
   };
 
+  /** A change to some of the page settings, applied to the settings as they are when it arrives: a cover that was being
+   *  attached while the width changed must not bring the old width back (R1-17). */
+  const patchMeta = (patch: Partial<Meta>) => {
+    const next = { ...meta.current, ...patch };
+    if (next.width === "normal") delete next.width;
+    if (!next.cover) delete next.cover;
+    setMeta(next);
+  };
+  /** What the sorted copy of a table asks of the page. */
+  const copyActions = useRef({ clear: (_id: string) => {}, open: (_id: string) => {} });
+  copyActions.current = {
+    clear: (id) => {
+      const view = meta.current.views?.[id];
+      if (!view || !editorRef.current?.isEditable) return;
+      const { sort: _sort, ...rest } = view;
+      setMeta(withView(meta.current, id, rest.filter ? rest : undefined));
+    },
+    open: (id) => { if (editorRef.current?.isEditable) setDialog({ kind: "view", id }); },
+  };
+
   useEffect(() => {
     const ctx = () => latest.current.ctx;
     const editor = new Editor({
@@ -132,7 +177,20 @@ function Editing(props: HmdocEditorProps & { checked: Valid }) {
         Placeholder.configure({ placeholder: "Start writing…", showOnlyCurrent: true }),
         RichInputRules, PendingPictures, slashPlugin(slashKeys),
         richKeys(() => latest.current.onSave()),
-        tableViews(() => meta.current.views ?? {}),
+        tableViews(() => meta.current.views ?? {}, {
+          // A sorted table is drawn as a copy by an editor of the same kind that cannot be edited (R1-10).
+          render: (doc) => {
+            const dom = document.createElement("div");
+            const copy = new Editor({
+              element: dom, editable: false, content: doc.toJSON(),
+              extensions: withViews(hmdocExtensions(), { ctx, edit: () => {} }),
+              editorProps: { attributes: { class: "rich-doc markdown hmdoc-doc hm-copy" } },
+            });
+            return { dom, destroy: () => copy.destroy() };
+          },
+          clearSort: (id) => copyActions.current.clear(id),
+          openView: (id) => copyActions.current.open(id),
+        }),
       ],
       editorProps: {
         attributes: { class: "rich-doc markdown hmdoc-doc", spellcheck: "true", "aria-label": "Page text" },
@@ -148,8 +206,10 @@ function Editing(props: HmdocEditorProps & { checked: Valid }) {
           if (view.state.selection.$from.parent.type.spec.code) return false;
           if (event.clipboardData?.getData("text/html")) return false;
           const text = event.clipboardData?.getData("text/plain");
-          const slice = text ? pastedSlice(view.state.schema, text) : null;
-          if (!slice) return false;
+          const pasted = text ? pastedSlice(view.state.schema, text) : null;
+          if (!pasted) return false;
+          // This path does not go through transformPasted, so the slice is cleaned here (R1-12).
+          const slice = sanitiseSlice(pasted);
           view.dispatch(view.state.tr.replaceSelection(slice).scrollIntoView());
           return true;
         },
@@ -226,7 +286,7 @@ function Editing(props: HmdocEditorProps & { checked: Valid }) {
     } catch { return null; }
   };
 
-  const target = dialog?.kind === "view" && editor ? editor.state.doc.nodeAt(dialog.pos) : null;
+  const target = dialog?.kind === "view" && editor ? tableWithId(editor.state.doc, dialog.id) : null;
   const width = meta.current.width ?? "normal";
   return (
     <div className={`rich-editor hmdoc-editor hmdoc-width-${width}`}>
@@ -234,10 +294,10 @@ function Editing(props: HmdocEditorProps & { checked: Valid }) {
         <RichToolbar editor={editor} ctx={props.ctx} readOnly={props.readOnly} onLink={() => setPopover({ kind: "link" })} onEdit={(pos) => setPopover({ kind: "atom", pos })}
           extra={<HmdocTools editor={editor} readOnly={props.readOnly}
             onSettings={() => setDialog({ kind: "page" })}
-            onTableView={() => { const t = tableAt(editor); if (t) setDialog({ kind: "view", pos: t.pos }); }} />} />
+            onTableView={() => { const t = tableAt(editor); if (t) setDialog({ kind: "view", id: t.attrs.id }); }} />} />
       )}
       <div className="hmdoc-page">
-        <Cover meta={meta.current} ctx={props.ctx} editable={!props.readOnly} onCover={(cover) => setMeta({ ...meta.current, cover })} onSettings={() => setDialog({ kind: "page" })} />
+        <Cover meta={meta.current} ctx={props.ctx} editable={!props.readOnly} onCover={(cover) => patchMeta({ cover })} onSettings={() => setDialog({ kind: "page" })} />
         <div className="rich-wrap" ref={wrap}>
           <div ref={host} className="rich-host" />
           {editor && !props.readOnly && <BlockHandle editor={editor} wrap={wrap} />}
@@ -256,9 +316,9 @@ function Editing(props: HmdocEditorProps & { checked: Valid }) {
           {editor && popover?.kind === "link" && <LinkPopover editor={editor} style={at(editor.state.selection.from)} onClose={() => { setPopover(null); editor.commands.focus(); }} />}
         </div>
       </div>
-      {dialog?.kind === "page" && <PageDialog meta={meta.current} pictures={props.pictures} ctx={props.ctx} onChange={setMeta} onClose={() => setDialog(null)} />}
-      {target && target.type.name === "table" && dialog?.kind === "view" && (
-        <TableViewDialog labels={columnNames(target.firstChild?.childCount ?? 0, headerTexts(target))} rowSpans={hasRowSpans(target)}
+      {dialog?.kind === "page" && <PageDialog meta={meta.current} pictures={props.pictures} ctx={props.ctx} onPatch={patchMeta} onClose={() => setDialog(null)} />}
+      {target && dialog?.kind === "view" && (
+        <TableViewDialog labels={columnNames(TableMap.get(target).width, headerTexts(target))} rowSpans={hasRowSpans(target)}
           view={meta.current.views?.[target.attrs.id]} onClose={() => setDialog(null)}
           onApply={(view) => setMeta(withView(meta.current, target.attrs.id, view))} />
       )}

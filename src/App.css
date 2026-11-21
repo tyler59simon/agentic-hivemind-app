@@ -1557,7 +1557,10 @@ button.icon { border: none; padding: .25rem; }
 .hm-formula { font-variant-numeric: tabular-nums; cursor: text; }
 .hm-formula-error { color: var(--error); font-weight: 600; }
 .hm-sorted { margin: .6rem 0; white-space: normal; }
-.hm-sorted-note { margin: 0 0 .2rem; color: var(--muted); font-size: .85rem; }
+.hm-sorted-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: 0 0 .2rem; }
+.hm-sorted-note { color: var(--muted); font-size: .85rem; margin-right: auto; }
+.hm-sorted-bar button { font-size: .8rem; padding: .1rem .5rem; }
+.hm-copy.rich-doc { min-height: 0; padding-bottom: 0; }
 .hm-sorted table { border-collapse: collapse; table-layout: auto; }
 .hm-sorted th, .hm-sorted td { border: 1px solid var(--border); padding: .25rem .5rem; min-width: 4rem; vertical-align: top; }
 .hm-sorted th { background: var(--bg-alt); font-weight: 700; }

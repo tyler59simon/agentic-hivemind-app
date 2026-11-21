@@ -34,4 +34,17 @@ describe("resolvePage", () => {
     expect(resolvePage("New idea", from("Projects/Plan.md"), pages)).toEqual({ missing: "Projects/New idea.md" });
     expect(resolvePage("Later/Thing", from("Projects/Plan.md"), pages)).toEqual({ missing: "Later/Thing.md" });
   });
+
+  it("R1-6: with Plan.md and Plan.hmdoc side by side, [[Plan]] is the Markdown page and [[Plan.hmdoc]] the rich one", () => {
+    const both = ["Plan.hmdoc", "Plan.md", "Other.md", "Dir/Only.hmdoc", "Dir/Plan.hmdoc", "Dir/Plan.markdown"];
+    // Whatever order the notebook lists them in.
+    for (const list of [both, [...both].reverse()]) {
+      expect(resolvePage("Plan", from("Other.md"), list)).toEqual(at("Plan.md"));
+      expect(resolvePage("Plan.hmdoc", from("Other.md"), list)).toEqual(at("Plan.hmdoc"));
+      expect(resolvePage("Dir/Plan", from("Other.md"), list)).toEqual(at("Dir/Plan.markdown"));
+      expect(resolvePage("Dir/Plan.hmdoc", from("Other.md"), list)).toEqual(at("Dir/Plan.hmdoc"));
+    }
+    // A rich page with no Markdown twin answers to its bare name.
+    expect(resolvePage("Only", from("Other.md"), both)).toEqual(at("Dir/Only.hmdoc"));
+  });
 });

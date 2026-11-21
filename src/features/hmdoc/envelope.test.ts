@@ -53,6 +53,24 @@ describe("opening a file", () => {
     expect(reason(file(doc({ type: "callout", attrs: { marker: "[!note]", icon: "a very long icon" }, content: [{ type: "calloutTitle" }] })))).toContain('"icon"');
   });
 
+  it("R1-19: text on a node that is not text, and content on a text node, open read-only: ProseMirror would drop them", () => {
+    expect(reason(file(doc({ type: "paragraph", text: "x", content: [] })))).toContain('a node "paragraph" with text of its own');
+    expect(reason(file(doc({ type: "paragraph", content: [{ type: "text", text: "x", content: [] }] })))).toContain("a text node with content");
+    expect(reason(file(doc(para("fine"))))).toBeNull();
+  });
+
+  it("R1-3 and R1-12: an unset column width of a merged cell (0) and a list number up to nine digits are accepted", () => {
+    const cell = (attrs: Record<string, unknown>) => ({ type: "tableCell", attrs, content: [para("x")] });
+    const table = (c: unknown) => doc({ type: "table", content: [{ type: "tableRow", content: [c] }] });
+    expect(reason(file(table(cell({ colspan: 2, colwidth: [0, 96] }))))).toBeNull();
+    expect(reason(file(table(cell({ colspan: 2, colwidth: [-1, 96] }))))).toContain('"colwidth"');
+    const list = (start: number) => doc({ type: "orderedList", attrs: { start }, content: [{ type: "listItem", content: [para("a")] }] });
+    expect(reason(file(list(999_999_999)))).toBeNull();
+    expect(reason(file(list(0)))).toBeNull();
+    expect(reason(file(list(1_000_000_000)))).toContain('"start"');
+    expect(reason(file(list(-1)))).toContain('"start"');
+  });
+
   it("a document that breaks the schema's structure, or a malformed table, opens read-only", () => {
     expect(reason(file(doc({ type: "bulletList", content: [para("not an item")] })))).toContain("not valid");
     expect(reason(file({ type: "doc", content: [] }))).toContain("not valid");

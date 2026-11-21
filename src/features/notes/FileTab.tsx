@@ -17,7 +17,7 @@ import { useWorkspace, type Mode, type Tab } from "../../workspace/store";
 import { CodeEditor } from "../editor/CodeEditor";
 import { PageMergeDialog } from "../editor/MergeDialog";
 import { resolvePage } from "../links/resolve";
-import { convertToRich, movePath, openPage, renamed, saveBothVersions, saveCopy, trashPath } from "./actions";
+import { convertToRich, createMissingPage, missingPageProblem, movePath, openPage, renamed, saveBothVersions, saveCopy, trashPath } from "./actions";
 import { DeleteConfirm } from "./DeleteConfirm";
 import { forgetRecent } from "./opening";
 import { PageView } from "./PageView";
@@ -58,12 +58,15 @@ function useFollow(tab: Tab, pages: string[], ask: (node: ReactNode) => void) {
         </Modal>,
       );
     }
+    // A rich page is not made in a Living Memory notebook (R1-16).
+    const problem = missingPageProblem(from.notebook, hit.missing);
+    if (problem) { toast(problem, "warn"); return; }
     ask(
       <Confirm title="Create this page?" action="Create page" message={<p>No page called <b>{target}</b> exists yet. Create <code>{hit.missing}</code>?</p>}
         onAnswer={(yes) => {
           ask(null);
           if (!yes) return;
-          createDoc(from.notebook, hit.missing, "").then(() => {
+          createMissingPage(from.notebook, hit.missing).then(() => {
             client.invalidateQueries({ queryKey: ["notebook-tree", from.notebook] });
             openPage({ notebook: from.notebook, path: hit.missing }, { split });
           }, (e) => toast(classify(e).message, "error"));
@@ -279,7 +282,13 @@ export function FileTab({ tab }: { tab: Tab }) {
   const saveBoth = () => {
     const d = useDocuments.getState().docs[key];
     if (!d) return;
-    saveBothVersions(client, ref, d.text).then((path) => { toast(`Your version was saved as ${fileName(path)}`); reloadPage(key); }, (e) => toast(classify(e).message, "error"));
+    const copied = d.text;
+    saveBothVersions(client, ref, copied).then((path) => {
+      // Typing went on while the copy was made: that text is not in the copy, so the page keeps it (R1-4).
+      if (useDocuments.getState().docs[key]?.text !== copied) { toast(`Your version was saved as ${fileName(path)}, but you typed more meanwhile. Those edits stay here; the page was not reloaded.`, "warn"); return; }
+      toast(`Your version was saved as ${fileName(path)}`);
+      reloadPage(key);
+    }, (e) => toast(classify(e).message, "error"));
   };
   const recreate = () => {
     const d = useDocuments.getState().docs[key];

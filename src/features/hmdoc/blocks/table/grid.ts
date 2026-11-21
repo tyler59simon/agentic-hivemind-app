@@ -76,6 +76,13 @@ export function effectiveSort(table: PMNode, view: TableView | undefined): Table
   return view.sort.column < map.width && !hasRowSpans(table) ? view.sort : null;
 }
 
+/** The filter that applies to `table`, if any. Like a sort it is not applied to a table with a cell that spans rows: hiding
+ *  a row there would hide part of the spanning cell and shift the columns of the rows after it (R1-7). */
+export function effectiveFilter(table: PMNode, view: TableView | undefined): TableView["filter"] | null {
+  if (!view?.filter) return null;
+  return view.filter.column < TableMap.get(table).width && !hasRowSpans(table) ? view.filter : null;
+}
+
 /** Whether `text` passes a filter. Numbers compare as numbers, everything else as lower-case text. */
 export function matches(text: string, op: FilterOp, value: string): boolean {
   const t = text.trim();
@@ -101,8 +108,8 @@ export function visibleRows(table: PMNode, view: TableView | undefined): number[
   const g = tableSheet(table);
   const first = hasHeaderRow(table) ? 1 : 0;
   let rows = Array.from({ length: g.grid.rows - first }, (_, i) => i + first);
-  const filter = view?.filter;
-  if (filter && filter.column < g.grid.cols) rows = rows.filter((r) => matches(shownText(g, r, filter.column), filter.op, filter.value));
+  const filter = effectiveFilter(table, view);
+  if (filter) rows = rows.filter((r) => matches(shownText(g, r, filter.column), filter.op, filter.value));
   const sort = effectiveSort(table, view);
   if (sort) {
     const key = (r: number) => shownText(g, r, sort.column).trim();

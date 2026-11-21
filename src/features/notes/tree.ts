@@ -12,6 +12,7 @@ export interface Node {
 
 const low = (s: string) => s.toLowerCase();
 const PAGE = /\.(md|markdown|hmdoc)$/i;
+const RICH = /\.hmdoc$/i;
 
 /** Sort one folder's children: the sidecar's order first, then folders, then by name. */
 function sorted(nodes: Node[], order: string[] | undefined): Node[] {
@@ -36,7 +37,14 @@ export function buildTree(entries: Entry[], meta?: NotebookMeta): Node[] {
   }
   const build = (folder: string): Node[] => {
     const here = byFolder.get(low(folder)) ?? [];
-    const pages = new Map(here.filter((n) => n.kind === "page").map((n) => [low(n.name.replace(PAGE, "")), n]));
+    // A folder named like a page holds that page's subpages; when `Plan.md` and `Plan.hmdoc` both exist the folder is the
+    // Markdown page's, whatever order they are listed in (R1-15).
+    const pages = new Map<string, Node>();
+    for (const n of here.filter((x) => x.kind === "page")) {
+      const key = low(n.name.replace(PAGE, ""));
+      const had = pages.get(key);
+      if (!had || (RICH.test(had.name) && !RICH.test(n.name))) pages.set(key, n);
+    }
     const out: Node[] = [];
     for (const node of here) {
       if (node.kind === "dir") {

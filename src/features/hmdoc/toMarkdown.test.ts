@@ -1,8 +1,9 @@
 // NS-3C: Export to Markdown and Convert to rich page. The report lists everything the Markdown could not keep, and a
 // test fails when the schema holds a node, mark or attribute the export does not account for.
 import type { Node as PMNode } from "@tiptap/pm/model";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { convertMarkdown, markdownToRichDoc } from "./convert";
+import * as validate from "./validate";
 import { inspect } from "./validate";
 import { richSchema } from "../rich/schema";
 import { attrsOf, hmdocSchema } from "./schema";
@@ -94,6 +95,31 @@ describe("export to Markdown", () => {
   it("a cell of one paragraph, and an empty paragraph beside it, is not reported", () => {
     const d = doc({ type: "table", attrs: { id: "t" }, content: [row(cell("tableHeader", [p(t("a")), p()]), cell("tableHeader", [p(t("b"))])), row(cell("tableCell", [p(t("1"))]), cell("tableCell", [p()]))] });
     expect(exportMarkdown(d).report).toEqual([]);
+  });
+
+  it("R1-13: toggles, columns and callout icons nested in a table cell are reported too", () => {
+    const toggle = { type: "toggle", attrs: { open: true }, content: [{ type: "toggleSummary", content: [t("More")] }, p(t("Hidden"))] };
+    const columns = { type: "columns", content: [{ type: "column", content: [p(t("L"))] }, { type: "column", content: [p(t("R"))] }] };
+    const callout = { type: "callout", attrs: { marker: "[!tip]", icon: "★" }, content: [{ type: "calloutTitle", content: [t("Hint")] }, p(t("Body"))] };
+    const d = doc({ type: "table", attrs: { id: "t" }, content: [
+      row(cell("tableHeader", [p(t("a"))]), cell("tableHeader", [p(t("b"))])),
+      row(cell("tableCell", [toggle]), cell("tableCell", [columns, callout])),
+    ] });
+    const out = exportMarkdown(d);
+    expect(counts(out.report)).toEqual({ richCells: 2, toggles: 1, columns: 1, calloutIcons: 1 });
+    // The words are kept.
+    for (const word of ["More", "Hidden", "L", "R", "Hint", "Body"]) expect(out.text).toContain(word);
+  });
+
+  it("R1-14: a line break inside a table cell is written as <br>, like the break between paragraphs", () => {
+    const d = doc({ type: "table", attrs: { id: "t" }, content: [
+      row(cell("tableHeader", [p(t("a"))]), cell("tableHeader", [p(t("b"))])),
+      row(cell("tableCell", [p(t("one"), { type: "hardBreak" }, t("two"))]), cell("tableCell", [p(t("x")), p(t("y"))])),
+    ] });
+    const out = exportMarkdown(d);
+    expect(out.text).toMatch(/one<br>two/);
+    expect(out.text).toMatch(/x<br>y/);
+    expect(out.text.split("\n").filter((l) => l.startsWith("|"))).toHaveLength(3);
   });
 
   it("views of tables no longer in the page, and a normal width, are not reported", () => {
@@ -213,6 +239,46 @@ describe("convert to a rich page", () => {
     const out = exportMarkdown(r.doc, r.envelope.meta);
     expect(out.report).toEqual([]);
     expect(out.text).toBe(MD);
+  });
+
+  it("R1-12: a list that starts above 1,000,000 converts to a page that opens for editing", () => {
+    for (const start of [2_000_000, 999_999_999]) {
+      const text = convertMarkdown(`${start}. one\n${start + 1 > 999_999_999 ? 1 : start + 1}. two\n`, "Big");
+      const read = inspect(text);
+      expect(read.ok ? "ok" : read.reason, String(start)).toBe("ok");
+      if (read.ok) expect(read.doc.child(0).attrs.start).toBe(start);
+    }
+  });
+
+  it("R1-12: a block the rich page cannot hold stays as a source box, and the converted file always opens", () => {
+    const real = validate.readContent;
+    // Pretend the validator refuses any list: the whole page fails, and so does the block alone.
+    const spy = vi.spyOn(validate, "readContent").mockImplementation((content, schema) => {
+      if (JSON.stringify(content).includes('"orderedList"')) return { ok: false, reason: "pretend" };
+      return real(content, schema);
+    });
+    try {
+      const text = convertMarkdown("# Title\n\n3. a\n4. b\n\nAfter.\n", "P");
+      spy.mockRestore();
+      const read = inspect(text);
+      expect(read.ok).toBe(true);
+      if (!read.ok) return;
+      const kinds: string[] = [];
+      read.doc.forEach((n) => kinds.push(n.type.name));
+      expect(kinds).toEqual(["heading", "rawBlock", "paragraph"]);
+      expect(read.doc.child(1).attrs).toEqual({ kind: "block", value: "3. a\n4. b" });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("R1-12: a conversion whose result would not open is refused, not written", () => {
+    const spy = vi.spyOn(validate, "readContent").mockReturnValue({ ok: false, reason: "pretend" });
+    try {
+      expect(() => convertMarkdown("Text\n", "P")).toThrow("cannot be converted");
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("gives each table its own id and an empty page one paragraph", () => {

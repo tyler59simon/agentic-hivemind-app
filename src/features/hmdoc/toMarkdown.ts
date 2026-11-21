@@ -141,12 +141,20 @@ class Walk {
     const lines: Json[][] = [];
     const take = (n: PMNode) => {
       if (n.isTextblock) {
-        const inline = n.type.name === "codeBlock" ? [{ type: "text", text: n.textContent, marks: [{ type: "code" }] }] : this.inline(n);
+        // A line break inside a block is a line break in the cell, written as <br> like the break between blocks.
+        const inline = n.type.name === "codeBlock" ? [{ type: "text", text: n.textContent, marks: [{ type: "code" }] }]
+          : this.inline(n).map((i): Json => (i.type === "hardBreak" ? { type: "rawInline", attrs: { value: "<br>", kind: "html" } } : i));
         if (n.content.size) lines.push(inline);
       } else if (n.type.name === "mathBlock" || n.type.name === "rawBlock") {
         const text = String(n.attrs.value).trim();
         if (text) lines.push([{ type: "text", text }]);
       } else {
+        // What a block of its own would count, counted here too: the layouts and icons nested in a cell are lost as well
+        // (R1-13).
+        if (n.type.name === "columns") this.counts.columns++;
+        else if (n.type.name === "toggle") this.counts.toggles++;
+        else if (n.type.name === "callout" && n.attrs.icon) this.counts.calloutIcons++;
+        else if (n.type.name === "table") this.table(n);
         n.forEach(take);
       }
     };

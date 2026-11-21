@@ -2,7 +2,7 @@
 // React, so moving between the Notes and Memory pages (which remounts the workspace) keeps edits and state.
 import { create } from "zustand";
 import { deleteDraft, getFileDraft, putDraft } from "../lib/drafts";
-import type { Loaded as RawLoaded } from "../lib/notebooks";
+import { isRichDoc, type Loaded as RawLoaded } from "../lib/notebooks";
 import { mergeBody } from "../features/editor/merge";
 import { isLm } from "./adapters/lmdoc";
 import { readDoc, saveDoc } from "./io";
@@ -263,7 +263,9 @@ async function load(key: string, ref: FileRef, attempt: number, convertNow = fal
     // to keep one) never merges by itself: an empty base makes every difference a conflict the user resolves (Codex
     // review of 32fd236, D4).
     const base = draft.base;
-    const merged = base !== undefined ? mergeBody(base, draft.mine, loaded.text) : null;
+    // A rich page is JSON: lines of it merged by line can make a document that is not one, so it is never merged (R1-2).
+    // The draft opens as the unsaved text and the file as the version to keep or leave, as for any conflict.
+    const merged = base !== undefined && !isRichDoc(ref.path) ? mergeBody(base, draft.mine, loaded.text) : null;
     if (merged && merged.conflicts === 0) {
       dispatch(key, { type: "loaded", loaded, draft: { text: merged.text, at: draft.savedAt }, convert });
       autosaveRestored(key, ref);

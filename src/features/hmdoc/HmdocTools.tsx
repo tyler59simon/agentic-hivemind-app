@@ -100,7 +100,7 @@ export function TableViewDialog({ labels, rowSpans, view, onApply, onClose }: {
   const apply = () => {
     const next: TableView = {};
     if (dir !== "none" && !rowSpans) next.sort = { column: sortColumn, dir };
-    if (op !== "none") next.filter = { column: filterColumn, op, value: op === "empty" || op === "filled" ? "" : value };
+    if (op !== "none" && !rowSpans) next.filter = { column: filterColumn, op, value: op === "empty" || op === "filled" ? "" : value };
     onApply(next.sort || next.filter ? next : undefined);
     onClose();
   };
@@ -114,11 +114,11 @@ export function TableViewDialog({ labels, rowSpans, view, onApply, onClose }: {
           <option value="none">Not sorted</option><option value="asc">Ascending</option><option value="desc">Descending</option>
         </select>
       </div>
-      {rowSpans && <p className="muted">Sorting is not available while a cell spans rows.</p>}
+      {rowSpans && <p className="muted">Sorting and filtering are not available while a cell spans rows.</p>}
       <div className="hm-view-row">
         <span>Show rows where</span>
         {columns(filterColumn, setFilterColumn, "Filter column")}
-        <select aria-label="Filter" value={op} onChange={(e) => setOp(e.target.value as typeof op)}>
+        <select aria-label="Filter" value={op} disabled={rowSpans} onChange={(e) => setOp(e.target.value as typeof op)}>
           <option value="none">Show all rows</option>
           {FILTER_OPS.map((o) => <option key={o} value={o}>{OPS[o]}</option>)}
         </select>
@@ -134,17 +134,13 @@ export function TableViewDialog({ labels, rowSpans, view, onApply, onClose }: {
 }
 
 /** The page's width and cover image. */
-export function PageDialog({ meta, pictures, ctx, onChange, onClose }: {
-  meta: Meta; pictures: string[]; ctx: RichContext; onChange: (meta: Meta) => void; onClose: () => void;
+export function PageDialog({ meta, pictures, ctx, onPatch, onClose }: {
+  meta: Meta; pictures: string[]; ctx: RichContext; onPatch: (patch: Partial<Meta>) => void; onClose: () => void;
 }) {
   const picker = useRef<HTMLInputElement>(null);
   const width = meta.width ?? "normal";
-  const set = (patch: Partial<Meta>) => {
-    const next = { ...meta, ...patch };
-    if (next.width === "normal") delete next.width;
-    if (!next.cover) delete next.cover;
-    onChange(next);
-  };
+  // Each change is a patch the page applies to its settings as they are then, not to the ones this dialog drew (R1-17).
+  const set = onPatch;
   const add = async (files: FileList | null) => {
     const file = [...(files ?? [])].find((f) => pictureExt(f.type) || /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i.test(f.name));
     if (!file || !ctx.attachPath) return;

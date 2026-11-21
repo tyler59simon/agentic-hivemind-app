@@ -11,7 +11,7 @@ import { bridgeGeneration, lmNotebooksQuery } from "../../lib/lm";
 import { forgetMoved } from "../../lib/drafts";
 import { createDoc, createSection, deleteDoc, moveDoc, readDoc } from "../../documents/io";
 import { newPageText } from "../hmdoc/envelope";
-import { fileName, folderOf, isMarkdown, notebooksQuery, pageTitle } from "../../lib/notebooks";
+import { fileName, folderOf, isMarkdown, isRichDoc, notebooksQuery, pageTitle } from "../../lib/notebooks";
 import { isLoose, saveAs } from "../../lib/opens";
 import { untitledText } from "./untitled";
 import { toast } from "../../ui/toast";
@@ -255,4 +255,16 @@ export async function newPageHere(client: QueryClient) {
   // With no notebook yet, Ctrl+N starts an untitled text file (NS-1B).
   if (!notebook) { useWorkspace.getState().openTab({ kind: "new-file" }); return; }
   await newPage(client, notebook, folder).catch((e) => toast(classify(e).message, "error"));
+}
+
+/** Why a page a missing `[[link]]` names cannot be made, or null. A rich page is a file of a folder notebook (R1-16). */
+export function missingPageProblem(notebook: string, path: string): string | null {
+  return isRichDoc(path) && isLm({ notebook }) ? `Living Memory notebooks hold Markdown pages only, so ${path} was not created.` : null;
+}
+
+/** Make the page a missing `[[link]]` names: a rich page starts as a valid one, any other page is empty. */
+export async function createMissingPage(notebook: string, path: string) {
+  const problem = missingPageProblem(notebook, path);
+  if (problem) throw new Error(problem);
+  await createDoc(notebook, path, isRichDoc(path) ? newPageText(pageTitle(path)) : "");
 }
