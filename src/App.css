@@ -1431,6 +1431,8 @@ button.icon { border: none; padding: .25rem; }
 
 /* Rich mode of a Markdown page (NS-3B): the page drawn without its Markdown syntax. */
 .rich-editor { display: flex; flex-direction: column; min-height: 22rem; }
+/* Node views hide parts with the hidden attribute; their own display rules must not show them (UI pass of NS-3B). */
+.rich-editor [hidden] { display: none !important; }
 .rich-toolbar .icon-button.active { background: var(--accent-soft); color: var(--fg); }
 .rich-toolbar-sep { width: 1px; align-self: stretch; margin: .2rem .3rem; background: var(--border); }
 .rich-wrap { position: relative; padding-left: 1.6rem; }
@@ -1438,11 +1440,11 @@ button.icon { border: none; padding: .25rem; }
 .rich-doc { outline: none; white-space: pre-wrap; min-height: 20rem; padding-bottom: 6rem; }
 .rich-doc p.is-editor-empty:first-child::before, .rich-doc .is-empty::before { content: attr(data-placeholder); color: var(--muted); float: left; height: 0; pointer-events: none; }
 .rich-doc blockquote p { margin: .2rem 0; }
-.rich-doc ul[data-type], .rich-doc li[data-type="taskItem"] { list-style: none; }
-.rich-doc li[data-type="taskItem"] { display: flex; gap: .45rem; align-items: flex-start; margin-left: -1.3rem; }
-.rich-doc li[data-type="taskItem"] > label { flex: none; margin-top: .3rem; }
-.rich-doc li[data-type="taskItem"] > div { flex: 1; min-width: 0; }
-.rich-doc li[data-type="taskItem"][data-checked="true"] > div { color: var(--muted); text-decoration: line-through; }
+.rich-doc ul[data-type], .rich-doc li[data-checked] { list-style: none; }
+.rich-doc li[data-checked] { display: flex; gap: .45rem; align-items: flex-start; margin-left: -1.3rem; }
+.rich-doc li[data-checked] > label { flex: none; margin-top: .3rem; }
+.rich-doc li[data-checked] > div { flex: 1; min-width: 0; }
+.rich-doc li[data-checked][data-checked="true"] > div { color: var(--muted); text-decoration: line-through; }
 .rich-doc table { border-collapse: collapse; margin: .6rem 0; table-layout: fixed; }
 .rich-doc th, .rich-doc td { border: 1px solid var(--border); padding: .25rem .5rem; min-width: 4rem; vertical-align: top; position: relative; }
 .rich-doc th { background: var(--bg-alt); font-weight: 700; }

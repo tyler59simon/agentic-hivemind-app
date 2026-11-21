@@ -163,12 +163,54 @@ function overridesFor(n: PMNode, style: Style): Overrides {
 export function writeBlock(n: PMNode, style: Style, definitions: readonly string[]): string {
   if (n.type.name === "horizontalRule" && n.attrs.markup) return n.attrs.markup;
   if (n.type.name === "rawBlock") return n.attrs.value;
+  if ((n.type.name === "bulletList" || n.type.name === "orderedList") && n.childCount > LONG_LIST) {
+    const text = writeLongList(n, style, definitions);
+    if (text !== null) return text;
+  }
   const tree = blockToMdast(n);
   if (!tree) return "";
   const overrides = overridesFor(n, style);
   const plain = stringify([tree], style, true, overrides);
   if (readsAs(plain, tree, definitions)) return plain;
   return stringify([tree], style, false, overrides);
+}
+
+/** Lists longer than this are written item by item. */
+const LONG_LIST = 32;
+
+/** What one item of a long list was written as, by item: an unchanged item keeps its node, so typing in one item of a
+ *  3,000-item list writes that item alone (it took 640 ms a key to write the whole list; UI pass of NS-3B). */
+const itemTexts = new WeakMap<PMNode, { style: Style; definitions: readonly string[]; key: string; text: string }>();
+
+/** A long list as its items, each written as a list of one item with the list's marker and its own number, joined
+ *  as the list is (a blank line between items of a loose list). Null when the items would not read as one list: the
+ *  writer gave one item another marker, as it does for an item that would read as a rule. */
+function writeLongList(n: PMNode, style: Style, definitions: readonly string[]): string | null {
+  const ordered = n.type.name === "orderedList";
+  const start = (n.attrs.start as number | null) ?? 1;
+  const overrides = overridesFor(n, style);
+  const parts: string[] = [];
+  let marker: string | null = null;
+  for (let i = 0; i < n.childCount; i++) {
+    const item = n.child(i);
+    const number = ordered ? (style.incrementListMarker ? start + i : start) : 0;
+    const key = `${JSON.stringify(overrides)}|${number}|${n.attrs.spread}`;
+    const hit = itemTexts.get(item);
+    let text: string;
+    if (hit && hit.style === style && hit.definitions === definitions && hit.key === key) text = hit.text;
+    else {
+      const one = n.type.create({ ...n.attrs, ...(ordered ? { start: number } : {}) }, item);
+      const tree = blockToMdast(one)!;
+      const plain = stringify([tree], style, true, overrides);
+      text = readsAs(plain, tree, definitions) ? plain : stringify([tree], style, false, overrides);
+      itemTexts.set(item, { style, definitions, key, text });
+    }
+    const mark = ordered ? /^\d+([.)])/.exec(text)?.[1] ?? "" : text[0];
+    if (marker === null) marker = mark;
+    else if (mark !== marker) return null;
+    parts.push(text);
+  }
+  return parts.join(n.attrs.spread ? "\n\n" : "\n");
 }
 
 /** Whether `text` parses, on its own with the definitions after it, as exactly `tree`. */

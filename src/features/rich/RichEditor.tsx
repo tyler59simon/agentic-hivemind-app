@@ -150,9 +150,13 @@ export default function RichEditor(props: RichEditorProps) {
 
   // Pictures and embeds draw again when the page's grant or files change, and source boxes and code language fields
   // follow a change of read-only (R1-11): the views are rebuilt.
+  // Only on a change: drawing every node again costs seconds on a page near the size limit (UI pass of NS-3B).
+  const drawnFor = useRef({ stamp: props.ctxStamp, readOnly: props.readOnly });
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor) return;
+    if (drawnFor.current.stamp === props.ctxStamp && drawnFor.current.readOnly === props.readOnly) return;
+    drawnFor.current = { stamp: props.ctxStamp, readOnly: props.readOnly };
     if (editor.isEditable === props.readOnly) {
       editor.setEditable(!props.readOnly);
       setPopover(null);

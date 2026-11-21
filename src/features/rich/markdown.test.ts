@@ -10,7 +10,7 @@ import { DEFAULT_STYLE, parse, stringify } from "./markdown";
 import { obsidian } from "./micromark/obsidian";
 import { serialize } from "./preserve";
 import { richSchema } from "./schema";
-import { writeBlock } from "./toMarkdown";
+import { blockToMdast, readsAs, writeBlock } from "./toMarkdown";
 import { wikiParts } from "./views";
 
 const live = lezer.configure([GFM, richSyntax]);
@@ -270,5 +270,41 @@ describe("Codex review of ad6c5c5", () => {
     expect(fresh.type.name).toBe("bulletList");
     const out = serialize(doc.type.create(null, [fresh.type.create({ ...fresh.attrs, marker: null }, fresh.content), doc.child(0)]), original);
     expect(parse(out).children.map((c) => c.type)).toEqual(["list", "list"]);
+  });
+});
+
+describe("long lists, written item by item (UI pass of NS-3B)", () => {
+  const schema = richSchema();
+  const items = (n: number, line: (i: number) => string) => Array.from({ length: n }, (_, i) => line(i)).join("");
+
+  it("writes an edited item alone and the list reads back the same", () => {
+    const text = items(40, (i) => `- item ${i} with *some* text\n`);
+    const { doc } = loadPage(schema, text);
+    const list = doc.child(0);
+    const item = list.child(7);
+    const para = item.child(0);
+    const edited = item.copy(item.content.replaceChild(0, para.copy(para.content.addToEnd(schema.text(" more")))));
+    const next = list.type.create(list.attrs, list.content.replaceChild(7, edited));
+    const out = writeBlock(next, DEFAULT_STYLE, []);
+    expect(out.split("\n")[7]).toBe("- item 7 with *some* text more");
+    expect(out.split("\n").filter((_l, i) => i !== 7)).toEqual(text.trimEnd().split("\n").filter((_l, i) => i !== 7));
+    expect(readsAs(out, blockToMdast(next)!, [])).toBe(true);
+  });
+
+  it("numbers a loose ordered list from its start and keeps it loose", () => {
+    const { doc } = loadPage(schema, items(40, (i) => `${i + 5}) item ${i}\n\n`));
+    const list = doc.child(0);
+    const out = writeBlock(list, loadPage(schema, "1) a\n").original.style, []);
+    expect(out.startsWith("5) item 0\n\n6) item 1\n\n")).toBe(true);
+    expect(readsAs(out, blockToMdast(list)!, [])).toBe(true);
+  });
+
+  it("writes the whole list at once when an item would take another marker", () => {
+    const { doc } = loadPage(schema, `* ---\n${items(40, (i) => `* item ${i}\n`)}`);
+    const list = doc.child(0);
+    const dashed = list.type.create({ ...list.attrs, marker: "-" }, list.content);
+    const out = writeBlock(dashed, DEFAULT_STYLE, []);
+    expect(parse(out).children).toHaveLength(1);
+    expect(readsAs(out, blockToMdast(dashed)!, [])).toBe(true);
   });
 });
