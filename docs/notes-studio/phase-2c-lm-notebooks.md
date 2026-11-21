@@ -110,4 +110,20 @@ The review of `dd4c1b0` (round 3, the last) changed these on 2026-11-21:
 
 ## 6. Shipped
 
-(Filled in when the phase lands.)
+Code landed on 2026-11-21: Hivemind `32fee20` (the phase), then `75ce884`, `dd4c1b0` and `e2e86cc` (fixes from three Codex review rounds); Living Memory `a493525`, `7f06bda` and `ad1fc3f`. The UI pass has not run yet (below), so the roadmap item stays open until it has.
+
+**Verified**
+- `npm test` (90 files, 700 tests), `npx tsc --noEmit`, `npm run build`, `cargo test` (612), `cargo clippy --all-targets` (the same older warning in `lib.rs`). `bridge::tests::a_script_that_fails_shows_its_stderr` failed in two full runs and passed alone; its cause is known and it stays tracked as its own bug.
+- `lmdoc::tests::live_pages_through_the_bridge` against a real Living Memory in a temporary store: a notebook-only domain and notebook, small and staged bodies, a stale write, a move that carries a draft, an attachment, an agent's proposal accepted, a page named `-Draft.md` created, moved, merged with `doc accept --edited` and saved, the webview's `doc notebooks` argv, and a request refused after the bridge switched generations.
+- Living Memory: the whole unittest suite (2,369 tests, run in chunks) and `scripts/simulate.py` (103 of 103) at `7f06bda`; `ad1fc3f` changes one test.
+- Three read-only Codex reviews (18, 16 and 17 findings), each finding checked against the code before it was fixed, each fix with a regression test checked to fail with the fix undone: [reviews/ns2c-codex-review.md](reviews/ns2c-codex-review.md).
+
+**Not run: the UI pass.** Claude Code stopped `npm run tauri dev` twice on 2026-11-21 because the machine ran low on memory, both times while it was still building, so the exit checks above have not been made in the real app: a Living Memory page beside a memory note in a split, an agent's proposal from a Hivemind terminal accepted in the inbox, folder notebook reach seen through `alm search`, and the Memory regression pass. A scratch store for it is ready (notebook `demo/plans` with a pending proposal, and the notebook-only domain `jot`).
+
+**Deviations**
+- A Living Memory page is a `file` tab whose notebook is `lm:<domain>:<notebook>`, not a `doc` tab kind (section "Changes from building NS-2C").
+- Merging a proposal is one Living Memory operation, `doc accept ID --edited`, not a write followed by a reject.
+- Pages belong to the store they were read from, and the bridge refuses a request made for an earlier store. A page whose edits could not be drafted is parked read-only across a store switch (section "Changes from the Codex review").
+
+**Open**
+- Publishing the store root, watcher and generation in `connect` as one step (R3-D9), and a live test that switches a bridge between two roots through `connect` (R3-T1).
