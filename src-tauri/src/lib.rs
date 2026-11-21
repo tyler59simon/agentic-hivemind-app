@@ -905,7 +905,7 @@ async fn automation_put(app: AppHandle, automation: automations::Automation) -> 
         }
         // A workflow automation runs its template on the engines shown now; refuse one that could never run unattended.
         if let (true, automations::Action::Workflow { template, .. }) = (automation.enabled, &automation.action)
-            && let Some(t) = workflow::templates().into_iter().find(|t| &t.id == template)
+            && let Some(t) = workflow::templates().into_iter().find(|t| t.id == *template)
         {
             workflow::check_unattended(&workflow::on_shown(t.tasks, &settings::load(&state.settings_path)), true)?;
         }
