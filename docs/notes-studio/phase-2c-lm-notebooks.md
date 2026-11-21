@@ -110,7 +110,7 @@ The review of `dd4c1b0` (round 3, the last) changed these on 2026-11-21:
 
 ## 6. Shipped
 
-Code landed on 2026-11-21: Hivemind `32fee20` (the phase), then `75ce884`, `dd4c1b0` and `e2e86cc` (fixes from three Codex review rounds); Living Memory `a493525`, `7f06bda` and `ad1fc3f`. The UI pass has not run yet (below), so the roadmap item stays open until it has.
+Code landed on 2026-11-21: Hivemind `32fee20` (the phase), then `75ce884`, `dd4c1b0` and `e2e86cc` (fixes from three Codex review rounds) and `2ab51dd` (fixes from the UI pass); Living Memory `a493525`, `7f06bda` and `ad1fc3f`.
 
 **Verified**
 - `npm test` (90 files, 700 tests), `npx tsc --noEmit`, `npm run build`, `cargo test` (612), `cargo clippy --all-targets` (the same older warning in `lib.rs`). `bridge::tests::a_script_that_fails_shows_its_stderr` failed in two full runs and passed alone; its cause is known and it stays tracked as its own bug.
@@ -118,7 +118,15 @@ Code landed on 2026-11-21: Hivemind `32fee20` (the phase), then `75ce884`, `dd4c
 - Living Memory: the whole unittest suite (2,369 tests, run in chunks) and `scripts/simulate.py` (103 of 103) at `7f06bda`; `ad1fc3f` changes one test.
 - Three read-only Codex reviews (18, 16 and 17 findings), each finding checked against the code before it was fixed, each fix with a regression test checked to fail with the fix undone: [reviews/ns2c-codex-review.md](reviews/ns2c-codex-review.md).
 
-**Not run: the UI pass.** Claude Code stopped `npm run tauri dev` twice on 2026-11-21 because the machine ran low on memory, both times while it was still building, so the exit checks above have not been made in the real app: a Living Memory page beside a memory note in a split, an agent's proposal from a Hivemind terminal accepted in the inbox, folder notebook reach seen through `alm search`, and the Memory regression pass. A scratch store for it is ready (notebook `demo/plans` with a pending proposal, and the notebook-only domain `jot`).
+**UI pass (2026-11-21).** The dev app ran against a scratch store (notebook `demo/plans`, notebook-only domain `jot`, two memory notes) and a folder notebook outside any bound folder, driven over WebView2 remote debugging. The exit checks:
+- A Living Memory page and a memory note side by side in a split, each edited and saved on its own; the page kept its CRLF line endings.
+- An agent's `doc propose` showed in the inbox without a reload (the badge went from 1 to 2), and Accept wrote the proposed bytes and settled the proposal. "Edit, then accept" merged a second proposal through `doc accept --edited`. The same agent's `doc write` was refused by the Living Memory guard.
+- Folder notebook reach: before Save, `search` and `ask` found nothing; Searchable registered the folder and both found its page; Hidden, and then Searchable with Private, hid it as soon as Save returned; turning Private off brought it back.
+- Memory regression: the library, opening a note from it, editing and saving, a note merge after an outside `update` (with conflict markers resolved by hand), the split and the context rail following the focused pane. Domain pickers left the notebook-only domain out.
+
+The pass found three problems, fixed in `2ab51dd` with tests: "Edit, then accept" and "Merge" on a proposal used the wording of a page that changed on disk (the agent's text was labelled "Version on disk"); the rail beside a Living Memory page showed its container id and the breadcrumb said "Notebook"; and one proposal was announced as "1 agent proposals".
+
+One deviation from the exit check: the agent's `doc propose` ran from a shell with the variables a Hivemind terminal sets (`LIVING_MEMORY_ROOT` for the connected store, `HIVEMIND_SESSION`), not inside a Hivemind terminal, because Hivemind offers a plain shell tab only beside an agent session, and starting one is a paid Claude Code or Codex run.
 
 **Deviations**
 - A Living Memory page is a `file` tab whose notebook is `lm:<domain>:<notebook>`, not a `doc` tab kind (section "Changes from building NS-2C").
