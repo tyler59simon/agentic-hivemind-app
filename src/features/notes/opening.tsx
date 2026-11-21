@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { classify } from "../../lib/errors";
 import type { FileRef } from "../../documents/keys";
-import { routeDrop, type Dropped } from "./drops";
+import { claimDrop, openDropped, routeDrop, unclaimedDrops, type Dropped } from "./drops";
 import { announceAdded } from "./reach";
 import { addDroppedNotebook, LOOSE, openDialog, openForget, openPending, recentQuery } from "../../lib/opens";
 import { Confirm } from "../../ui/Modal";
@@ -49,11 +49,15 @@ export function useOpenRequests() {
     const stops = [
       listen("open-requested", () => void drain()),
       listen<{ token: string; name: string }>("folder-dropped", (e) => setOffer(e.payload)),
-      listen<Dropped>("files-dropped", (e) => void routeDrop(e.payload).catch((err) => toast(classify(err).message, "error"))),
+      listen<Dropped>("files-dropped", (e) => void claimDrop(e.payload.token)
+        .then((mine) => (mine ? routeDrop(e.payload) : undefined)).catch((err) => toast(classify(err).message, "error"))),
     ];
     // An effect that ended before its listeners were in place (Strict Mode runs effects twice) leaves the queue to the
     // one that follows it.
-    void Promise.all(stops).then(() => { if (!stopped) void drain(); });
+    // A drop sent before the listener was in place opens like a file from Explorer (Codex review of 398b956, P3).
+    const drainDrops = () => unclaimedDrops().then((drops) => Promise.all(drops.map((d) => openDropped(d.token, d.names.map((_, i) => i)))))
+      .catch((e) => toast(classify(e).message, "error"));
+    void Promise.all(stops).then(() => { if (!stopped) { void drain(); void drainDrops(); } });
     return () => { stopped = true; stops.forEach((s) => s.then((unlisten) => unlisten())); };
   }, [client]);
   return offer && (

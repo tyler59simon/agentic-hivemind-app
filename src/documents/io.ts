@@ -48,6 +48,9 @@ export const treeQuery = (id: string) => ({
   queryFn: () => { const lm = lmdoc.parseLm(id); return lm ? lmdoc.pageTree(lm) : files.notebookTree(id); },
 });
 
+/** The attachments of a Living Memory notebook (`assets/<sha8>-<name>`), for `![[picture.png]]`. */
+export const lmAssets = (notebook: string) => invoke<string[]>("lmdoc_assets", { notebook });
+
 /** Save a picture as an attachment of a notebook page (NS-3A); resolves to its path from the notebook's root. The
  *  bytes go as the raw request body, the names as percent-encoded headers. */
 export const attachBytes = (notebook: string, page: string, name: string, bytes: Uint8Array) => {

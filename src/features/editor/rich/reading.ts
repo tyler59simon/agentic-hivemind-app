@@ -9,6 +9,9 @@ import { richSyntax } from "./syntax";
 /** Inline code that starts with this character is math. It is a private-use character, so no page has it by accident. */
 export const MATH_MARK = "";
 
+/** Inline code that starts with this character is display math (`$$x$$` on one line). */
+export const MATH_BLOCK_MARK = "";
+
 const parser = baseParser.configure([GFM, richSyntax]);
 
 /** A code span holding `text` exactly: a backtick run longer than any inside it, and a space where it would touch one. */
@@ -30,16 +33,32 @@ export function prepareForReading(text: string): string {
         if (marks.length === 2) edits.push({ from: node.from, to: node.to, insert: codeSpan(MATH_MARK + text.slice(marks[0].to, marks[1].from)) });
         return false;
       }
+      // Every rewrite keeps the page's lines and their container markers (`> `, list indents), so a quote or list
+      // around the math stays whole and the Outline's line numbers still match the source (Codex review of 398b956, P2).
       if (node.name === "BlockMath") {
         const marks = node.node.getChildren("BlockMathMark");
         const inner = marks.length === 2 ? text.slice(marks[0].to, marks[1].from) : text.slice(node.from + 2, node.to);
-        const longest = Math.max(2, ...[...inner.matchAll(/`+/g)].map((m) => m[0].length));
-        const fence = "`".repeat(longest + 1);
-        edits.push({ from: node.from, to: node.to, insert: `${fence}math\n${inner.trim()}\n${fence}` });
+        const lineEnd = (pos: number) => { const n = text.indexOf("\n", pos); return n < 0 ? text.length : n; };
+        const lineStart = (pos: number) => text.lastIndexOf("\n", pos - 1) + 1;
+        const alone = marks.length === 2
+          && !text.slice(marks[0].to, lineEnd(marks[0].to)).trim()
+          && /^[ \t>]*$/.test(text.slice(lineStart(marks[1].from), marks[1].from))
+          && !text.slice(marks[1].to, lineEnd(marks[1].to)).trim();
+        if (alone) {
+          // `$$` on lines of their own: the marks become a math fence in place.
+          const longest = Math.max(2, ...[...inner.matchAll(/`+/g)].map((m) => m[0].length));
+          const fence = "`".repeat(longest + 1);
+          edits.push({ from: marks[0].from, to: marks[0].to, insert: `${fence}math` }, { from: marks[1].from, to: marks[1].to, insert: fence });
+        } else {
+          // `$$x$$` and math sharing a line with its marks: display math in a code span over the same lines.
+          edits.push({ from: node.from, to: node.to, insert: codeSpan(MATH_BLOCK_MARK + inner.trim()) });
+        }
         return false;
       }
       if (node.name === "Comment") {
-        edits.push({ from: node.from, to: node.to, insert: "" });
+        // Only its line breaks and each later line's container markers stay.
+        const kept = text.slice(node.from, node.to).split("\n").map((l, i) => (i === 0 ? "" : /^[ \t>]*/.exec(l)![0])).join("\n");
+        edits.push({ from: node.from, to: node.to, insert: kept });
         return false;
       }
     },
@@ -89,16 +108,45 @@ function walkCallouts(node: MdNode) {
     walkCallouts(child);
     if (child.type !== "blockquote") continue;
     const para = child.children?.[0];
-    const first = para?.type === "paragraph" ? para.children?.[0] : undefined;
+    const kids = para?.type === "paragraph" ? para.children ?? [] : [];
+    const first = kids[0];
     if (!para || first?.type !== "text") continue;
     const value = first.value ?? "";
     const end = value.indexOf("\n");
     const callout = parseCallout(`> ${end < 0 ? value : value.slice(0, end)}`);
     if (!callout) continue;
-    // The title line leaves the paragraph; what followed it on later lines stays.
-    first.value = end < 0 ? "" : value.slice(end + 1);
-    if (!first.value) para.children!.shift();
-    const body = para.children!.length ? child.children! : child.children!.slice(1);
+    // The title is the whole first line, formatting included: the text after the marker and every inline node before
+    // the line ends; the rest of the paragraph stays as the body (Codex review of 398b956, P3).
+    const marker = /^\s*\[![^\]]+\][+-]?[ \t]*/.exec(value)?.[0] ?? "";
+    const titled: MdNode[] = [];
+    let rest: MdNode[] = [];
+    const line = end < 0 ? value.slice(marker.length) : value.slice(marker.length, end);
+    if (line) titled.push({ type: "text", value: line });
+    if (end >= 0) {
+      const tail = value.slice(end + 1);
+      rest = [...(tail ? [{ type: "text", value: tail }] : []), ...kids.slice(1)];
+    } else {
+      let i = 1;
+      for (; i < kids.length; i++) {
+        const k = kids[i];
+        if (k.type === "break") { i++; break; }
+        const nl = k.type === "text" ? (k.value ?? "").indexOf("\n") : -1;
+        if (nl >= 0) {
+          if (nl > 0) titled.push({ type: "text", value: k.value!.slice(0, nl) });
+          const tail = k.value!.slice(nl + 1);
+          if (tail) rest.push({ type: "text", value: tail });
+          i++;
+          break;
+        }
+        titled.push(k);
+      }
+      rest = [...rest, ...kids.slice(i)];
+    }
+    const last = titled[titled.length - 1];
+    if (last?.type === "text") last.value = (last.value ?? "").replace(/\s+$/, "");
+    const shown = titled.some((n) => n.type !== "text" || n.value) ? titled : [{ type: "text", value: callout.title }];
+    para.children = rest;
+    const body = rest.length ? child.children! : child.children!.slice(1);
     const fold = callout.fold;
     child.data = {
       hName: fold ? "details" : "div",
@@ -107,7 +155,7 @@ function walkCallouts(node: MdNode) {
     const title: MdNode = {
       type: "calloutTitle",
       data: { hName: fold ? "summary" : "div", hProperties: { className: ["callout-title"] } },
-      children: [{ type: "text", value: callout.title }],
+      children: shown,
     };
     child.children = [title, ...body];
   }

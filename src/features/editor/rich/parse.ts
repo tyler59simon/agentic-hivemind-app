@@ -1,5 +1,8 @@
 // Pure parsers for the rich page editor and the reading view (NS-3A): pictures and their width, embeds, callouts and
 // footnotes. Everything here works on plain text, so Live and Reading agree.
+import { GFM, parser } from "@lezer/markdown";
+
+const headingParser = parser.configure([GFM]);
 
 export const PICTURE = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
 export const isPicture = (path: string) => PICTURE.test(path.replace(/[?#].*$/, ""));
@@ -114,14 +117,24 @@ export function footnoteDefs(lines: Iterable<string>): Map<string, string> {
  *  `![[Page#Heading]]`; the whole text when there is no heading; null when it is not found. */
 export function section(text: string, heading?: string): string | null {
   if (!heading) return text;
-  const lines = text.split(/\r?\n/);
+  // Headings as Markdown parses them: a `# line` inside a code fence is not one, and Setext headings are (Codex review
+  // of 398b956, P3).
+  const headings: { level: number; from: number; title: string }[] = [];
+  const top = headingParser.parse(text).topNode;
+  for (let node = top.firstChild; node; node = node.nextSibling) {
+    const m = /^(ATXHeading|SetextHeading)(\d)$/.exec(node.name);
+    if (!m) continue;
+    const raw = text.slice(node.from, node.to);
+    const title = m[1] === "ATXHeading"
+      ? raw.replace(/^#{1,6}[ \t]*/, "").replace(/([ \t]+#+)?[ \t]*$/, "")
+      : raw.split(/\r?\n/)[0];
+    headings.push({ level: Number(m[2]), from: node.from, title: title.trim() });
+  }
   const want = heading.trim().toLowerCase();
-  const start = lines.findIndex((l) => { const m = /^(#{1,6})\s+(.*?)\s*#*\s*$/.exec(l); return !!m && m[2].trim().toLowerCase() === want; });
+  const start = headings.findIndex((h) => h.title.toLowerCase() === want);
   if (start < 0) return null;
-  const level = /^(#{1,6})/.exec(lines[start])![1].length;
-  let end = start + 1;
-  while (end < lines.length && !(/^(#{1,6})\s/.exec(lines[end]) && /^(#{1,6})/.exec(lines[end])![1].length <= level)) end++;
-  return lines.slice(start, end).join("\n");
+  const next = headings.slice(start + 1).find((h) => h.level <= headings[start].level);
+  return text.slice(headings[start].from, next ? next.from : text.length).replace(/\s+$/, "");
 }
 
 /** A name for a pasted picture: `Pasted image 20261121135501.png`, from the local time. */
@@ -141,6 +154,7 @@ export function relativePath(folder: string, path: string): string {
 
 /** The Markdown that links an attachment at `path` (relative to the page's folder) under `name`. */
 export function attachmentLink(path: string, name: string): string {
-  const url = path.split("/").map(encodeURIComponent).join("/");
+  // Parentheses too: Markdown ends a link's destination at the first `)` (Codex review of 398b956, P2).
+  const url = path.split("/").map((p) => encodeURIComponent(p).replace(/\(/g, "%28").replace(/\)/g, "%29")).join("/");
   return `${isPicture(path) ? "!" : ""}[${name.replace(/[[\]]/g, "")}](${url})`;
 }

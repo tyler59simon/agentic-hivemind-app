@@ -3,7 +3,7 @@
 // Marks stay visible on the lines that hold the cursor, as in the plain live preview. Ranges the block field replaced
 // are left alone.
 import { syntaxTree } from "@codemirror/language";
-import type { EditorState, Range, Text } from "@codemirror/state";
+import type { EditorState, Range } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { replacedBlocks } from "./blocks";
 import { richContext, richRefresh } from "./context";
@@ -21,11 +21,21 @@ function activeLines(state: EditorState): Set<number> {
   return lines;
 }
 
-// Footnote definitions are read from the whole page once per version of it.
-const defsCache = new WeakMap<Text, Map<string, string>>();
-function definitions(doc: Text): Map<string, string> {
-  let defs = defsCache.get(doc);
-  if (!defs) { defs = footnoteDefs(doc.iterLines()); defsCache.set(doc, defs); }
+// Footnote definitions are read from the whole page once per syntax tree, leaving out lines in code (Codex review of
+// 398b956, P3).
+const defsCache = new WeakMap<object, Map<string, string>>();
+function definitions(state: EditorState): Map<string, string> {
+  const tree = syntaxTree(state);
+  let defs = defsCache.get(tree);
+  if (!defs) {
+    const lines: string[] = [];
+    for (let n = 1; n <= state.doc.lines; n++) {
+      const line = state.doc.line(n);
+      lines.push(line.text.startsWith("[^") && CODE.has(tree.resolveInner(line.from, 1).name) ? "" : line.text);
+    }
+    defs = footnoteDefs(lines);
+    defsCache.set(tree, defs);
+  }
   return defs;
 }
 
@@ -38,11 +48,14 @@ function build(view: EditorView): DecorationSet {
     return false;
   };
   const blocks = replacedBlocks(state);
+  // Inside a drawn block, not merely overlapping one: the document node overlaps every block (Codex review of 398b956, P1).
   const replaced = (from: number, to: number) => {
     let hit = false;
-    blocks.between(from, to, (_f, _t, d) => { if (d.spec.block) { hit = true; return false; } });
+    blocks.between(from, to, (f, t, d) => { if (d.spec.block && f <= from && t >= to) { hit = true; return false; } });
     return hit;
   };
+  // A replacement from a view plugin may not cross a line break, so a construct over two lines shows its source.
+  const oneLine = (from: number, to: number) => state.doc.lineAt(from).number === state.doc.lineAt(to).number;
   const tree = syntaxTree(state);
   const out: Range<Decoration>[] = [];
   const href = (from: number, to: number, url: string) =>
@@ -64,13 +77,13 @@ function build(view: EditorView): DecorationSet {
             out.push(Decoration.mark({ class: "cm-comment" }).range(node.from, node.to));
             return false;
           case "InlineMath": {
-            if (touches(node.from, node.to)) { out.push(Decoration.mark({ class: "cm-math-source" }).range(node.from, node.to)); return false; }
+            if (touches(node.from, node.to) || !oneLine(node.from, node.to)) { out.push(Decoration.mark({ class: "cm-math-source" }).range(node.from, node.to)); return false; }
             const marks = node.node.getChildren("InlineMathMark");
             if (marks.length === 2) out.push(Decoration.replace({ widget: new MathWidget(state.sliceDoc(marks[0].to, marks[1].from), false) }).range(node.from, node.to));
             return false;
           }
           case "Image": {
-            if (!ctx || touches(node.from, node.to)) return false;
+            if (!ctx || touches(node.from, node.to) || !oneLine(node.from, node.to)) return false;
             const embed = parseEmbed(state.sliceDoc(node.from, node.to));
             if (embed?.kind === "picture") {
               out.push(Decoration.replace({ widget: new PictureWidget(state.sliceDoc(node.from, node.to), ctx.pictureUrl(embed.src, embed.wiki), embed.alt, embed.width, false) }).range(node.from, node.to));
@@ -106,7 +119,7 @@ function build(view: EditorView): DecorationSet {
       }
     }
     if (text.includes("[^")) {
-      const defs = definitions(state.doc);
+      const defs = definitions(state);
       for (let pos = from; pos <= to;) {
         const line = state.doc.lineAt(pos);
         if (/^\[\^[^\]\s]+\]:/.test(line.text)) {

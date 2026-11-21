@@ -77,11 +77,15 @@ const pad = (cell: string, w: number, align: Align) => {
   return cell + " ".repeat(gap);
 };
 
+/** Columns are padded to line up only up to this width: a longer cell is written as it is, so one long cell never pads
+ *  every other row of its column (Codex review of 398b956, P2). */
+export const PAD_MAX = 60;
+
 /** The model as GFM text, columns padded to line up, with leading and trailing pipes and no final newline. */
 export function writeTable(model: TableModel): string {
   const cols = model.header.length;
   const all = [model.header, ...model.rows].map((r) => Array.from({ length: cols }, (_, i) => escapeCell(r[i] ?? "")));
-  const widths = Array.from({ length: cols }, (_, i) => Math.max(3, ...all.map((r) => width(r[i]))));
+  const widths = Array.from({ length: cols }, (_, i) => Math.max(3, ...all.map((r) => width(r[i])).filter((w) => w <= PAD_MAX)));
   const line = (cells: string[]) => `| ${cells.map((c, i) => pad(c, widths[i], model.align[i] ?? null)).join(" | ")} |`;
   const [head, ...body] = all;
   return [line(head), `| ${widths.map((w, i) => dashes(model.align[i] ?? null, w)).join(" | ")} |`, ...body.map(line)].join("\n");

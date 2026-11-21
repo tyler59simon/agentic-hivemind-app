@@ -7,13 +7,17 @@ import { Mermaid, mermaidSource } from "../../ui/Mermaid";
 import { useWorkspace } from "../../workspace/store";
 import type { EmbedPage } from "../editor/rich/context";
 import { section, splitSize } from "../editor/rich/parse";
-import { MATH_MARK, prepareForReading, remarkCallouts, remarkEmbeds, remarkHighlights, WIKI_PICTURE } from "../editor/rich/reading";
+import { MATH_BLOCK_MARK, MATH_MARK, prepareForReading, remarkCallouts, remarkEmbeds, remarkHighlights, WIKI_PICTURE } from "../editor/rich/reading";
 import { remarkWikilinks, WIKI_PREFIX } from "../viewer/remarkWikilinks";
 import { findFile, pictureUrl, relativeTarget } from "./pictures";
 import { folderOf } from "../../lib/notebooks";
 
 const PLUGINS = [remarkGfm, remarkEmbeds, remarkWikilinks, remarkHighlights, remarkCallouts];
 const keepUrl = (url: string) => (url.startsWith(WIKI_PREFIX) || url.startsWith(WIKI_PICTURE) ? url : defaultUrlTransform(url));
+
+/** Follow a `[[link]]`; `from` is the path of the page it is in when that is an embedded page, so it resolves from that
+ *  page's folder (Codex review of 398b956, P2). */
+export type Follow = (target: string, split: boolean, from?: string) => void;
 
 /** Where a page's pictures load from: the grant's prefix, the page's folder under it, and the notebook's files (for
  *  `![[picture.png]]`). */
@@ -23,7 +27,7 @@ export interface Pictures { base?: string; folder: string; files?: string[] }
  *  itself shows once. */
 function Embed({ target, heading, read, onLink, onFile, pictures }: {
   target: string; heading?: string; read: (target: string) => Promise<EmbedPage | null>;
-  onLink: (target: string, split: boolean) => void; onFile?: (path: string) => void; pictures?: Pictures;
+  onLink: Follow; onFile?: (path: string) => void; pictures?: Pictures;
 }) {
   const [page, setPage] = useState<EmbedPage | null | undefined>(undefined);
   useEffect(() => {
@@ -42,7 +46,7 @@ function Embed({ target, heading, read, onLink, onFile, pictures }: {
       {page === undefined ? <p className="muted">Loading…</p>
         : !page ? <p className="muted">No page is named {target}.</p>
           : text === null ? <p className="muted">{page.title} has no heading {heading}.</p>
-            : <PageView text={text} tabId={`embed-${target}`} onLink={onLink} onFile={onFile}
+            : <PageView text={text} tabId={`embed-${target}`} onLink={(t, split) => onLink(t, split, page.path)} onFile={onFile}
               pictures={pictures && { ...pictures, folder: folderOf(page.path) }} nested />}
     </div>
   );
@@ -54,7 +58,7 @@ function Embed({ target, heading, read, onLink, onFile, pictures }: {
  *  Callouts, highlights, math, picture widths and `![[embeds]]` render as in Live (NS-3A); `embed` reads an embedded
  *  page, and without it an embed shows as a link. */
 export function PageView({ text, tabId, onLink, onFile, pictures, embed, nested }: {
-  text: string; tabId: string; onLink: (target: string, split: boolean) => void; onFile?: (path: string) => void;
+  text: string; tabId: string; onLink: Follow; onFile?: (path: string) => void;
   pictures?: Pictures; embed?: (target: string) => Promise<EmbedPage | null>; nested?: boolean;
 }) {
   const reveal = useWorkspace((s) => s.reveal);
@@ -99,6 +103,7 @@ export function PageView({ text, tabId, onLink, onFile, pictures, embed, nested 
       code: ({ node: _node, className, children, ...rest }) => {
         const source = String(children ?? "");
         if (source.startsWith(MATH_MARK)) return <MathView tex={source.slice(MATH_MARK.length)} display={false} />;
+        if (source.startsWith(MATH_BLOCK_MARK)) return <MathView tex={source.slice(MATH_BLOCK_MARK.length)} display />;
         return <code className={className} {...rest}>{children}</code>;
       },
       pre: ({ node: _node, children, ...rest }) => {

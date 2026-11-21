@@ -23,7 +23,8 @@ pub fn is_picture(name: &str) -> bool {
 /// trailing dots go, a device name gets a `_` in front, and a long name is cut before its extension. Only pictures.
 pub fn clean_name(name: &str) -> Result<String, String> {
     let mapped: String = name.chars().map(|c| if BAD.contains(&c) || c.is_control() { '-' } else { c }).collect();
-    let trimmed = mapped.trim().trim_end_matches(['.', ' ']).to_string();
+    // No leading dot: `hmfile` serves no hidden path, so `.shot.png` would never show (Codex review of 398b956, P3).
+    let trimmed = mapped.trim().trim_start_matches('.').trim_start().trim_end_matches(['.', ' ']).to_string();
     let path = Path::new(&trimmed);
     let ext = path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
     let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -104,6 +105,8 @@ mod tests {
         assert_eq!(clean_name("a/b\\c:d*e?f\"g<h>i|j.PNG").unwrap(), "a-b-c-d-e-f-g-h-i-j.PNG");
         assert_eq!(clean_name("  shot.jpg  ").unwrap(), "shot.jpg");
         assert_eq!(clean_name("con.png").unwrap(), "_con.png");
+        assert_eq!(clean_name(".snapshot.png").unwrap(), "snapshot.png", "no hidden names");
+        assert_eq!(clean_name("-draft.png").unwrap(), "-draft.png");
         assert_eq!(clean_name("tab\there.gif").unwrap(), "tab-here.gif");
         let long = format!("{}.webp", "x".repeat(300));
         let cut = clean_name(&long).unwrap();

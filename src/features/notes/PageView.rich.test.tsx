@@ -10,7 +10,7 @@ vi.mock("../../ui/Math", () => ({
 }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn(async () => {}) }));
 
-import { prepareForReading, MATH_MARK } from "../editor/rich/reading";
+import { prepareForReading, MATH_BLOCK_MARK, MATH_MARK } from "../editor/rich/reading";
 import { PageView } from "./PageView";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -79,6 +79,38 @@ describe("reading a page", () => {
     // The embedded page's own `![[Q1]]` paragraph is a link, not another embed.
     expect(embed.querySelectorAll(".page-embed").length).toBe(0);
     expect([...embed.querySelectorAll("a.wikilink")].some((a) => a.textContent === "Q1")).toBe(true);
+  });
+
+  it("keeps quotes, lists and line numbers around math and comments (Codex review of 398b956)", async () => {
+    const text = "> $$\n> x^2\n> $$\n\n# After\n\n$$y$$\n\n- a %%one\n  two%% b\n\n## End";
+    const out = prepareForReading(text);
+    expect(out.split("\n").length).toBe(text.split("\n").length);
+    expect(out).toContain("> ```math\n> x^2\n> ```");
+    expect(out).toContain(`\`${MATH_BLOCK_MARK}y\``);
+    expect(out).toContain("- a \n   b");
+    const el = await render(text);
+    expect(el.querySelector("blockquote [data-math=\"display\"]")?.textContent).toBe("x^2");
+    expect(el.querySelector("h1")?.textContent).toBe("After");
+    expect(el.querySelector("h1")?.id).toBe("t-l4");
+    expect(el.querySelectorAll('[data-math="display"]').length).toBe(2);
+    expect(el.querySelector("h2")?.id).toBe("t-l11");
+  });
+
+  it("keeps a callout's formatted title in its summary", async () => {
+    const el = await render("> [!note]- Fix **this** now\n> Body");
+    const summary = el.querySelector("details.callout summary");
+    expect(summary?.textContent).toBe("Fix this now");
+    expect(summary?.querySelector("strong")?.textContent).toBe("this");
+    expect(el.querySelector("details.callout")?.textContent).toContain("Body");
+  });
+
+  it("follows a link inside an embed from the embedded page's folder", async () => {
+    const onLink = vi.fn();
+    const read = vi.fn(async () => ({ title: "Plan", path: "Projects/Plan.md", text: "See [[Todo]]" }));
+    const el = await render("![[Plan]]", { embed: read, onLink });
+    await act(async () => {});
+    (el.querySelector(".page-embed a.wikilink") as HTMLElement).click();
+    expect(onLink).toHaveBeenCalledWith("Todo", false, "Projects/Plan.md");
   });
 
   it("shows an embed as a link when the page cannot read other pages", async () => {

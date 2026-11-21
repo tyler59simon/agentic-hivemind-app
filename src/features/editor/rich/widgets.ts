@@ -147,9 +147,9 @@ const CALLOUT_ICONS: Record<string, string> = {
 
 /** A callout's first line (`> [!type]- Title`) shown as its title, with a fold button when it folds. */
 export class CalloutTitleWidget extends WidgetType {
-  constructor(readonly callout: Callout, readonly open: boolean, readonly at: number) { super(); }
+  constructor(readonly callout: Callout, readonly open: boolean) { super(); }
   eq(o: CalloutTitleWidget) {
-    return o.callout.type === this.callout.type && o.callout.title === this.callout.title && o.callout.fold === this.callout.fold && o.open === this.open && o.at === this.at;
+    return o.callout.type === this.callout.type && o.callout.title === this.callout.title && o.callout.fold === this.callout.fold && o.open === this.open;
   }
   toDOM(view: EditorView) {
     const box = el("span", "cm-callout-title");
@@ -159,7 +159,14 @@ export class CalloutTitleWidget extends WidgetType {
       fold.type = "button";
       fold.setAttribute("aria-label", this.open ? "Fold" : "Unfold");
       fold.setAttribute("aria-expanded", String(this.open));
-      fold.addEventListener("mousedown", (e) => { e.preventDefault(); view.dispatch({ effects: toggleCallout.of(this.at) }); });
+      // The callout's start is read when clicked: a widget kept across an edit above it has an old `at` (Codex review of
+      // 398b956, P2).
+      fold.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        let at: number;
+        try { at = view.state.doc.lineAt(view.posAtDOM(box)).from; } catch { return; }
+        view.dispatch({ effects: toggleCallout.of(at) });
+      });
       box.append(fold);
     }
     return box;
@@ -234,7 +241,9 @@ export class TableWidget extends WidgetType {
   updateDOM(dom: HTMLElement) {
     const model = T.parseTable(this.source);
     const inputs = dom.querySelectorAll<HTMLInputElement>("input[data-row]");
-    if (!model || inputs.length !== (model.rows.length + 1) * model.header.length || dom.dataset.readOnly !== String(this.readOnly)) return false;
+    // Both dimensions must match: 2 columns by 2 rows and 1 column by 4 rows have as many cells (Codex review of 398b956).
+    const same = model && dom.dataset.rows === String(model.rows.length) && dom.dataset.cols === String(model.header.length);
+    if (!model || !same || dom.dataset.readOnly !== String(this.readOnly)) return false;
     gridSource.set(dom, this.source);
     for (const input of inputs) {
       const row = Number(input.dataset.row), col = Number(input.dataset.col);
@@ -265,6 +274,8 @@ export class TableWidget extends WidgetType {
     const model = T.parseTable(this.source);
     box.dataset.readOnly = String(this.readOnly);
     if (!model) { box.textContent = this.source; return; }
+    box.dataset.rows = String(model.rows.length);
+    box.dataset.cols = String(model.header.length);
     const table = el("table");
     const cols = model.header.length;
     const cell = (row: number, col: number, text: string) => {

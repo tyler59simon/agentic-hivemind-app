@@ -154,3 +154,26 @@ describe("embeds, widths, callouts and footnotes", () => {
     expect(attachmentLink("doc.pdf", "[doc].pdf")).toBe("[doc.pdf](doc.pdf)");
   });
 });
+
+describe("Codex review of 398b956", () => {
+  it("encodes parentheses in attachment links, so the destination ends where it should", () => {
+    expect(attachmentLink("attachments/Screen ).png", "Screen ).png")).toBe("![Screen ).png](attachments/Screen%20%29.png)");
+    expect(attachmentLink("a (1).png", "a (1).png")).toBe("![a (1).png](a%20%281%29.png)");
+  });
+
+  it("pads table columns only up to a width, so one long cell does not pad every row", () => {
+    const long = "x".repeat(T.PAD_MAX + 1000);
+    const rows = Array.from({ length: 50 }, (_, i) => [String(i)]);
+    const text = T.writeTable({ header: ["h"], align: [null], rows: [[long], ...rows] });
+    expect(text.length).toBeLessThan(long.length + 50 * 20);
+    expect(T.parseTable(text)?.rows[0][0]).toBe(long);
+    expect(T.writeTable({ header: ["a", "b"], align: [null, null], rows: [["1", "22"]] })).toBe("| a   | b   |\n| --- | --- |\n| 1   | 22  |");
+  });
+
+  it("finds an embedded section by the headings Markdown parses", () => {
+    const page = "Intro\n\n```\n# Setup\nnot a heading\n```\n\nSetup\n=====\n\nReal setup.\n\n```\n# Other\n```\n\nstill setup\n\n# Next\n\nno";
+    expect(section(page, "Setup")).toBe("Setup\n=====\n\nReal setup.\n\n```\n# Other\n```\n\nstill setup");
+    expect(section(page, "Other")).toBeNull();
+    expect(section("## A ##\n\nx\n\n## B\n\ny", "A")).toBe("## A ##\n\nx");
+  });
+});

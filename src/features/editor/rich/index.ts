@@ -6,7 +6,7 @@ import { languages } from "@codemirror/language-data";
 import { Prec, type Extension } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { toolbarKeys } from "../toolbar";
-import { pastePictures } from "./attach";
+import { attaching, pastePictures } from "./attach";
 import { richBlocks } from "./blocks";
 import { richContext, type RichContext } from "./context";
 import { richInline, richLinks } from "./inline";
@@ -23,6 +23,7 @@ export const richLanguage = () => markdown({ base: markdownLanguage, extensions:
 export function richEditing(ctx: RichContext): Extension[] {
   return [
     richContext.of(ctx),
+    attaching,
     richLinks,
     Prec.high(keymap.of(toolbarKeys)),
     EditorView.domEventHandlers({

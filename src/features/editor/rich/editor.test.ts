@@ -3,13 +3,14 @@
 // become links where they landed, and drops on the window go to the page, the terminal or a new tab.
 import { ensureSyntaxTree } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
+import { undo, history } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn(async (_cmd: string, _args?: unknown) => undefined as unknown);
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (cmd: string, args?: unknown) => invoke(cmd, args) }));
 
-import { registerDropTarget, routeDrop } from "../../notes/drops";
+import { registerDropTarget, routeDrop, setTerminalDrops } from "../../notes/drops";
 import { attachAt, dropPictures, pastedPictures } from "./attach";
 import { richContext, type RichContext } from "./context";
 import { richEditing, richLanguage, richPreview } from "./index";
@@ -31,7 +32,7 @@ afterEach(() => { views.forEach((v) => v.destroy()); views = []; document.body.i
 function editor(doc: string, rich: RichContext, cursor = doc.length) {
   const parent = document.createElement("div");
   document.body.append(parent);
-  const view = new EditorView({ parent, state: EditorState.create({ doc, selection: { anchor: cursor }, extensions: [richLanguage(), ...richEditing(rich), richPreview] }) });
+  const view = new EditorView({ parent, state: EditorState.create({ doc, selection: { anchor: cursor }, extensions: [history(), richLanguage(), ...richEditing(rich), richPreview] }) });
   ensureSyntaxTree(view.state, view.state.doc.length, 5000);
   view.dispatch({ effects: [] });
   views.push(view);
@@ -80,30 +81,48 @@ describe("the table grid", () => {
 });
 
 describe("attaching pictures", () => {
-  it("puts a placeholder at once and swaps it for the link, wherever typing moved it", async () => {
+  it("marks where the link goes without changing the text, and links there wherever typing moved it", async () => {
     let finish!: (link: string) => void;
     const view = editor("Hello world", ctx());
     const pending = attachAt(view, ctx(), 5, ["shot.png"], () => new Promise((r) => { finish = r; }));
-    expect(view.state.doc.toString()).toMatch(/^Hello!\[Attaching shot\.png \(\d+\)…\]\(\) world$/);
+    // The marker is a widget: the page, its draft and its undo history never hold a placeholder (Codex review of 398b956).
+    expect(view.state.doc.toString()).toBe("Hello world");
+    expect(view.dom.querySelector(".cm-attaching")?.textContent).toBe("Attaching shot.png…");
     view.dispatch({ changes: { from: 0, insert: "Oh. " } });
     finish("![shot.png](attachments/shot.png)");
     await pending;
     expect(view.state.doc.toString()).toBe("Oh. Hello![shot.png](attachments/shot.png) world");
+    expect(view.dom.querySelector(".cm-attaching")).toBeNull();
+    undo(view);
+    expect(view.state.doc.toString()).toBe("Oh. Hello world");
   });
 
-  it("removes the placeholder and says why when saving fails, and adds no link when the user deleted it", async () => {
+  it("says why when saving fails, adds no link where the text was deleted, and keeps the link when the page closed", async () => {
     const fail = vi.fn();
-    const view = editor("Text", ctx({ fail }));
+    const view = editor("Text more", ctx({ fail }));
     await attachAt(view, ctx({ fail }), 4, ["a.png"], async () => { throw new Error("disk full"); });
-    expect(view.state.doc.toString()).toBe("Text");
+    expect(view.state.doc.toString()).toBe("Text more");
     expect(fail).toHaveBeenCalledWith("a.png was not attached: disk full");
     let finish!: (link: string) => void;
-    const pending = attachAt(view, ctx({ fail }), 4, ["b.png"], () => new Promise((r) => { finish = r; }));
-    view.dispatch({ changes: { from: 4, to: view.state.doc.length } });
+    let pending = attachAt(view, ctx({ fail }), 4, ["b.png"], () => new Promise((r) => { finish = r; }));
+    view.dispatch({ changes: { from: 2, to: 6 } });
     finish("![b.png](b.png)");
     await pending;
-    expect(view.state.doc.toString()).toBe("Text");
-    expect(fail).toHaveBeenLastCalledWith("b.png was attached, but its placeholder was removed, so the page has no link to it.");
+    expect(view.state.doc.toString()).toBe("Teore");
+    expect(fail).toHaveBeenLastCalledWith("b.png was attached, but the text where it was going was removed, so the page has no link to it.");
+
+    pending = attachAt(view, ctx({ fail }), 2, ["c.png"], () => new Promise((r) => { finish = r; }));
+    view.destroy();
+    finish("![c.png](c.png)");
+    await pending;
+    await flush();
+    expect(fail.mock.lastCall?.[0]).toMatch(/^c\.png was attached, but the page was closed before it could be linked\./);
+  });
+
+  it("links several pictures in order, each on its own line", async () => {
+    const view = editor("Line one", ctx());
+    await attachAt(view, ctx(), 4, ["a.png", "b.png", "c.png"], async (i) => `![${i}](${i}.png)`);
+    expect(view.state.doc.toString()).toBe("Line\n![0](0.png)\n![1](1.png)\n![2](2.png) one");
   });
 
   it("names clipboard pictures by the time and skips other files", () => {
@@ -137,10 +156,17 @@ describe("routing a drop", () => {
     const stop = registerDropTarget(page, handler);
     const at = (el: Element) => { document.elementFromPoint = () => el; };
 
+    // A running terminal pastes the paths itself.
+    setTerminalDrops((x, y) => x === 10 && y === 10);
     at(term);
     await routeDrop({ token: "a", names: ["x.png"], x: 10, y: 10 }, 1);
     expect(invoke).not.toHaveBeenCalled();
     expect(handler).not.toHaveBeenCalled();
+    // One whose program exited pastes nothing, so the files open (Codex review of 398b956, P3).
+    await routeDrop({ token: "e", names: ["x.png"], x: 11, y: 10 }, 1);
+    expect(invoke).toHaveBeenCalledWith("open_dropped", { token: "e", indexes: [0] });
+    invoke.mockClear();
+    setTerminalDrops(() => false);
 
     at(page);
     await routeDrop({ token: "b", names: ["x.png", "y.txt"], x: 20, y: 40 }, 2);
@@ -177,5 +203,41 @@ describe("links", () => {
   it("keeps the rich context out of an editor that has none", () => {
     const state = EditorState.create({ doc: "x", extensions: [richLanguage()] });
     expect(state.facet(richContext)).toBeNull();
+  });
+});
+
+describe("Codex review of 398b956", () => {
+  it("shows inline math over two lines as source instead of throwing", () => {
+    const view = editor("Text $a +\nb$ end and ![two\nlines](x.png)\n\nmore", ctx());
+    expect(view.dom.querySelector(".cm-math-source")?.textContent).toContain("$a +");
+    expect(view.dom.querySelector(".cm-rich-picture")).toBeNull();
+  });
+
+  it("renders inline marks and links on a page that also has a drawn table", () => {
+    const view = editor("| a |\n|---|\n| 1 |\n\nSome ==hi== and [l](https://x.y)\n\nend", ctx());
+    expect(view.dom.querySelector(".cm-rich-table")).not.toBeNull();
+    expect(view.dom.querySelector(".cm-highlight")?.textContent).toBe("hi");
+    expect(view.dom.querySelector<HTMLElement>("[data-href]")?.dataset.href).toBe("https://x.y");
+  });
+
+  it("rebuilds the grid when a table changes shape with as many cells", () => {
+    const view = editor("| a | b |\n|---|---|\n| 1 | 2 |\n\nEnd", ctx());
+    expect(view.dom.querySelectorAll("input[data-row]").length).toBe(4);
+    view.dispatch({ changes: { from: 0, to: 25, insert: "| a |\n|---|\n| 1 |\n| 2 |\n| 3 |" } });
+    const inputs = [...view.dom.querySelectorAll<HTMLInputElement>("input[data-row]")];
+    expect(inputs.map((i) => i.value)).toEqual(["a", "1", "2", "3"]);
+  });
+
+  it("folds the callout where it is now after text is added above it", () => {
+    const view = editor("Intro\n\n> [!note]- Title\n> Body\n\nEnd", ctx());
+    expect(view.dom.textContent).not.toContain("Body");
+    view.dispatch({ changes: { from: 0, insert: "More text. " } });
+    view.dom.querySelector(".cm-callout-fold")!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(view.dom.textContent).toContain("Body");
+  });
+
+  it("reads footnote definitions outside code only", () => {
+    const view = editor("Ref[^1] here\n\n[^1]: real text\n\n```\n[^1]: example\n```\n\nend", ctx());
+    expect(view.dom.querySelector<HTMLElement>(".cm-footnote")?.title).toBe("real text");
   });
 });

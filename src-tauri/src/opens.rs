@@ -289,39 +289,79 @@ struct FolderDropped {
 const DROP_PATIENCE: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// The files of recent drops, by the token the webview got for them (NS-3A). The webview names a file only by its
-/// token and its index in the drop, so it can read or open only what the user dropped.
+/// token and its index in the drop, so it can read or open only what the user dropped, and each file only once: a
+/// mixed drop attaches its pictures while the rest open (Codex review of 398b956, P2). A drop is claimed once, by the
+/// `files-dropped` listener or by the drain when the webview starts listening after the event went out (P3).
 #[derive(Default)]
 pub struct DroppedFiles {
-    inner: Mutex<Vec<(String, Vec<PathBuf>, std::time::Instant)>>,
+    inner: Mutex<Vec<Drop>>,
 }
+
+struct Drop {
+    token: String,
+    files: Vec<Option<PathBuf>>,
+    at: std::time::Instant,
+    claimed: bool,
+}
+
+/// A drop no listener has claimed yet, for the drain.
+#[derive(Serialize, Clone)]
+pub struct Unclaimed {
+    token: String,
+    names: Vec<String>,
+}
+
+const GONE: &str = "Those files were dropped too long ago; drop them again";
 
 impl DroppedFiles {
     /// Keep a drop's files; returns its token. Drops older than two minutes go.
     pub fn keep(&self, files: Vec<PathBuf>) -> String {
         let token = uuid::Uuid::new_v4().simple().to_string();
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner.retain(|(_, _, at)| at.elapsed() < DROP_PATIENCE);
-        inner.push((token.clone(), files, std::time::Instant::now()));
+        inner.retain(|d| d.at.elapsed() < DROP_PATIENCE);
+        inner.push(Drop { token: token.clone(), files: files.into_iter().map(Some).collect(), at: std::time::Instant::now(), claimed: false });
         token
     }
 
-    /// The file at `index` of the drop `token`.
-    pub fn file(&self, token: &str, index: usize) -> Result<PathBuf, String> {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let (_, files, _) = inner.iter().find(|(t, _, at)| t == token && at.elapsed() < DROP_PATIENCE).ok_or("Those files were dropped too long ago; drop them again")?;
-        files.get(index).cloned().ok_or_else(|| "That file was not part of the drop".to_string())
+    /// Claim the drop `token` for routing; false when it was claimed already or is gone.
+    pub fn claim(&self, token: &str) -> bool {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        match inner.iter_mut().find(|d| d.token == token && d.at.elapsed() < DROP_PATIENCE) {
+            Some(d) if !d.claimed => { d.claimed = true; true }
+            _ => false,
+        }
     }
 
-    /// Take the drop's files at `indexes` (each at most once) and forget the drop.
+    /// Claim every drop no listener has claimed, with the names of its files.
+    pub fn claim_all(&self) -> Vec<Unclaimed> {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.retain(|d| d.at.elapsed() < DROP_PATIENCE);
+        inner.iter_mut().filter(|d| !d.claimed).map(|d| {
+            d.claimed = true;
+            let names = d.files.iter().map(|f| f.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).collect();
+            Unclaimed { token: d.token.clone(), names }
+        }).collect()
+    }
+
+    /// Take the files at `indexes` of the drop `token`, each at most once; the drop goes once all its files are taken.
     pub fn take(&self, token: &str, indexes: &[usize]) -> Result<Vec<PathBuf>, String> {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner.retain(|(_, _, at)| at.elapsed() < DROP_PATIENCE);
-        let at = inner.iter().position(|(t, ..)| t == token).ok_or("Those files were dropped too long ago; drop them again")?;
-        let files = inner.remove(at).1;
-        let mut picked: Vec<usize> = indexes.iter().copied().filter(|i| *i < files.len()).collect();
+        inner.retain(|d| d.at.elapsed() < DROP_PATIENCE);
+        let at = inner.iter().position(|d| d.token == token).ok_or(GONE)?;
+        let drop = &mut inner[at];
+        let mut picked: Vec<usize> = indexes.to_vec();
         picked.sort_unstable();
         picked.dedup();
-        Ok(picked.into_iter().map(|i| files[i].clone()).collect())
+        let taken = picked.into_iter().filter_map(|i| drop.files.get_mut(i).and_then(Option::take)).collect();
+        if drop.files.iter().all(Option::is_none) {
+            inner.remove(at);
+        }
+        Ok(taken)
+    }
+
+    /// Take the one file at `index` of the drop `token`.
+    pub fn file(&self, token: &str, index: usize) -> Result<PathBuf, String> {
+        self.take(token, &[index])?.pop().ok_or_else(|| "That file was not part of the drop, or was used already".to_string())
     }
 }
 
@@ -368,6 +408,18 @@ pub fn open_dropped(app: AppHandle, state: State<'_, AppState>, token: String, i
     Ok(())
 }
 
+/// Claim the drop `token` for routing (NS-3A): false when the drain has it already.
+#[tauri::command]
+pub fn claim_drop(state: State<'_, AppState>, token: String) -> bool {
+    state.dropped_files.claim(&token)
+}
+
+/// The drops sent while no listener was in place, claimed for the webview that asks (NS-3A).
+#[tauri::command]
+pub fn unclaimed_drops(state: State<'_, AppState>) -> Vec<Unclaimed> {
+    state.dropped_files.claim_all()
+}
+
 #[cfg(test)]
 mod prune_tests {
     use super::*;
@@ -375,13 +427,29 @@ mod prune_tests {
     #[test]
     fn a_drop_hands_out_only_its_own_files_once() {   // NS-3A
         let drops = DroppedFiles::default();
-        let token = drops.keep(vec![PathBuf::from(r"C:/drops/a.png"), PathBuf::from(r"C:/drops/b.txt")]);
-        assert_eq!(drops.file(&token, 1).unwrap(), PathBuf::from(r"C:/drops/b.txt"));
-        assert!(drops.file(&token, 2).is_err(), "an index past the drop names nothing");
+        let token = drops.keep(vec![PathBuf::from("C:/drops/a.png"), PathBuf::from("C:/drops/b.txt"), PathBuf::from("C:/drops/c.png")]);
+        assert!(drops.file(&token, 3).is_err(), "an index past the drop names nothing");
         assert!(drops.file("other", 0).is_err(), "another token names nothing");
-        assert_eq!(drops.take(&token, &[1, 1, 7]).unwrap(), vec![PathBuf::from(r"C:/drops/b.txt")]);
-        assert!(drops.take(&token, &[0]).is_err(), "a drop is opened once");
-        assert!(drops.file(&token, 0).is_err());
+        // A mixed drop: the text file opens while the pictures are still being attached (Codex review of 398b956, P2).
+        assert_eq!(drops.file(&token, 0).unwrap(), PathBuf::from("C:/drops/a.png"));
+        assert_eq!(drops.take(&token, &[1, 1, 7]).unwrap(), vec![PathBuf::from("C:/drops/b.txt")]);
+        assert_eq!(drops.file(&token, 2).unwrap(), PathBuf::from("C:/drops/c.png"));
+        assert!(drops.file(&token, 0).is_err(), "each file is handed out once");
+        assert!(drops.take(&token, &[1]).is_err(), "a drop whose files were all taken is gone");
+    }
+
+    #[test]
+    fn a_drop_is_claimed_once_by_the_listener_or_the_drain() {   // Codex review of 398b956, P3
+        let drops = DroppedFiles::default();
+        let early = drops.keep(vec![PathBuf::from("C:/drops/early.md")]);
+        let heard = drops.keep(vec![PathBuf::from("C:/drops/heard.md")]);
+        assert!(drops.claim(&heard));
+        assert!(!drops.claim(&heard), "claimed once");
+        let drained = drops.claim_all();
+        assert_eq!(drained.len(), 1);
+        assert_eq!((drained[0].token.as_str(), drained[0].names.clone()), (early.as_str(), vec!["early.md".to_string()]));
+        assert!(drops.claim_all().is_empty() && !drops.claim(&early), "the drain claimed it");
+        assert_eq!(drops.take(&early, &[0]).unwrap(), vec![PathBuf::from("C:/drops/early.md")]);
     }
 
     #[test]

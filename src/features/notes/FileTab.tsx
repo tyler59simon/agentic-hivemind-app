@@ -5,7 +5,7 @@ import { convertToUtf8, discardKept, edit, inOwnStore, isArriving, isDeleting, k
 import { isUnsaved, mergeable, type DocState } from "../../documents/session";
 import { classify } from "../../lib/errors";
 import { assetLink, attachFile, openAttachment, parseLm } from "../../documents/adapters/lmdoc";
-import { createDoc, treeQuery } from "../../documents/io";
+import { createDoc, lmAssets, treeQuery } from "../../documents/io";
 import { lmNotebooksQuery } from "../../lib/lm";
 import { fileName, folderOf, isMarkdown, notebooksQuery, pageTitle, revealFile, type Notebook } from "../../lib/notebooks";
 import { assetBase, isLoose, recentQuery, recentRef } from "../../lib/opens";
@@ -36,8 +36,10 @@ function usePages(notebook: string) {
 function useFollow(tab: Tab, pages: string[], ask: (node: ReactNode) => void) {
   const client = useQueryClient();
   const from = tab.file!;
-  return useCallback((target: string, split: boolean) => {
-    const hit = resolvePage(target, from, pages);
+  // `at` is the page the link is in when that is not this tab's page: an embedded page resolves from its own folder
+  // (Codex review of 398b956, P2).
+  return useCallback((target: string, split: boolean, at?: string) => {
+    const hit = resolvePage(target, at === undefined ? from : { ...from, path: at }, pages);
     if ("ref" in hit) return openPage(hit.ref, { split });
     if ("ambiguous" in hit) {
       return ask(
@@ -256,13 +258,18 @@ export function FileTab({ tab }: { tab: Tab }) {
   };
   /** Copy a file the user picks into the notebook's attachments and link it at the end of the page (NS-2C). A page that
    *  cannot take the link is said before anything is copied (Codex review of 32fee20, U2). */
+  const ownNow = useCallback(() => inOwnStore(key), [key]);
   const takesLink = useCallback(() => {
     const d = useDocuments.getState().docs[key];
     return !!d && d.status !== "readOnly" && d.status !== "loading" && d.status !== "error" && !arriving && inOwnStore(key);
   }, [key, arriving]);
   // Rich editing of a Markdown page (NS-3A); a page of another store shows and attaches nothing from this one.
-  const rich = useRichPage({ ref, files: pages, base: own ? pictures.data : undefined, lm: !!lm, loose, follow, takesLink });
-  const richStamp = useMemo(() => ({}), [pictures.data, pages]);
+  // A Living Memory notebook's attachments are not in its tree; `![[picture.png]]` looks among them too.
+  const assets = useQuery({ queryKey: ["lm-assets", ref.notebook], queryFn: () => lmAssets(ref.notebook), enabled: markdown && own && !!lm });
+  const files = useMemo(() => (assets.data?.length ? [...pages, ...assets.data] : pages), [pages, assets.data]);
+  const rich = useRichPage({ ref, files, base: own ? pictures.data : undefined, lm: !!lm, loose, follow, takesLink, own: ownNow });
+  // A change of store redraws embeds too, so a parked page shows none from the store connected now.
+  const richStamp = useMemo(() => ({}), [pictures.data, files, own]); // eslint-disable-line react-hooks/exhaustive-deps
   const attach = () => {
     if (!takesLink()) { toast("This page cannot take a link now, so nothing was attached.", "warn"); return; }
     return attachFile(ref.notebook).then((asset) => { if (asset) linkAsset(asset); }, (e) => toast(classify(e).message, "error"));
@@ -346,7 +353,7 @@ export function FileTab({ tab }: { tab: Tab }) {
       )}
       {mode === "reading"
         ? <PageView text={doc.text} tabId={tab.id} onLink={follow} onFile={lm ? openLinked : undefined}
-          pictures={{ base: own ? pictures.data : undefined, folder: loose ? "" : folderOf(ref.path), files: pages }} embed={loose ? undefined : rich.readEmbed} />
+          pictures={{ base: own ? pictures.data : undefined, folder: loose ? "" : folderOf(ref.path), files }} embed={loose ? undefined : rich.readEmbed} />
         : (
           <div className="note file-editor">
             <CodeEditor key={key} doc={doc.text} docVersion={doc.version} follow language={markdown ? "markdown" : "text"} live={mode === "live"}

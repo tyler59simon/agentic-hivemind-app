@@ -18,12 +18,21 @@ export function registerDropTarget(el: HTMLElement, handle: DropHandler): () => 
 }
 
 export const openDropped = (token: string, indexes: number[]) => invoke<void>("open_dropped", { token, indexes });
+/** Claim a drop for routing: false when the startup drain took it. */
+export const claimDrop = (token: string) => invoke<boolean>("claim_drop", { token });
+/** Drops sent before the listener was in place, claimed now. */
+export const unclaimedDrops = () => invoke<{ token: string; names: string[] }[]>("unclaimed_drops");
+
+// Whether a terminal at a point pastes a drop there; the terminal registry says (a terminal whose program exited
+// pastes nothing, so the files open instead).
+let terminalTakes: (x: number, y: number) => boolean = () => false;
+export function setTerminalDrops(check: (x: number, y: number) => boolean) { terminalTakes = check; }
 
 /** Route one drop. The position Rust reports is in physical pixels. */
 export async function routeDrop(drop: Dropped, ratio = window.devicePixelRatio || 1): Promise<void> {
   const x = drop.x / ratio, y = drop.y / ratio;
   const at = document.elementFromPoint(x, y);
-  if (at?.closest(".xterm")) return;
+  if (terminalTakes(x, y)) return;
   let taken: number[] = [];
   for (const [el, handle] of targets) {
     if (!at || !el.contains(at)) continue;

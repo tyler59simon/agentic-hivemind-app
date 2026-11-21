@@ -622,6 +622,7 @@ input[type="checkbox"] { accent-color: var(--success); }
 .md-editor .cm-highlight { background: var(--mark); border-radius: 2px; }
 .md-editor .cm-comment { color: var(--muted); font-style: italic; opacity: .75; }
 .md-editor .cm-footnote { color: var(--accent); cursor: help; padding: 0 1px; }
+.md-editor .cm-attaching { color: var(--muted); font-style: italic; border: 1px dashed var(--border); border-radius: 4px; padding: 0 4px; }
 .md-editor .cm-footnote-missing { color: var(--error); }
 .md-editor .cm-footnote-def { color: var(--fg-soft); font-size: .92em; }
 .md-editor .cm-rich-embed, .markdown .page-embed { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: .4rem; padding: .3rem .8rem .5rem; background: var(--bg-alt); }

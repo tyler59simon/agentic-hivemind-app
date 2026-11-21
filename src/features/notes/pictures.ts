@@ -42,5 +42,7 @@ export function findFile(name: string, files: string[]): string | null {
   if (exact) return exact;
   const hits = files.filter((f) => low(f).endsWith(`/${want}`));
   hits.sort((a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b));
-  return hits[0] ?? null;
+  if (hits[0]) return hits[0];
+  // A Living Memory attachment is kept as `assets/<sha8>-<name>` (Codex review of 398b956, P2).
+  return files.find((f) => /^assets\/[0-9a-f]{8}-/.test(f) && low(f.slice(16)) === want) ?? null;
 }

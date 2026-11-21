@@ -88,7 +88,7 @@ function callout(state: EditorState, from: number, to: number, active: boolean, 
     out.push(Decoration.line({ class: cls }).range(line.from));
   }
   if (active) return;
-  out.push(Decoration.replace({ widget: new CalloutTitleWidget(c, open, first.from) }).range(first.from, first.to));
+  out.push(Decoration.replace({ widget: new CalloutTitleWidget(c, open) }).range(first.from, first.to));
   if (!open) {
     if (last.number > first.number) out.push(hide.range(first.to, last.to));
     return;

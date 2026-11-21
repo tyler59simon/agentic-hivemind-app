@@ -18,6 +18,7 @@ import { decodeOsc52 } from "./osc52";
 import { quotePaths } from "./paths";
 import { pasteAction } from "./paste";
 import { isShellId, type ShellTab } from "./shells";
+import { setTerminalDrops } from "../notes/drops";
 import { fontPx, xtermTheme } from "./theme";
 import { makeWriter } from "./writer";
 
@@ -133,18 +134,24 @@ function watchDrops() {
   getCurrentWebview().onDragDropEvent((e) => {
     if (e.payload.type !== "drop" || e.payload.paths.length === 0) return;
     // The position is in physical pixels.
-    const x = e.payload.position.x / window.devicePixelRatio;
-    const y = e.payload.position.y / window.devicePixelRatio;
-    for (const live of lives.values()) {
-      if (!live.running || live.box.offsetParent === null) continue;
-      const r = live.box.getBoundingClientRect();
-      if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue;
-      live.term.paste(quotePaths(e.payload.paths));
-      live.term.focus();
-      return;
-    }
+    const live = terminalAt(e.payload.position.x / window.devicePixelRatio, e.payload.position.y / window.devicePixelRatio);
+    if (!live) return;
+    live.term.paste(quotePaths(e.payload.paths));
+    live.term.focus();
   }).catch(() => { dropListener = false; });
 }
+
+/** The visible, running terminal at a point in CSS pixels: the one a drop there pastes into. */
+function terminalAt(x: number, y: number): Live | undefined {
+  for (const live of lives.values()) {
+    if (!live.running || live.box.offsetParent === null) continue;
+    const r = live.box.getBoundingClientRect();
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return live;
+  }
+  return undefined;
+}
+// The drop router leaves a drop to a terminal only when one here pastes it (Codex review of 398b956, P3).
+setTerminalDrops((x, y) => !!terminalAt(x, y));
 
 /** Attach to the Rust side: `term_open` for a session, `term_login` for a sign-in terminal. */
 async function attach(id: string, start: StartMode | null, replay: boolean): Promise<void> {

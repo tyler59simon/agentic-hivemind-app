@@ -1,7 +1,9 @@
 // Pictures pasted into a page, dropped on it or picked from the toolbar become attachments, linked where they landed
-// (NS-3A). A placeholder goes in at once and is replaced by the link when the attachment is saved, so typing meanwhile
-// never moves the link; a placeholder the user deleted meanwhile gets no link.
-import type { EditorView } from "@codemirror/view";
+// (NS-3A). While one is saved, a marker shows where its link goes; the marker is a widget, never text, so the page as
+// saved, a draft or an undo never holds a placeholder (Codex review of 398b956, P2). The marker follows edits around
+// it; a marker whose text the user deleted gets no link, and a page closed meanwhile gets the link on the clipboard.
+import { StateEffect, StateField, type EditorState, type Range } from "@codemirror/state";
+import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet } from "@codemirror/view";
 import type { RichContext } from "./context";
 import { isPicture, pastedName } from "./parse";
 
@@ -12,16 +14,75 @@ const EXT: Record<string, string> = {
 /** The extension for a picture's MIME type, or null when Hivemind does not attach that kind. */
 export const pictureExt = (mime: string) => EXT[mime.toLowerCase()] ?? null;
 
+class AttachingWidget extends WidgetType {
+  constructor(readonly name: string) { super(); }
+  eq(o: AttachingWidget) { return o.name === this.name; }
+  toDOM() {
+    const span = document.createElement("span");
+    span.className = "cm-attaching";
+    span.textContent = `Attaching ${this.name}…`;
+    return span;
+  }
+}
+
+const addPending = StateEffect.define<{ id: number; batch: number; pos: number; name: string }[]>();
+/** One attachment is done: its marker goes, and the batch's other markers move to `to` (after its link) when given. */
+const endPending = StateEffect.define<{ id: number; batch: number; to?: number }>();
+
+/** The markers of attachments being saved. Before the cursor (side -1), so typing meanwhile goes after the link. */
+export const pendingAttachments = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(set, tr) {
+    set = set.map(tr.changes);
+    for (const e of tr.effects) {
+      if (e.is(addPending)) {
+        set = set.update({ add: e.value.map((p) => Decoration.widget({ widget: new AttachingWidget(p.name), side: -1, id: p.id, batch: p.batch }).range(p.pos)), sort: true });
+      } else if (e.is(endPending)) {
+        const { id, batch, to } = e.value;
+        const moved: Range<Decoration>[] = [];
+        set = set.update({
+          filter: (_f, _t, d) => {
+            if (d.spec.id === id) return false;
+            if (to !== undefined && d.spec.batch === batch) { moved.push(d.range(to)); return false; }
+            return true;
+          },
+        });
+        if (moved.length) set = set.update({ add: moved, sort: true });
+      }
+    }
+    return set;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
+const closed = new WeakSet<EditorView>();
+/** Notes which editors are gone, so an attachment finishing later does not write to one. */
+const closing = ViewPlugin.define((view) => ({ destroy() { closed.add(view); } }));
+
+/** What attaching needs in the editor: the markers and the note of closed editors. */
+export const attaching = [pendingAttachments, closing];
+
+/** Where the marker `id` is now, or null when it is gone. */
+function markerAt(state: EditorState, id: number): number | null {
+  let at: number | null = null;
+  state.field(pendingAttachments, false)?.between(0, state.doc.length, (from, _to, d) => {
+    if (d.spec.id === id) { at = from; return false; }
+  });
+  return at;
+}
+
 let counter = 0;
 
-/** Put a placeholder for each item at `pos` (each on its own line when there are several), save each item, and swap
- *  each placeholder for the item's link. `save` resolves to the Markdown link. */
+/** Put a marker for each item at `pos`, save each item, and put each item's link where its marker is then (each on
+ *  its own line when there are several). `save` resolves to the Markdown link. */
 export async function attachAt(view: EditorView, ctx: RichContext, pos: number, names: string[], save: (i: number) => Promise<string>): Promise<void> {
   if (!names.length || view.state.readOnly) return;
-  const marks = names.map((name) => `![Attaching ${name.replace(/[[\]]/g, "")} (${++counter})…]()`);
+  const batch = ++counter;
+  const ids = names.map(() => ++counter);
   const line = view.state.doc.lineAt(pos);
   const lead = pos > line.from && names.length > 1 ? "\n" : "";
-  view.dispatch({ changes: { from: pos, insert: lead + marks.join("\n") }, selection: { anchor: pos + lead.length + marks.join("\n").length }, userEvent: "input.paste" });
+  view.dispatch({ effects: addPending.of(names.map((name, i) => ({ id: ids[i], batch, pos, name: name.replace(/[[\]]/g, "") }))) });
+  let linked = false;
   for (let i = 0; i < names.length; i++) {
     let link: string | null = null;
     try {
@@ -29,12 +90,29 @@ export async function attachAt(view: EditorView, ctx: RichContext, pos: number, 
     } catch (e) {
       ctx.fail(`${names[i]} was not attached: ${e instanceof Error ? e.message : String(e)}`);
     }
-    const at = view.state.doc.toString().indexOf(marks[i]);
-    if (at < 0) {
-      if (link) ctx.fail(`${names[i]} was attached, but its placeholder was removed, so the page has no link to it.`);
+    if (closed.has(view) || !view.state.field(pendingAttachments, false)) {
+      if (link) lost(ctx, names[i], link, "the page was closed before it could be linked");
       continue;
     }
-    view.dispatch({ changes: { from: at, to: at + marks[i].length, insert: link ?? "" }, userEvent: "input.paste" });
+    const at = markerAt(view.state, ids[i]);
+    if (at === null || !link) {
+      view.dispatch({ effects: endPending.of({ id: ids[i], batch }) });
+      if (link) ctx.fail(`${names[i]} was attached, but the text where it was going was removed, so the page has no link to it.`);
+      continue;
+    }
+    const insert = (linked ? "\n" : lead) + link;
+    linked = true;
+    view.dispatch({ changes: { from: at, insert }, effects: endPending.of({ id: ids[i], batch, to: at + insert.length }), userEvent: "input.paste" });
+  }
+}
+
+/** Say that an attachment was saved but not linked, and put its link on the clipboard. */
+function lost(ctx: RichContext, name: string, link: string, why: string) {
+  const say = (copied: boolean) => ctx.fail(`${name} was attached, but ${why}.${copied ? " Its link is on the clipboard." : ` Its link: ${link}`}`);
+  try {
+    navigator.clipboard.writeText(link).then(() => say(true), () => say(false));
+  } catch {
+    say(false);
   }
 }
 

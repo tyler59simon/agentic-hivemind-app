@@ -38,6 +38,21 @@ function shown(state: EditorState): string[] {
 
 const TABLE = "| a | b |\n|---|---|\n| 1 | 2 |";
 
+const CHUNK = `## Section
+
+Some text with **bold** and a [link](https://example.com).
+
+${TABLE}
+
+> [!note] Callout
+> body
+
+$$
+x^2
+$$
+
+`;
+
 describe("rich blocks", () => {
   it("draws a table as a grid until the cursor enters it", () => {
     const doc = `Intro\n\n${TABLE}\n\nEnd`;
@@ -162,21 +177,25 @@ ${TABLE}
     }
   });
 
-  it("adds little to typing on a 1 MB page", () => {
-    const chunk = `## Section
+  it("redraws only the blocks around an edit", () => {
+    // Deterministic stand-in for the timing check below: an edit in the middle of a long page keeps every other block's
+    // widget (Codex review of 398b956, P2).
+    let state = stateOf(CHUNK.repeat(150), 0);
+    const widgets = (s: EditorState) => {
+      const out: unknown[] = [];
+      s.field(richBlocks).deco.between(0, s.doc.length, (_f, _t, d) => { if (d.spec.widget) out.push(d.spec.widget); });
+      return out;
+    };
+    const before = new Set(widgets(state));
+    state = state.update({ changes: { from: Math.floor(state.doc.length / 2), insert: "x" } }).state;
+    const after = widgets(state);
+    expect(after.length).toBe(before.size);
+    expect(after.filter((w) => !before.has(w)).length).toBeLessThanOrEqual(2);
+  });
 
-Some text with **bold** and a [link](https://example.com).
-
-${TABLE}
-
-> [!note] Callout
-> body
-
-$$
-x^2
-$$
-
-`;
+  // Timing depends on the machine and on what else runs, so it runs only when asked: VITE_RICH_BENCH=1 npx vitest run blocks.
+  it.skipIf(!import.meta.env.VITE_RICH_BENCH)("adds little to typing on a 1 MB page", () => {
+    const chunk = CHUNK;
     const doc = chunk.repeat(Math.ceil(1_000_000 / chunk.length)).slice(0, 999_000);
     const median = (extensions: Extension) => {
       let state = EditorState.create({ doc, extensions });

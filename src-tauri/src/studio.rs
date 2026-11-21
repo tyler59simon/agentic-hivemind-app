@@ -385,6 +385,18 @@ pub async fn lmdoc_open_asset(app: AppHandle, notebook: String, path: String) ->
     })
 }
 
+/// The attachments of a Living Memory notebook (`assets/<sha8>-<name>`), for `![[picture.png]]`: `doc list` names pages
+/// only (Codex review of 398b956, P2). Read here, as the `hmfile` grant serves them; links are left out.
+#[tauri::command]
+pub async fn lmdoc_assets(state: State<'_, AppState>, notebook: String) -> Result<Vec<String>, String> {
+    let store = store_root(&state).ok_or("Hivemind does not know where the Living Memory store is")?;
+    blocking(move || {
+        let assets = crate::lmdoc::folder(&store, &notebook)?.join("assets");
+        Ok(crate::lmdoc::asset_names(&assets))
+    })
+    .await
+}
+
 /// Show a page or folder in Explorer, or open a file with the program Windows associates with it.
 #[tauri::command]
 pub async fn file_reveal(app: AppHandle, notebook: String, path: Option<String>, open: bool) -> Result<(), String> {

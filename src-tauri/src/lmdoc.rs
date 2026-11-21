@@ -179,6 +179,25 @@ pub fn attach(bridge: &Bridge, generation: Option<u64>, container: &str, file: &
     reply.result.get("path").and_then(|p| p.as_str()).map(str::to_string).ok_or_else(|| "Living Memory did not say where it put the file".into())
 }
 
+/// The files in a notebook's `assets` folder as `assets/<name>`, sorted, links and folders left out, at most 10,000.
+/// A missing folder has none.
+pub fn asset_names(assets: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(assets) else { return Vec::new() };
+    let mut names: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()) && !crate::files::contain::is_link(&e.path()))
+        .filter_map(|e| e.file_name().to_str().map(|n| format!("assets/{n}")))
+        .take(10_000)
+        .collect();
+    names.sort();
+    names
+}
+
+/// The `doc attach` argv for a staged file, its options given as `--opt=value`.
+fn attach_argv(from: &str, name: &str, domain: &str, notebook: &str) -> Vec<String> {
+    doc_argv("attach", &[from, name, "--include-private"], &[domain, notebook])
+}
+
 /// Attach bytes the webview sent (a pasted or dropped picture, NS-3A) under `name`: Living Memory reads them from a
 /// staging file, removed after the reply, and names the asset `<sha8>-<name>`. Returns its path in the notebook.
 pub fn attach_bytes(bridge: &Bridge, generation: Option<u64>, staging: &Path, container: &str, name: &str, bytes: &[u8]) -> Result<String, String> {
@@ -186,8 +205,9 @@ pub fn attach_bytes(bridge: &Bridge, generation: Option<u64>, staging: &Path, co
     std::fs::create_dir_all(staging).map_err(|e| format!("Could not create {}: {e}", staging.display()))?;
     let file = Staged(staging.join(format!("{}.bin", uuid::Uuid::new_v4().simple())));
     std::fs::write(&file.0, bytes).map_err(|e| format!("Could not stage the picture for Living Memory: {e}"))?;
-    let from = file.0.display().to_string();
-    let argv = doc_argv("attach", &["--from-file", &from, "--name", name, "--include-private"], &[&domain, &notebook]);
+    // `--opt=value`: a name such as `-draft.png` is then never read as an option (Codex review of 398b956, P3).
+    let (from, name) = (format!("--from-file={}", file.0.display()), format!("--name={name}"));
+    let argv = attach_argv(&from, &name, &domain, &notebook);
     let reply = bridge.call_at(generation, &argv, None)?;
     if reply.exit_code != 0 {
         return Err(failure(&reply));
@@ -311,6 +331,17 @@ fn clear_copies_in(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn asset_names_list_the_files_of_the_assets_folder() {
+        let dir = std::env::temp_dir().join(format!("hm-assets-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("1a2b3c4d-pic.png"), b"x").unwrap();
+        std::fs::write(dir.join("00aa11bb-a.png"), b"x").unwrap();
+        assert_eq!(asset_names(&dir), ["assets/00aa11bb-a.png", "assets/1a2b3c4d-pic.png"]);
+        assert!(asset_names(&dir.join("missing")).is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn container_ids_parse_only_living_memory_names() {
@@ -539,6 +570,10 @@ mod tests {
         let asset = attach(&bridge, None, container, &picked).unwrap();
         assert!(asset.starts_with("assets/") && asset.ends_with("pic.png"), "{asset}");
         assert!(folder(&store, container).unwrap().join(&asset).is_file());
+        // Pasted bytes go the same way; a name that starts with a dash is not read as an option (Codex review of 398b956).
+        let pasted = attach_bytes(&bridge, None, &staging, container, "-draft.png", b"\x89PNG\r\n\x1a\nx").unwrap();
+        assert!(pasted.starts_with("assets/") && pasted.ends_with("--draft.png"), "{pasted}");
+        assert_eq!(std::fs::read_dir(&staging).unwrap().count(), 0, "the staged picture is removed");
 
         // An agent proposes an edit against the revision it read; accepting writes it.
         let body = base.join("proposal.md");
