@@ -14,6 +14,24 @@ These rules come from the Codex review of the design ([reviews/ns0-codex-review.
 - Notebook settings of a notebook-only domain offer choosing its Obsidian vault, which runs `sync --domain DOMAIN VAULT` (U5).
 - Hivemind's notebook registry (`notebooks.json`) keeps a copy of each folder notebook's reach and Private, written with every `doc folder set`; Hivemind's AI features read the stricter of that copy and the sidecar (S10).
 
+## Changes from the code survey before NS-2C
+
+Claude surveyed Hivemind at 9437abe (the end of NS-1B) and Living Memory as NS-2A and NS-2B shipped them, on 2026-11-21. Where the text below says otherwise, these win.
+
+- **Living Memory commands as shipped.** Folder reach is `doc folder set PATH --visibility V [--private|--no-private]` and `doc folder unset PATH [--forget]`; `unset` of a hidden or private folder keeps a tombstone, so Hivemind sends `--forget` only when the user removes a notebook and wants its folder reachable again. The wrappers are `docFolderSet` and `docFolderUnset`, plus `docProposal` (one proposal), `docUndo` and `docSearch`. `doc notebooks` leaves hidden notebooks out unless given `--include-hidden`, which Hivemind always passes. `--include-private` is needed on writes, `undo`, `apply` and `recover` that touch a private notebook, not only on reads. `search` and `ask` return pages in a `pages` array with `pages_stale` when the page index was not fully refreshed.
+- **Reach takes effect at once.** Living Memory checks folder reach and Private when it serves each result, so Hidden or Private hides a folder notebook's pages immediately; the exit check below no longer waits for a reindex. The same holds for Living Memory notebooks (`notebook.json` is read when results are served).
+- **No vault for notebook-only domains yet.** Living Memory mirrors notebooks only into the vault of a domain that already syncs notes (NS-2B, design section 12b). The U5 item above (choosing a vault for a notebook-only domain) is deferred.
+- **Adapter seam first.** NS-1A shipped no adapter interface: `src/documents/store.ts` calls `readFile` and `saveFile` directly and is keyed by `FileRef`, and `FileTab` (`src/features/notes/FileTab.tsx`) assumes a folder notebook (`tab.file`, `notebooksQuery`, `treeQuery`, `createFile`, `trashPath`, `assetBase`). NS-2C first splits the document store by key kind and makes the page view work without a `FileRef`; `lmdoc.ts` then implements that seam.
+- **Tabs.** `docKey` (`src/documents/keys.ts`) gains a `doc:<domain>:<notebook>:<path>` branch; `Tab` gains `doc?: DocRef`; `"doc"` joins `TabKind` and `KINDS` in `src/workspace/store.ts`; `showTab` routes doc tabs to Notes; `src/workspace/sync.ts` treats them like file tabs (unsaved dots, letting documents go); `FileDraft.target` (`src/documents/drafts.ts`) accepts a `DocRef`.
+- **Text format.** BOM and line-ending detection exists only in Rust (`files/encoding.rs`). The `lmdoc` adapter gets a small TypeScript helper with the same rules (UTF-8 only: a page is UTF-8 by Living Memory's rule), tested on NS-1A's round-trip cases.
+- **Bridge size.** `max_page_bytes` is 4 MiB, above the bridge's 2 MiB line limit (`SERVE_LIMIT`), so the 512 KiB escaped-size rule above is the one that holds. `bridge.rs` `exchange` has no size check today; the measuring and `lm-staging` files are new code.
+- **Watcher.** `src-tauri/src/watcher.rs` has the pure mappers `note_domain` and `store_file`, and `watch_all` already watches `domains/` recursively; `doc_change` is a third mapper and callback, emitted beside `notes-changed` and `store-changed` in `lib.rs`. It ignores `docs.sqlite3*`, `.docs-*` and `notebook-sync.json`.
+- **Attachments grant.** `assets.rs` has one map of grant id to root and no kinds. The `hmfile` handler refuses everything under the store through `Protected::check`, and `opens.rs` `prune_assets` keeps only notebook roots and recent-file folders. The Living Memory assets grant needs an explicit exemption in both, limited to `<store>/domains/D/notebooks/<nb>/assets`, and `asset_base` needs a form for Living Memory notebooks.
+- **Reach for folder notebooks.** Nothing writes reach or Private today: `NotebookMeta` (`src/lib/notebooks.ts`) and the registry structs (`src-tauri/src/notebooks/mod.rs`, which drop unknown keys) gain `visibility` and `private` with defaults. Both registration paths, `notebook_add` and `notebook_add_dropped` (`studio.rs`), call `doc folder set`, and removal calls `doc folder unset`.
+- **Domain pickers.** `DomainInfo` (`src/lib/lm.ts`) gains `kind`. Besides Quick capture, New note and the Memory library filter, the default domain choice (`App.tsx`) and the Graph, History, Log, Wiki and Work views also list domains; notebook-only domains are left out of every one.
+- **Saving.** File pages have no timed save to disk today (the store's timer writes drafts only), so the 5 s save of Living Memory pages is new behaviour, limited to `doc` tabs.
+- **Files.** New: `src/features/notes/NewNotebook.tsx`, `ProposalInbox.tsx`, `src/documents/adapters/lmdoc.ts`. Changed besides those listed in section 3: `src/lib/notebooks.ts`, `src-tauri/src/notebooks/mod.rs`, `src-tauri/src/studio.rs`, `src-tauri/src/opens.rs`, `src-tauri/src/bridge.rs`, `src/documents/{store.ts, drafts.ts, keys.ts}`, `src/workspace/sync.ts`, `src/features/notes/{NotesPage.tsx, FileTab.tsx}`, `src/App.tsx`.
+
 ## 1. What the user sees
 
 - The notebook column lists Living Memory notebooks under a **Living Memory** heading, grouped by domain, below folder notebooks. **New notebook** offers "Folder on disk" or "Living Memory" (pick a domain, or **New notebook-only domain**, which asks for a name).
@@ -27,7 +45,7 @@ These rules come from the Codex review of the design ([reviews/ns0-codex-review.
 ## 2. Design
 
 - Gate: `useDocsEnabled()` in `src/lib/connection.ts` on `capabilities.docs.version >= 1`. Without it, the Living Memory heading shows "Update Living Memory to use Living Memory notebooks".
-- `src/lib/lm.ts` wrappers for every `doc` command used: `docNotebooks`, `docNotebookCreate`, `docNotebookUpdate`, `docList`, `docRead`, `docWrite`, `docCreate`, `docMove`, `docDelete`, `docAttach`, `docHistory`, `docProposals`, `docAccept`, `docReject`, `docFolderLink`, `docFolderUnlink`, plus `domainCreateNotebook`. Reads use `view()` (`--actor viewer`); writes run as main. Stdin payloads stay under `max_page_bytes`; larger pages are written to a temp file and passed with `--body-file` (the bridge's 2 MiB request limit).
+- `src/lib/lm.ts` wrappers for every `doc` command used: `docNotebooks`, `docNotebookCreate`, `docNotebookUpdate`, `docList`, `docRead`, `docWrite`, `docCreate`, `docMove`, `docDelete`, `docAttach`, `docHistory`, `docSearch`, `docProposals`, `docProposal`, `docAccept`, `docReject`, `docUndo`, `docFolderSet`, `docFolderUnset`, plus `domainCreateNotebook`. Reads use `view()` (`--actor viewer`); writes run as main. Stdin payloads stay under `max_page_bytes`; larger pages are written to a temp file and passed with `--body-file` (the bridge's 2 MiB request limit).
 - `src/documents/adapters/lmdoc.ts`: precondition `{ revision }`; maps `LmError.stale` to the controller's stale event.
 - `docKey`: `doc:<domain>:<notebook>:<lowercased path>`. `TabKind` gains `"doc"`; `TAB_VIEWS.doc` renders the same `FileTab` component through the adapter.
 - Watcher (`src-tauri/src/watcher.rs`): a pure `doc_change(domains_dir, path) -> Option<(domain, notebook)>` for `domains/D/notebooks/<nb>/**` excluding `docs.sqlite3*`, emitted as `docs-changed`; the frontend invalidates the tree and refreshes open clean documents.
@@ -47,7 +65,7 @@ These rules come from the Codex review of the design ([reviews/ns0-codex-review.
 
 - A Living Memory page and a memory note side by side in a split, both editable.
 - An agent's `alm doc propose` (run in a Hivemind terminal) shows in the inbox and is accepted.
-- Agent reach set to Searchable on a folder notebook outside any repo makes `alm search` find its text; Hidden or Private makes it disappear (after Living Memory reindexes).
+- Agent reach set to Searchable on a folder notebook outside any repo makes `alm search` find its text; Hidden or Private makes it disappear at once.
 - Memory regression pass.
 
 ## 6. Shipped
