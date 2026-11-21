@@ -30,7 +30,7 @@ export interface DocState {
   draftError?: string;
   /** The user chose Convert to UTF-8: the next save writes UTF-8 over bytes that did not decode (NS-1B). */
   convert?: boolean;
-  /** A draft the file cannot take now (it opened read-only or is not text): kept, and offered as a copy. */
+  /** A draft the file cannot take now (it opened read-only, is not text or is gone): kept, and offered as a copy. */
   kept?: { text: string; at: string };
 }
 
@@ -44,7 +44,8 @@ export type DocEvent =
   | { type: "outsideChange"; theirs: Loaded }
   | { type: "merged"; text: string; theirs: Loaded }
   | { type: "reloaded"; theirs: Loaded }
-  | { type: "failed"; error: string }
+  | { type: "failed"; error: string; kept?: { text: string; at: string } }
+  | { type: "keptDropped" }
   | { type: "draft"; error: string | null }
   | { type: "convert" }
   | { type: "dismiss" };
@@ -96,6 +97,9 @@ export function reduce(s: DocState, e: DocEvent): DocState {
     }
     case "outsideChange": {
       if (!s.base || e.theirs.stamp.sha256 === s.base.stamp.sha256) return s;
+      // A kept draft is never dropped by following the file: once the file can take it, the store loads the page
+      // again, which brings the draft back as edits (Codex final review of a34fafd, D3b).
+      if (s.kept && !e.theirs.readOnly && !e.theirs.binary) return s;
       // A save in flight finds out for itself, and a merge in progress already has a newer version to look at.
       if (s.status === "saving" || s.status === "stale") return s;
       if (s.status === "dirty") return { ...s, banner: { kind: "changed" }, theirs: e.theirs };
@@ -111,7 +115,9 @@ export function reduce(s: DocState, e: DocEvent): DocState {
     case "reloaded":
       return reduce({ ...s, banner: undefined, theirs: undefined, saving: undefined }, { type: "loaded", loaded: e.theirs });
     case "failed":
-      return s.base ? { ...s, status: s.status === "saving" ? "dirty" : s.status, saving: undefined, error: e.error } : { ...s, status: "error", error: e.error };
+      return s.base ? { ...s, status: s.status === "saving" ? "dirty" : s.status, saving: undefined, error: e.error } : { ...s, status: "error", error: e.error, kept: e.kept };
+    case "keptDropped":
+      return { ...s, kept: undefined };
     case "draft":
       return e.error === (s.draftError ?? null) ? s : { ...s, draftError: e.error ?? undefined };
     case "convert": {

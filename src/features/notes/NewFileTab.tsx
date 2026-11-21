@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Save } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { classify } from "../../lib/errors";
 import { recentQuery } from "../../lib/opens";
 import { toast } from "../../ui/toast";
@@ -20,17 +20,12 @@ export function NewFileTab({ tab }: { tab: Tab }) {
   const setDirty = useWorkspace((s) => s.setDirty);
   useEffect(() => { setDirty(tab.id, text !== ""); }, [text, tab.id, setDirty]);
   const change = useCallback((next: string) => { setText(next); setUntitledText(tab.id, next); }, [tab.id]);
-  // One Save as at a time: a second Ctrl+S while the dialog is open does nothing (Codex re-review of fa08348, N3).
-  const busy = useRef(false);
+  // A second Ctrl+S while the dialog is open does nothing (saveUntitled keeps one Save as per tab).
   const save = useCallback(async () => {
-    if (busy.current) return;
-    busy.current = true;
     try {
       if (await saveUntitled(tab.id, text, tab.title ? `${tab.title}.txt` : "Untitled.txt")) client.invalidateQueries({ queryKey: recentQuery().queryKey });
     } catch (e) {
       toast(classify(e).message, "error");
-    } finally {
-      busy.current = false;
     }
   }, [text, tab.id, tab.title, client]);
   return (

@@ -7,8 +7,8 @@ import { mergeBody } from "../features/editor/merge";
 import { docKey, draftKeyOf, movedPath, type FileRef } from "./keys";
 import { initial, isUnsaved, reduce, type DocEvent, type DocState, type Loaded } from "./session";
 
-/** A move or delete in progress over a page or folder (`hold`). */
-export interface Held { notebook: string; from: string; kind: "move" | "delete" }
+/** A move or delete in progress over a page or folder (`hold`); `into` is the destination of a move. */
+export interface Held { notebook: string; from: string; kind: "move" | "delete" | "into" }
 
 interface DocumentsState {
   docs: Record<string, DocState>;
@@ -86,9 +86,14 @@ function isHeld(key: string) {
   return !!ref && [...holds].some(({ entry: h }) => h.notebook === ref.notebook && movedPath(ref.path, h.from, h.from) !== null);
 }
 
+const under = (h: Held, ref: FileRef) => h.notebook === ref.notebook && movedPath(ref.path, h.from, h.from) !== null;
+
 /** Whether `ref` lies under a delete in progress, so its page shows that instead of an editor. */
-export const isDeleting = (held: Held[], ref: FileRef) =>
-  held.some((h) => h.kind === "delete" && h.notebook === ref.notebook && movedPath(ref.path, h.from, h.from) !== null);
+export const isDeleting = (held: Held[], ref: FileRef) => held.some((h) => h.kind === "delete" && under(h, ref));
+
+/** Whether a page or folder is moving onto `ref`: its page takes no edits until the move ends, since the move would
+ *  replace them (Codex final review of a34fafd, F2a). */
+export const isArriving = (held: Held[], ref: FileRef) => held.some((h) => h.kind === "into" && under(h, ref));
 
 /** Resolves once no move or delete is in progress and the loads they let start have run. */
 function afterHolds(): Promise<void> {
@@ -121,10 +126,30 @@ function startLoad(key: string, ref: FileRef, convertNow = false) {
 const current = (key: string, generation: number | undefined) =>
   generation !== undefined && generations.get(key) === generation && !!get(key);
 
+/** The draft kept for `ref`. One written for another page is never taken for this one (Codex final review of
+ *  a34fafd, W1a). */
+async function draftOf(key: string, ref: FileRef) {
+  const draft = await getFileDraft(await draftKeyOf(key));
+  return draft && draft.target?.notebook === ref.notebook && draft.target?.path === ref.path ? draft : null;
+}
+
 async function load(key: string, ref: FileRef, attempt: number, convertNow = false) {
+  let loaded: Loaded;
   try {
-    const loaded = toLoaded(await readFile(ref.notebook, ref.path));
-    const draft = await getFileDraft(await draftKeyOf(key)).catch(() => null);
+    loaded = toLoaded(await readFile(ref.notebook, ref.path));
+  } catch (e) {
+    if (!current(key, attempt)) return;
+    // A page gone from disk may still have unsaved edits kept as a draft: they are shown, to copy out or discard
+    // (Codex final review of a34fafd, F2b).
+    const draft = isMissing(e) ? await draftOf(key, ref).catch(() => null) : null;
+    if (current(key, attempt)) dispatch(key, { type: "failed", error: String(e), kept: draft ? { text: draft.mine, at: draft.savedAt } : undefined });
+    return;
+  }
+  try {
+    // A lookup that failed is not "no draft": the page would then write over it (Codex final review of a34fafd, D3a).
+    const draft = await draftOf(key, ref).catch((e) => {
+      throw new Error(`Hivemind could not check this page for unsaved edits, so it did not open it: ${String(e)}`);
+    });
     if (!current(key, attempt)) return;
     // A draft written after Convert to UTF-8 comes back converted, whether the file is unchanged, still undecodable
     // or changed since; the file's own encoding no longer decides (Codex review of 52051c8, D3).
@@ -253,14 +278,13 @@ export function draftsPending(): boolean {
     || Object.entries(docs).some(([k, d]) => isUnsaved(d) && kept.get(k) !== d.text);
 }
 
-/** Convert to UTF-8: the page becomes editable and the next save writes UTF-8 (NS-1B). */
 /** Convert to UTF-8. A read-only page whose draft was written before the file became undecodable converts with that
  *  draft's edits, merged into the file as it is now, so Convert never writes over them (Codex review of 52051c8, D3). */
 export async function convertToUtf8(key: string) {
   const ref = useDocuments.getState().refs[key];
   if (ref && get(key)?.status === "readOnly") {
     // A draft that could not be looked up may exist, and converting would write over it (Codex re-review of fa08348, D3).
-    const draft = await getFileDraft(await draftKeyOf(key)).catch((e) => {
+    const draft = await draftOf(key, ref).catch((e) => {
       throw new Error(`Hivemind could not check this file for unsaved edits, so it did not convert it: ${String(e)}`);
     });
     if (get(key)?.status !== "readOnly") return;
@@ -271,8 +295,16 @@ export async function convertToUtf8(key: string) {
 }
 
 export function edit(key: string, text: string) {
+  const ref = useDocuments.getState().refs[key];
+  if (ref && isArriving(useDocuments.getState().held, ref)) return;
   dispatch(key, { type: "edited", text });
   scheduleDraft(key);
+}
+
+/** Discard the draft shown beside a page that cannot take it (its file is gone, or read-only). */
+export async function discardKept(key: string) {
+  await deleteDraft(await draftKeyOf(key));
+  dispatch(key, { type: "keptDropped" });
 }
 
 /** Save the document. Returns the state after the attempt. */
@@ -346,7 +378,15 @@ async function recheck(key: string) {
   if (!ref || !get(key) || get(key).status === "loading") return;
   try {
     const theirs = toLoaded(await readFile(ref.notebook, ref.path));
-    if (current(key, generation)) dispatch(key, { type: "outsideChange", theirs });
+    if (!current(key, generation)) return;
+    // A draft kept beside a read-only page comes back once the file can take it, through a load that merges it like
+    // any draft (Codex final review of a34fafd, D3b).
+    const s = get(key);
+    if (s.kept && s.base && theirs.stamp.sha256 !== s.base.stamp.sha256 && !theirs.readOnly && !theirs.binary) {
+      await startLoad(key, ref);
+      return;
+    }
+    dispatch(key, { type: "outsideChange", theirs });
   } catch (e) {
     if (current(key, generation) && get(key)?.base && isMissing(e)) dispatch(key, { type: "gone" });
   }
@@ -358,9 +398,12 @@ export async function refresh(notebook: string, paths: string[]) {
   for (const key of Object.keys(useDocuments.getState().refs)) {
     if (!wanted.has(key)) continue;
     // A load in flight may have read the old bytes: it finishes first, then the page is checked against the disk (Codex
-    // re-review of fa08348, D2).
+    // re-review of fa08348, D2). One that failed (the file was not there yet) has nothing to check against, so the
+    // page loads again (final review of a34fafd, D2).
     await loads.get(key);
-    await recheck(key);
+    const s = get(key), ref = useDocuments.getState().refs[key];
+    if (s?.status === "error" && !s.base && ref && !isHeld(key)) await startLoad(key, ref);
+    else await recheck(key);
   }
 }
 

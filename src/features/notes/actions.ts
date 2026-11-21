@@ -63,8 +63,8 @@ export async function movePath(client: QueryClient, notebook: string, from: stri
   if (from === to) return;
   const done = await beforeMove(notebook, from);
   // The destination is held too: a page opened there before its draft arrives would load without it (Codex review of
-  // 52051c8, F2).
-  const doneTo = await hold(notebook, to, "move");
+  // 52051c8, F2), and one open there takes no edits the move would replace (final review of a34fafd, F2a).
+  const doneTo = await hold(notebook, to, "into");
   try {
     // A page at the destination with unsaved edits would be overwritten by the move (Codex re-review of fa08348, F2).
     if (unsavedUnder(notebook, to).length) throw new Error(`${to} has unsaved edits; save or discard them first`);
@@ -86,21 +86,40 @@ async function saveAsAndRefresh(text: string, suggested: string): Promise<FileRe
   return ref;
 }
 
-/** Save an untitled tab's text where the user picks; the tab then shows the saved file. */
+/** Untitled tabs with a Save as in progress. A second one for the same tab does nothing, even from a remounted view
+ *  (Codex final review of a34fafd, N3c). */
+const savingUntitled = new Set<string>();
+
+const isUntitled = (tabId: string) => useWorkspace.getState().panes.some((p) => p.tabs.some((t) => t.id === tabId && t.kind === "new-file"));
+
+/** Save an untitled tab's text where the user picks; the tab then shows the saved file. Null when the user cancelled
+ *  or a Save as of this tab is already running. */
 export async function saveUntitled(tabId: string, text: string, suggested: string): Promise<FileRef | null> {
-  const ref = await saveAsAndRefresh(text, suggested);
-  if (!ref) return null;
-  // Typing went on while the dialog and the write ran: the newer text stays as unsaved edits of the saved file (Codex
-  // re-review of fa08348, N3). It is read before the tab changes kind, which drops the buffer.
-  const latest = untitledText(tabId);
-  const ws = useWorkspace.getState();
-  ws.setDirty(tabId, false);
-  ws.updateTab(tabId, { kind: "file", file: ref, title: pageTitle(ref.path), mode: isMarkdown(ref.path) ? "live" : "source" });
-  if (latest !== text) {
-    await open(ref);
-    edit(keyOf(ref), latest);
+  if (savingUntitled.has(tabId)) return null;
+  savingUntitled.add(tabId);
+  try {
+    const ref = await saveAsAndRefresh(text, suggested);
+    if (!ref || !isUntitled(tabId)) return ref;
+    if (untitledText(tabId) !== text) {
+      // Typing went on during Save as (Codex re-review of fa08348, N3). The newer text becomes unsaved edits of the
+      // saved file only when that file opens for editing with no edits of its own; otherwise this tab keeps it and stays
+      // untitled. The buffer goes only once the file has the text (final review of a34fafd, N3a and N3b).
+      await open(ref);
+      const key = keyOf(ref);
+      if (!isUntitled(tabId)) return ref;
+      if (useDocuments.getState().docs[key]?.status !== "clean") {
+        toast(`Saved ${fileName(ref.path)}. What you typed during the save is still in this tab; save it again to keep it.`, "error");
+        return ref;
+      }
+      edit(key, untitledText(tabId));
+    }
+    const ws = useWorkspace.getState();
+    ws.setDirty(tabId, false);
+    ws.updateTab(tabId, { kind: "file", file: ref, title: pageTitle(ref.path), mode: isMarkdown(ref.path) ? "live" : "source" });
+    return ref;
+  } finally {
+    savingUntitled.delete(tabId);
   }
-  return ref;
 }
 
 /** Save a copy of a page's text where the user picks (it cannot be written in place), and open the copy. */

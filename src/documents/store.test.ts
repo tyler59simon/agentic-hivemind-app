@@ -32,6 +32,10 @@ vi.mock("@tauri-apps/api/core", () => ({
         return loaded(files.get(path)!);
       case "file_rename": {
         const from = a.from as string, to = a.to as string;
+        // Rust refuses a move onto a page whose unsaved edits are kept as a draft (drafts::any_under).
+        if ([...drafts.values()].some((d) => { const p = (d as { target: { path: string } }).target.path; return p === to || p.startsWith(`${to}/`); })) {
+          throw new Error(`${to} has unsaved edits kept as a draft; open it and save or discard them first`);
+        }
         for (const [p, text] of [...files]) {
           const moved = p === from ? to : p.startsWith(`${from}/`) ? to + p.slice(from.length) : null;
           if (moved !== null) { files.delete(p); files.set(moved, text); }
@@ -754,6 +758,136 @@ describe("documents store", () => {
     expect(ws().panes[0].tabs[0]).toMatchObject({ kind: "file", file: ref("U.txt") });
     expect(files.get("U.txt")).toBe("first");
     expect(state("U.txt")).toMatchObject({ status: "dirty", text: "first and more" });
+  });
+
+  it("W1a: a draft filed under this page's key but written for another page is not taken for it", async () => {   // Codex final review of a34fafd
+    files.set("plan.md", "lower");
+    drafts.set(await draftKeyOf(key("plan.md")), { key: "x", kind: "file", target: ref("Plan.md"), precondition: { sha256: sha("lower"), size: 5, mtimeMs: 1 }, format: loaded("").format, base: "lower", mine: "Plan.md's edits", savedAt: "t" });
+    ws().openTab({ kind: "file", file: ref("plan.md") });
+    await docs.open(ref("plan.md"));
+    expect(state("plan.md")).toMatchObject({ status: "clean", text: "lower" });
+  });
+
+  it("D3a: a page whose draft lookup fails does not open, so nothing writes over the draft", async () => {   // Codex final review of a34fafd
+    flags.draftGetError = true;
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    expect(state("A.md")).toMatchObject({ status: "error" });
+    expect(state("A.md").error).toContain("could not check this page for unsaved edits");
+  });
+
+  it("F2b: a page gone from disk shows the draft it left, to copy out or discard", async () => {   // Codex final review of a34fafd
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    docs.edit(key("A.md"), "one, mine");
+    await docs.flushAllDrafts();
+    ws().closeTab("p0", ws().panes[0].tabs[0].id);
+    docs.release(key("A.md"));
+    files.delete("A.md");
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    expect(state("A.md")).toMatchObject({ status: "error", kept: { text: "one, mine" } });
+    await docs.discardKept(key("A.md"));
+    expect(drafts.size).toBe(0);
+    expect(state("A.md").kept).toBeUndefined();
+  });
+
+  it("D3b: a draft kept beside a read-only page comes back once the file can take it", async () => {   // Codex final review of a34fafd
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    docs.edit(key("A.md"), "one, mine");
+    await docs.flushAllDrafts();
+    ws().closeTab("p0", ws().panes[0].tabs[0].id);
+    docs.release(key("A.md"));
+    flags.locked.add("A.md");
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    expect(state("A.md").kept).toBeDefined();
+    flags.locked.delete("A.md");
+    files.set("A.md", "one, changed");
+    await docs.refresh("nb-1", ["A.md"]);
+    expect(state("A.md")).toMatchObject({ text: "one, mine" });
+    expect(state("A.md").kept).toBeUndefined();
+    expect(["dirty", "stale"]).toContain(state("A.md").status);
+  });
+
+  it("D2: Save as onto a page whose load failed (the file was not there) shows the saved text", async () => {   // Codex final review of a34fafd
+    const { saveCopy } = await import("../features/notes/actions");
+    ws().openTab({ kind: "file", file: ref("B.md") });
+    await docs.open(ref("B.md"));
+    expect(state("B.md").status).toBe("error");
+    await saveCopy("saved by Save as", "B.md");
+    expect(state("B.md")).toMatchObject({ status: "clean", text: "saved by Save as" });
+  });
+
+  it("F2a: a page a move lands on takes no edits until the move ends", async () => {   // Codex final review of a34fafd
+    const { QueryClient } = await import("@tanstack/react-query");
+    const { movePath } = await import("../features/notes/actions");
+    files.set("B.md", "b");
+    ws().openTab({ kind: "file", file: ref("B.md") });
+    await docs.open(ref("B.md"));
+    files.delete("B.md");   // another program deleted it; the page is still open and clean
+    const slow = gate("file_rename undefined");
+    const moving = movePath(new QueryClient(), "nb-1", "A.md", "B.md");
+    await until(() => calls.includes("file_rename "));
+    docs.edit(key("B.md"), "typed during the move");
+    expect(state("B.md").text).toBe("b");
+    slow();
+    await moving;
+    expect(files.get("B.md")).toBe("one");
+  });
+
+  it("N3a: text typed during Save as onto a page with unsaved edits stays in the untitled tab", async () => {   // Codex final review of a34fafd
+    const { saveUntitled } = await import("../features/notes/actions");
+    const { setUntitledText, untitledText } = await import("../features/notes/untitled");
+    files.set("B.md", "b");
+    ws().openTab({ kind: "file", file: ref("B.md") });
+    await docs.open(ref("B.md"));
+    docs.edit(key("B.md"), "b, mine");
+    ws().openTab({ kind: "new-file" });
+    const tab = ws().panes[0].tabs[1];
+    setUntitledText(tab.id, "first");
+    const slow = gate("file_save_as undefined");
+    const saving = saveUntitled(tab.id, "first", "B.md");
+    await until(() => calls.includes("file_save_as "));
+    setUntitledText(tab.id, "first and more");
+    slow();
+    await saving;
+    expect(state("B.md")).toMatchObject({ text: "b, mine" });
+    expect(ws().panes[0].tabs[1]).toMatchObject({ kind: "new-file" });
+    expect(untitledText(tab.id)).toBe("first and more");
+  });
+
+  it("N3b: text typed during Save as stays in the untitled tab when the saved file does not open for editing", async () => {   // Codex final review of a34fafd
+    const { saveUntitled } = await import("../features/notes/actions");
+    const { setUntitledText, untitledText } = await import("../features/notes/untitled");
+    flags.readError.set("U.txt", "U.txt is in use by another program");
+    ws().openTab({ kind: "new-file" });
+    const tab = ws().panes[0].tabs[0];
+    setUntitledText(tab.id, "first");
+    const slow = gate("file_save_as undefined");
+    const saving = saveUntitled(tab.id, "first", "U.txt");
+    await until(() => calls.includes("file_save_as "));
+    setUntitledText(tab.id, "first and more");
+    slow();
+    await saving;
+    expect(ws().panes[0].tabs[0]).toMatchObject({ kind: "new-file" });
+    expect(untitledText(tab.id)).toBe("first and more");
+  });
+
+  it("N3c: a second Save as of the same untitled tab while one runs does nothing", async () => {   // Codex final review of a34fafd
+    const { saveUntitled } = await import("../features/notes/actions");
+    const { setUntitledText } = await import("../features/notes/untitled");
+    ws().openTab({ kind: "new-file" });
+    const tab = ws().panes[0].tabs[0];
+    setUntitledText(tab.id, "text");
+    const slow = gate("file_save_as undefined");
+    const first = saveUntitled(tab.id, "text", "U.txt");
+    await until(() => calls.includes("file_save_as "));
+    expect(await saveUntitled(tab.id, "text", "U.txt")).toBeNull();
+    slow();
+    await first;
+    expect(calls.filter((c) => c === "file_save_as ")).toHaveLength(1);
   });
 
   it("U2: renaming a section keeps every dot of the new name", async () => {

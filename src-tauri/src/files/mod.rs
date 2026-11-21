@@ -199,7 +199,10 @@ fn read_inner(path: &Path, may_recover: bool) -> Result<Loaded, String> {
     if meta.len() > MAX_READ {
         return Err(format!("{} is larger than 64 MB, too large to edit", path.display()));
     }
-    let bytes = std::fs::read(path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
+    let bytes = std::fs::File::open(path)
+        .and_then(|mut file| read_capped(&mut file))
+        .map_err(|e| format!("Could not read {}: {e}", path.display()))?
+        .ok_or_else(|| format!("{} is larger than 64 MB, too large to edit", path.display()))?;
     let (text, format, mut read_only, binary) = decode(&bytes);
     let attribute = meta.permissions().readonly();
     // Converting helps only when the encoding is the reason: not for a binary file, mixed line endings or a file
@@ -209,6 +212,14 @@ fn read_inner(path: &Path, may_recover: bool) -> Result<Loaded, String> {
         read_only = Some("This file is read-only on disk".into());
     }
     Ok(Loaded { text, stamp: Stamp { sha256: sha256(&bytes), size: bytes.len() as u64, mtime_ms: mtime_ms(&meta) }, format, read_only, binary, convertible })
+}
+
+/// Read at most 64 MB: None when there is more, however large the file looked a moment before (Codex final review of
+/// a34fafd, N2).
+fn read_capped(reader: &mut impl std::io::Read) -> std::io::Result<Option<Vec<u8>>> {
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut std::io::Read::take(reader, MAX_READ + 1), &mut bytes)?;
+    Ok((bytes.len() as u64 <= MAX_READ).then_some(bytes))
 }
 
 /// One lock per file, so two saves of the same path never interleave between the hash check and the rename.
@@ -230,7 +241,9 @@ fn written() -> &'static Mutex<VecDeque<(String, String)>> {
 
 fn remember_written(path: &Path, sha: &str) {
     let mut list = written().lock().unwrap_or_else(|e| e.into_inner());
-    let key = path.to_string_lossy().to_lowercase();
+    // Exact, not lowercased: in a case-sensitive folder `a.md` is another file than `A.md` (Codex final review of
+    // a34fafd, W1c). A spelling that differs only costs one needless check of an unchanged file.
+    let key = path.to_string_lossy().into_owned();
     list.retain(|(p, _)| *p != key);
     list.push_back((key, sha.to_string()));
     while list.len() > 256 {
@@ -242,7 +255,7 @@ fn remember_written(path: &Path, sha: &str) {
 /// the write is forgotten, so a later outside restore of the same bytes is not mistaken for an echo (Codex review of
 /// 32fd236, S4).
 pub fn is_own_write(path: &Path) -> bool {
-    let key = path.to_string_lossy().to_lowercase();
+    let key = path.to_string_lossy().into_owned();
     let Some(expected) = written().lock().unwrap_or_else(|e| e.into_inner()).iter().rev().find(|(p, _)| *p == key).map(|(_, s)| s.clone()) else {
         return false;
     };
@@ -289,11 +302,9 @@ pub fn save(path: &Path, text: &str, pre: &Stamp, format: &FileFormat, convert: 
         Err(e) if atomic::in_use(&e) => return Err(format!("{} is in use by another program; try again", path.display())),
         Err(e) => return Err(format!("Could not read {}: {e}", path.display())),
     };
-    if held.file.metadata().is_ok_and(|m| m.len() > MAX_READ) {
-        return Err(format!("{} is now larger than 64 MB, so Hivemind does not replace it", path.display()));
-    }
-    let mut current = Vec::new();
-    std::io::Read::read_to_end(&mut held.file, &mut current).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
+    let current = read_capped(&mut held.file)
+        .map_err(|e| format!("Could not read {}: {e}", path.display()))?
+        .ok_or_else(|| format!("{} is now larger than 64 MB, so Hivemind does not replace it", path.display()))?;
     let sha = sha256(&current);
     if sha != pre.sha256 {
         return Ok(SaveOutcome::Stale { sha256: sha });
@@ -352,8 +363,9 @@ pub fn save_as(path: &Path, text: &str) -> Result<(), String> {
     if meta.len() > MAX_READ {
         return Err(format!("{} is larger than 64 MB, so Hivemind does not replace it", path.display()));
     }
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
+    let bytes = match std::fs::File::open(path).and_then(|mut file| read_capped(&mut file)) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return Err(format!("{} is larger than 64 MB, so Hivemind does not replace it", path.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return fresh(&lf),
         Err(e) => return Err(format!("Could not read {}: {e}", path.display())),
     };
@@ -549,6 +561,36 @@ mod tests {
         create(&dir.join("A/B/New.md"), "x").unwrap();
         assert!(create(&dir.join("A/B/New.md"), "y").unwrap_err().contains("already exists"));
         assert_eq!(std::fs::read_to_string(dir.join("A/B/New.md")).unwrap(), "x");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn reads_stop_after_64_mb_whatever_the_size_looked_like() {   // Codex final review of a34fafd, N2
+        struct Counting<R>(R, u64);
+        impl<R: std::io::Read> std::io::Read for Counting<R> {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let n = self.0.read(buf)?;
+                self.1 += n as u64;
+                Ok(n)
+            }
+        }
+        let mut growing = Counting(std::io::Read::take(std::io::repeat(b'x'), MAX_READ * 2), 0);
+        assert!(read_capped(&mut growing).unwrap().is_none());
+        assert!(growing.1 <= MAX_READ + 1, "read {} bytes", growing.1);
+        assert_eq!(read_capped(&mut std::io::Read::take(std::io::repeat(b'x'), 5)).unwrap(), Some(b"xxxxx".to_vec()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_write_to_one_file_is_not_the_echo_of_another_differing_in_case() {   // Codex final review of a34fafd, W1c
+        let dir = scratch();
+        let made = std::process::Command::new("fsutil").args(["file", "setCaseSensitiveInfo"]).arg(&dir).arg("enable").output().unwrap();
+        assert!(made.status.success(), "fsutil could not make a case-sensitive folder: {}", String::from_utf8_lossy(&made.stdout));
+        let (upper, lower) = (dir.join("A.md"), dir.join("a.md"));
+        create(&upper, "same").unwrap();
+        std::fs::write(&lower, "same").unwrap();
+        assert!(!is_own_write(&lower), "a.md changed on its own");
+        assert!(is_own_write(&upper));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

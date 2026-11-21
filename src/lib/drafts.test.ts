@@ -5,11 +5,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const disk = new Map<string, unknown>();
 const failing = new Set<unknown>();
 const delays = new Map<unknown, number>();
-const deletes = { fail: 0, delay: 5 };
+const deletes: { fail: number; gate: Promise<void> | null } = { fail: 0, gate: null };
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string, args: { key?: string; value?: unknown }) => {
-    await new Promise((r) => setTimeout(r, cmd === "draft_delete" ? deletes.delay : delays.get(args.value) ?? 5));
+    await new Promise((r) => setTimeout(r, delays.get(args.value) ?? 5));
     if (cmd === "draft_delete" && deletes.fail > 0) { deletes.fail--; throw new Error("The disk is full"); }
+    if (cmd === "draft_delete" && deletes.gate) await deletes.gate;
     if (cmd === "draft_put" && failing.has(args.value)) throw new Error("The disk is full");
     if (cmd === "draft_put") disk.set(args.key!, args.value);
     else if (cmd === "draft_get") return disk.get(args.key!) ?? null;
@@ -27,7 +28,7 @@ const file = (key: string, mine: string) => ({
 });
 
 describe("drafts", () => {
-  beforeEach(() => { disk.clear(); deletes.fail = 0; deletes.delay = 5; });
+  beforeEach(() => { disk.clear(); deletes.fail = 0; deletes.gate = null; });
 
   it("a draft put and read back at once returns the newest value", async () => {
     void putDraft(note("d:1", "old"));
@@ -60,14 +61,16 @@ describe("drafts", () => {
 
   it("a failed delete never hides a later one still on its way (Codex re-review of fa08348, F1)", async () => {
     disk.set("file-del", file("file-del", "old draft"));
-    deletes.delay = 30;
+    let letThrough = () => {};
+    deletes.gate = new Promise<void>((r) => { letThrough = r; });
     deletes.fail = 1;
-    const first = deleteDraft("file-del").catch(() => {});
+    const first = deleteDraft("file-del");
     const second = deleteDraft("file-del");
-    // The first has failed by now; the second is still on its way.
-    await new Promise((r) => setTimeout(r, 45));
+    await expect(first).rejects.toThrow("disk is full");
+    // The second delete is held in Rust until after this read (final review of a34fafd, T3).
     expect(await getFileDraft("file-del")).toBeNull();
-    await Promise.all([first, second]);
+    letThrough();
+    await second;
     expect(disk.has("file-del")).toBe(false);
   });
 

@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ellipsis, Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { convertToUtf8, edit, isDeleting, keyOf, open, reload, resolveMerge, save, useDocuments } from "../../documents/store";
+import { convertToUtf8, discardKept, edit, isArriving, isDeleting, keyOf, open, reload, resolveMerge, save, useDocuments } from "../../documents/store";
 import { isUnsaved, mergeable, type DocState } from "../../documents/session";
 import { classify } from "../../lib/errors";
 import { createFile, fileName, folderOf, isMarkdown, notebooksQuery, pageTitle, revealFile, treeQuery, type Notebook } from "../../lib/notebooks";
@@ -201,6 +201,7 @@ export function FileTab({ tab }: { tab: Tab }) {
   const key = keyOf(ref);
   const doc = useDocuments((s) => s.docs[key]);
   const deleting = useDocuments((s) => isDeleting(s.held, ref));
+  const arriving = useDocuments((s) => isArriving(s.held, ref));
   const updateTab = useWorkspace((s) => s.updateTab);
   const reveal = useWorkspace((s) => (s.reveal?.tabId === tab.id ? s.reveal : null));
   const client = useQueryClient();
@@ -251,7 +252,10 @@ export function FileTab({ tab }: { tab: Tab }) {
       <div className="center">
         <div className="card">
           <p className="error">{doc.error}</p>
+          {doc.kept && <p>Unsaved edits of this page are kept as a draft (from {new Date(doc.kept.at).toLocaleString()}).</p>}
           <div className="actions">
+            {doc.kept && <button onClick={() => void copyAs(doc.kept!.text, fileName(ref.path))}>Save the edits as a copy…</button>}
+            {doc.kept && <button onClick={() => void discardKept(key).catch((e) => toast(classify(e).message, "error"))}>Discard the draft</button>}
             {/* A file too large to edit opens in its own program until NS-6B's viewer. */}
             {doc.error?.includes("larger than 64 MB") && <button onClick={() => void openOutside(ref)}>Open with default app</button>}
             <button onClick={() => void open(ref)}>Try again</button>
@@ -298,7 +302,7 @@ export function FileTab({ tab }: { tab: Tab }) {
         : (
           <div className="note file-editor">
             <CodeEditor key={key} doc={doc.text} docVersion={doc.version} follow language={markdown ? "markdown" : "text"} live={mode === "live"}
-              readOnly={doc.status === "readOnly"} lineNumbers={!markdown} onChange={(text) => edit(key, text)} onSave={doSave}
+              readOnly={doc.status === "readOnly" || arriving} lineNumbers={!markdown} onChange={(text) => edit(key, text)} onSave={doSave}
               titles={titles} onOpenLink={follow} reveal={reveal} placeholder={markdown ? "Start writing…" : undefined} />
           </div>
         )}

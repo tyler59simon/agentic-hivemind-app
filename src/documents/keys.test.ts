@@ -17,7 +17,8 @@ describe("document keys", () => {
 
   it("draft keys are the hash Rust computes, and distinct for a_b and a/b", async () => {
     // The same value is asserted in src-tauri/src/drafts.rs (the_file_key_matches_the_webview).
-    expect(await draftKeyOf("file:nb-1:Projects/A.md")).toBe("file-16d2a638270cf6584f1fae6209b8cae20d85327e77e3f1371b6172d17e4f491c");
+    // From a tab's own key, so the letter case the webview keeps is the one Rust hashes (Codex final review of a34fafd, T4).
+    expect(await draftKeyOf(docKey({ kind: "file", file: { notebook: "nb-1", path: "Projects/A.md" } }))).toBe("file-16d2a638270cf6584f1fae6209b8cae20d85327e77e3f1371b6172d17e4f491c");
     expect(await draftKeyOf("file:nb-1:a_b")).not.toBe(await draftKeyOf("file:nb-1:a/b"));
   });
 

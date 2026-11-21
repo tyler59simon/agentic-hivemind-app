@@ -116,6 +116,14 @@ describe("document session", () => {
     expect(run({ type: "loaded", loaded: locked, draft: { text: "disk", at: "t" } }).kept).toBeUndefined();
   });
 
+  it("following the file never drops a kept draft; a page gone on load keeps one to show (Codex final review of a34fafd, D3b and F2b)", () => {
+    const locked = { ...file("disk"), readOnly: "This file is read-only on disk" };
+    const s = run({ type: "loaded", loaded: locked, draft: { text: "my edits", at: "t" } });
+    expect(reduce(s, { type: "outsideChange", theirs: file("new on disk") })).toBe(s);
+    expect(reduce(initial, { type: "failed", error: "gone", kept: { text: "mine", at: "t" } })).toMatchObject({ status: "error", kept: { text: "mine" } });
+    expect(reduce(s, { type: "keptDropped" }).kept).toBeUndefined();
+  });
+
   it("read-only files ignore edits", () => {
     const s = run({ type: "loaded", loaded: { ...file("x"), readOnly: "This file is not UTF-8" } });
     expect(s.status).toBe("readOnly");

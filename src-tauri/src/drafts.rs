@@ -28,8 +28,18 @@ pub fn put(dir: &Path, key: &str, value: &Value) -> Result<(), String> {
 }
 
 pub fn get(dir: &Path, key: &str) -> Result<Option<Value>, String> {
-    match std::fs::read(file_for(dir, key)?) {
-        Ok(bytes) => Ok(serde_json::from_slice(&bytes).ok()),
+    let path = file_for(dir, key)?;
+    match std::fs::read(&path) {
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(value) => Ok(Some(value)),
+            // A damaged draft is moved aside with its bytes, never reported as "no draft" and then written over (Codex
+            // final review of a34fafd, D3a).
+            Err(_) => {
+                let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+                std::fs::rename(&path, path.with_extension(format!("json.damaged-{stamp}"))).map_err(|e| format!("A draft is damaged and could not be moved aside: {e}"))?;
+                Ok(None)
+            }
+        },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.to_string()),
     }
@@ -50,50 +60,124 @@ pub fn file_key(notebook: &str, path: &str) -> String {
     format!("file-{}", digest.iter().map(|b| format!("{b:02x}")).collect::<String>())
 }
 
-/// After a page or folder of `notebook` moved from `from` to `to`, move the drafts of every page it held, so unsaved
-/// edits follow the file even if the app stops before the webview catches up.
-pub fn retarget(dir: &Path, notebook: &str, from: &str, to: &str) {
-    let moved = |path: &str| {
-        if path == from {
-            Some(to.to_string())
-        } else {
-            path.strip_prefix(from).filter(|rest| rest.starts_with('/')).map(|rest| format!("{to}{rest}"))
-        }
-    };
-    for mut draft in list(dir) {
-        let Some(target) = draft.get("target").filter(|_| draft.get("kind").and_then(Value::as_str) == Some("file")) else { continue };
-        if target.get("notebook").and_then(Value::as_str) != Some(notebook) {
+/// The notebook and path a page draft belongs to.
+fn page_of(draft: &Value) -> Option<(String, String)> {
+    if draft.get("kind").and_then(Value::as_str) != Some("file") {
+        return None;
+    }
+    Some((draft["target"]["notebook"].as_str()?.to_string(), draft["target"]["path"].as_str()?.to_string()))
+}
+
+/// A page draft that moves with its page: the file it is in, and its new key and content.
+pub struct Moving {
+    from: PathBuf,
+    key: String,
+    draft: Value,
+}
+
+/// The drafts of every page of `notebook` at or below `from`, as they will be once it has moved to `to`.
+pub fn moving(dir: &Path, notebook: &str, from: &str, to: &str) -> Vec<Moving> {
+    entries(dir)
+        .into_iter()
+        .filter_map(|(file, mut draft)| {
+            let (nb, path) = page_of(&draft)?;
+            if nb != notebook {
+                return None;
+            }
+            let new = if path == from { to.to_string() } else { format!("{to}{}", path.strip_prefix(from).filter(|rest| rest.starts_with('/'))?) };
+            let key = file_key(notebook, &new);
+            draft["target"]["path"] = Value::from(new);
+            draft["key"] = Value::from(key.clone());
+            Some(Moving { from: file, key, draft })
+        })
+        .collect()
+}
+
+/// Before a move: write each moved draft under its new key, beside the old one. On a failure the copies already
+/// written are removed and the move must not happen, so its unsaved edits are never left behind (Codex final review of
+/// a34fafd, W1b).
+pub fn copy_moved(dir: &Path, moves: &[Moving]) -> Result<(), String> {
+    let mut written = Vec::new();
+    for m in moves {
+        let to = file_for(dir, &m.key)?;
+        if to == m.from {
             continue;
         }
-        let Some(old) = target.get("path").and_then(Value::as_str).map(str::to_string) else { continue };
-        let Some(new) = moved(&old) else { continue };
-        let key = file_key(notebook, &new);
-        draft["target"]["path"] = Value::from(new);
-        draft["key"] = Value::from(key.clone());
-        if put(dir, &key, &draft).is_ok() && key != file_key(notebook, &old) {
-            let _ = delete(dir, &file_key(notebook, &old));
+        if let Err(e) = put(dir, &m.key, &m.draft) {
+            for path in written {
+                let _ = std::fs::remove_file(path);
+            }
+            return Err(format!("Its unsaved edits could not be moved with it, so nothing moved: {e}"));
+        }
+        written.push(to);
+    }
+    Ok(())
+}
+
+/// After the move: the old drafts go (one whose key did not change is rewritten in place with its new path).
+pub fn finish_moved(dir: &Path, moves: &[Moving]) {
+    for m in moves {
+        match file_for(dir, &m.key) {
+            Ok(to) if to == m.from => {
+                let _ = put(dir, &m.key, &m.draft);
+            }
+            _ => {
+                let _ = std::fs::remove_file(&m.from);
+            }
         }
     }
 }
 
-/// Every stored draft, for "unsaved drafts" recovery after a crash.
-pub fn list(dir: &Path) -> Vec<Value> {
+/// The move failed: the copies written for it go, and every draft stays where it was.
+pub fn undo_moved(dir: &Path, moves: &[Moving]) {
+    for m in moves {
+        if let Some(to) = file_for(dir, &m.key).ok().filter(|to| *to != m.from) {
+            let _ = std::fs::remove_file(to);
+        }
+    }
+}
+
+/// Drafts written while page keys ignored letter case sit under a lowercased key, which can now be another file's
+/// (Codex re-review of fa08348, W1): move each to its page's key. One whose page already has a draft there is set
+/// aside as `.json.legacy`, out of every lookup and never written over (Codex final review of a34fafd, W1a).
+pub fn migrate(dir: &Path) {
+    for (file, mut draft) in entries(dir) {
+        let Some((notebook, path)) = page_of(&draft) else { continue };
+        let key = file_key(&notebook, &path);
+        let Ok(to) = file_for(dir, &key) else { continue };
+        if to == file {
+            continue;
+        }
+        if to.exists() {
+            let _ = std::fs::rename(&file, file.with_extension("json.legacy"));
+            continue;
+        }
+        draft["key"] = Value::from(key.clone());
+        if put(dir, &key, &draft).is_ok() {
+            let _ = std::fs::remove_file(&file);
+        }
+    }
+}
+
+/// Every stored draft with the file it is in.
+fn entries(dir: &Path) -> Vec<(PathBuf, Value)> {
     let Ok(entries) = std::fs::read_dir(dir) else { return vec![] };
     entries
         .filter_map(Result::ok)
-        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
-        .filter_map(|e| std::fs::read(e.path()).ok())
-        .filter_map(|bytes| serde_json::from_slice(&bytes).ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .filter_map(|p| Some((p.clone(), serde_json::from_slice(&std::fs::read(&p).ok()?).ok()?)))
         .collect()
+}
+
+/// Every stored draft, for "unsaved drafts" recovery after a crash.
+pub fn list(dir: &Path) -> Vec<Value> {
+    entries(dir).into_iter().map(|(_, draft)| draft).collect()
 }
 
 /// Whether a page draft of `notebook` is kept for `path` or anything below it.
 pub fn any_under(dir: &Path, notebook: &str, path: &str) -> bool {
-    list(dir).iter().any(|draft| {
-        draft.get("kind").and_then(Value::as_str) == Some("file")
-            && draft["target"]["notebook"].as_str() == Some(notebook)
-            && draft["target"]["path"].as_str().is_some_and(|p| p == path || p.strip_prefix(path).is_some_and(|rest| rest.starts_with('/')))
-    })
+    list(dir).iter().filter_map(page_of).any(|(nb, p)| nb == notebook && (p == path || p.strip_prefix(path).is_some_and(|rest| rest.starts_with('/'))))
 }
 
 #[cfg(test)]
@@ -113,6 +197,63 @@ mod tests {
         assert_eq!(get(&dir, "demo:1234").unwrap(), None);
         assert!(get(&dir, "").is_err());
         assert!(file_for(&dir, "../../etc/passwd").unwrap().starts_with(&dir));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Move the drafts as `file_rename` does around a successful move.
+    fn retarget(dir: &Path, notebook: &str, from: &str, to: &str) {
+        let moves = moving(dir, notebook, from, to);
+        copy_moved(dir, &moves).unwrap();
+        finish_moved(dir, &moves);
+    }
+
+    fn page(path: &str) -> Value {
+        json!({ "key": file_key("nb-1", path), "kind": "file", "target": { "notebook": "nb-1", "path": path }, "mine": path })
+    }
+
+    #[test]
+    fn a_move_whose_drafts_cannot_be_copied_changes_no_draft() {   // Codex final review of a34fafd, W1b
+        let dir = std::env::temp_dir().join(format!("hivemind-drafts-stuck-{}", uuid::Uuid::new_v4().simple()));
+        put(&dir, &file_key("nb-1", "Area/A.md"), &page("Area/A.md")).unwrap();
+        put(&dir, &file_key("nb-1", "Area/B.md"), &page("Area/B.md")).unwrap();
+        let moves = moving(&dir, "nb-1", "Area", "Moved");
+        // The second copy's key is taken by a folder, so it fails after the first copy was written.
+        std::fs::create_dir_all(file_for(&dir, &moves[1].key).unwrap()).unwrap();
+        assert!(copy_moved(&dir, &moves).unwrap_err().contains("nothing moved"));
+        assert_eq!(get(&dir, &moves[0].key).unwrap(), None, "the copy written first is removed");
+        assert!(get(&dir, &file_key("nb-1", "Area/A.md")).unwrap().is_some());
+        assert!(get(&dir, &file_key("nb-1", "Area/B.md")).unwrap().is_some());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn drafts_under_the_old_lowercased_keys_move_to_their_pages_keys() {   // Codex final review of a34fafd, W1a
+        let dir = std::env::temp_dir().join(format!("hivemind-drafts-legacy-{}", uuid::Uuid::new_v4().simple()));
+        let legacy = |path: &str| file_key("nb-1", &path.to_lowercase());
+        put(&dir, &legacy("Plan.md"), &json!({ "key": legacy("Plan.md"), "kind": "file", "target": { "notebook": "nb-1", "path": "Plan.md" }, "mine": "old" })).unwrap();
+        // Other.md already has a draft under its new key: the legacy one is set aside, not written over it.
+        put(&dir, &legacy("Other.md"), &json!({ "key": legacy("Other.md"), "kind": "file", "target": { "notebook": "nb-1", "path": "Other.md" }, "mine": "legacy" })).unwrap();
+        put(&dir, &file_key("nb-1", "Other.md"), &page("Other.md")).unwrap();
+        migrate(&dir);
+        let plan = get(&dir, &file_key("nb-1", "Plan.md")).unwrap().unwrap();
+        assert_eq!((plan["mine"].as_str(), plan["key"].as_str()), (Some("old"), Some(file_key("nb-1", "Plan.md").as_str())));
+        assert_eq!(get(&dir, &file_key("nb-1", "plan.md")).unwrap(), None, "plan.md, another file, no longer sees Plan.md's draft");
+        assert_eq!(get(&dir, &file_key("nb-1", "Other.md")).unwrap().unwrap()["mine"], "Other.md");
+        assert_eq!(get(&dir, &file_key("nb-1", "other.md")).unwrap(), None);
+        assert!(file_for(&dir, &legacy("Other.md")).unwrap().with_extension("json.legacy").is_file(), "kept aside");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_damaged_draft_is_set_aside_not_reported_missing_and_overwritten() {   // Codex final review of a34fafd, D3a
+        let dir = std::env::temp_dir().join(format!("hivemind-drafts-damaged-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(file_for(&dir, "file-x").unwrap(), b"{\"mine\": \"half").unwrap();
+        assert_eq!(get(&dir, "file-x").unwrap(), None);
+        put(&dir, "file-x", &json!({ "mine": "new" })).unwrap();
+        let aside: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(Result::ok).filter(|e| e.file_name().to_string_lossy().contains(".damaged-")).collect();
+        assert_eq!(aside.len(), 1);
+        assert_eq!(std::fs::read(aside[0].path()).unwrap(), b"{\"mine\": \"half");
         std::fs::remove_dir_all(dir).ok();
     }
 

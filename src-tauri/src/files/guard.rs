@@ -91,13 +91,17 @@ const RESERVED: &[&str] = &[".git", ".obsidian", ".hivemind"];
 /// sidecar and the trash (README 5.3). Loose files there open read-only, and Save As refuses them (Codex re-review of
 /// fa08348, P1).
 pub fn reserved(path: &Path) -> Option<String> {
-    path.components().find_map(|part| match part {
-        std::path::Component::Normal(name) => {
-            let name = name.to_string_lossy().to_lowercase();
-            RESERVED.contains(&name.as_str()).then(|| format!("This is inside a {name} folder, which Hivemind does not edit"))
-        }
-        _ => None,
-    })
+    let named = |path: &Path| {
+        path.components().find_map(|part| match part {
+            std::path::Component::Normal(name) => {
+                let name = name.to_string_lossy().to_lowercase();
+                RESERVED.contains(&name.as_str()).then(|| format!("This is inside a {name} folder, which Hivemind does not edit"))
+            }
+            _ => None,
+        })
+    };
+    // Both as named and as it resolves on disk, so a link into one is refused too (Codex final review of a34fafd, P1).
+    named(path).or_else(|| named(&real(path)))
 }
 
 impl Protected {

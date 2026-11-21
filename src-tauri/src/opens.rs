@@ -143,8 +143,13 @@ impl Grants {
         // A case-only rename in a case-insensitive folder keeps the file's grant (and with it its tab and draft): the
         // stored spelling still resolves to this file. In a case-sensitive folder it is another file, or none (Codex
         // re-review of fa08348, N5).
+        // A stored spelling that now goes through a link is not reused: loose files never open through one (Codex final
+        // review of a34fafd, N5a).
         let same = grants.iter().position(|g| {
-            g.path != plain && g.path.to_lowercase() == plain.to_lowercase() && std::fs::canonicalize(&g.path).is_ok_and(|real| crate::folders::plain(&real) == plain)
+            g.path != plain
+                && g.path.to_lowercase() == plain.to_lowercase()
+                && crate::files::contain::unmoved(Path::new(&g.path))
+                && std::fs::canonicalize(&g.path).is_ok_and(|real| crate::folders::plain(&real) == plain)
         });
         let grant = match same {
             Some(at) => Grant { opened: now.to_string(), ..grants.remove(at) },
@@ -260,14 +265,17 @@ pub async fn file_save_as(app: AppHandle, text: String, suggested: String) -> Re
         let Some(picked) = handle.dialog().file().set_file_name(&suggested).blocking_save_file() else { return Ok(None) };
         let path = picked.into_path().map_err(|e| e.to_string())?;
         let state = handle.state::<AppState>();
-        protected(&state).check(&path)?;
-        if let Some(why) = files::guard::reserved(&path) {
-            return Err(why);
-        }
+        may_save_as(&protected(&state), &path)?;
         files::save_as(&path, &text)?;
         ref_for(&state, &path, &now()).map(Some)
     })
     .await
+}
+
+/// Whether Save As may write `path`: never into the store, a managed vault, Hivemind's own folders or a reserved folder.
+fn may_save_as(protected: &crate::files::guard::Protected, path: &Path) -> Result<(), String> {
+    protected.check(path)?;
+    files::guard::reserved(path).map_or(Ok(()), Err)
 }
 
 /// A folder dropped on the window, offered to the webview as a new notebook.
@@ -334,6 +342,44 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hm-opens-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[cfg(windows)]
+    fn junction(link: &Path, target: &Path) {
+        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(link).arg(target).output().unwrap();
+        assert!(made.status.success(), "mklink /J needs no admin rights: {}", String::from_utf8_lossy(&made.stderr));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn save_as_refuses_a_reserved_folder_named_or_reached_through_a_link() {   // Codex final review of a34fafd, P1 and T2
+        let dir = scratch();
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        junction(&dir.join("alias"), &dir.join(".git"));
+        let open = crate::files::guard::Protected::new(None);
+        assert!(may_save_as(&open, &dir.join(".git/config")).unwrap_err().contains(".git"));
+        assert!(may_save_as(&open, &dir.join("alias/config")).unwrap_err().contains(".git"));
+        assert!(may_save_as(&open, &dir.join("notes.txt")).is_ok());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_stored_spelling_that_now_goes_through_a_link_is_not_reused() {   // Codex final review of a34fafd, N5a
+        let dir = scratch();
+        let made = std::process::Command::new("fsutil").args(["file", "setCaseSensitiveInfo"]).arg(&dir).arg("enable").output().unwrap();
+        assert!(made.status.success(), "fsutil could not make a case-sensitive folder: {}", String::from_utf8_lossy(&made.stdout));
+        let file = dir.join("sub").join("a.txt");
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(&file, "a").unwrap();
+        junction(&dir.join("SUB"), &dir.join("sub"));
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "fsutil could not make a case-sensitive folder");
+        let grants = Grants::new(dir.join("open-files.json"));
+        let through_link = grants.add(&dir.join("SUB").join("a.txt"), "t").unwrap();
+        let picked = grants.add(&file, "t").unwrap();
+        assert_ne!(picked.id, through_link.id);
+        assert_eq!(picked.path, crate::folders::plain(&file));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

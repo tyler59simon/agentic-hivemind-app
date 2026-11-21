@@ -304,27 +304,48 @@ pub async fn file_mkdir(state: State<'_, AppState>, notebook: String, path: Stri
 
 #[tauri::command]
 pub async fn file_rename(state: State<'_, AppState>, notebook: String, from: String, to: String) -> Result<(), String> {
-    if to.to_lowercase().starts_with(&format!("{}/", from.to_lowercase())) {
-        return Err("A folder cannot move into itself".into());
-    }
     let (root, protected) = root_of(&state, &notebook)?;
     let drafts_dir = state.drafts_dir.clone();
-    blocking(move || {
-        // Resolved as a write, so neither end goes through a link (Codex review of 32fd236, P2).
-        let source = inside(&root, &protected, &from, true)?;
-        if source.is_dir() {
-            crate::files::guard::check_no_vault_inside(&source)?;
+    blocking(move || rename_in(&root, &protected, &drafts_dir, &notebook, &from, &to)).await
+}
+
+/// Whether `dest` lies inside the folder `folder`, judged on the folders as they are on disk: in a case-insensitive
+/// folder `area/Sub` is inside `Area`, in a case-sensitive one `area` can be another folder (Codex final review of
+/// a34fafd, W1c).
+fn lands_inside(folder: &Path, dest: &Path) -> bool {
+    let Ok(folder) = std::fs::canonicalize(folder) else { return false };
+    dest.ancestors().skip(1).find_map(|p| std::fs::canonicalize(p).ok()).is_some_and(|real| real.starts_with(&folder))
+}
+
+/// Move a page or folder of a notebook, and the drafts of its pages with it.
+fn rename_in(root: &Path, protected: &Protected, drafts_dir: &Path, notebook: &str, from: &str, to: &str) -> Result<(), String> {
+    if to.starts_with(&format!("{from}/")) {
+        return Err("A folder cannot move into itself".into());
+    }
+    // Resolved as a write, so neither end goes through a link (Codex review of 32fd236, P2).
+    let source = inside(root, protected, from, true)?;
+    let dest = inside(root, protected, to, true)?;
+    if source.is_dir() {
+        if lands_inside(&source, &dest) {
+            return Err("A folder cannot move into itself".into());
         }
-        // The moved drafts would overwrite unsaved edits kept for a page at the destination (Codex re-review of fa08348,
-        // F2).
-        if crate::drafts::any_under(&drafts_dir, &notebook, &to) {
-            return Err(format!("{to} has unsaved edits kept as a draft; open it and save or discard them first"));
-        }
-        files::rename(&source, &inside(&root, &protected, &to, true)?)?;
-        crate::drafts::retarget(&drafts_dir, &notebook, &from, &to);
-        Ok(())
-    })
-    .await
+        crate::files::guard::check_no_vault_inside(&source)?;
+    }
+    // The moved drafts would overwrite unsaved edits kept for a page at the destination (Codex re-review of fa08348,
+    // F2).
+    if crate::drafts::any_under(drafts_dir, notebook, to) {
+        return Err(format!("{to} has unsaved edits kept as a draft; open it and save or discard them first"));
+    }
+    // The drafts are copied to their new keys first, and the old ones go only once the files moved (Codex final review
+    // of a34fafd, W1b).
+    let moves = crate::drafts::moving(drafts_dir, notebook, from, to);
+    crate::drafts::copy_moved(drafts_dir, &moves)?;
+    if let Err(e) = files::rename(&source, &dest) {
+        crate::drafts::undo_moved(drafts_dir, &moves);
+        return Err(e);
+    }
+    crate::drafts::finish_moved(drafts_dir, &moves);
+    Ok(())
 }
 
 /// Move a page or folder to the notebook's trash. With `pre`, a page is only trashed while it still holds those bytes.
@@ -522,6 +543,60 @@ mod tests {
         let grant = grants.add(&base.join(".git").join("config"), "t").unwrap();
         let (_, locked) = loose_in(&grants, &Protected::new(None), &grant.id, "config").unwrap();
         assert!(locked.unwrap().contains(".git folder"));
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    fn page_draft(path: &str) -> serde_json::Value {
+        serde_json::json!({ "key": crate::drafts::file_key("nb-1", path), "kind": "file", "target": { "notebook": "nb-1", "path": path }, "mine": path })
+    }
+
+    #[test]
+    fn a_rename_moves_drafts_with_the_page_and_never_onto_a_kept_draft() {   // Codex final review of a34fafd, T1 and W1b
+        let base = temp_dir();
+        let (root, drafts) = (base.join("nb"), base.join("drafts"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("A.md"), "a").unwrap();
+        let open = Protected::new(None);
+        crate::drafts::put(&drafts, &crate::drafts::file_key("nb-1", "A.md"), &page_draft("A.md")).unwrap();
+        // B.md is gone from disk, but its unsaved edits are kept as a draft.
+        crate::drafts::put(&drafts, &crate::drafts::file_key("nb-1", "B.md"), &page_draft("B.md")).unwrap();
+        assert!(rename_in(&root, &open, &drafts, "nb-1", "A.md", "B.md").unwrap_err().contains("draft"));
+        assert!(root.join("A.md").is_file() && !root.join("B.md").exists());
+        assert_eq!(crate::drafts::get(&drafts, &crate::drafts::file_key("nb-1", "B.md")).unwrap().unwrap()["mine"], "B.md");
+        // Drafts that cannot follow keep the page where it is.
+        crate::drafts::delete(&drafts, &crate::drafts::file_key("nb-1", "B.md")).unwrap();
+        let blocker = drafts.join(format!("{}.json", crate::drafts::file_key("nb-1", "C.md")));
+        std::fs::create_dir_all(&blocker).unwrap();
+        assert!(rename_in(&root, &open, &drafts, "nb-1", "A.md", "C.md").unwrap_err().contains("nothing moved"));
+        assert!(root.join("A.md").is_file() && !root.join("C.md").exists());
+        std::fs::remove_dir(&blocker).unwrap();
+        // A move that works takes the draft along.
+        rename_in(&root, &open, &drafts, "nb-1", "A.md", "B.md").unwrap();
+        assert!(root.join("B.md").is_file());
+        assert_eq!(crate::drafts::get(&drafts, &crate::drafts::file_key("nb-1", "A.md")).unwrap(), None);
+        assert_eq!(crate::drafts::get(&drafts, &crate::drafts::file_key("nb-1", "B.md")).unwrap().unwrap()["target"]["path"], "B.md");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_folder_moves_into_a_sibling_whose_name_differs_only_in_case_where_that_is_another_folder() {   // Codex final review of a34fafd, W1c
+        let base = temp_dir();
+        let (root, drafts, open) = (base.join("nb"), base.join("drafts"), Protected::new(None));
+        std::fs::create_dir_all(root.join("Area")).unwrap();
+        std::fs::write(root.join("Area/x.md"), "x").unwrap();
+        // In a case-insensitive folder, area/Sub is inside Area.
+        assert!(rename_in(&root, &open, &drafts, "nb-1", "Area", "area/Sub/Area").unwrap_err().contains("into itself"));
+        // fsutil sets case sensitivity only on an empty folder, and exits 0 when it could not.
+        let root = base.join("cs");
+        std::fs::create_dir_all(&root).unwrap();
+        std::process::Command::new("fsutil").args(["file", "setCaseSensitiveInfo"]).arg(&root).arg("enable").output().unwrap();
+        std::fs::create_dir_all(root.join("Area")).unwrap();
+        std::fs::write(root.join("Area/x.md"), "x").unwrap();
+        std::fs::create_dir_all(root.join("area")).unwrap();
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 2, "fsutil could not make a case-sensitive folder");
+        rename_in(&root, &open, &drafts, "nb-1", "Area", "area/Area").unwrap();
+        assert!(root.join("area/Area/x.md").is_file());
         std::fs::remove_dir_all(&base).unwrap();
     }
 
