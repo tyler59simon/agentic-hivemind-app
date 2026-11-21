@@ -44,7 +44,7 @@ pub fn check_part(part: &str) -> Result<&str, &'static str> {
 
 /// A symbolic link or junction (a name-surrogate reparse point). Other reparse points, such as OneDrive
 /// placeholders, are ordinary files and folders here: notebooks in OneDrive must stay writable.
-fn is_link(path: &Path) -> bool {
+pub fn is_link(path: &Path) -> bool {
     std::fs::symlink_metadata(path).map(|meta| meta.file_type().is_symlink()).unwrap_or(false)
 }
 

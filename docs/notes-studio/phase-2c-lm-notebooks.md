@@ -58,6 +58,14 @@ The Codex review of `32fee20` (record: `reviews/ns2c-codex-review.md`) changed t
 - **Arguments (C4).** Every `doc` command sends options, then `--`, then its operands.
 - **Attachments (U2).** A relative link in a Living Memory page opens its attachment with the program Windows uses for its kind, from a read-only copy in the temporary folder (never an executable kind), or opens the page it names.
 
+The re-review of `75ce884` (same record, round 2) changed these on 2026-11-21:
+
+- **Bridge generation (R2-D1).** Store binding is also checked in Rust: every `doc` request carries the bridge generation `connect` reported, and the bridge refuses one made before Settings pointed it at another store.
+- **Store switch (R2-D2, R2-D3, R2-D7).** A page follows a store switch only once its load, save or move has ended, and never while its latest edits are not in a draft. Moves and deletes leave drafts that name another store alone.
+- **Folder policy 2 (R2-C2).** Folder reach needs Living Memory's `docs.folder_policy` 2, where `doc folder set` keeps the fields it is not given.
+- **Attachments (R2-P2, R2-P3, R2-P4).** Opened copies are cleared at the next start; SVG is not opened outside Hivemind; a notebook folder reached through any link below the store gets no grant.
+- **Argument lists (R2-C1).** A `doc` command without operands has no `--`.
+
 ## 1. What the user sees
 
 - The notebook column lists Living Memory notebooks under a **Living Memory** heading, grouped by domain, below folder notebooks. **New notebook** offers "Folder on disk" or "Living Memory" (pick a domain, or **New notebook-only domain**, which asks for a name).

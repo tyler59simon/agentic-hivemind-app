@@ -340,12 +340,12 @@ fn rename_in(root: &Path, protected: &Protected, drafts_dir: &Path, notebook: &s
     }
     // The moved drafts would overwrite unsaved edits kept for a page at the destination (Codex re-review of fa08348,
     // F2).
-    if crate::drafts::any_under(drafts_dir, notebook, to) {
+    if crate::drafts::any_under(drafts_dir, None, notebook, to) {
         return Err(format!("{to} has unsaved edits kept as a draft; open it and save or discard them first"));
     }
     // The drafts are copied to their new keys first, and the old ones go only once the files moved (Codex final review
     // of a34fafd, W1b).
-    let moves = crate::drafts::moving(drafts_dir, notebook, from, to);
+    let moves = crate::drafts::moving(drafts_dir, None, notebook, from, to);
     crate::drafts::copy_moved(drafts_dir, &moves)?;
     if let Err(e) = files::rename(&source, &dest) {
         crate::drafts::undo_moved(drafts_dir, &moves);
@@ -378,7 +378,11 @@ pub async fn lmdoc_open_asset(app: AppHandle, notebook: String, path: String) ->
     let state = app.state::<AppState>();
     let store = store_root(&state).ok_or("Hivemind does not know where the Living Memory store is")?;
     let copy = blocking(move || crate::lmdoc::attachment(&store, &notebook, &path).and_then(|full| crate::lmdoc::copy_to_open(&full))).await?;
-    app.opener().open_path(copy.display().to_string(), None::<&str>).map_err(|e| e.to_string())
+    // A copy no program opened goes now; the others go at the next start (Codex re-review of 75ce884, R2-P2).
+    app.opener().open_path(copy.display().to_string(), None::<&str>).map_err(|e| {
+        crate::lmdoc::remove_copy(&copy);
+        e.to_string()
+    })
 }
 
 /// Show a page or folder in Explorer, or open a file with the program Windows associates with it.

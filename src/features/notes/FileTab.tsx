@@ -103,7 +103,11 @@ function Banners({ doc, docKey, onMerge, onRecreate }: { doc: DocState; docKey: 
     const back = doc.base?.convertible ? " Convert to UTF-8 brings them back." : "";
     out.push(
       <div key="kept" className="banner note-banner">Unsaved edits from a draft (kept {new Date(kept.at).toLocaleString()}) cannot be saved to this file.{back}
-        {!doc.base?.convertible && <div className="actions"><button onClick={() => void copyAs(kept.text, fileName(ref.path))}>Save the edits as a copy…</button></div>}
+        <div className="actions">
+          {!doc.base?.convertible && <button onClick={() => void copyAs(kept.text, fileName(ref.path))}>Save the edits as a copy…</button>}
+          {/* A draft from another Living Memory store blocks this page until it is discarded here (R2-U1). */}
+          <button onClick={() => void discardKept(docKey).catch((e) => toast(classify(e).message, "error"))}>Discard the draft</button>
+        </div>
       </div>,
     );
   }

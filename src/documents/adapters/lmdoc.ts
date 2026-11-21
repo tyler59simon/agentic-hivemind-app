@@ -4,7 +4,7 @@
 // file applies the same byte-order-mark and line-ending rules as the Rust file service (`files/mod.rs` decode and
 // encode), so the editor gets LF text and a save writes the bytes back as they were except where the text changed.
 import { invoke } from "@tauri-apps/api/core";
-import { docCreate, docDelete, docList, docRead, docWrite, LmError } from "../../lib/lm";
+import { bridgeGeneration, docCreate, docDelete, docList, docRead, docWrite, LmError } from "../../lib/lm";
 import type { Eol, FileFormat, Loaded, SaveOutcome, Stamp, Tree } from "../../lib/notebooks";
 
 export const LM = "lm:";
@@ -123,10 +123,10 @@ export async function deletePage(where: LmNotebookRef, path: string, pre?: Stamp
 }
 
 /** Move a page or section. Rust moves the drafts of the pages with it, as `file_rename` does (NS-2C). */
-export const movePage = (container: string, from: string, to: string) => invoke<void>("lmdoc_move", { notebook: container, from, to });
+export const movePage = (container: string, from: string, to: string) => invoke<void>("lmdoc_move", { notebook: container, from, to, generation: bridgeGeneration() });
 
 /** Ask for a file with the native dialog and copy it into the notebook's `assets/`; null when the user cancelled. */
-export const attachFile = (container: string) => invoke<string | null>("lmdoc_attach", { notebook: container });
+export const attachFile = (container: string) => invoke<string | null>("lmdoc_attach", { notebook: container, generation: bridgeGeneration() });
 
 /** Open an attachment (`assets/...`) with the program Windows uses for its kind. Rust opens a read-only copy, so the
  *  store keeps Living Memory as its only writer (Codex review of 32fee20, U2). */

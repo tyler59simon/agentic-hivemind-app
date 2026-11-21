@@ -3,8 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // A fake notebook on disk and Rust's draft store. `gates` holds a read or save of a path until the test opens it;
 // `calls` counts commands; `failDrafts` makes draft writes fail; `readError` makes a read of a path fail.
 const files = new Map<string, string>();
-// Pages of the Living Memory notebook lm:demo:plans (NS-2C), served by fake `doc read` and `doc write` commands.
-const lmPages = new Map<string, string>();
+// Pages of the Living Memory notebook lm:demo:plans (NS-2C), served by fake `doc read` and `doc write` commands. Two
+// stores hold it; the fake bridge serves one at a time and, like Rust, refuses a request bound to an earlier generation
+// once it has waited for the bridge (Codex re-review of 75ce884, R2-T1).
+const lmStores = { a: new Map<string, string>(), b: new Map<string, string>() };
+const lmPages = lmStores.a;
+const bridge = { store: "a" as "a" | "b", generation: 1 };
 const lmRevs = new Map<string, string>();
 async function lmRevision(...texts: string[]) {
   for (const text of texts) {
@@ -87,6 +91,8 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "draft_delete": drafts.delete(a.key as string); return null;
       case "lm":
       case "lm_body": {
+        if (a.generation !== undefined && a.generation !== bridge.generation) throw new Error("Living Memory switched to another store while this request waited, so Hivemind did not send it");
+        const lmPages = lmStores[bridge.store];
         // Options come first, then `--` and the operands: the page is the last one.
         const argv = a.argv as string[], page = argv[argv.length - 1];
         // Web Crypto settles outside fake timers, so the test computes the revisions it needs first (`lmRevision`).
@@ -114,6 +120,11 @@ const { useApp } = await import("../store");
 const docs = await import("./store");
 const { retargetAll, startDocumentSync } = await import("./sync");
 const { draftKeyOf } = await import("./keys");
+const { setBridgeGeneration } = await import("../lib/lm");
+/** Settings pointed the bridge at another store (Rust's `reconfigure`). */
+const switchBridge = (to: "a" | "b") => { bridge.store = to; bridge.generation++; };
+/** `connect` reported the store the bridge now serves (App's effect). */
+const connected = () => { setBridgeGeneration(bridge.generation); docs.setLmStore(bridge.store === "a" ? "C:/stores/a" : "C:/stores/b"); };
 const { forgetMoved } = await import("../lib/drafts");
 type FileRef = { notebook: string; path: string };
 
@@ -134,7 +145,8 @@ describe("documents store", () => {
     // The drafts module caches the drafts this run wrote; in the app the cache and the store always agree, so it forgets
     // them when the fake store is cleared.
     for (const d of drafts.values()) forgetMoved((d as { target: FileRef }).target.notebook, (d as { target: FileRef }).target.path);
-    files.clear(); lmPages.clear(); drafts.clear(); gates.clear(); calls.length = 0;
+    files.clear(); lmPages.clear(); lmStores.b.clear(); drafts.clear(); gates.clear(); calls.length = 0;
+    bridge.store = "a"; bridge.generation = 1; setBridgeGeneration(1);
     flags.failDrafts = false; flags.readError.clear(); flags.deleteError = ""; flags.convertible.clear(); flags.legacy.clear(); flags.locked.clear(); flags.draftGetError = false; converted.length = 0;
     files.set("A.md", "one");
     useWorkspace.setState({ panes: [{ id: "p0", tabs: [], active: null }], focused: "p0", dirty: {}, reveal: null });
@@ -960,6 +972,7 @@ describe("documents store", () => {
 
   it("D1 (review of 32fee20): a Living Memory page saves only into the store it was read from, and its draft stays with it", async () => {
     lmPages.set("A.md", "one\n");
+    lmStores.b.set("A.md", "one\n");
     await lmRevision("one\n", "two\n");
     const lm = { notebook: "lm:demo:plans", path: "A.md" }, k = docs.keyOf(lm);
     ws().openTab({ kind: "file", file: lm });
@@ -971,17 +984,125 @@ describe("documents store", () => {
     expect(lmPages.get("A.md")).toBe("one\n");
     // Hivemind connects to another store holding a page of the same name and bytes: the tab shows that page, read-only,
     // with the edits beside it, and the draft names the store they belong to.
-    docs.setLmStore("C:/stores/b");
+    switchBridge("b");
+    connected();
     await until(() => docs.useDocuments.getState().docs[k]?.status === "readOnly");
     expect(docs.useDocuments.getState().docs[k].kept?.text).toBe("two\n");
     expect(await docs.save(k)).toMatchObject({ status: "readOnly" });
-    expect(lmPages.get("A.md")).toBe("one\n");
+    expect([lmPages.get("A.md"), lmStores.b.get("A.md")]).toEqual(["one\n", "one\n"]);
     expect(drafts.get(await draftKeyOf(k))).toMatchObject({ store: "C:/stores/a", mine: "two\n" });
-    // Back in its own store the page takes the edits again and saves them there.
+    // Back in its own store (written another way) the page takes the edits again and saves them there.
+    switchBridge("a");
+    setBridgeGeneration(bridge.generation);
     docs.setLmStore("C:\\Stores\\A\\");
     await until(() => docs.useDocuments.getState().docs[k]?.status === "dirty");
     expect((await docs.save(k))?.status).toBe("clean");
-    expect(lmPages.get("A.md")).toBe("two\n");
+    expect([lmPages.get("A.md"), lmStores.b.get("A.md")]).toEqual(["two\n", "one\n"]);
+  });
+
+  describe("Codex re-review of 75ce884", () => {
+    const lm = { notebook: "lm:demo:plans", path: "A.md" }, k = docs.keyOf(lm);
+    const page = () => docs.useDocuments.getState().docs[k];
+    async function opened(a: string, b: string) {
+      lmPages.set("A.md", a);
+      lmStores.b.set("A.md", b);
+      await lmRevision(a, b, "two\n");
+      ws().openTab({ kind: "file", file: lm });
+      await docs.open(lm);
+    }
+
+    it("R2-D1: a save held at the bridge while Settings switch stores is refused, so neither store's page changes", async () => {
+      await opened("one\n", "one\n");
+      docs.edit(k, "two\n");
+      const release = gate("lm_body undefined");
+      const saving = docs.save(k);
+      docs.pauseLmStore();
+      switchBridge("b");
+      release();
+      expect(await saving).toMatchObject({ status: "dirty", text: "two\n" });
+      expect([lmPages.get("A.md"), lmStores.b.get("A.md")]).toEqual(["one\n", "one\n"]);
+      connected();
+      await until(() => page()?.status === "readOnly");
+      expect(page().kept?.text).toBe("two\n");
+      expect(drafts.get(await draftKeyOf(k))).toMatchObject({ store: "C:/stores/a", mine: "two\n" });
+    });
+
+    it("R2-D2: edits whose draft could not be written stay on screen when Hivemind switches stores", async () => {
+      await opened("one\n", "other\n");
+      // Text no draft of this page ever held: the store module remembers what earlier tests kept.
+      flags.failDrafts = true;
+      docs.edit(k, "kept nowhere\n");
+      docs.pauseLmStore();
+      switchBridge("b");
+      connected();
+      await until(() => !!page()?.draftError);
+      await new Promise((r) => setTimeout(r, 10));
+      expect(page()).toMatchObject({ status: "dirty", text: "kept nowhere\n" });
+      // Back on their store they save there.
+      switchBridge("a");
+      connected();
+      expect((await docs.save(k))?.status).toBe("clean");
+      expect([lmPages.get("A.md"), lmStores.b.get("A.md")]).toEqual(["kept nowhere\n", "other\n"]);
+    });
+
+    it("R2-D3: a page held by a move, or still loading, when Hivemind switches stores follows the switch afterwards", async () => {
+      await opened("one\n", "other\n");
+      const end = await docs.hold(lm.notebook, "A.md", "move");
+      docs.pauseLmStore();
+      switchBridge("b");
+      connected();
+      expect(page().text).toBe("one\n");
+      end();
+      await until(() => page()?.status === "clean" && page().text === "other\n");
+      // A load sent before the switch is refused at the bridge; the page then loads from the store now connected.
+      ws().closeTab("p0", ws().panes[0].tabs[0].id);
+      const release = gate("lm undefined");
+      ws().openTab({ kind: "file", file: lm });
+      const loading = docs.open(lm);
+      docs.pauseLmStore();
+      switchBridge("a");
+      connected();
+      release();
+      await loading;
+      await until(() => page()?.status === "clean" && page().text === "one\n");
+    });
+
+    it("R2-D7: deleting a page in one store leaves the draft another store keeps for its page of the same name", async () => {
+      await opened("one\n", "one\n");
+      docs.edit(k, "two\n");
+      await docs.flushDraft(k);
+      switchBridge("b");
+      connected();
+      await until(() => page()?.status === "readOnly");
+      docs.discard(k);
+      await new Promise((r) => setTimeout(r, 10));
+      expect(drafts.get(await draftKeyOf(k))).toMatchObject({ store: "C:/stores/a", mine: "two\n" });
+    });
+
+    it("R2-U1: discarding another store's draft from the page lets it be edited here", async () => {
+      await opened("one\n", "other\n");
+      docs.edit(k, "two\n");
+      await docs.flushDraft(k);
+      switchBridge("b");
+      connected();
+      await until(() => page()?.status === "readOnly");
+      await docs.discardKept(k);
+      await until(() => page()?.status === "clean");
+      expect(page().text).toBe("other\n");
+      expect(drafts.has(await draftKeyOf(k))).toBe(false);
+    });
+
+    it("R2-T1: a Living Memory page reopened while its draft is still being written comes back with the edits", async () => {
+      await opened("one\n", "one\n");
+      docs.edit(k, "two\n");
+      const release = gate("draft_put undefined");
+      ws().closeTab("p0", ws().panes[0].tabs[0].id);
+      ws().openTab({ kind: "file", file: lm });
+      const reopening = docs.open(lm);
+      release();
+      await reopening;
+      expect(page()).toMatchObject({ status: "dirty", text: "two\n" });
+    });
   });
 
   it("D6 (review of 32fee20): a Living Memory page closed before its autosave saves once it is open again", async () => {

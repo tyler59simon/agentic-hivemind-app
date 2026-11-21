@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -66,17 +67,31 @@ impl Drop for Proc {
 pub struct Bridge {
     launch: Mutex<Launch>,
     proc: Mutex<Option<Proc>>,
+    /// Counts reconfigures. It changes only while `proc` is locked, and `call_at` checks it under that lock, so a request
+    /// made for one store never runs in the next (Codex re-review of 75ce884, R2-D1).
+    generation: AtomicU64,
 }
+
+/// The error of a request made before the bridge switched stores.
+pub const STORE_CHANGED: &str = "Living Memory switched to another store while this request waited, so Hivemind did not send it";
 
 impl Bridge {
     pub fn new(launch: Launch) -> Self {
-        Bridge { launch: Mutex::new(launch), proc: Mutex::new(None) }
+        Bridge { launch: Mutex::new(launch), proc: Mutex::new(None), generation: AtomicU64::new(0) }
     }
 
-    /// Point at a different interpreter/script/store; the next call starts a fresh process.
+    /// Point at a different interpreter/script/store; the next call starts a fresh process. Requests bound to the
+    /// earlier generation are refused from now on.
     pub fn reconfigure(&self, launch: Launch) {
+        let mut proc = self.proc.lock().unwrap();
         *self.launch.lock().unwrap() = launch;
-        *self.proc.lock().unwrap() = None;
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        *proc = None;
+    }
+
+    /// The current generation, which `connect` reports and the webview sends back with document requests.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
     }
 
     pub fn launch(&self) -> Launch {
@@ -170,6 +185,11 @@ impl Bridge {
     /// Run one command. Transport failures drop the process so the next call starts a new one;
     /// a failed request is never retried, because it may already have changed the store.
     pub fn call(&self, argv: &[String], stdin: Option<&str>) -> Result<Reply, String> {
+        self.call_at(None, argv, stdin)
+    }
+
+    /// `call`, refused when `generation` is given and the bridge has been reconfigured since.
+    pub fn call_at(&self, generation: Option<u64>, argv: &[String], stdin: Option<&str>) -> Result<Reply, String> {
         // Measured before the process is touched, so a request that is too large never costs a restart. Its arguments count
         // as much as its stdin (Codex review of 32fee20, B1); JSON escaping at most sextuples a byte, so a request whose
         // raw size is under an eighth of the limit is never measured.
@@ -178,6 +198,9 @@ impl Bridge {
             return Err("This request is larger than the 2 MiB Living Memory accepts".into());
         }
         let mut guard = self.proc.lock().unwrap();
+        if generation.is_some_and(|g| g != self.generation()) {
+            return Err(STORE_CHANGED.into());
+        }
         if guard.is_none() {
             let mut proc = Self::spawn(&self.launch())?;
             Self::handshake(&mut proc)?;
@@ -216,6 +239,20 @@ mod tests {
 
     fn reply(result: Value) -> Reply {
         Reply { exit_code: 0, result, error: Value::Null }
+    }
+
+    /// Codex re-review of 75ce884, R2-D1: a request made for the bridge before Settings pointed it at another store is
+    /// refused before any process is picked; one made for the current generation goes on (here to the missing script).
+    #[test]
+    fn a_request_for_an_earlier_store_is_refused() {
+        let launch = |root: &str| Launch { program: "py".into(), args: vec![], script: "no-such-living_memory.py".into(), root: Some(root.into()) };
+        let bridge = Bridge::new(launch("a"));
+        let before = bridge.generation();
+        bridge.reconfigure(launch("b"));
+        let argv = ["version".to_string()];
+        assert_eq!(bridge.call_at(Some(before), &argv, None).unwrap_err(), STORE_CHANGED);
+        assert!(bridge.call_at(Some(bridge.generation()), &argv, None).unwrap_err().contains("not installed"));
+        assert!(bridge.call(&argv, None).unwrap_err().contains("not installed"), "an unbound request is not checked");
     }
 
     #[test]

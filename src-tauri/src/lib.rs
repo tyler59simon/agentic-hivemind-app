@@ -95,6 +95,8 @@ struct ConnectInfo {
     script: String,
     /// The signed-in OS user, for the sidebar footer.
     user: Option<String>,
+    /// The bridge generation this connection is for; document requests send it back (R2-D1).
+    generation: u64,
 }
 
 /// The `term-attention` event; `kind` is null when the attention was cleared.
@@ -120,36 +122,39 @@ async fn blocking<T: Send + 'static>(work: impl FnOnce() -> Result<T, String> + 
 
 /// Run one Living Memory command (argv starts with the command) and return its reply.
 #[tauri::command]
-async fn lm(state: State<'_, AppState>, argv: Vec<String>, stdin: Option<String>) -> Result<Reply, String> {
+/// `generation`, when given, is the bridge generation `connect` reported: the request is refused if the bridge switched
+/// stores since (Codex re-review of 75ce884, R2-D1).
+async fn lm(state: State<'_, AppState>, argv: Vec<String>, stdin: Option<String>, generation: Option<u64>) -> Result<Reply, String> {
     let bridge = state.bridge.clone();
-    blocking(move || bridge.call(&argv, stdin.as_deref())).await
+    blocking(move || bridge.call_at(generation, &argv, stdin.as_deref())).await
 }
 
 /// Run a Living Memory `doc` command that carries a page body; a large body goes through a staging file (NS-2C).
 #[tauri::command]
-async fn lm_body(state: State<'_, AppState>, argv: Vec<String>, body: String) -> Result<Reply, String> {
+async fn lm_body(state: State<'_, AppState>, argv: Vec<String>, body: String, generation: Option<u64>) -> Result<Reply, String> {
     let (bridge, staging) = (state.bridge.clone(), state.lm_staging.clone());
-    blocking(move || lmdoc::call_with_body(&bridge, &staging, &argv, &body)).await
+    blocking(move || lmdoc::call_with_body(&bridge, generation, &staging, &argv, &body)).await
 }
 
 /// Move a Living Memory page or section with the drafts of its pages (NS-2C).
 #[tauri::command]
-async fn lmdoc_move(state: State<'_, AppState>, notebook: String, from: String, to: String) -> Result<(), String> {
+async fn lmdoc_move(state: State<'_, AppState>, notebook: String, from: String, to: String, generation: Option<u64>) -> Result<(), String> {
     let (bridge, drafts) = (state.bridge.clone(), state.drafts_dir.clone());
-    blocking(move || lmdoc::move_with_drafts(&bridge, &drafts, &notebook, &from, &to)).await
+    let store = state.store_root.lock().unwrap().clone();
+    blocking(move || lmdoc::move_with_drafts(&bridge, generation, &drafts, store.as_deref(), &notebook, &from, &to)).await
 }
 
 /// Ask for a file with the native dialog and attach it to a Living Memory notebook; returns its path in the notebook,
 /// or None when the user cancelled (NS-2C).
 #[tauri::command]
-async fn lmdoc_attach(app: AppHandle, notebook: String) -> Result<Option<String>, String> {
+async fn lmdoc_attach(app: AppHandle, notebook: String, generation: Option<u64>) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
     let handle = app.clone();
     blocking(move || {
         let Some(picked) = handle.dialog().file().blocking_pick_file() else { return Ok(None) };
         let path = picked.into_path().map_err(|e| e.to_string())?;
         let state = handle.state::<AppState>();
-        lmdoc::attach(&state.bridge, &notebook, &path).map(Some)
+        lmdoc::attach(&state.bridge, generation, &notebook, &path).map(Some)
     })
     .await
 }
@@ -162,6 +167,7 @@ async fn connect(app: AppHandle, state: State<'_, AppState>) -> Result<ConnectIn
     if launch != state.bridge.launch() {
         state.bridge.reconfigure(launch);
     }
+    let generation = state.bridge.generation();
     let bridge = state.bridge.clone();
     let (version, doctor) = blocking(move || {
         let version = bridge.call(&["version".into()], None)?;
@@ -189,7 +195,7 @@ async fn connect(app: AppHandle, state: State<'_, AppState>) -> Result<ConnectIn
     *state.store_root.lock().unwrap() = Some(PathBuf::from(&root));
     let launch = state.bridge.launch();
     let user = std::env::var("USERNAME").or_else(|_| std::env::var("USER")).ok().filter(|name| !name.is_empty());
-    Ok(ConnectInfo { version: version.result, root, program: launch.program, script: launch.script.display().to_string(), user })
+    Ok(ConnectInfo { version: version.result, root, program: launch.program, script: launch.script.display().to_string(), user, generation })
 }
 
 /// Recent commits and pull requests for a project's repos (paths are looked up in Living Memory).
@@ -1864,6 +1870,7 @@ pub fn run() {
                 lm_staging: app.path().app_data_dir()?.join("lm-staging"),
             });
             lmdoc::clear_staging(&app.state::<AppState>().lm_staging);
+            lmdoc::clear_open_copies();
             studio::rewatch(app.handle());
             conductor::run(report_queue, vec![session_notices(app.handle().clone()), learning_reports(app.handle().clone()), orchestration_reports(app.handle().clone()), executive_reports(app.handle().clone())]);
             {

@@ -37,7 +37,9 @@ export const docsEnabled = () => docsOn(useConnection.getState());
 
 /** Agent reach for folder notebooks needs `doc folder` (`docs.folder_policy`, NS-2B); notebook pages alone (NS-2A) have
  *  no such command (Codex review of 32fee20, C1). */
-const folderPolicyOn = (s: { commands: string[]; capabilities?: Capabilities }) => docsOn(s) && !!s.capabilities?.docs?.folder_policy;
+// Version 2: `doc folder set` keeps the fields it is not given. Hivemind registers a folder and changes one field at a
+// time that way, which version 1 (`true`) refuses (Codex re-review of 75ce884, R2-C2).
+const folderPolicyOn = (s: { commands: string[]; capabilities?: Capabilities }) => docsOn(s) && Number(s.capabilities?.docs?.folder_policy ?? 0) >= 2;
 export const useFolderPolicyEnabled = () => useConnection(folderPolicyOn);
 export const folderPolicyEnabled = () => folderPolicyOn(useConnection.getState());
 

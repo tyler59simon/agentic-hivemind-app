@@ -13,16 +13,26 @@ import { domainForFolder, forgetFolder, REACH_TEXT, setFolderReach, stricter, ty
 
 interface Reach { visibility: Visibility; private: boolean }
 
-/** Agent reach and Private, for both notebook kinds (NS-2C). */
-function ReachFields({ value, onChange }: { value: Reach; onChange: (v: Reach) => void }) {
+/** The fields the user changed that differ from `current` (what Living Memory or the sidecar says now). Each field is
+ *  recorded as it is touched, so one refreshed while the dialog is open is never sent back as it was (Codex re-review of
+ *  75ce884, R2-P1). */
+export function reachChange(current: Reach, edits: Partial<Reach>): Partial<Reach> {
+  const change: Partial<Reach> = {};
+  if (edits.visibility !== undefined && edits.visibility !== current.visibility) change.visibility = edits.visibility;
+  if (edits.private !== undefined && edits.private !== current.private) change.private = edits.private;
+  return change;
+}
+
+/** Agent reach and Private, for both notebook kinds (NS-2C). `onChange` gets only the field the user touched (R2-P1). */
+export function ReachFields({ value, onChange }: { value: Reach; onChange: (v: Partial<Reach>) => void }) {
   return (
     <fieldset className="field reach">
       <legend>Agent reach</legend>
       {(["hidden", "searchable", "injectable"] as const).map((v) => (
-        <label key={v} className="check"><input type="radio" name="reach" checked={value.visibility === v} onChange={() => onChange({ ...value, visibility: v })} />
+        <label key={v} className="check"><input type="radio" name="reach" checked={value.visibility === v} onChange={() => onChange({ visibility: v })} />
           <span><b>{REACH_TEXT[v].label}.</b> {REACH_TEXT[v].text}</span></label>
       ))}
-      <label className="check"><input type="checkbox" checked={value.private} onChange={(e) => onChange({ ...value, private: e.target.checked })} />
+      <label className="check"><input type="checkbox" checked={value.private} onChange={(e) => onChange({ private: e.target.checked })} />
         <span><b>Private.</b> Hivemind's AI features and every Living Memory search and prompt leave this notebook out. It is not file
           protection: an agent whose working folder holds the files can still read them with its own tools.</span></label>
     </fieldset>
@@ -52,14 +62,14 @@ export function NotebookSettings({ notebook, onClose }: { notebook: Notebook; on
   const fallback = useApp((s) => s.domain);
   const [title, setTitle] = useState(notebook.title);
   const [form, setForm] = useState<NotebookMeta | null>(null);
-  const [reach, setReach] = useState<Reach | null>(null);
+  const [edits, setEdits] = useState<Partial<Reach>>({});
   const [domain, setDomain] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState(false);
   const values = form ?? meta.data ?? {};
   // The stricter of Hivemind's copy and the sidecar, as Living Memory judges it.
   const current = stricter(notebook, (meta.data ?? {}) as Partial<Reach>);
-  const shown = reach ?? current;
+  const shown = { ...current, ...edits };
   const memoryDomains = known.data?.domains ?? [];
   const chosenDomain = domain ?? notebook.domain ?? domainForFolder(notebook.path, memoryDomains, fallback) ?? "";
   const field = (key: "attachments" | "templates" | "inbox", label: string, hint: string) => (
@@ -85,9 +95,7 @@ export function NotebookSettings({ notebook, onClose }: { notebook: Notebook; on
       // Only what the user changed goes to Living Memory, so a privacy decision made elsewhere while this dialog was open
       // stays (Codex review of 32fee20, P3). A folder never registered keeps what Living Memory holds for it, or becomes
       // searchable.
-      const change: ReachChange = {};
-      if (reach && reach.visibility !== current.visibility) change.visibility = reach.visibility;
-      if (reach && reach.private !== current.private) change.private = reach.private;
+      const change: ReachChange = reachChange(current, edits);
       if (docs && (Object.keys(change).length || domain !== null || unregistered(notebook))) {
         if (!chosenDomain) throw new Error("Pick the memory domain agents find this notebook from.");
         await setFolderReach(notebook, chosenDomain, change);
@@ -131,7 +139,7 @@ export function NotebookSettings({ notebook, onClose }: { notebook: Notebook; on
         <p className="muted small">These are kept in <code>.hivemind/notebook.json</code> inside the notebook, so they travel with the folder.</p>
         {docs ? (
           <>
-            <ReachFields value={shown} onChange={setReach} />
+            <ReachFields value={shown} onChange={(e) => setEdits((was) => ({ ...was, ...e }))} />
             <label className="field">
               <span>Agents find it from the domain</span>
               <select value={chosenDomain} onChange={(e) => setDomain(e.target.value)}>
@@ -164,13 +172,12 @@ export function NotebookSettings({ notebook, onClose }: { notebook: Notebook; on
 export function LmNotebookSettings({ nb, onClose }: { nb: DocNotebook; onClose: () => void }) {
   const client = useQueryClient();
   const [title, setTitle] = useState(nb.title);
-  const [reach, setReach] = useState<Reach>({ visibility: nb.visibility, private: nb.private });
+  const [edits, setEdits] = useState<Partial<Reach>>({});
   const [busy, setBusy] = useState(false);
   const save = async () => {
     const patch: { title?: string; visibility?: Visibility; private?: boolean } = {};
     if (title.trim() && title.trim() !== nb.title) patch.title = title.trim();
-    if (reach.visibility !== nb.visibility) patch.visibility = reach.visibility;
-    if (reach.private !== nb.private) patch.private = reach.private;
+    Object.assign(patch, reachChange({ visibility: nb.visibility, private: nb.private }, edits));
     if (!Object.keys(patch).length) { onClose(); return; }
     setBusy(true);
     try {
@@ -187,7 +194,7 @@ export function LmNotebookSettings({ nb, onClose }: { nb: DocNotebook; onClose: 
       <div className="form">
         <label className="field"><span>Name</span><input value={title} onChange={(e) => setTitle(e.target.value)} /></label>
         <p className="muted small">Living Memory notebook <code>{nb.notebook}</code> in <code>{nb.domain}</code>: {nb.pages} pages, {nb.assets} attachments.</p>
-        <ReachFields value={reach} onChange={setReach} />
+        <ReachFields value={{ visibility: nb.visibility, private: nb.private, ...edits }} onChange={(e) => setEdits((was) => ({ ...was, ...e }))} />
       </div>
       <div className="actions">
         <span className="fill" />

@@ -31,8 +31,15 @@ let call: Invoke = invoke as Invoke;
 /** Tests swap the transport. */
 export function setTransport(fn: Invoke) { call = fn; }
 
+/** The bridge generation `connect` reported. Every `doc` request carries it, and Rust refuses one made before the bridge
+ *  switched stores, checked under the lock that picks the process (Codex re-review of 75ce884, R2-D1). */
+let generation: number | undefined;
+export function setBridgeGeneration(next: number | undefined) { generation = next; }
+export const bridgeGeneration = () => generation;
+const bound = (argv: string[]) => (argv[0] === "doc" && generation !== undefined ? { generation } : {});
+
 export async function run<T>(argv: string[], stdin?: string): Promise<T> {
-  const reply = (await call("lm", { argv, stdin: stdin ?? null })) as Reply<T>;
+  const reply = (await call("lm", { argv, stdin: stdin ?? null, ...bound(argv) })) as Reply<T>;
   if (reply.exit_code !== 0) {
     const error = reply.error ?? { code: "invalid", message: `Exit code ${reply.exit_code}` };
     throw new LmError(error.code, error.message, reply.exit_code);
@@ -47,7 +54,7 @@ export interface Capabilities {
   direct_writes?: number; history?: number; restore?: number; pin?: number; rule?: number; maintenance?: { version: number; actions: string[] };
   wiki_agent?: { version: number }; note_types?: number;
   /** Notebook pages (NS-2A, NS-2B). */
-  docs?: { version: number; max_page_bytes: number; max_asset_bytes: number; notebook_only_domains?: boolean; search?: boolean; folder_policy?: boolean; accept_edited?: boolean };
+  docs?: { version: number; max_page_bytes: number; max_asset_bytes: number; notebook_only_domains?: boolean; search?: boolean; folder_policy?: boolean | number; accept_edited?: boolean };
 }
 
 export interface ConnectInfo {
@@ -57,6 +64,8 @@ export interface ConnectInfo {
   script: string;
   /** The signed-in OS user, when the system reports one. */
   user?: string | null;
+  /** The bridge generation this connection is for (R2-D1). */
+  generation?: number;
 }
 export interface Settings {
   python: string | null; script: string | null; root: string | null;
@@ -630,7 +639,7 @@ export interface DocHistoryRow { operation_id: string; kind: string; state: stri
 const PRIVATE = "--include-private";
 /** A command that carries a page body: Rust sends it as stdin, or through a staging file when it is large (NS-2C). */
 async function runBody<T>(argv: string[], body: string): Promise<T> {
-  const reply = (await call("lm_body", { argv, body })) as Reply<T>;
+  const reply = (await call("lm_body", { argv, body, ...bound(argv) })) as Reply<T>;
   if (reply.exit_code !== 0) {
     const error = reply.error ?? { code: "invalid", message: `Exit code ${reply.exit_code}` };
     throw new LmError(error.code, error.message, reply.exit_code);
@@ -640,9 +649,10 @@ async function runBody<T>(argv: string[], body: string): Promise<T> {
 
 /** A `doc` command: options first, then `--` and the operands, so a page named `-Draft.md` is never read as an option
  *  (Codex review of 32fee20, C4). Free text goes as `--option=value` for the same reason. Rust's `lm_body` puts
- *  `--body-file` before the `--`. */
+ *  `--body-file` before the `--`. A command without operands gets no `--`: argparse refuses one where the command takes
+ *  no positional arguments, as `doc notebooks` does (Codex re-review of 75ce884, R2-C1). */
 function doc(action: string[], operands: string[], options: string[] = [], how: { viewer?: boolean; priv?: boolean } = {}) {
-  return ["doc", ...action, ...options, ...(how.priv === false ? [] : [PRIVATE]), ...(how.viewer ? ["--actor", "viewer"] : []), "--", ...operands];
+  return ["doc", ...action, ...options, ...(how.priv === false ? [] : [PRIVATE]), ...(how.viewer ? ["--actor", "viewer"] : []), ...(operands.length ? ["--", ...operands] : [])];
 }
 
 /** A notebook Living Memory cannot read (its `notebook.json` is damaged): `error` says why. */

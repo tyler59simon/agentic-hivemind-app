@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { QueryClient } from "@tanstack/react-query";
-import { docAcceptEdited, docNotebooks, docReject, domains, setTransport, type DocProposal, type DomainInfo, type Invoke } from "../../lib/lm";
+import { docAcceptEdited, docNotebooks, docReject, domains, setBridgeGeneration, setTransport, type DocProposal, type DomainInfo, type Invoke } from "../../lib/lm";
 import { folderPolicyEnabled, useConnection } from "../../lib/connection";
 import type { Notebook } from "../../lib/notebooks";
 import { pageText, parseLm } from "../../documents/adapters/lmdoc";
@@ -122,6 +122,36 @@ describe("proposals", () => {
   });
 });
 
+describe("Codex re-review of 75ce884", () => {
+  it("R2-C1: a doc command without operands has no `--`, which argparse would refuse", async () => {
+    const seen = answer(() => ({ notebooks: [] }));
+    await docNotebooks();
+    expect(seen[0]).toEqual(["doc", "notebooks", "--all-domains", "--include-hidden", "--include-private", "--actor", "viewer"]);
+  });
+
+  it("R2-C2: folder reach needs version 2 of the folder policy, which keeps the fields it is not given", () => {
+    useConnection.setState({ commands: ["doc"], capabilities: { docs: { version: 1, max_page_bytes: 1, max_asset_bytes: 1, folder_policy: true } } });
+    expect(folderPolicyEnabled()).toBe(false);
+    useConnection.setState({ commands: ["doc"], capabilities: { docs: { version: 1, max_page_bytes: 1, max_asset_bytes: 1, folder_policy: 2 } } });
+    expect(folderPolicyEnabled()).toBe(true);
+    useConnection.setState({ commands: [], capabilities: undefined });
+  });
+
+  it("R2-D1: doc requests carry the bridge generation; other commands do not", async () => {
+    const args: Record<string, unknown>[] = [];
+    setTransport(async (_cmd, a) => { args.push(a); return { exit_code: 0, result: { notebooks: [], domains: [] }, error: null }; });
+    setBridgeGeneration(7);
+    try {
+      await docNotebooks();
+      await domains();
+    } finally {
+      setBridgeGeneration(undefined);
+    }
+    expect(args[0].generation).toBe(7);
+    expect(args[1]).not.toHaveProperty("generation");
+  });
+});
+
 describe("Codex review of 32fee20", () => {
   const nb: Notebook = { id: "nb-1", path: "C:\\Users\\me\\sandbox\\notes", title: "Notes", added: "" };
   const invoked = () => vi.mocked(invoke).mock.calls.map(([cmd, args]) => [cmd, args] as [string, Record<string, unknown>]);
@@ -152,7 +182,7 @@ describe("Codex review of 32fee20", () => {
   it("C1: folder reach needs Living Memory's folder policy, not only notebook pages", () => {
     useConnection.setState({ commands: ["doc"], capabilities: { docs: { version: 1, max_page_bytes: 1, max_asset_bytes: 1 } } });
     expect(folderPolicyEnabled()).toBe(false);
-    useConnection.setState({ commands: ["doc"], capabilities: { docs: { version: 1, max_page_bytes: 1, max_asset_bytes: 1, folder_policy: true } } });
+    useConnection.setState({ commands: ["doc"], capabilities: { docs: { version: 1, max_page_bytes: 1, max_asset_bytes: 1, folder_policy: 2 } } });
     expect(folderPolicyEnabled()).toBe(true);
     useConnection.setState({ commands: [], capabilities: undefined });
   });

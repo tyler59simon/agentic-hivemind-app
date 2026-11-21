@@ -9,7 +9,7 @@ import { Palette } from "./features/palette/Palette";
 import { BeforeUninstall } from "./features/settings/BeforeUninstall";
 import { SettingsForm } from "./features/settings/SettingsForm";
 import { agentSessions } from "./lib/agent";
-import { captureStatus, connect, domains } from "./lib/lm";
+import { captureStatus, connect, domains, setBridgeGeneration } from "./lib/lm";
 import { prefs } from "./lib/prefs";
 import { appQuit, notifyTray, quitAck, termList } from "./lib/term";
 import { useAttentionEvents } from "./features/terminal/attention";
@@ -205,7 +205,10 @@ export default function App() {
   useEffect(() => {
     if (!link.data) return;
     useConnection.getState().set(link.data.version);
-    setLmStore(link.data.root); // Living Memory pages belong to the store they were read from (Codex review of 32fee20, D1)
+    // Living Memory pages belong to the store they were read from (Codex review of 32fee20, D1), and their requests to the
+    // bridge generation that serves it (re-review of 75ce884, R2-D1).
+    setBridgeGeneration(link.data.generation);
+    setLmStore(link.data.root);
   }, [link.data]);
 
   // Start on the largest bound domain once domains are known.

@@ -62,17 +62,17 @@ fn with_options(argv: &[String], extra: &[String]) -> Vec<String> {
 
 /// Run a `doc` command that carries a page body: as the request's stdin, or through `staging/<uuid>.md` and
 /// `--body-file` when it is large. The staging file is removed after the reply, whatever it says.
-pub fn call_with_body(bridge: &Bridge, staging: &Path, argv: &[String], body: &str) -> Result<Reply, String> {
+pub fn call_with_body(bridge: &Bridge, generation: Option<u64>, staging: &Path, argv: &[String], body: &str) -> Result<Reply, String> {
     if argv.first().map(String::as_str) != Some("doc") {
         return Err("Only doc commands carry a page body".into());
     }
     if !needs_staging(body) {
-        return bridge.call(argv, Some(body));
+        return bridge.call_at(generation, argv, Some(body));
     }
     std::fs::create_dir_all(staging).map_err(|e| format!("Could not create {}: {e}", staging.display()))?;
     let file = Staged(staging.join(format!("{}.md", uuid::Uuid::new_v4().simple())));
     std::fs::write(&file.0, body.as_bytes()).map_err(|e| format!("Could not stage the page for Living Memory: {e}"))?;
-    bridge.call(&with_options(argv, &["--body-file".into(), file.0.display().to_string()]), None)
+    bridge.call_at(generation, &with_options(argv, &["--body-file".into(), file.0.display().to_string()]), None)
 }
 
 /// Remove staging files an earlier run left behind (it stopped between writing one and the reply).
@@ -107,28 +107,37 @@ fn settle_move(outcome: Result<Reply, String>, from: &str, to: &str, list: impl 
         Ok(reply) => return Moved::No(failure(&reply)),
         Err(e) => e,
     };
+    // `list` gives files only: a section's folder can stay behind, empty, after its pages moved (Codex re-review of
+    // 75ce884, R2-D4). Files on both sides, or on neither, settle nothing.
     let under = |paths: &[String], at: &str| paths.iter().any(|p| p == at || p.starts_with(&format!("{at}/")));
     match list() {
         Ok(paths) if under(&paths, to) && !under(&paths, from) => Moved::Yes,
-        Ok(paths) if under(&paths, from) => Moved::No(lost),
+        Ok(paths) if under(&paths, from) && !under(&paths, to) => Moved::No(lost),
         Ok(_) | Err(_) => Moved::Unknown(lost),
     }
 }
 
-/// Every path a notebook lists (pages and sections).
-fn listed(bridge: &Bridge, domain: &str, notebook: &str) -> Result<Vec<String>, String> {
-    let reply = bridge.call(&doc_argv("list", &["--include-private"], &[domain, notebook]), None)?;
+/// The paths of a notebook's files (pages and attachments), without its folders.
+fn listed(bridge: &Bridge, generation: Option<u64>, domain: &str, notebook: &str) -> Result<Vec<String>, String> {
+    let reply = bridge.call_at(generation, &doc_argv("list", &["--include-private"], &[domain, notebook]), None)?;
     if reply.exit_code != 0 {
         return Err(failure(&reply));
     }
-    let entries = reply.result.get("entries").and_then(|e| e.as_array()).ok_or("Living Memory listed no entries")?;
-    Ok(entries.iter().filter_map(|e| e.get("path").and_then(|p| p.as_str()).map(str::to_string)).collect())
+    file_paths(&reply.result)
+}
+
+/// The paths of the files in a `doc list` result, its folders left out.
+fn file_paths(result: &serde_json::Value) -> Result<Vec<String>, String> {
+    let entries = result.get("entries").and_then(|e| e.as_array()).ok_or("Living Memory listed no entries")?;
+    let file = |e: &&serde_json::Value| e.get("kind").and_then(|k| k.as_str()) != Some("folder");
+    Ok(entries.iter().filter(file).filter_map(|e| e.get("path").and_then(|p| p.as_str()).map(str::to_string)).collect())
 }
 
 /// Move a page or section, and the drafts of its pages with it: copied to their new keys first, the old ones removed
 /// once Living Memory moved the pages, and put back when it refused (as `studio::rename_in` does for folders). When
 /// the reply is lost and the store cannot say where the pages are, both copies stay, and the error says so.
-pub fn move_with_drafts(bridge: &Bridge, drafts_dir: &Path, container: &str, from: &str, to: &str) -> Result<(), String> {
+/// `store` is the store Hivemind is connected to: drafts written in another store stay where they are (R2-D7).
+pub fn move_with_drafts(bridge: &Bridge, generation: Option<u64>, drafts_dir: &Path, store: Option<&Path>, container: &str, from: &str, to: &str) -> Result<(), String> {
     let (domain, notebook) = parsed(container)?;
     if from == to {
         return Ok(());
@@ -136,13 +145,13 @@ pub fn move_with_drafts(bridge: &Bridge, drafts_dir: &Path, container: &str, fro
     if to.starts_with(&format!("{from}/")) {
         return Err("A section cannot move into itself".into());
     }
-    if crate::drafts::any_under(drafts_dir, container, to) {
+    if crate::drafts::any_under(drafts_dir, store, container, to) {
         return Err(format!("{to} has unsaved edits kept as a draft; open it and save or discard them first"));
     }
-    let moves = crate::drafts::moving(drafts_dir, container, from, to);
+    let moves = crate::drafts::moving(drafts_dir, store, container, from, to);
     crate::drafts::copy_moved(drafts_dir, &moves)?;
-    let outcome = bridge.call(&doc_argv("move", &["--include-private"], &[&domain, &notebook, from, to]), None);
-    match settle_move(outcome, from, to, || listed(bridge, &domain, &notebook)) {
+    let outcome = bridge.call_at(generation, &doc_argv("move", &["--include-private"], &[&domain, &notebook, from, to]), None);
+    match settle_move(outcome, from, to, || listed(bridge, generation, &domain, &notebook)) {
         Moved::Yes => {
             crate::drafts::finish_moved(drafts_dir, &moves);
             Ok(())
@@ -156,9 +165,9 @@ pub fn move_with_drafts(bridge: &Bridge, drafts_dir: &Path, container: &str, fro
 }
 
 /// Copy `file` into the notebook's `assets/`; returns the attachment's path in the notebook.
-pub fn attach(bridge: &Bridge, container: &str, file: &Path) -> Result<String, String> {
+pub fn attach(bridge: &Bridge, generation: Option<u64>, container: &str, file: &Path) -> Result<String, String> {
     let (domain, notebook) = parsed(container)?;
-    let reply = bridge.call(&doc_argv("attach", &["--from-file", &file.display().to_string(), "--include-private"], &[&domain, &notebook]), None)?;
+    let reply = bridge.call_at(generation, &doc_argv("attach", &["--from-file", &file.display().to_string(), "--include-private"], &[&domain, &notebook]), None)?;
     if reply.exit_code != 0 {
         return Err(failure(&reply));
     }
@@ -172,7 +181,13 @@ pub fn folder(store: &Path, container: &str) -> Result<PathBuf, String> {
     let (domain, notebook) = parsed(container)?;
     let store = std::fs::canonicalize(store).map_err(|e| format!("The Living Memory store {} is missing ({e})", store.display()))?;
     let expected = store.join("domains").join(&domain).join("notebooks").join(&notebook);
+    // A link below the store is refused before anything is compared: in a case-sensitive folder, a link named `plans`
+    // could lead to a sibling `PLANS` that the comparison below cannot tell apart (Codex re-review of 75ce884, R2-P3).
+    let linked = expected.ancestors().take_while(|p| *p != store.as_path()).any(crate::files::contain::is_link);
     let folder = std::fs::canonicalize(&expected).map_err(|_| format!("The notebook {notebook} of {domain} is missing"))?;
+    if linked {
+        return Err(format!("The notebook {notebook} of {domain} leads somewhere else, so Hivemind does not show its attachments"));
+    }
     // Compared without letter case: Windows names a folder in any case, and only a link changes where it leads.
     let same = |a: &Path, b: &Path| a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase();
     if !same(&folder, &expected) {
@@ -181,9 +196,10 @@ pub fn folder(store: &Path, container: &str) -> Result<PathBuf, String> {
     Ok(folder)
 }
 
-/// Kinds of attachment Hivemind opens in another program: documents, pictures and media, never anything that runs.
+/// Kinds of attachment Hivemind opens in another program: documents, pictures and media, never anything that runs. SVG
+/// is left out: it can hold script, and outside Hivemind's preview nothing restricts it (Codex re-review of 75ce884, R2-P4).
 const OPENABLE: &[&str] = &[
-    "pdf", "png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "svg", "txt", "csv", "md", "json", "docx", "xlsx", "pptx", "odt", "ods",
+    "pdf", "png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "txt", "csv", "md", "json", "docx", "xlsx", "pptx", "odt", "ods",
     "odp", "rtf", "mp3", "wav", "ogg", "m4a", "mp4", "webm", "mov",
 ];
 
@@ -212,7 +228,7 @@ pub fn copy_to_open(full: &Path) -> Result<PathBuf, String> {
         Some((hash, rest)) if hash.len() == 8 && hash.chars().all(|c| c.is_ascii_hexdigit()) && !rest.is_empty() => rest.to_string(),
         _ => name,
     };
-    let dir = std::env::temp_dir().join("hivemind-attachments").join(uuid::Uuid::new_v4().simple().to_string());
+    let dir = open_copies().join(uuid::Uuid::new_v4().simple().to_string());
     std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
     let copy = dir.join(shown);
     std::fs::copy(full, &copy).map_err(|e| format!("Could not copy the attachment: {e}"))?;
@@ -220,6 +236,44 @@ pub fn copy_to_open(full: &Path) -> Result<PathBuf, String> {
     perms.set_readonly(true);
     std::fs::set_permissions(&copy, perms).ok();
     Ok(copy)
+}
+
+/// Where `copy_to_open` puts its copies.
+fn open_copies() -> PathBuf {
+    std::env::temp_dir().join("hivemind-attachments")
+}
+
+/// Remove an opened copy and its folder (they are read-only, so the flag is cleared first).
+pub fn remove_copy(copy: &Path) {
+    if let Ok(meta) = std::fs::metadata(copy) {
+        let mut perms = meta.permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        std::fs::set_permissions(copy, perms).ok();
+    }
+    std::fs::remove_file(copy).ok();
+    if let Some(dir) = copy.parent() {
+        std::fs::remove_dir(dir).ok();
+    }
+}
+
+/// Remove the copies an earlier session opened: an attachment of a private notebook should not stay in the temporary
+/// folder, where Living Memory's private-read rules do not reach (Codex re-review of 75ce884, R2-P2). A copy another
+/// program still holds open stays until the next start.
+pub fn clear_open_copies() {
+    clear_copies_in(&open_copies());
+}
+
+fn clear_copies_in(dir: &Path) {
+    let Ok(read) = std::fs::read_dir(dir) else { return };
+    for sub in read.flatten() {
+        if let Ok(files) = std::fs::read_dir(sub.path()) {
+            for file in files.flatten() {
+                remove_copy(&file.path());
+            }
+        }
+        std::fs::remove_dir(sub.path()).ok();
+    }
 }
 
 #[cfg(test)]
@@ -288,6 +342,43 @@ mod tests {
         assert_eq!(settle_move(lost(), "A.md", "B.md", list(&["C.md"])), Moved::Unknown("Living Memory stopped".into()));
     }
 
+    /// Codex re-review of 75ce884, R2-D4: the move committed and its reply was lost before the empty source folder was
+    /// removed. `listed` gives files only, so that folder does not make the move look undone; files on both sides settle
+    /// nothing.
+    #[test]
+    fn an_empty_source_folder_does_not_undo_a_move() {
+        let lost = || Err::<Reply, String>("Living Memory stopped".into());
+        let list = |paths: &[&str]| { let v: Vec<String> = paths.iter().map(|s| s.to_string()).collect(); move || Ok(v) };
+        assert_eq!(settle_move(lost(), "S", "T/S", list(&["T/S/a.md"])), Moved::Yes);
+        assert_eq!(settle_move(lost(), "S", "T/S", list(&["S/a.md", "T/S/a.md"])), Moved::Unknown("Living Memory stopped".into()));
+        // What `doc list` gives right after such a move: the empty source folder is not a file.
+        let result = serde_json::json!({ "entries": [{ "path": "S", "kind": "folder" }, { "path": "T", "kind": "folder" }, { "path": "T/S", "kind": "folder" }, { "path": "T/S/a.md", "kind": "page" }] });
+        let files = file_paths(&result).unwrap();
+        assert_eq!(files, ["T/S/a.md"]);
+        assert_eq!(settle_move(lost(), "S", "T/S", move || Ok(files)), Moved::Yes);
+    }
+
+    /// Codex re-review of 75ce884, R2-P2: a copy left by an earlier session goes at the next start, read-only or not.
+    #[test]
+    fn opened_copies_are_cleared() {
+        let dir = std::env::temp_dir().join(format!("hm-open-{}", uuid::Uuid::new_v4().simple()));
+        let one = dir.join("a1").join("plan.pdf");
+        std::fs::create_dir_all(one.parent().unwrap()).unwrap();
+        std::fs::write(&one, "x").unwrap();
+        let mut perms = std::fs::metadata(&one).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&one, perms).unwrap();
+        clear_copies_in(&dir);
+        assert!(!one.exists() && !dir.join("a1").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Codex re-review of 75ce884, R2-P4: SVG can hold script, so it is not opened in another program.
+    #[test]
+    fn svg_attachments_are_not_opened_outside() {
+        assert!(!OPENABLE.contains(&"svg"));
+    }
+
     #[test]
     fn large_bodies_are_staged() {
         assert!(!needs_staging("short page"));
@@ -337,36 +428,36 @@ mod tests {
 
         ok(bridge.call(&argv(&["domain", "create", "jot", "--notebook-only"]), None).unwrap());
         ok(bridge.call(&argv(&["doc", "notebook", "create", "jot", "daily", "--title", "Daily"]), None).unwrap());
-        let created = ok(call_with_body(&bridge, &staging, &doc_argv("create", &["--include-private"], &["jot", "daily", "Mon.md"]), "# Monday\r\n").unwrap());
+        let created = ok(call_with_body(&bridge, None, &staging, &doc_argv("create", &["--include-private"], &["jot", "daily", "Mon.md"]), "# Monday\r\n").unwrap());
         let rev1 = created["revision"].as_str().unwrap().to_string();
         assert_eq!(read("Mon.md")["text"], "# Monday\r\n");
 
         // A body larger than the staging threshold goes through a file, which is gone after the reply.
         let big = format!("# Monday\n{}\n", "x".repeat(STAGE_OVER + 10));
         let write = doc_argv("write", &["--expected-revision", &rev1, "--include-private"], &["jot", "daily", "Mon.md"]);
-        let rev2 = ok(call_with_body(&bridge, &staging, &write, &big).unwrap())["revision"].as_str().unwrap().to_string();
+        let rev2 = ok(call_with_body(&bridge, None, &staging, &write, &big).unwrap())["revision"].as_str().unwrap().to_string();
         assert_eq!(read("Mon.md")["text"].as_str().unwrap().len(), big.len());
         assert_eq!(std::fs::read_dir(&staging).unwrap().count(), 0);
-        let stale = call_with_body(&bridge, &staging, &write, "again").unwrap();
+        let stale = call_with_body(&bridge, None, &staging, &write, "again").unwrap();
         assert_eq!((stale.exit_code, stale.error["code"].as_str()), (6, Some("stale")));
-        assert!(call_with_body(&bridge, &staging, &argv(&["list"]), "x").is_err(), "only doc commands carry a body");
+        assert!(call_with_body(&bridge, None, &staging, &argv(&["list"]), "x").is_err(), "only doc commands carry a body");
 
         // A move carries the page's draft to its new key.
         let container = "lm:jot:daily";
         crate::drafts::put(&drafts, &crate::drafts::file_key(container, "Mon.md"),
             &serde_json::json!({ "key": crate::drafts::file_key(container, "Mon.md"), "kind": "file", "target": { "notebook": container, "path": "Mon.md" }, "text": "unsaved" })).unwrap();
-        move_with_drafts(&bridge, &drafts, container, "Mon.md", "Week/Mon.md").unwrap();
+        move_with_drafts(&bridge, None, &drafts, None, container, "Mon.md", "Week/Mon.md").unwrap();
         assert_eq!(read("Week/Mon.md")["revision"], rev2.as_str());
         assert!(crate::drafts::get(&drafts, &crate::drafts::file_key(container, "Mon.md")).unwrap().is_none());
         assert_eq!(crate::drafts::get(&drafts, &crate::drafts::file_key(container, "Week/Mon.md")).unwrap().unwrap()["text"], "unsaved");
         // A move Living Memory refuses (nothing there) leaves the draft where it was.
-        assert!(move_with_drafts(&bridge, &drafts, container, "Nope.md", "Week/Nope.md").is_err());
-        assert!(move_with_drafts(&bridge, &drafts, container, "Week", "Week/Inner").is_err());
+        assert!(move_with_drafts(&bridge, None, &drafts, None, container, "Nope.md", "Week/Nope.md").is_err());
+        assert!(move_with_drafts(&bridge, None, &drafts, None, container, "Week", "Week/Inner").is_err());
 
         // An attachment lands in assets/, inside the folder the pictures grant names.
         let picked = base.join("pic.png");
         std::fs::write(&picked, b"\x89PNG\r\n\x1a\n").unwrap();
-        let asset = attach(&bridge, container, &picked).unwrap();
+        let asset = attach(&bridge, None, container, &picked).unwrap();
         assert!(asset.starts_with("assets/") && asset.ends_with("pic.png"), "{asset}");
         assert!(folder(&store, container).unwrap().join(&asset).is_file());
 
@@ -379,15 +470,30 @@ mod tests {
         assert_eq!(read("Week/Mon.md")["text"], "# Monday\nproposed\n");
 
         // A page named like an option opens, saves and moves (C4); a merge is written and settled in one step (D3).
-        let dash = ok(call_with_body(&bridge, &staging, &doc_argv("create", &["--include-private"], &["jot", "daily", "-Draft.md"]), "a\n").unwrap());
+        let dash = ok(call_with_body(&bridge, None, &staging, &doc_argv("create", &["--include-private"], &["jot", "daily", "-Draft.md"]), "a\n").unwrap());
         assert_eq!(read("-Draft.md")["text"], "a\n");
-        move_with_drafts(&bridge, &drafts, container, "-Draft.md", "-Other.md").unwrap();
+        move_with_drafts(&bridge, None, &drafts, None, container, "-Draft.md", "-Other.md").unwrap();
         let rev = dash["revision"].as_str().unwrap();
         let propose = doc_argv("propose", &["--base-revision", rev, "--body-file", body.to_str().unwrap(), "--include-private"], &["jot", "daily", "-Other.md"]);
         let proposal = ok(bridge.call(&propose, None).unwrap());
         let merged = doc_argv("accept", &["--edited", "--expected-revision", rev, "--include-private"], &[proposal["id"].as_str().unwrap()]);
-        ok(call_with_body(&bridge, &staging, &merged, "merged\n").unwrap());
+        ok(call_with_body(&bridge, None, &staging, &merged, "merged\n").unwrap());
         assert_eq!(read("-Other.md")["text"], "merged\n");
+
+        // Codex re-review of 75ce884, R2-T2: the argv the webview sends, through the real parser. `doc notebooks` takes no
+        // operands, so it has no `--` (R2-C1); a write to a page named like an option goes after `--`.
+        let rev = read("-Other.md")["revision"].as_str().unwrap().to_string();
+        let write = doc_argv("write", &["--expected-revision", &rev, "--include-private"], &["jot", "daily", "-Other.md"]);
+        ok(call_with_body(&bridge, None, &staging, &write, "saved\n").unwrap());
+        assert_eq!(read("-Other.md")["text"], "saved\n");
+        let notebooks = ok(bridge.call(&argv(&["doc", "notebooks", "--all-domains", "--include-hidden", "--include-private", "--actor", "viewer"]), None).unwrap());
+        assert!(notebooks["notebooks"].as_array().unwrap().iter().any(|n| n["notebook"] == "daily"), "{notebooks}");
+
+        // R2-D1: a request made before the bridge switched stores is refused, one made after runs.
+        let before = bridge.generation();
+        bridge.reconfigure(bridge.launch());
+        assert_eq!(bridge.call_at(Some(before), &argv(&["version"]), None).unwrap_err(), crate::bridge::STORE_CHANGED);
+        ok(bridge.call_at(Some(bridge.generation()), &argv(&["version"]), None).unwrap());
 
         drop(bridge);
         std::fs::remove_dir_all(&base).ok();
@@ -401,6 +507,30 @@ mod tests {
         assert_eq!(folder(&base.join("store"), "lm:demo:plans").unwrap(), std::fs::canonicalize(&nb).unwrap());
         assert!(folder(&base.join("store"), "lm:demo:other").is_err());
         assert!(folder(&base.join("store"), "nb-1234").is_err());
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// Codex re-review of 75ce884, R2-P3: in a case-sensitive folder, a junction `plans` to its sibling `PLANS` resolves to
+    /// a path equal to the expected one but for letter case; it is refused because it is a link. Skipped where Windows
+    /// does not let this user make a folder case-sensitive.
+    #[cfg(windows)]
+    #[test]
+    fn a_link_to_a_sibling_differing_only_in_case_is_refused() {
+        let base = std::env::temp_dir().join(format!("hm-lmdoc-{}", uuid::Uuid::new_v4().simple()));
+        let (store, notebooks) = (base.join("store"), base.join("store").join("domains").join("demo").join("notebooks"));
+        std::fs::create_dir_all(&notebooks).unwrap();
+        let sensitive = std::process::Command::new("fsutil").args(["file", "setCaseSensitiveInfo"]).arg(&notebooks).arg("enable").output();
+        if !sensitive.is_ok_and(|out| out.status.success()) {
+            std::fs::remove_dir_all(&base).ok();
+            return;
+        }
+        std::fs::create_dir_all(notebooks.join("PLANS").join("assets")).unwrap();
+        std::fs::write(notebooks.join("PLANS").join("assets").join("0123abcd-plan.pdf"), b"%PDF").unwrap();
+        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(notebooks.join("plans")).arg(notebooks.join("PLANS")).output().unwrap();
+        assert!(made.status.success(), "{made:?}");
+        assert!(folder(&store, "lm:demo:plans").is_err());
+        assert!(attachment(&store, "lm:demo:plans", "assets/0123abcd-plan.pdf").is_err());
+        std::fs::remove_dir(notebooks.join("plans")).ok();
         std::fs::remove_dir_all(&base).ok();
     }
 
