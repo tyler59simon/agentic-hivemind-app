@@ -5,7 +5,7 @@ import {
   AlignCenter, AlignLeft, AlignRight, Bold, Code, Columns2, Heading1, Heading2, Heading3, Highlighter, Image, Italic, Link,
   List, ListOrdered, ListTodo, MessageSquareText, Minus, Quote, Rows2, Sigma, SquareCode, Strikethrough, Table, Trash2,
 } from "lucide-react";
-import { selectedRect } from "@tiptap/pm/tables";
+import { selectedRect, TableMap } from "@tiptap/pm/tables";
 import { useRef, type ReactNode } from "react";
 import { pictureExt } from "../editor/rich/attach";
 import type { RichContext } from "../editor/rich/context";
@@ -54,7 +54,8 @@ function column(editor: Editor, add: boolean) {
     const pos = tr.mapping.map(start);
     const table = tr.doc.nodeAt(pos);
     if (!table || table.type.name !== "table") return true;
-    const now = table.firstChild?.childCount ?? 0;
+    // Columns as the table commands count them: a cell spanning two counts twice (Codex review of ad6c5c5, R3-4).
+    const now = TableMap.get(table).width;
     if (now === width) return true;
     const next = Array.from({ length: width }, (_, i) => (table.attrs.align as (string | null)[] | null)?.[i] ?? null);
     if (add) next.splice(rect.right, 0, null);

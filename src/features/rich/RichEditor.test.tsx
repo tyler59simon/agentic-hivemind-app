@@ -369,3 +369,23 @@ describe("Codex review of b0afec0", () => {
     expect(fail).not.toHaveBeenCalled();
   });
 });
+
+describe("Codex review of ad6c5c5", () => {
+  it("moves alignments when a column is added to a table with a merged header (R3-4)", async () => {
+    const { editor, el } = await mount("| a | b | c |\n|:--|:-:|--:|\n| 1 | 2 | 3 |\n");
+    // A header cell spanning two columns, as an HTML paste makes.
+    const { schema } = editor;
+    const cell = (type: "tableHeader" | "tableCell", text: string, colspan = 1) => schema.nodes[type].create({ colspan }, schema.nodes.paragraph.create(null, schema.text(text)));
+    const old = editor.state.doc.child(0);
+    const merged = schema.nodes.table.create(old.attrs, [
+      schema.nodes.tableRow.create(null, [cell("tableHeader", "a", 2), cell("tableHeader", "c")]),
+      schema.nodes.tableRow.create(null, [cell("tableCell", "1"), cell("tableCell", "2"), cell("tableCell", "3")]),
+    ]);
+    await act(async () => { editor.view.dispatch(editor.state.tr.replaceWith(0, old.nodeSize, merged)); });
+    let last = -1;
+    editor.state.doc.descendants((n, pos) => { if (n.isText && n.text === "3") last = pos; return true; });
+    await act(async () => { editor.commands.setTextSelection(last); });
+    await act(async () => { el.querySelector('[aria-label="Add column right"]')!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); });
+    expect(editor.state.doc.child(0).attrs.align).toEqual(["left", "center", "right", null]);
+  });
+});

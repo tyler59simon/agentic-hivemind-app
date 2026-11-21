@@ -62,6 +62,7 @@ function endsAlone(n: PMNode, text: string): boolean {
 const LIST = new Set(["bulletList", "orderedList"]);
 /** Blocks after which an indented block can be read as part of them. */
 const TAKES_IN = new Set([...LIST, "rawBlock"]);
+const PLAIN = new Set(["paragraph", "heading"]);
 const markerOf = (n: PMNode, o: Original) => (n.type.name === "bulletList" ? n.attrs.marker ?? o.style.bullet : n.attrs.marker ?? o.style.bulletOrdered);
 const otherMarker = (n: PMNode, marker: string) => (n.type.name === "bulletList" ? (marker === "-" ? "*" : "-") : marker === "." ? ")" : ".");
 
@@ -118,15 +119,31 @@ export function serialize(doc: PMNode, o: Original): string {
       // The text between two blocks comes back only while it still parts them: a block that changed type may need a
       // blank line where the page had a line break (R1-2), and a list or a source box takes in an indented block
       // written after it (R2-3).
+      // A paragraph or heading written after a source box that ends by itself needs no check: nothing in the box can
+      // take in an unindented block after a blank line (Codex review of ad6c5c5, R3-5).
+      const plainAfterBox = prev.step.n.type.name === "rawBlock" && PLAIN.has(p.n.type.name) && !/^[ \t]/.test(text) && endsAlone(prev.step.n, prev.text);
       const check = original
         ? !(p.owns && prev.step.owns) && !/\n[ \t]*\n/.test(gap)
-        : TAKES_IN.has(prev.step.n.type.name) || /^[ \t]/.test(text);
-      const how = `${prev.step.owns ? 1 : 0}${p.owns ? 1 : 0}`;
-      if (check && !separates(prev.step.n, prev.text, gap, p.n, text, how)) {
+        : !plainAfterBox && (TAKES_IN.has(prev.step.n.type.name) || /^[ \t]/.test(text));
+      const parts = () => separates(prev!.step.n, prev!.text, gap, p.n, text, `${prev!.step.owns ? 1 : 0}${p.owns ? 1 : 0}`);
+      if (check && !parts()) {
         gap = "\n\n";
-        if (p.owns && !separates(prev.step.n, prev.text, gap, p.n, text, how)) {
+        if (p.owns && !parts()) {
           rewrite(p);
           text = blockText(p.n, o);
+        }
+        // Two lists still read as one when the writer had to keep a marker (an item `* ---` cannot be `- ---`, a
+        // rule): this list takes a marker that parts them (R3-3).
+        if (LIST.has(p.n.type.name) && p.n.type === prev.step.n.type && !parts()) {
+          for (const marker of p.n.type.name === "bulletList" ? ["-", "*", "+"] : [".", ")"]) {
+            const n = variant(p.n, { marker });
+            const t = blockText(n, o);
+            if (separates(prev.step.n, prev.text, gap, n, t, "00")) {
+              p.n = n;
+              text = t;
+              break;
+            }
+          }
         }
       }
       out += gap;

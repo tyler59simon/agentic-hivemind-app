@@ -5,7 +5,7 @@ import type { Nodes } from "mdast";
 import type { Construct, Event, Token, TokenizeContext } from "micromark-util-types";
 import { describe, expect, it } from "vitest";
 import { richSyntax } from "../editor/rich/syntax";
-import { loadPage } from "./fromMarkdown";
+import { loadPage, markdownNodes } from "./fromMarkdown";
 import { DEFAULT_STYLE, parse, stringify } from "./markdown";
 import { obsidian } from "./micromark/obsidian";
 import { serialize } from "./preserve";
@@ -228,5 +228,47 @@ describe("Codex review of b0afec0", () => {
     const back: string[] = [];
     again.descendants((n) => { if (n.attrs.value !== undefined && n.isAtom) back.push(n.attrs.value); return true; });
     expect(back).toEqual(values);
+  });
+});
+
+describe("Codex review of ad6c5c5", () => {
+  const schema = richSchema();
+  const cell = (children: unknown[]) => ({ type: "tableCell", children });
+  const table = (nodes: unknown[]) => ({
+    type: "table", align: [null, null, null],
+    children: [
+      { type: "tableRow", children: [cell([{ type: "text", value: "a" }]), cell([{ type: "text", value: "b" }]), cell([{ type: "text", value: "c" }])] },
+      { type: "tableRow", children: [cell([nodes[0]]), cell([nodes[1]]), cell([{ type: "text", value: "end" }])] },
+    ],
+  });
+  const row = (text: string) => (parse(text).children[0] as unknown as { children: { children: { children: { type: string; value?: string }[] }[] }[] }).children[1].children;
+
+  it("keeps TeX backslashes before pipes in a table cell (R3-1)", () => {
+    for (const value of ["\\|x\\|", "a\\\\|b", "|x|", "plain \\ back"]) {
+      for (const relaxed of [true, false]) {
+        const out = stringify([table([{ type: "inlineMath", value, dollars: 1 }, { type: "wikiLink", value: `P|${value}` }]) as never], DEFAULT_STYLE, relaxed);
+        const cells = row(out);
+        expect(cells, out).toHaveLength(3);
+        expect(cells[0].children[0]).toMatchObject({ type: "inlineMath", value });
+        expect(cells[1].children[0]).toMatchObject({ type: "wikiLink", value: `P|${value}` });
+      }
+    }
+  });
+
+  it("escapes the pipes of a comment or inline source in a table cell once (R3-2)", () => {
+    for (const relaxed of [true, false]) {
+      const out = stringify([table([{ type: "comment", value: "%%a|b%%" }, { type: "raw", value: "<b>x\\|y</b>" }]) as never], DEFAULT_STYLE, relaxed);
+      expect(row(out), out).toHaveLength(3);
+      expect(out).toContain("%%a\\|b%%");
+      expect(out).toContain("<b>x\\|y</b>");
+    }
+  });
+
+  it("keeps a new list apart from the next one when the writer must keep its marker (R3-3)", () => {
+    const { doc, original } = loadPage(schema, "* a\n");
+    const [fresh] = markdownNodes(schema, "* ---\n");
+    expect(fresh.type.name).toBe("bulletList");
+    const out = serialize(doc.type.create(null, [fresh.type.create({ ...fresh.attrs, marker: null }, fresh.content), doc.child(0)]), original);
+    expect(parse(out).children.map((c) => c.type)).toEqual(["list", "list"]);
   });
 });

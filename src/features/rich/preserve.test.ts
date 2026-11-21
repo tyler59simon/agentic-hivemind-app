@@ -25,3 +25,17 @@ describe("writing back", () => {
     expect(parse).not.toHaveBeenCalled();
   });
 });
+
+describe("writing after a source box", () => {
+  it("does not parse a large closed source box again while a paragraph after it is typed in (R3-5)", () => {
+    const schema = richSchema();
+    const { doc, original } = loadPage(schema, `<!--\n${"x\n".repeat(20000)}-->\n`);
+    expect(doc.child(0).type.name).toBe("rawBlock");
+    const para = (text: string) => schema.nodes.paragraph.create(null, schema.text(text));
+    serialize(doc.type.create(null, [doc.child(0), para("a")]), original);
+    const parse = vi.mocked(markdown.parse);
+    parse.mockClear();
+    serialize(doc.type.create(null, [doc.child(0), para("ab")]), original);
+    expect(parse.mock.calls.filter(([text]) => text.length > 1000)).toEqual([]);
+  });
+});

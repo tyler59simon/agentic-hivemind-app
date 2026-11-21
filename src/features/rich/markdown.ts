@@ -31,10 +31,15 @@ declare module "mdast" {
 type Ctx = CompileContext;
 const top = (cx: Ctx) => cx.stack[cx.stack.length - 1] as unknown as Record<string, unknown>;
 
-/** In a table cell a `|` inside a link, an embed or math is written `\|` (GFM reads `\|` in a cell as `|`): the value
- *  holds the plain pipe, and the writer escapes it again (Codex reviews of 2392f6b, R1-6, and b0afec0, R2-4). */
+/** In a table cell a `|` inside a link, an embed or math is escaped, since GFM ends a cell at a pipe that is not. The
+ *  table reads backslashes in pairs, so `k` backslashes before a pipe are written as `2k` and then `\|`; the value
+ *  holds the plain text (Codex reviews of 2392f6b, R1-6, b0afec0, R2-4, and ad6c5c5, R3-1). */
+export const pipeEscape = (value: string) => value.replace(/(\\*)\|/g, (_m, bs: string) => `${bs}${bs}\\|`);
+export const pipeUnescape = (text: string) => text.replace(/(\\*)\|/g, (m, bs: string) => (bs.length % 2 ? `${bs.slice(0, (bs.length - 1) / 2)}|` : m));
+/** Source text in a cell (a comment, inline HTML) keeps the pipes already escaped and escapes the others (R3-2). */
+const pipeProtect = (text: string) => text.replace(/(\\*)\|/g, (m, bs: string) => (bs.length % 2 ? m : `${bs}\\|`));
 const inCell = (cx: Ctx) => cx.stack.some((n) => n.type === "tableCell");
-const unpipe = (cx: Ctx, value: string) => (inCell(cx) ? value.split("\\|").join("|") : value);
+const unpipe = (cx: Ctx, value: string) => (inCell(cx) ? pipeUnescape(value) : value);
 
 const obsidianFromMarkdown: FromExtension = {
   canContainEols: ["highlight"],
@@ -109,11 +114,12 @@ export const DEFAULT_STYLE: Style = {
 
 const peek = (mark: string) => () => mark;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-/** A node written as its source. `piped` nodes write each `|` as `\|` inside a table cell, where it would end the
- *  cell, as Obsidian writes `[[Page\|alias]]` in tables; comments and source keep their text as written. */
-const literal = (wrap: (v: string, node: any) => string, mark: string, piped = false): Handle => Object.assign(
+/** A node written as its source. Inside a table cell, `value` nodes escape their pipes as Obsidian writes
+ *  `[[Page\|alias]]` in tables, and `source` nodes (comments, inline source) escape the pipes not yet escaped. */
+const literal = (wrap: (v: string, node: any) => string, mark: string, pipes: "value" | "source" | "none" = "none"): Handle => Object.assign(
   (node: Literal, _parent: unknown, state: Parameters<Handle>[2]) => {
-    const value = piped && state.stack.includes("tableCell") ? node.value.split("|").join("\\|") : node.value;
+    const cell = pipes !== "none" && state.stack.includes("tableCell");
+    const value = cell ? (pipes === "value" ? pipeEscape(node.value) : pipeProtect(node.value)) : node.value;
     return wrap(value, node);
   },
   { peek: peek(mark) },
@@ -132,11 +138,11 @@ const highlight: Handle = Object.assign(
 
 const handlers: Record<string, Handle> = {
   math: literal((v, node: MathBlock) => `$$${v}${node.closed ? "$$" : ""}`, "$"),
-  inlineMath: literal((v, node: InlineMath) => `${"$".repeat(node.dollars)}${v}${"$".repeat(node.dollars)}`, "$", true),
-  wikiLink: literal((v) => `[[${v}]]`, "[", true),
-  embed: literal((v) => `![[${v}]]`, "!", true),
-  comment: literal((v) => v, "%"),
-  raw: literal((v) => v, ""),
+  inlineMath: literal((v, node: InlineMath) => `${"$".repeat(node.dollars)}${v}${"$".repeat(node.dollars)}`, "$", "value"),
+  wikiLink: literal((v) => `[[${v}]]`, "[", "value"),
+  embed: literal((v) => `![[${v}]]`, "!", "value"),
+  comment: literal((v) => v, "%", "source"),
+  raw: literal((v) => v, "", "source"),
   highlight,
 };
 
