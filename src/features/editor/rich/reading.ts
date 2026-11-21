@@ -42,23 +42,31 @@ export function prepare(text: string): Prepared {
         const inner = marks.length === 2 ? text.slice(marks[0].to, marks[1].from) : text.slice(node.from + 2, node.to);
         const longest = Math.max(2, ...[...inner.matchAll(/`+/g)].map((m) => m[0].length));
         const fence = "`".repeat(longest + 1);
-        const alone = marks.length === 2
-          && !text.slice(marks[0].to, lineEnd(marks[0].to)).trim()
-          && /^[ \t>]*$/.test(text.slice(lineStart(marks[1].from), marks[1].from))
-          && !text.slice(marks[1].to, lineEnd(marks[1].to)).trim();
-        if (alone) {
-          // `$$` on lines of their own: the marks become the fence in place.
-          edits.push({ from: marks[0].from, to: marks[0].to, insert: `${fence}math` }, { from: marks[1].from, to: marks[1].to, insert: fence });
-        } else {
-          // `$$x$$`, or math sharing a line with a mark: a fence over new lines, each with the container's markers
-          // (a list marker becomes spaces), so the quote or list goes on around it.
-          const pre = text.slice(lineStart(node.from), node.from).replace(/[-*+]|\d+[.)]/g, (m) => " ".repeat(m.length));
-          edits.push({ from: node.from, to: node.to, insert: `${fence}math\n${pre}${inner.trim()}\n${pre}${fence}` });
-        }
+        // A fence whose every line carries the container's markers (a list marker becomes spaces), whatever the source
+        // lines had, so a quote or list goes on around it even when a math line was under-indented (Codex re-review of
+        // fd7109e).
+        const pre = text.slice(lineStart(node.from), node.from).replace(/[-*+]|\d+[.)]/g, (m) => " ".repeat(m.length));
+        const lines = inner.split("\n").map((l, i) => (i === 0 ? l : l.replace(/^[ \t>]*/, "")).trimEnd());
+        while (lines.length && !lines[0].trim()) lines.shift();
+        while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+        const body = lines.map((l) => `\n${pre}${l.trimStart()}`).join("");
+        edits.push({ from: node.from, to: node.to, insert: `${fence}math${body}\n${pre}${fence}` });
         return false;
       }
       if (node.name === "Comment") {
-        edits.push({ from: node.from, to: node.to, insert: "" });
+        // A comment over several lines leaves one line break (with the last line's container markers), so a callout
+        // title or paragraph keeps its first line; text after it is escaped where it would start a new block (Codex
+        // re-reviews of 87a0a1f and fd7109e).
+        const source = text.slice(node.from, node.to);
+        const after = text.slice(node.to, lineEnd(node.to));
+        const lead = /^[ \t]*/.exec(after)![0].length;
+        const rest = after.slice(lead);
+        if (!source.includes("\n") || !rest) { edits.push({ from: node.from, to: node.to, insert: "" }); return false; }
+        const prefix = /^[ \t>]*/.exec(source.slice(source.lastIndexOf("\n") + 1))![0];
+        edits.push({ from: node.from, to: node.to, insert: `\n${prefix}` });
+        const numbered = /^\d+(?=[.)])/.exec(rest);
+        if (numbered) edits.push({ from: node.to + lead + numbered[0].length, to: node.to + lead + numbered[0].length, insert: "\\" });
+        else if (/^[#>\-+*=`~|_]/.test(rest)) edits.push({ from: node.to + lead, to: node.to + lead, insert: "\\" });
         return false;
       }
     },

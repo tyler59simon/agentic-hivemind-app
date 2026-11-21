@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { isValidElement, useEffect, useMemo, useState, type ReactNode } from "react";
+import { isValidElement, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Markdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { MathView } from "../../ui/Math";
@@ -66,11 +66,15 @@ export function PageView({ text, tabId, onLink, onFile, pictures, embed, nested 
     if (!nested && reveal?.tabId === tabId) document.getElementById(`${tabId}-l${reveal.line}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [reveal, tabId, nested]);
   const prepared = useMemo(() => prepare(text), [text]);
+  // Headings read the line map through a ref, so a text change does not make new component types, which would remount
+  // every embed (Codex re-review of fd7109e).
+  const sourceLine = useRef(prepared.sourceLine);
+  sourceLine.current = prepared.sourceLine;
   const { base, folder = "", files } = pictures ?? {};
   const components = useMemo<Components>(() => {
     const pictures: Pictures = { base, folder, files };
     const heading = (Tag: "h1" | "h2" | "h3" | "h4" | "h5" | "h6"): Components["h1"] =>
-      ({ node, children }) => <Tag id={nested ? undefined : `${tabId}-l${prepared.sourceLine((node?.position?.start.line ?? 1) - 1)}`}>{children}</Tag>;
+      ({ node, children }) => <Tag id={nested ? undefined : `${tabId}-l${sourceLine.current((node?.position?.start.line ?? 1) - 1)}`}>{children}</Tag>;
     const link = (href: string | undefined, children: ReactNode) => {
       if (href?.startsWith(WIKI_PREFIX)) {
         const target = decodeURIComponent(href.slice(WIKI_PREFIX.length));
@@ -124,7 +128,7 @@ export function PageView({ text, tabId, onLink, onFile, pictures, embed, nested 
       },
       h1: heading("h1"), h2: heading("h2"), h3: heading("h3"), h4: heading("h4"), h5: heading("h5"), h6: heading("h6"),
     };
-  }, [tabId, onLink, onFile, base, folder, files, embed, nested, prepared]);
+  }, [tabId, onLink, onFile, base, folder, files, embed, nested]);
   const body = text.trim()
     ? <Markdown remarkPlugins={PLUGINS} components={components} urlTransform={keepUrl}>{prepared.text}</Markdown>
     : nested ? null : <p className="muted">This page is empty. Press <kbd>Ctrl</kbd>+<kbd>E</kbd> to write.</p>;

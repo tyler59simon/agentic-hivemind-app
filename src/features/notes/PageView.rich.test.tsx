@@ -86,7 +86,7 @@ describe("reading a page", () => {
     const out = prepareForReading(text);
     expect(out).toContain("> ```math\n> x^2\n> ```");
     expect(out).toContain("```math\ny\n```\n---");
-    expect(out).toContain("- a # not a heading");
+    expect(out).toContain("- a \n  \\# not a heading");
     expect(out).toContain("- ```math\n  z\n  ```");
     const el = await render(text);
     expect(el.querySelector("blockquote [data-math=\"display\"]")?.textContent).toBe("x^2");
@@ -98,6 +98,30 @@ describe("reading a page", () => {
     // Lines a fence adds map back to the line it came from.
     const { sourceLine } = prepare("$$a$$\n# H");
     expect([0, 1, 2, 3].map(sourceLine)).toEqual([0, 0, 0, 1]);
+  });
+
+  it("keeps every math line inside its list, and a comment from joining a callout's title to its body (Codex re-review of fd7109e)", async () => {
+    const el = await render("- $$x\n y$$\n- next\n\n> [!note]- Title %% hidden\n> more %% Body\n\nA %%c\nd%%# not a heading");
+    const items = [...el.querySelectorAll("li")];
+    expect(items.length).toBe(2);
+    expect(items[0].querySelector('[data-math="display"]')?.textContent).toBe("x\ny");
+    expect(items[1].textContent).toBe("next");
+    expect(el.querySelector("details.callout summary")?.textContent).toBe("Title");
+    expect(el.querySelector("details.callout")?.textContent).toContain("Body");
+    expect(el.querySelector("h1")).toBeNull();
+    expect(el.textContent).toContain("# not a heading");
+  });
+
+  it("keeps embeds mounted when other text of the page changes", async () => {
+    const read = vi.fn(async () => ({ title: "Q1", path: "Plans/Q1.md", text: "Inside" }));
+    // The page passes the same handlers and file list while only its text changes.
+    const onLink = () => {};
+    const pictures = { base: "http://hmfile.localhost/g/", folder: "Plans", files: ["Plans/Q1.md"] };
+    const el = await render("One\n\n![[Q1]]", { embed: read, onLink, pictures });
+    await act(async () => root!.render(<PageView text={"Two\n\n![[Q1]]"} tabId="t" onLink={onLink} embed={read} pictures={pictures} />));
+    expect(el.textContent).toContain("Two");
+    expect(el.textContent).toContain("Inside");
+    expect(read).toHaveBeenCalledTimes(1);
   });
 
   it("leaves bold that runs past a callout's title line in its body", async () => {

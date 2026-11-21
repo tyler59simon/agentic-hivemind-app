@@ -179,5 +179,9 @@ describe("Codex review of 398b956", () => {
     const setext = "Long\ntitle\n=====\n\nx\n\n# Next";
     expect(section(setext, "Long title")).toBe("Long\ntitle\n=====\n\nx");
     expect(section(setext, "Long")).toBeNull();
+    // The exact title wins over one that matches only with its spaces collapsed (Codex re-review of fd7109e).
+    const twin = "# Work plan\n\na\n\n# Work  plan\n\nb";
+    expect(section(twin, "Work  plan")).toBe("# Work  plan\n\nb");
+    expect(section(twin, "Work plan")).toBe("# Work plan\n\na");
   });
 });

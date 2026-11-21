@@ -2,9 +2,8 @@
 // (NS-3A). While one is saved, a marker shows where its link goes; the marker is a widget, never text, so the page as
 // saved, a draft or an undo never holds a placeholder (Codex review of 398b956, P2). The marker follows edits around
 // it; a marker whose text the user deleted gets no link, and a page closed meanwhile gets the link on the clipboard.
-import { invertedEffects, isolateHistory } from "@codemirror/commands";
-import { StateEffect, StateField, type EditorState, type Range } from "@codemirror/state";
-import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet } from "@codemirror/view";
+import { Prec, StateEffect, StateField, type EditorState, type Range } from "@codemirror/state";
+import { Decoration, EditorView, keymap, ViewPlugin, WidgetType, type DecorationSet } from "@codemirror/view";
 import type { RichContext } from "./context";
 import { isPicture, pastedName } from "./parse";
 
@@ -27,8 +26,8 @@ class AttachingWidget extends WidgetType {
 }
 
 type Marker = { id: number; batch: number; pos: number; name: string };
-const addPending = StateEffect.define<Marker[]>({ map: (markers, changes) => markers.map((m) => ({ ...m, pos: changes.mapPos(m.pos, -1) })) });
-/** Markers Undo took away: their attachments get no link (Codex re-review of 87a0a1f). */
+const addPending = StateEffect.define<Marker[]>();
+/** Markers Undo took away: their attachments get no link. */
 const cancelPending = StateEffect.define<number[]>();
 /** One attachment is done: its marker goes, and the batch's other markers move to `to` (after its link) when given. */
 const endPending = StateEffect.define<{ id: number; batch: number; to?: number }>();
@@ -66,24 +65,30 @@ const closed = new WeakSet<EditorView>();
 /** Notes which editors are gone, so an attachment finishing later does not write to one. */
 const closing = ViewPlugin.define((view) => ({ destroy() { closed.add(view); } }));
 
-/** Undo takes a marker away (and Redo puts it back), so Ctrl+Z after a paste cancels the link, not earlier typing. */
-const undoable = invertedEffects.of((tr) => {
-  const out: StateEffect<unknown>[] = [];
-  for (const e of tr.effects) {
-    if (e.is(addPending)) out.push(cancelPending.of(e.value.map((m) => m.id)));
-    else if (e.is(cancelPending)) {
-      const back: Marker[] = [];
-      tr.startState.field(pendingAttachments, false)?.between(0, tr.startState.doc.length, (from, _to, d) => {
-        if (e.value.includes(d.spec.id)) back.push({ id: d.spec.id, batch: d.spec.batch, pos: from, name: (d.spec.widget as AttachingWidget).name });
-      });
-      if (back.length) out.push(addPending.of(back));
-    }
-  }
-  return out;
-});
+/** Undo while pictures are being saved cancels their links and undoes nothing else; the markers never enter the undo
+ *  history, so once a link is in, Undo removes it and the next Undo goes on to earlier edits (Codex re-reviews of
+ *  87a0a1f and fd7109e). */
+function cancelPendingUndo(view: EditorView): boolean {
+  const ids: number[] = [];
+  view.state.field(pendingAttachments, false)?.between(0, view.state.doc.length, (_f, _t, d) => { ids.push(d.spec.id); });
+  if (!ids.length) return false;
+  view.dispatch({ effects: cancelPending.of(ids) });
+  return true;
+}
+// Undo's own transactions skip filters, so the keys and the browser's undo input are caught before the history's.
+const undoCancels = Prec.highest([
+  keymap.of([{ key: "Mod-z", run: cancelPendingUndo, preventDefault: true }]),
+  EditorView.domEventHandlers({
+    beforeinput: (e, view) => {
+      if (e.inputType !== "historyUndo" || !cancelPendingUndo(view)) return false;
+      e.preventDefault();
+      return true;
+    },
+  }),
+]);
 
 /** What attaching needs in the editor: the markers, Undo for them, and the note of closed editors. */
-export const attaching = [pendingAttachments, undoable, closing];
+export const attaching = [pendingAttachments, undoCancels, closing];
 
 /** Where the marker `id` is now, or null when it is gone. */
 function markerAt(state: EditorState, id: number): number | null {
@@ -104,7 +109,7 @@ export async function attachAt(view: EditorView, ctx: RichContext, pos: number, 
   const ids = names.map(() => ++counter);
   const line = view.state.doc.lineAt(pos);
   const lead = pos > line.from && names.length > 1 ? "\n" : "";
-  view.dispatch({ effects: addPending.of(names.map((name, i) => ({ id: ids[i], batch, pos, name: name.replace(/[[\]]/g, "") }))), annotations: isolateHistory.of("full") });
+  view.dispatch({ effects: addPending.of(names.map((name, i) => ({ id: ids[i], batch, pos, name: name.replace(/[[\]]/g, "") }))) });
   let linked = false;
   const unlinked: { name: string; link: string }[] = [];
   for (let i = 0; i < names.length; i++) {

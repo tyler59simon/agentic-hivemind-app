@@ -3,8 +3,8 @@
 // become links where they landed, and drops on the window go to the page, the terminal or a new tab.
 import { ensureSyntaxTree } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
-import { undo, history } from "@codemirror/commands";
-import { EditorView } from "@codemirror/view";
+import { history, historyKeymap, redo, undo } from "@codemirror/commands";
+import { EditorView, keymap } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn(async (_cmd: string, _args?: unknown) => undefined as unknown);
@@ -32,7 +32,7 @@ afterEach(() => { views.forEach((v) => v.destroy()); views = []; document.body.i
 function editor(doc: string, rich: RichContext, cursor = doc.length) {
   const parent = document.createElement("div");
   document.body.append(parent);
-  const view = new EditorView({ parent, state: EditorState.create({ doc, selection: { anchor: cursor }, extensions: [history(), richLanguage(), ...richEditing(rich), richPreview] }) });
+  const view = new EditorView({ parent, state: EditorState.create({ doc, selection: { anchor: cursor }, extensions: [history(), keymap.of(historyKeymap), richLanguage(), ...richEditing(rich), richPreview] }) });
   ensureSyntaxTree(view.state, view.state.doc.length, 5000);
   view.dispatch({ effects: [] });
   views.push(view);
@@ -40,6 +40,8 @@ function editor(doc: string, rich: RichContext, cursor = doc.length) {
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
+/** Ctrl+Z as the user presses it, through the editor's keymaps. */
+const ctrlZ = (view: EditorView) => view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "z", keyCode: 90, ctrlKey: true, bubbles: true, cancelable: true }));
 
 describe("the table grid", () => {
   it("writes a typed cell back as the padded table, keeping the focused input", () => {
@@ -131,13 +133,33 @@ describe("attaching pictures", () => {
     view.dispatch({ changes: { from: 5, insert: " there" }, userEvent: "input.type" });
     let finish!: (link: string) => void;
     const pending = attachAt(view, ctx({ fail }), 11, ["p.png"], () => new Promise((r) => { finish = r; }));
-    undo(view);
+    ctrlZ(view);
     expect(view.state.doc.toString()).toBe("Hello there");
     expect(view.dom.querySelector(".cm-attaching")).toBeNull();
     finish("![p](p.png)");
     await pending;
     expect(view.state.doc.toString()).toBe("Hello there");
     expect(fail).toHaveBeenLastCalledWith("p.png was attached, but the place for its link was removed or undone, so the page has no link to it.");
+  });
+
+  it("keeps the marker out of the undo history (Codex re-review of fd7109e)", async () => {
+    const view = editor("A", ctx());
+    view.dispatch({ changes: { from: 1, insert: "B" }, userEvent: "input.type" });
+    await attachAt(view, ctx(), 2, ["p.png"], async () => "![p](p.png)");
+    expect(view.state.doc.toString()).toBe("AB![p](p.png)");
+    undo(view);
+    expect(view.state.doc.toString()).toBe("AB");
+    undo(view);
+    expect(view.state.doc.toString()).toBe("A");
+    // Undo while saving cancels the link; Redo after the save brings back no marker.
+    let finish!: (link: string) => void;
+    const pending = attachAt(view, ctx(), 1, ["q.png"], () => new Promise((r) => { finish = r; }));
+    ctrlZ(view);
+    finish("![q](q.png)");
+    await pending;
+    redo(view);
+    expect(view.dom.querySelector(".cm-attaching")).toBeNull();
+    expect(view.state.doc.toString()).not.toContain("q.png");
   });
 
   it("puts every link a closed page missed in one message", async () => {
