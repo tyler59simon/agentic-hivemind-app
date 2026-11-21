@@ -61,7 +61,7 @@ describe("identity: an untouched page is written back byte for byte", () => {
     expect(serialize(doc, original)).toBe(big);
     // Printed for the phase record; the budget is checked in the UI pass.
     console.info(`1 MB page: load ${Math.round(loaded - started)} ms, write ${Math.round(performance.now() - loaded)} ms`);
-  });
+  }, 30_000); // Asserts identity only (the timings are printed); the default 5 s fails when the whole suite runs in parallel.
 
   it("empty and blank pages", () => {
     for (const raw of ["", "\n", "\n\n\n", "   \n"]) expect(through(raw)).toBe(raw);

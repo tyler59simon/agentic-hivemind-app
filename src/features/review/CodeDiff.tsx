@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTheme } from "../../lib/theme";
 import { loadLanguage } from "./language";
 
-const code = HighlightStyle.define([
+export const code = HighlightStyle.define([
   { tag: [t.keyword, t.modifier], color: "var(--accent)", fontWeight: "600" },
   { tag: [t.string, t.regexp], color: "var(--syntax-string)" },
   { tag: [t.comment, t.meta], color: "var(--muted)" },
@@ -32,8 +32,8 @@ const look = {
   ".cm-collapsedLines": { background: "var(--bg-alt)", color: "var(--muted)", fontFamily: "var(--font-sans)", fontSize: ".86rem" },
 };
 // CodeMirror's own defaults (selection, merge marks) follow the light or dark base.
-const darkTheme = EditorView.theme(look, { dark: true });
-const lightTheme = EditorView.theme(look);
+export const darkTheme = EditorView.theme(look, { dark: true });
+export const lightTheme = EditorView.theme(look);
 
 /** One file's changes as a read-only unified diff: line numbers, added and removed lines on the diff colours. */
 export function CodeDiff({ path, base, head }: { path: string; base: string; head: string }) {

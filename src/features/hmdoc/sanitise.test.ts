@@ -107,6 +107,13 @@ describe("every attribute of every node and mark", () => {
       { type: "callout", attrs: { marker: "[!tip]-", icon: "★" }, content: [{ type: "calloutTitle", content: [t("T")] }, p(t("body"))] },
       { type: "toggle", attrs: { open: false }, content: [{ type: "toggleSummary", content: [t("S")] }, p(t("body"))] },
       { type: "columns", content: [{ type: "column", content: [p(t("l"))] }, { type: "column", content: [p(t("r"))] }] },
+      { type: "noteCard", attrs: { ref: "sandbox:ab12cd34", title: "Note" } },
+      { type: "diagram", attrs: { system: "hive", path: "diagrams/c4.svg", title: "C4" } },
+      { type: "codeRange", attrs: { file: "src/a.ts", from: 1, to: 2, sha256: "a".repeat(64), text: "a\nb", language: "ts", title: "" } },
+      { type: "pdfPage", attrs: { file: "docs/a.pdf", page: 2, title: "" } },
+      { type: "gallery", attrs: { images: ["a.png", "pics/b.jpg"], columns: 2, title: "" } },
+      { type: "excalidraw", attrs: { scene: "attachments/D.excalidraw", preview: "attachments/D.png", title: "" } },
+      { type: "freeform", attrs: { height: 240 }, content: [{ type: "frame", attrs: { x: 16, y: 16, w: 320, h: 96, z: 1 }, content: [p(t("in a frame"))] }] },
       { type: "table", attrs: { id: "t1", align: ["left", null] }, content: [
         { type: "tableRow", content: [cell("tableHeader", "a"), { type: "tableHeader", attrs: { colwidth: [100], background: "green" }, content: [p(t("b"))] }] },
         { type: "tableRow", content: [cell("tableCell", "c"), { type: "tableCell", attrs: { background: "red" }, content: [p(t("d"))] }] },
@@ -153,6 +160,6 @@ describe("every attribute of every node and mark", () => {
     expect(verdict(editor)).toBe("ok");
     const types = new Set<string>();
     editor.state.doc.descendants((n) => { types.add(n.type.name); return true; });
-    for (const kept of ["heading", "callout", "toggle", "columns", "table", "tableHeader", "orderedList", "taskItem", "mathBlock"]) expect(types.has(kept), kept).toBe(true);
+    for (const kept of ["heading", "callout", "toggle", "columns", "table", "tableHeader", "orderedList", "taskItem", "mathBlock", "noteCard", "diagram", "codeRange", "pdfPage", "gallery", "excalidraw", "freeform", "frame"]) expect(types.has(kept), kept).toBe(true);
   });
 });

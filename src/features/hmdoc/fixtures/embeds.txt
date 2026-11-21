@@ -1,0 +1,16 @@
+Embeds
+Hivemind codebase map
+Container view
+Adding
+export function add(a: number, b: number) {
+  return a + b;
+}
+Spec, section 4
+Screens
+pictures/one.png
+pictures/two.jpg
+Sketch
+Top left
+Top right
+Bottom left
+The end

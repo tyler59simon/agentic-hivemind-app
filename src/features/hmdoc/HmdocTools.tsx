@@ -1,13 +1,14 @@
 // The rich page's own controls (NS-3C): colours, columns, toggles and table options in the toolbar, and the dialogs for
 // a table's sort and filter and for the page's width and cover. NS-3B's toolbar carries these as its `extra`.
 import type { Editor } from "@tiptap/core";
-import { Baseline, Columns3, Highlighter, ListCollapse, Settings2, TableCellsMerge, TableCellsSplit, TableProperties } from "lucide-react";
+import { Baseline, Columns3, Highlighter, ListCollapse, Settings2, Shapes, TableCellsMerge, TableCellsSplit, TableProperties } from "lucide-react";
 import { useRef, useState, type ReactNode } from "react";
 import { pictureExt } from "../editor/rich/attach";
 import type { RichContext } from "../editor/rich/context";
 import { Menu } from "../../ui/Menu";
 import { Modal } from "../../ui/Modal";
 import { addColumn, inColumns, insertColumns, MAX_COLUMNS, MIN_COLUMNS, removeColumn } from "./blocks/columns";
+import type { BlockCommand } from "../rich/slash";
 import { insertToggle } from "./blocks/toggle";
 import { FILTER_OPS, type FilterOp, type Meta, type TableView } from "./envelope";
 import { columnLabel } from "./formulas";
@@ -29,7 +30,7 @@ function Palette({ label, icon, none, pick }: { label: string; icon: ReactNode; 
 }
 
 /** The controls after NS-3B's table ones. Nothing shows while the page is read-only. */
-export function HmdocTools({ editor, readOnly, onSettings, onTableView }: { editor: Editor; readOnly: boolean; onSettings: () => void; onTableView: () => void }) {
+export function HmdocTools({ editor, readOnly, inserts, onSettings, onTableView }: { editor: Editor; readOnly: boolean; /** Embeds and free-positioned blocks (NS-3D). */ inserts: BlockCommand[]; onSettings: () => void; onTableView: () => void }) {
   if (readOnly) return null;
   const run = (f: (c: ReturnType<Editor["chain"]>) => ReturnType<Editor["chain"]>) => f(editor.chain().focus()).run();
   const inTable = editor.isActive("table");
@@ -52,6 +53,11 @@ export function HmdocTools({ editor, readOnly, onSettings, onTableView }: { edit
       <button type="button" className="icon-button" aria-label="Toggle" title="Toggle (a block that opens and closes)" onMouseDown={(e) => { e.preventDefault(); insertToggle(editor); }}>
         <ListCollapse size="1em" />
       </button>
+      <Menu align="left" label="Insert an embed" button={<Shapes size="1em" />} className="icon-menu">
+        {(close) => inserts.map((item) => (
+          <li key={item.label}><button role="menuitem" onClick={() => { close(); item.run(editor, () => {}); }}>{item.label} <span className="muted small">{item.hint}</span></button></li>
+        ))}
+      </Menu>
       {inTable && (
         <Menu align="left" label="Table options" button={<TableProperties size="1em" />} className="icon-menu">
           {(close) => {

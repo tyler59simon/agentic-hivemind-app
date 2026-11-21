@@ -12,7 +12,7 @@ const names = Object.keys(files).filter((p) => p.endsWith(".hmdoc")).map((p) => 
 
 describe("extraction fixtures", () => {
   it("there are fixtures", () => {
-    expect(names.sort()).toEqual(["basic", "inline", "table"]);
+    expect(names.sort()).toEqual(["basic", "embeds", "inline", "table"]);
   });
 
   for (const name of names) {

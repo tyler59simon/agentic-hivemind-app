@@ -1,0 +1,51 @@
+// The geometry of a free-positioned block (NS-3D), without ProseMirror or the DOM, so extraction, export and tests share
+// it. A frame is `{ x, y, w, h, z }` in pixels from the block's top left; moves and resizes snap to an 8 px grid.
+export const GRID = 8;
+export const MIN_FRAME_W = 64;
+export const MIN_FRAME_H = 32;
+/** The block never draws shorter than this, and keeps this margin below its lowest frame. */
+export const MIN_BLOCK_H = 240;
+export const BLOCK_MARGIN = 16;
+/** The largest a stored number may be (the same bound `rules.ts` holds). */
+const LIMIT = 100_000;
+
+export interface Frame { x: number; y: number; w: number; h: number; z: number }
+
+export const snap = (v: number): number => Math.round(v / GRID) * GRID;
+
+const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
+
+/** A frame moved by `dx`, `dy` from `from`: snapped, and never left of or above the block. */
+export function moved(from: Frame, dx: number, dy: number): Frame {
+  return { ...from, x: clamp(snap(from.x + dx), 0, LIMIT), y: clamp(snap(from.y + dy), 0, LIMIT) };
+}
+
+/** A frame whose bottom right corner moved by `dx`, `dy`: snapped, and never smaller than the minimum. */
+export function resized(from: Frame, dx: number, dy: number): Frame {
+  return { ...from, w: clamp(snap(from.w + dx), MIN_FRAME_W, LIMIT), h: clamp(snap(from.h + dy), MIN_FRAME_H, LIMIT) };
+}
+
+/** The height a block needs for these frames: it grows to fit the lowest one and shrinks back when that one moves up. */
+export function blockHeight(frames: readonly Pick<Frame, "y" | "h">[]): number {
+  const bottom = frames.reduce((low, f) => Math.max(low, f.y + f.h), 0);
+  return clamp(Math.max(MIN_BLOCK_H, bottom + BLOCK_MARGIN), 0, LIMIT);
+}
+
+/** The z a frame needs to be in front of the others: unchanged when it already is. */
+export function frontZ(own: number, others: readonly number[]): number {
+  const top = others.reduce((m, z) => Math.max(m, z), -1);
+  return own > top ? own : Math.min(top + 1, LIMIT);
+}
+
+/** Reading order of frames, for extraction and export: top to bottom, then left to right, then as they stand in the
+ *  document. Returns the indexes in that order. Frames snap to the grid, so equal rows compare equal. */
+export function frameOrder(frames: readonly Pick<Frame, "x" | "y">[]): number[] {
+  return frames.map((_, i) => i).sort((a, b) => frames[a].y - frames[b].y || frames[a].x - frames[b].x || a - b);
+}
+
+/** A place for a new frame: below the lowest one, or at the top left of an empty block. */
+export function newFrame(frames: readonly Pick<Frame, "y" | "h" | "z">[]): Frame {
+  const bottom = frames.reduce((low, f) => Math.max(low, f.y + f.h), 0);
+  const z = frames.reduce((m, f) => Math.max(m, f.z), 0) + 1;
+  return { x: GRID * 2, y: frames.length ? snap(bottom + GRID) : GRID * 2, w: 320, h: 96, z: Math.min(z, LIMIT) };
+}

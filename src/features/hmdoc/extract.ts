@@ -2,6 +2,10 @@
 // against the same fixtures (`fixtures/*.hmdoc` and the `.txt` beside each): the text of each block in document order,
 // one block per line; a table as one line per row with its cells' texts separated by tabs; a formula cell as its stored
 // formula, so no evaluator is needed; marks and attributes are left out. Lines are joined with LF, with none at the end.
+// Embeds (NS-3D) give their title; a code range adds the lines it stores, a gallery the paths of its pictures. A
+// free-positioned block gives its frames top to bottom, then left to right.
+import { frameOrder } from "./blocks/layout";
+
 type Json = { type?: unknown; text?: unknown; content?: unknown; attrs?: Record<string, unknown> | null };
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
@@ -38,6 +42,23 @@ function block(n: Json, out: string[]): void {
   } else if (type === "mathBlock") {
     const text = str(n.attrs?.value).trim();
     if (text) out.push(text);
+  } else if (type === "noteCard" || type === "diagram" || type === "pdfPage" || type === "excalidraw") {
+    const text = str(n.attrs?.title).trim();
+    if (text) out.push(text);
+  } else if (type === "codeRange") {
+    const title = str(n.attrs?.title).trim();
+    if (title) out.push(title);
+    const text = str(n.attrs?.text).replace(/\s+$/, "");
+    if (text) out.push(text);
+  } else if (type === "gallery") {
+    const title = str(n.attrs?.title).trim();
+    if (title) out.push(title);
+    const images = n.attrs?.images;
+    if (Array.isArray(images)) for (const path of images) if (typeof path === "string" && path) out.push(path);
+  } else if (type === "freeform") {
+    const frames = kids(n);
+    const num = (f: Json, k: string) => (typeof f.attrs?.[k] === "number" ? (f.attrs[k] as number) : 0);
+    for (const i of frameOrder(frames.map((f) => ({ x: num(f, "x"), y: num(f, "y") })))) block(frames[i], out);
   } else if (type === "rawBlock") {
     const text = str(n.attrs?.value).replace(/\s+$/, "");
     if (text) out.push(text);

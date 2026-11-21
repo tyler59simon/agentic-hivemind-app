@@ -1,13 +1,16 @@
 // The rich page's document model (NS-3C): NS-3B's extensions without the attributes that only Markdown needs (the
 // source slice `srcId`, list markers, a heading's underline, a code fence, the original mdast of source boxes), and
 // with what JSON can hold that Markdown cannot: power tables, columns, toggles, a callout icon, text colour and
-// highlight colour.
+// highlight colour. NS-3D adds the embeds (memory note, architecture diagram, code range, PDF page, gallery, drawing) and
+// free-positioned blocks; the schema version stays 1.
 import type { MarkType, NodeType } from "@tiptap/pm/model";
 import { Plugin } from "@tiptap/pm/state";
 import { Extension, getSchema, Mark, mergeAttributes, type AnyExtension } from "@tiptap/core";
 import { Highlight, RawBlock, RawInline, baseExtensions } from "../rich/schema";
 import { HmCallout } from "./blocks/callout";
 import { Column, Columns } from "./blocks/columns";
+import { EMBEDS } from "./blocks/embeds";
+import { Freeform, FrameBlock } from "./blocks/freeform";
 import { HmTable, HmTableCell, HmTableHeader, HmTableRow, TableIds } from "./blocks/table/extensions";
 import { Toggle, ToggleSummary } from "./blocks/toggle";
 import { DEFAULT_HIGHLIGHT } from "./palette";
@@ -64,7 +67,7 @@ export function hmdocExtensions(): AnyExtension[] {
     ...baseExtensions().filter((e) => !REPLACED.has(e.name)),
     HmTable, HmTableRow, HmTableHeader, HmTableCell, TableIds,
     HmCallout, SourceBlock, SourceInline, HmHighlight, TextColor,
-    Columns, Column, Toggle, ToggleSummary, HmdocAttributes, PasteGuard,
+    Columns, Column, Toggle, ToggleSummary, ...EMBEDS, Freeform, FrameBlock, HmdocAttributes, PasteGuard,
   ];
 }
 

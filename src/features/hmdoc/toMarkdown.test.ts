@@ -21,6 +21,18 @@ const doc = (...blocks: unknown[]): PMNode => {
 };
 const counts = (report: { key: ReportKey; count: number }[]) => Object.fromEntries(report.map((r) => [r.key, r.count]));
 
+const frame = (x: number, y: number, ...blocks: unknown[]) => ({ type: "frame", attrs: { x, y, w: 160, h: 64, z: 1 }, content: blocks });
+/** One of each embed and a free-positioned block whose frames are stored out of reading order (NS-3D). */
+const embeds = () => [
+  { type: "noteCard", attrs: { ref: "sandbox:ab12cd34", title: "Plan note" } },
+  { type: "diagram", attrs: { system: "hive", path: "diagrams/c4.svg", title: "C4 overview" } },
+  { type: "codeRange", attrs: { file: "src/app.ts", from: 3, to: 4, sha256: "a".repeat(64), text: "let a = 1;\nlet b = 2;", language: "ts", title: "" } },
+  { type: "pdfPage", attrs: { file: "docs/Spec.pdf", page: 4, title: "" } },
+  { type: "gallery", attrs: { images: ["pics/a.png", "pics/b one.png"], columns: 2, title: "Shots" } },
+  { type: "excalidraw", attrs: { scene: "attachments/Sketch.excalidraw", preview: "attachments/Sketch.png", title: "Sketch" } },
+  { type: "freeform", attrs: { height: 240 }, content: [frame(200, 16, p(t("Top right"))), frame(16, 120, p(t("Bottom left"))), frame(16, 16, p(t("Top left")))] },
+];
+
 /** A page that uses every construct only the rich page has. */
 function everything(): { doc: PMNode; meta: Meta } {
   const table = {
@@ -40,6 +52,7 @@ function everything(): { doc: PMNode; meta: Meta } {
       { type: "columns", content: [{ type: "column", content: [p(t("Left"))] }, { type: "column", content: [p(t("Right"))] }] },
       { type: "orderedList", attrs: { start: -3 }, content: [{ type: "listItem", content: [p(t("below zero"))] }] },
       table,
+      ...embeds(),
     ),
     meta: { title: "Plan", cover: "assets/cover.png", width: "full", views: { t1: { sort: { column: 1, dir: "asc" }, filter: { column: 0, op: "contains", value: "P" } }, gone: { sort: { column: 0, dir: "asc" } } } },
   };
@@ -77,6 +90,7 @@ describe("export to Markdown", () => {
     expect(counts(report)).toEqual({
       mergedCells: 1, richCells: 2, cellBackgrounds: 1, columnWidths: 1, headerColumns: 1, textColours: 1, highlightColours: 1,
       columns: 1, toggles: 1, calloutIcons: 1, listNumbers: 1, formulas: 2, cover: 1, width: 1, views: 1,
+      noteCards: 1, diagrams: 1, codeRanges: 1, pdfPages: 1, galleries: 1, drawings: 1, freeform: 1,
     });
     // In the order the report lists them, each with its words.
     expect(report.map((r) => r.key)).toEqual(Object.keys(REPORT_LABELS));
@@ -187,7 +201,7 @@ describe("export to Markdown", () => {
     const { doc: d, meta } = everything();
     const text = JSON.stringify({ schemaVersion: 1, format: "hivemind-rich", meta, content: d.toJSON() });
     const ok = exportText(text);
-    expect(ok.ok && ok.report.length).toBe(15);
+    expect(ok.ok && ok.report.length).toBe(22);
     const bad = exportText("{}");
     expect(bad.ok).toBe(false);
   });

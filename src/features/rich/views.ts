@@ -20,20 +20,20 @@ export interface ViewEnv {
   edit(pos: number): void;
 }
 
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = "", text?: string): HTMLElementTagNameMap[K] {
+export function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = "", text?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
   if (text !== undefined) e.textContent = text;
   return e;
 }
 
-type View = { dom: HTMLElement; contentDOM?: HTMLElement; update?(node: PMNode): boolean; destroy?(): void; stopEvent?(e: Event): boolean; ignoreMutation?(m: unknown): boolean; selectNode?(): void; deselectNode?(): void };
-type Make = (props: NodeViewRendererProps, env: ViewEnv) => View;
+export type View = { dom: HTMLElement; contentDOM?: HTMLElement; update?(node: PMNode): boolean; destroy?(): void; stopEvent?(e: Event): boolean; ignoreMutation?(m: unknown): boolean; selectNode?(): void; deselectNode?(): void };
+export type Make = (props: NodeViewRendererProps, env: ViewEnv) => View;
 
 const posOf = (props: NodeViewRendererProps) => (typeof props.getPos === "function" ? props.getPos() : undefined);
 
 /** An atom drawn by `draw` and redrawn when its attributes change; double-click edits it. */
-function atomView(draw: (box: HTMLElement, node: PMNode, env: ViewEnv, props: NodeViewRendererProps) => (() => void) | void, tag: "span" | "div", cls: string): Make {
+export function atomView(draw: (box: HTMLElement, node: PMNode, env: ViewEnv, props: NodeViewRendererProps) => (() => void) | void, tag: "span" | "div", cls: string): Make {
   return (props, env) => {
     const box = el(tag, `${cls} rich-atom`);
     box.contentEditable = "false";

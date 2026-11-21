@@ -1,12 +1,27 @@
 // What the rich page editor (NS-3A) asks of the page it edits. `FileTab` supplies it; memory notes never do, so their
 // editor stays as it was.
 import { Facet, StateEffect } from "@codemirror/state";
+import type { FileFormat, Loaded, SaveOutcome, Stamp } from "../../../lib/notebooks";
 
 /** Pages longer than this (in characters, about 1 MB) keep the plain live preview, with a banner. */
 export const RICH_LIMIT = 1_000_000;
 
 /** A page an `![[embed]]` shows: its title, text and path in the notebook (its pictures are relative to its folder). */
 export interface EmbedPage { title: string; text: string; path: string }
+
+/** The files of the page's own notebook, for the embeds of a rich page (NS-3D). Every path is from the notebook's root.
+ *  Absent for a page that is not in a folder notebook (a loose file, a Living Memory page). */
+export interface NotebookFiles {
+  /** Every file of the notebook, from its tree. */
+  files: string[];
+  /** The `hmfile` URL of a file under the page's grant (pictures and PDFs), or null before the grant is known. */
+  url(path: string): string | null;
+  read(path: string): Promise<Loaded>;
+  create(path: string, text: string): Promise<Stamp>;
+  save(path: string, text: string, pre: Stamp, format: FileFormat): Promise<SaveOutcome>;
+  /** Move a file to the notebook's trash. */
+  trash(path: string): Promise<unknown>;
+}
 
 export interface RichContext {
   /** The URL a picture source written in this page loads from, or null when it must not load or the page's picture
@@ -29,6 +44,8 @@ export interface RichContext {
   attachPath?: (bytes: Uint8Array, name: string) => Promise<string>;
   /** Like `attachDropped`, resolving to the path from the notebook's root. */
   attachDroppedPath?: (token: string, index: number, name: string) => Promise<string>;
+  /** The page's notebook's files, for embeds (NS-3D). */
+  notebook?: NotebookFiles;
   /** Tell the user something failed. */
   fail(message: string): void;
 }

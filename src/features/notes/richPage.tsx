@@ -8,7 +8,7 @@ import { attachBytes, attachDropped, readDoc } from "../../documents/io";
 import type { FileRef } from "../../documents/keys";
 import { keyOf, useDocuments } from "../../documents/store";
 import { classify } from "../../lib/errors";
-import { fileName, folderOf, isMarkdown, pageTitle, revealFile } from "../../lib/notebooks";
+import { createFile, deleteFile, fileName, folderOf, isMarkdown, isNotebookPath, pageTitle, readFile, revealFile, saveFile } from "../../lib/notebooks";
 import { toast } from "../../ui/toast";
 import type { RichContext } from "../editor/rich/context";
 import { attachmentLink, relativePath } from "../editor/rich/parse";
@@ -102,6 +102,15 @@ export function useRichPage(page: RichPage): RichContext {
       attachDroppedPath: loose ? undefined : async (token, index) => {
         checked();
         return attachDropped(token, index, ref.notebook, ref.path);
+      },
+      // The page's own notebook, for the embeds of a rich page (NS-3D): a folder notebook only.
+      notebook: loose || lm ? undefined : {
+        files,
+        url: (path) => (base && isNotebookPath(path) ? pictureUrl(path.split("/").map(encodeURIComponent).join("/"), base, "") : null),
+        read: (path) => readFile(ref.notebook, path),
+        create: (path, text) => { checked(); return createFile(ref.notebook, path, text); },
+        save: (path, text, pre, format) => { checked(); return saveFile(ref.notebook, path, text, pre, format); },
+        trash: (path) => { checked(); return deleteFile(ref.notebook, path); },
       },
       fail: (message) => toast(message, "error"),
     };

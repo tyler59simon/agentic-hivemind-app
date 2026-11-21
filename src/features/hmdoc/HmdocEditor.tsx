@@ -18,6 +18,13 @@ import { SLASH_ITEMS, runSlash, type BlockCommand } from "../rich/slash";
 import { RichToolbar } from "../rich/toolbar";
 import { withViews } from "../rich/views";
 import { insertColumns } from "./blocks/columns";
+import { DrawingDialog } from "./blocks/DrawingDialog";
+import type { Drawing } from "./blocks/drawing";
+import { withEmbedViews } from "./blocks/embedViews";
+import { isEmbed, type EmbedType } from "./blocks/embeds";
+import { CodeRangeDialog, DiagramDialog, GalleryDialog, NoteCardDialog, PdfDialog } from "./blocks/EmbedDialogs";
+import { applyDrawing, insertEmbed, updateEmbed, usesPreview } from "./blocks/insert";
+import { embedItems } from "./blocks/items";
 import { hasHeaderRow, hasRowSpans } from "./blocks/table/grid";
 import { tableViews, viewsChanged } from "./blocks/table/plugin";
 import { withTableIds } from "./blocks/table/extensions";
@@ -48,7 +55,7 @@ export interface HmdocEditorProps {
 
 type Valid = Extract<Inspected, { ok: true }>;
 type Popover = { kind: "atom"; pos: number } | { kind: "link" } | null;
-type Dialog = { kind: "page" } | { kind: "view"; id: string } | null;
+type Dialog = { kind: "page" } | { kind: "view"; id: string } | { kind: "embed"; type: Exclude<EmbedType, "excalidraw">; at: number | null } | { kind: "drawing"; existing: Drawing | null } | null;
 
 const ITEMS: BlockCommand[] = [
   ...SLASH_ITEMS,
@@ -172,13 +179,28 @@ function Editing(props: HmdocEditorProps & { checked: Valid; own: { current: str
     open: (id) => { if (editorRef.current?.isEditable) setDialog({ kind: "view", id }); },
   };
 
+  /** Open the picker of an embed, or the drawing editor; `at` is the embed being changed, none for a new one (NS-3D). */
+  const openEmbed = (type: EmbedType, at: number | null = null) => {
+    if (type === "excalidraw") {
+      const a = at === null ? undefined : editorRef.current?.state.doc.nodeAt(at)?.attrs;
+      setDialog({ kind: "drawing", existing: a ? { scene: a.scene, preview: a.preview } : null });
+    } else setDialog({ kind: "embed", type, at });
+  };
+  /** A double-click or Edit on an atom: an embed opens its picker, any other atom its small editor. */
+  const editAt = (pos: number) => {
+    const node = editorRef.current?.state.doc.nodeAt(pos);
+    if (node && isEmbed(node.type.name)) openEmbed(node.type.name, pos);
+    else setPopover({ kind: "atom", pos });
+  };
+  const inserts = useMemo(() => embedItems((type) => openEmbed(type), (message) => latest.current.ctx.fail(message)), []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     const ctx = () => latest.current.ctx;
     const editor = new Editor({
       element: host.current!,
       editable: !latest.current.readOnly,
       extensions: [
-        ...withViews(hmdocExtensions(), { ctx, edit: (pos) => setPopover({ kind: "atom", pos }) }),
+        ...withEmbedViews(withViews(hmdocExtensions(), { ctx, edit: editAt }), { ctx, edit: editAt }),
         Placeholder.configure({ placeholder: "Start writing…", showOnlyCurrent: true }),
         RichInputRules, PendingPictures, slashPlugin(slashKeys),
         richKeys(() => latest.current.onSave()),
@@ -198,7 +220,7 @@ function Editing(props: HmdocEditorProps & { checked: Valid; own: { current: str
             const dom = document.createElement("div");
             const copy = new Editor({
               element: dom, editable: false, content: doc.toJSON(),
-              extensions: [...withViews(hmdocExtensions(), { ctx, edit: () => {} }), tableViews(() => ({}))],
+              extensions: [...withEmbedViews(withViews(hmdocExtensions(), { ctx, edit: () => {} }), { ctx, edit: () => {} }), tableViews(() => ({}))],
               editorProps: { attributes: { class: "rich-doc markdown hmdoc-doc hm-copy" } },
             });
             return { dom, destroy: () => copy.destroy() };
@@ -236,7 +258,8 @@ function Editing(props: HmdocEditorProps & { checked: Valid; own: { current: str
           return true;
         },
         handleDoubleClickOn: (_view, pos, node) => {
-          if (!node.isAtom || node.type.name === "rawBlock" || !editor.isEditable) return false;
+          // An embed's own view opens its picker on a double-click.
+          if (!node.isAtom || node.type.name === "rawBlock" || isEmbed(node.type.name) || !editor.isEditable) return false;
           setPopover({ kind: "atom", pos });
           return true;
         },
@@ -301,7 +324,7 @@ function Editing(props: HmdocEditorProps & { checked: Valid; own: { current: str
 
   const editor = editorRef.current;
   const slash: SlashState | null = editor ? slashKey.getState(editor.state)?.open ?? null : null;
-  const items = slash ? ITEMS.filter((i) => i.label.toLowerCase().includes(slash.query.trim().toLowerCase())) : [];
+  const items = slash ? [...ITEMS, ...inserts].filter((i) => i.label.toLowerCase().includes(slash.query.trim().toLowerCase())) : [];
   useEffect(() => { setSlashIndex(0); }, [slash?.query, !!slash]); // eslint-disable-line react-hooks/exhaustive-deps
   slashKeys.current = slash && items.length && editor ? (key) => {
     if (key === "ArrowDown") setSlashIndex((i) => (i + 1) % items.length);
@@ -325,7 +348,7 @@ function Editing(props: HmdocEditorProps & { checked: Valid; own: { current: str
     <div className={`rich-editor hmdoc-editor hmdoc-width-${width}`}>
       {editor && (
         <RichToolbar editor={editor} ctx={props.ctx} readOnly={props.readOnly} onLink={() => setPopover({ kind: "link" })} onEdit={(pos) => setPopover({ kind: "atom", pos })}
-          extra={<HmdocTools editor={editor} readOnly={props.readOnly}
+          extra={<HmdocTools editor={editor} readOnly={props.readOnly} inserts={inserts}
             onSettings={() => setDialog({ kind: "page" })}
             onTableView={() => { const t = tableAt(editor); if (t) setDialog({ kind: "view", id: t.attrs.id }); }} />} />
       )}
@@ -349,6 +372,11 @@ function Editing(props: HmdocEditorProps & { checked: Valid; own: { current: str
           {editor && popover?.kind === "link" && <LinkPopover editor={editor} style={at(editor.state.selection.from)} onClose={() => { setPopover(null); editor.commands.focus(); }} />}
         </div>
       </div>
+      {editor && dialog?.kind === "embed" && <EmbedPicker editor={editor} ctx={props.ctx} dialog={dialog} onClose={() => { setDialog(null); editor.commands.focus(); }} />}
+      {editor && dialog?.kind === "drawing" && (
+        <DrawingDialog ctx={props.ctx} existing={dialog.existing} onClose={() => { setDialog(null); editor.commands.focus(); }}
+          apply={(next, replaces) => applyDrawing(editor, next, replaces)} stillUsed={(path) => usesPreview(editor.state.doc, path)} />
+      )}
       {dialog?.kind === "page" && <PageDialog meta={meta.current} pictures={props.pictures} ctx={props.ctx} onPatch={patchMeta} onClose={() => setDialog(null)} />}
       {target && dialog?.kind === "view" && (
         <TableViewDialog labels={columnNames(TableMap.get(target).width, headerTexts(target))} rowSpans={hasRowSpans(target)}
@@ -357,6 +385,24 @@ function Editing(props: HmdocEditorProps & { checked: Valid; own: { current: str
       )}
     </div>
   );
+}
+
+/** The picker of the embed `dialog` names; what it hands back goes into the page, or onto the embed being changed. */
+function EmbedPicker({ editor, ctx, dialog, onClose }: { editor: Editor; ctx: RichContext; dialog: Extract<Dialog, { kind: "embed" }>; onClose: () => void }) {
+  const initial = dialog.at === null ? null : (editor.state.doc.nodeAt(dialog.at)?.attrs ?? null);
+  const pick = (attrs: Record<string, unknown>) => {
+    onClose();
+    const ok = dialog.at === null ? insertEmbed(editor, dialog.type, attrs) : updateEmbed(editor, dialog.at, dialog.type, attrs);
+    if (!ok) ctx.fail("That could not be put into the page.");
+  };
+  const common = { initial, onPick: pick, onClose };
+  switch (dialog.type) {
+    case "noteCard": return <NoteCardDialog {...common} />;
+    case "diagram": return <DiagramDialog {...common} />;
+    case "codeRange": return <CodeRangeDialog {...common} files={ctx.notebook} />;
+    case "pdfPage": return <PdfDialog {...common} files={ctx.notebook} />;
+    case "gallery": return <GalleryDialog {...common} files={ctx.notebook} attach={ctx.attachPath} fail={ctx.fail} />;
+  }
 }
 
 /** The text of each cell of a header row, or none when the table has no header row. */

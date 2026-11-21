@@ -5,7 +5,8 @@ import type { Node as PMNode, Schema } from "@tiptap/pm/model";
 import { Node } from "@tiptap/pm/model";
 import { TableMap } from "@tiptap/pm/tables";
 import { parseEnvelope, type Envelope, type Opened } from "./envelope";
-import { attrAccepts } from "./rules";
+import { holdsFreeform } from "./blocks/freeform";
+import { attrAccepts, nodeProblem } from "./rules";
 import { attrsOf, hmdocSchema } from "./schema";
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -65,12 +66,18 @@ export function readContent(content: unknown, schema: Schema = hmdocSchema()): {
     const doc = Node.fromJSON(schema, content);
     doc.check();
     let malformed = false;
+    let embedProblem: string | null = null;
     doc.descendants((node) => {
       // Cells of a column that disagree about its width are mended on the first edit; nothing else is.
       if (node.type.name === "table" && TableMap.get(node).problems?.some((p) => p.type !== "colwidth mismatch")) malformed = true;
-      return !malformed;
+      // An embed or frame whose attributes are not values Hivemind accepts (a missing path is the default, which is none),
+      // and a free-positioned block inside a frame (NS-3D).
+      embedProblem ??= nodeProblem(node.type.name, node.attrs);
+      if (node.type.name === "frame" && holdsFreeform(node)) embedProblem ??= "a free-positioned block inside a frame";
+      return !malformed && !embedProblem;
     });
     if (malformed) return { ok: false, reason: "This file is read-only: it has a table whose cells do not fit a grid." };
+    if (embedProblem) return { ok: false, reason: `This file is read-only: it has ${embedProblem}.` };
     return { ok: true, doc };
   } catch (e) {
     return { ok: false, reason: `This file is read-only: its document is not valid (${e instanceof Error ? e.message : String(e)}).` };

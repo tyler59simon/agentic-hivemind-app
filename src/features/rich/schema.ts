@@ -75,7 +75,7 @@ export const CalloutTitle = Node.create({
 });
 
 /** An atom whose attributes round-trip through its HTML as data attributes (copy and paste inside the editor). */
-function atom(name: string, inline: boolean, attrs: Record<string, unknown>, tag = inline ? "span" : "div", extra: Partial<Parameters<typeof Node.create>[0]> = {}) {
+export function atom(name: string, inline: boolean, attrs: Record<string, unknown>, tag = inline ? "span" : "div", extra: Partial<Parameters<typeof Node.create>[0]> = {}) {
   const keys = Object.keys(attrs);
   return Node.create({
     name,

@@ -1,0 +1,158 @@
+{
+  "content": {
+    "content": [
+      {
+        "attrs": {
+          "level": 1
+        },
+        "content": [
+          {
+            "text": "Embeds",
+            "type": "text"
+          }
+        ],
+        "type": "heading"
+      },
+      {
+        "attrs": {
+          "ref": "sandbox:4895d3f3",
+          "title": "Hivemind codebase map"
+        },
+        "type": "noteCard"
+      },
+      {
+        "attrs": {
+          "path": "diagrams/container.svg",
+          "system": "hivemind",
+          "title": "Container view"
+        },
+        "type": "diagram"
+      },
+      {
+        "attrs": {
+          "file": "src/math.ts",
+          "from": 10,
+          "language": "ts",
+          "sha256": "3e934c7521b5d274ebc11463774c1cbbaa11be25f36bbad1b19af529a95c4e12",
+          "text": "export function add(a: number, b: number) {\n  return a + b;\n}",
+          "title": "Adding",
+          "to": 12
+        },
+        "type": "codeRange"
+      },
+      {
+        "attrs": {
+          "file": "docs/Spec.pdf",
+          "page": 4,
+          "title": "Spec, section 4"
+        },
+        "type": "pdfPage"
+      },
+      {
+        "attrs": {
+          "columns": 2,
+          "images": [
+            "pictures/one.png",
+            "pictures/two.jpg"
+          ],
+          "title": "Screens"
+        },
+        "type": "gallery"
+      },
+      {
+        "attrs": {
+          "preview": "attachments/Sketch.png",
+          "scene": "attachments/Sketch.excalidraw",
+          "title": "Sketch"
+        },
+        "type": "excalidraw"
+      },
+      {
+        "attrs": {
+          "height": 240
+        },
+        "content": [
+          {
+            "attrs": {
+              "h": 64,
+              "w": 160,
+              "x": 200,
+              "y": 16,
+              "z": 2
+            },
+            "content": [
+              {
+                "content": [
+                  {
+                    "text": "Top right",
+                    "type": "text"
+                  }
+                ],
+                "type": "paragraph"
+              }
+            ],
+            "type": "frame"
+          },
+          {
+            "attrs": {
+              "h": 64,
+              "w": 160,
+              "x": 16,
+              "y": 120,
+              "z": 1
+            },
+            "content": [
+              {
+                "content": [
+                  {
+                    "text": "Bottom left",
+                    "type": "text"
+                  }
+                ],
+                "type": "paragraph"
+              }
+            ],
+            "type": "frame"
+          },
+          {
+            "attrs": {
+              "h": 64,
+              "w": 160,
+              "x": 16,
+              "y": 16,
+              "z": 3
+            },
+            "content": [
+              {
+                "content": [
+                  {
+                    "text": "Top left",
+                    "type": "text"
+                  }
+                ],
+                "type": "paragraph"
+              }
+            ],
+            "type": "frame"
+          }
+        ],
+        "type": "freeform"
+      },
+      {
+        "content": [
+          {
+            "text": "The end",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      }
+    ],
+    "type": "doc"
+  },
+  "format": "hivemind-rich",
+  "meta": {
+    "title": "Embeds"
+  },
+  "schemaVersion": 1
+}

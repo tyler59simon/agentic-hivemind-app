@@ -65,3 +65,12 @@ export const folderOf = (path: string) => (path.includes("/") ? path.slice(0, pa
 export const isRichDoc = (path: string) => /\.hmdoc$/i.test(path);
 /** A page's title: its file name without the Markdown or rich page extension. */
 export const pageTitle = (path: string) => fileName(path).replace(/\.(md|markdown|hmdoc)$/i, "");
+
+/** A path from the root of the page's own notebook (NS-3D), checked as the file commands check one: forward slashes, no
+ *  empty part, `.` or `..`, no hidden part (so `.git` and `.hivemind` stay out of reach), no character Windows refuses. A
+ *  file outside the notebook is copied in first, so an embed never names one. */
+export function isNotebookPath(v: unknown): v is string {
+  if (typeof v !== "string" || v.length === 0 || v.length > 1024) return false;
+  return v.split("/").every((part) =>
+    part.length > 0 && part.length <= 240 && !part.startsWith(".") && !/[\\:*?"<>|\u0000-\u001f]/.test(part) && !/[. ]$/.test(part));
+}

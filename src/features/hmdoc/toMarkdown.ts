@@ -11,10 +11,14 @@ import { DEFAULT_HIGHLIGHT } from "./palette";
 import { attrsOf } from "./schema";
 import { inspect } from "./validate";
 import { tableSheet } from "./blocks/table/grid";
+import { rangeLabel } from "./blocks/codeRange";
+import { isEmbed } from "./blocks/embeds";
+import { frameOrder } from "./blocks/layout";
 
 export type ReportKey =
   | "mergedCells" | "richCells" | "cellBackgrounds" | "columnWidths" | "headerColumns" | "textColours" | "highlightColours"
-  | "columns" | "toggles" | "calloutIcons" | "listNumbers" | "formulas" | "cover" | "width" | "views";
+  | "columns" | "toggles" | "calloutIcons" | "listNumbers" | "formulas" | "cover" | "width" | "views"
+  | "noteCards" | "diagrams" | "codeRanges" | "pdfPages" | "galleries" | "drawings" | "freeform";
 
 /** What each kind of loss is called in the report, in the order the report lists them. */
 export const REPORT_LABELS: Record<ReportKey, string> = {
@@ -33,6 +37,13 @@ export const REPORT_LABELS: Record<ReportKey, string> = {
   cover: "Cover image",
   width: "Page width",
   views: "Table sort and filter settings",
+  noteCards: "Memory note cards (written as a line with the note's title and reference)",
+  diagrams: "Architecture diagrams (written as a line naming the diagram)",
+  codeRanges: "Code ranges (written as a fenced block of the stored lines, with no live view or changed badge)",
+  pdfPages: "PDF pages (written as a link to the file and page)",
+  galleries: "Galleries (written as their pictures one after another)",
+  drawings: "Drawings (written as their preview picture; the scene is not exported)",
+  freeform: "Free-positioned blocks (their frames are written one after another, top to bottom, then left to right)",
 };
 
 export interface ReportItem { key: ReportKey; label: string; count: number }
@@ -52,6 +63,8 @@ export const CLASSIFIED: Record<string, ReportKey | "internal"> = {
   "attr:tableCell.colwidth": "columnWidths", "attr:tableHeader.colwidth": "columnWidths",
   "attr:tableCell.background": "cellBackgrounds", "attr:tableHeader.background": "cellBackgrounds",
   "attr:table.id": "internal",
+  "node:noteCard": "noteCards", "node:diagram": "diagrams", "node:codeRange": "codeRanges", "node:pdfPage": "pdfPages",
+  "node:gallery": "galleries", "node:excalidraw": "drawings", "node:freeform": "freeform", "node:frame": "freeform",
   // Uses of what both kinds of page have: a header cell below the first row, a formula, a cell of several blocks, and
   // the page's own settings.
   "use:negativeListStart": "listNumbers", "use:headerColumn": "headerColumns", "use:formula": "formulas", "use:richCell": "richCells",
@@ -69,7 +82,22 @@ function pick(kind: "nodes" | "marks", name: string, attrs: Record<string, unkno
   return Object.keys(out).length ? out : undefined;
 }
 
+/** `path`, a path from the notebook's root, as the link a page in `folder` writes for it. */
+export function relativeFrom(folder: string, path: string): string {
+  const from = folder ? folder.split("/") : [];
+  const to = path.split("/");
+  let common = 0;
+  while (common < from.length && common < to.length - 1 && from[common] === to[common]) common++;
+  return [...from.slice(common).map(() => ".."), ...to.slice(common)].join("/");
+}
+
+const plain = (value: string, marks?: Json[]): Json => ({ type: "text", text: value, ...(marks ? { marks } : {}) });
+const code = (value: string): Json => plain(value, [{ type: "code" }]);
+const paragraph = (...content: Json[]): Json => ({ type: "paragraph", content });
+const baseName = (path: string) => (path.split("/").pop() ?? path).replace(/\.[^.]*$/, "");
+
 class Walk {
+  constructor(private folder = "") {}
   counts: Counts = Object.fromEntries(Object.keys(REPORT_LABELS).map((k) => [k, 0])) as Counts;
 
   marks(marks: readonly Mark[]): Json[] {
@@ -111,6 +139,13 @@ class Walk {
         return [this.callout(n.attrs.marker, title, body)];
       }
       case "table": return [this.table(n)];
+      case "freeform": {
+        this.counts.freeform++;
+        return this.frames(n).flatMap((f) => this.block(f));
+      }
+      case "frame": return this.children(n);
+      case "noteCard": case "diagram": case "codeRange": case "pdfPage": case "gallery": case "excalidraw":
+        return this.embed(n);
       case "paragraph": case "heading": case "codeBlock":
         return [{ type: name, attrs: pick("nodes", name, n.attrs), content: n.isTextblock ? this.inline(n) : undefined }];
       case "horizontalRule": case "mathBlock": case "rawBlock":
@@ -120,6 +155,46 @@ class Walk {
         // from 1 (R3-2).
         if (name === "orderedList" && (n.attrs.start ?? 1) < 0) this.counts.listNumbers++;
         return [{ type: name, attrs: pick("nodes", name, n.attrs), content: this.children(n) }];
+    }
+  }
+
+  /** The frames of a free-positioned block in reading order: top to bottom, then left to right. */
+  private frames(n: PMNode): PMNode[] {
+    const frames = this.childList(n);
+    return frameOrder(frames.map((f) => ({ x: f.attrs.x, y: f.attrs.y }))).map((i) => frames[i]);
+  }
+
+  /** An embed as the blocks Markdown has for it, counted once. */
+  private embed(n: PMNode): Json[] {
+    const a = n.attrs;
+    const picture = (src: string, alt: string): Json => paragraph({ type: "image", attrs: { src: relativeFrom(this.folder, src), alt, title: null } });
+    switch (n.type.name) {
+      case "noteCard":
+        this.counts.noteCards++;
+        return [paragraph(plain(`Memory note: ${a.title || a.ref} (`), code(a.ref), plain(")"))];
+      case "diagram":
+        this.counts.diagrams++;
+        return [paragraph(plain(`Architecture diagram: ${a.title || a.path} (system ${a.system}, `), code(a.path), plain(")"))];
+      case "codeRange": {
+        this.counts.codeRanges++;
+        const lines: Json[] = [paragraph(...(a.title ? [plain(`${a.title}: `)] : []), code(rangeLabel(a.file, a.from, a.to)))];
+        const block: Json = { type: "codeBlock", attrs: pick("nodes", "codeBlock", { language: a.language || null }) };
+        if (a.text) block.content = [plain(a.text)];
+        return [...lines, block];
+      }
+      case "pdfPage": {
+        this.counts.pdfPages++;
+        return [paragraph(plain(a.title || `${baseName(a.file)}, page ${a.page}`, [{ type: "link", attrs: { href: `${relativeFrom(this.folder, a.file)}#page=${a.page}`, title: null } }]))];
+      }
+      case "gallery": {
+        this.counts.galleries++;
+        const out: Json[] = a.title ? [paragraph(plain(a.title))] : [];
+        for (const src of a.images as string[]) out.push(picture(src, baseName(src)));
+        return out;
+      }
+      default:
+        this.counts.drawings++;
+        return [picture(a.preview, a.title || baseName(a.scene))];
     }
   }
 
@@ -160,6 +235,15 @@ class Walk {
             if (inline.length) lines.push(inline);
           }
         }
+      } else if (isEmbed(n.type.name)) {
+        // An embed in a cell is the line or lines it would be written as; a code range's stored lines are lines of code.
+        for (const b of this.embed(n)) {
+          if (b.type === "codeBlock") for (const l of (b.content?.[0]?.text ?? "").split("\n")) lines.push(l ? [code(l)] : []);
+          else lines.push(b.content ?? []);
+        }
+      } else if (n.type.name === "freeform") {
+        this.counts.freeform++;
+        for (const f of this.frames(n)) f.forEach(take);
       } else {
         // What a block of its own would count, counted here too: the layouts and icons nested in a cell are lost as well
         // (R1-13).
@@ -235,9 +319,10 @@ function definitions(doc: PMNode): string[] {
   return [...out];
 }
 
-/** The Markdown of a rich page, and what it could not keep. */
-export function exportMarkdown(doc: PMNode, meta: Meta = {}): { text: string; report: ReportItem[] } {
-  const walk = new Walk();
+/** The Markdown of a rich page, and what it could not keep. `folder` is the folder of the page the Markdown is written
+ *  beside, so paths from the notebook's root are written as links from there. */
+export function exportMarkdown(doc: PMNode, meta: Meta = {}, folder = ""): { text: string; report: ReportItem[] } {
+  const walk = new Walk(folder);
   const blocks: Json[] = [];
   doc.forEach((b) => { for (const json of walk.block(b)) blocks.push(json); });
   const defs = definitions(doc);
@@ -258,9 +343,9 @@ export function exportMarkdown(doc: PMNode, meta: Meta = {}): { text: string; re
 }
 
 /** The Markdown for a `.hmdoc` file's text, or why it cannot be exported (the file is not one the editor can hold). */
-export function exportText(text: string): { ok: true; markdown: string; report: ReportItem[] } | { ok: false; reason: string } {
+export function exportText(text: string, folder = ""): { ok: true; markdown: string; report: ReportItem[] } | { ok: false; reason: string } {
   const read = inspect(text);
   if (!read.ok) return { ok: false, reason: read.reason };
-  const { text: markdown, report } = exportMarkdown(read.doc, read.envelope.meta);
+  const { text: markdown, report } = exportMarkdown(read.doc, read.envelope.meta, folder);
   return { ok: true, markdown, report };
 }

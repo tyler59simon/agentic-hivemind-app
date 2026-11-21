@@ -95,7 +95,7 @@ export async function exportToMarkdown(client: QueryClient, ref: FileRef, text?:
   folderOnly(ref.notebook);
   const source = text ?? await currentText(ref);
   const { exportText } = await import("../hmdoc/toMarkdown");
-  const out = exportText(source);
+  const out = exportText(source, folderOf(ref.path));
   if (!out.ok) throw new Error(out.reason);
   const path = await createUnique(ref.notebook, folderOf(ref.path), pageTitle(ref.path), out.markdown);
   client.invalidateQueries({ queryKey: ["notebook-tree", ref.notebook] });
