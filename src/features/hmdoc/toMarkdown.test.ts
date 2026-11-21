@@ -38,6 +38,7 @@ function everything(): { doc: PMNode; meta: Meta } {
       { type: "callout", attrs: { marker: "[!tip]", icon: "★" }, content: [{ type: "calloutTitle", content: [t("Hint")] }, p(t("Body"))] },
       { type: "toggle", attrs: { open: false }, content: [{ type: "toggleSummary", content: [t("More")] }, p(t("Hidden"))] },
       { type: "columns", content: [{ type: "column", content: [p(t("Left"))] }, { type: "column", content: [p(t("Right"))] }] },
+      { type: "orderedList", attrs: { start: -3 }, content: [{ type: "listItem", content: [p(t("below zero"))] }] },
       table,
     ),
     meta: { title: "Plan", cover: "assets/cover.png", width: "full", views: { t1: { sort: { column: 1, dir: "asc" }, filter: { column: 0, op: "contains", value: "P" } }, gone: { sort: { column: 0, dir: "asc" } } } },
@@ -75,7 +76,7 @@ describe("export to Markdown", () => {
     const { report } = exportMarkdown(d, meta);
     expect(counts(report)).toEqual({
       mergedCells: 1, richCells: 2, cellBackgrounds: 1, columnWidths: 1, headerColumns: 1, textColours: 1, highlightColours: 1,
-      columns: 1, toggles: 1, calloutIcons: 1, formulas: 2, cover: 1, width: 1, views: 1,
+      columns: 1, toggles: 1, calloutIcons: 1, listNumbers: 1, formulas: 2, cover: 1, width: 1, views: 1,
     });
     // In the order the report lists them, each with its words.
     expect(report.map((r) => r.key)).toEqual(Object.keys(REPORT_LABELS));
@@ -131,6 +132,41 @@ describe("export to Markdown", () => {
     expect(out.text.split("\n").filter((l) => l.startsWith("|"))).toHaveLength(3);
   });
 
+  it("R3-1: a nested table whose cell holds more inline nodes than a call can take as arguments still exports", () => {
+    // 70,000 nodes a paragraph (text and line breaks), two paragraphs in one cell of the inner table: one line of 140,000,
+    // more than a call can take as arguments (about 125,000).
+    const big = (n: number) => ({ type: "paragraph", content: Array.from({ length: n }, (_, i) => (i % 2 ? { type: "hardBreak" } : t("a"))) });
+    const inner = { type: "table", attrs: { id: "inner" }, content: [
+      row(cell("tableHeader", [p(t("h"))])),
+      row(cell("tableCell", [big(70_000), big(70_000)])),
+    ] };
+    const d = doc({ type: "table", attrs: { id: "outer" }, content: [
+      row(cell("tableHeader", [p(t("a"))])),
+      row(cell("tableCell", [inner])),
+    ] });
+    let out: ReturnType<typeof exportMarkdown> | undefined;
+    expect(() => { out = exportMarkdown(d); }).not.toThrow();
+    expect(out!.text.length).toBeGreaterThan(140_000);
+    // And a layout of more blocks than a call can take as arguments.
+    const many = doc({ type: "columns", content: [{ type: "column", content: Array.from({ length: 130_000 }, () => ({ type: "paragraph" })) }, { type: "column", content: [p(t("y"))] }] });
+    expect(() => exportMarkdown(many)).not.toThrow();
+  }, 120_000);
+
+  it("R3-2: a list that starts below 0 is reported, once per list, wherever it is", () => {
+    const list = (start: number) => ({ type: "orderedList", attrs: { start }, content: [{ type: "listItem", content: [p(t("a"))] }] });
+    const d = doc(
+      list(-5), list(0), list(3),
+      { type: "toggle", attrs: { open: true }, content: [{ type: "toggleSummary", content: [t("S")] }, list(-1)] },
+      { type: "table", attrs: { id: "t" }, content: [row(cell("tableHeader", [p(t("h"))])), row(cell("tableCell", [list(-2)]))] },
+    );
+    const out = exportMarkdown(d);
+    expect(counts(out.report).listNumbers).toBe(3);
+    expect(out.report.find((r) => r.key === "listNumbers")!.label).toBe("List numbering (lists that start below 0 are numbered from 1)");
+    // What the Markdown says is what the report says: numbered from 1.
+    expect(out.text.startsWith("1. a")).toBe(true);
+    expect(counts(exportMarkdown(doc(list(0), list(7))).report).listNumbers).toBeUndefined();
+  });
+
   it("R1-14: a line break inside a table cell is written as <br>, like the break between paragraphs", () => {
     const d = doc({ type: "table", attrs: { id: "t" }, content: [
       row(cell("tableHeader", [p(t("a"))]), cell("tableHeader", [p(t("b"))])),
@@ -151,7 +187,7 @@ describe("export to Markdown", () => {
     const { doc: d, meta } = everything();
     const text = JSON.stringify({ schemaVersion: 1, format: "hivemind-rich", meta, content: d.toJSON() });
     const ok = exportText(text);
-    expect(ok.ok && ok.report.length).toBe(14);
+    expect(ok.ok && ok.report.length).toBe(15);
     const bad = exportText("{}");
     expect(bad.ok).toBe(false);
   });

@@ -381,8 +381,10 @@ describe("Codex review of 9dda8ae", () => {
     const ctx = context();
     const m = await mount(fileOf([p("x".repeat(4_999_000))]), { ctx });
     const e = () => m.editor();
+    const original = e().state.doc;
     await act(async () => { e().view.dispatch(e().state.tr.insertText("small", 3)); });
     expect(m.changes).toHaveLength(1);
+    expect(e().state.doc.eq(original)).toBe(false);
     // The cursor moves on with no edit, then a change that cannot be taken is made elsewhere.
     await act(async () => { e().commands.setTextSelection(1000); });
     expect(e().state.selection.from).toBe(1000);
@@ -391,9 +393,11 @@ describe("Codex review of 9dda8ae", () => {
     expect(e().state.doc).toBe(before);
     expect(ctx.fail).toHaveBeenCalled();
     expect(e().state.selection.from).toBe(1000);
-    // Undo works as before.
+    // R3-3: the refused state is not kept as the one before.
+    expect((e().storage as unknown as Record<string, { state: unknown }>).hmdocBeforeState.state).toBeNull();
+    // Undo works as before: R3-4, the page is the one before the accepted change, not merely different text.
     await act(async () => { e().commands.undo(); });
-    expect(e().state.doc.textContent.startsWith("xxxsmall")).toBe(false);
+    expect(e().state.doc.eq(original)).toBe(true);
   });
 
   it("R1-12: Markdown pasted as plain text is cleaned like pasted HTML", async () => {

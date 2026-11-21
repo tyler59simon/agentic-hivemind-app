@@ -97,9 +97,6 @@ function Editing(props: HmdocEditorProps & { checked: Valid; own: { current: str
   const last = props.own;
   /** The last state and settings that were written: what a change the page cannot take goes back to. */
   const good = useRef<{ state: PMState; meta: Meta } | null>(null);
-  /** The state just before the latest transaction, kept by a plugin: a refused change goes back to exactly it, so the
-   *  cursor and the selection moves made since the last accepted change stay (R2-3). */
-  const before = useRef<PMState | null>(null);
   const latest = useRef(props);
   latest.current = props;
   const slashKeys = useRef<((key: string) => boolean) | null>(null);
@@ -117,7 +114,10 @@ function Editing(props: HmdocEditorProps & { checked: Valid; own: { current: str
     if (text.length > SIZE_LIMIT && good.current) {
       // A file over the limit would open as read-only JSON, and take Undo with it: the change is not made (R1-11).
       meta.current = good.current.meta;
-      editor.view.updateState(before.current ?? good.current.state);
+      const store = (editor.storage as unknown as Record<string, { state: PMState | null }>).hmdocBeforeState;
+      editor.view.updateState(store.state ?? good.current.state);
+      // The refused state is what the update just recorded as the one before: it is not kept (R3-3).
+      store.state = null;
       setTick((t) => t + 1);
       latest.current.ctx.fail(`A page can hold ${SIZE_LIMIT.toLocaleString("en-US")} characters of text and settings, and this change would go past that, so it was not made.`);
       return;
@@ -180,9 +180,15 @@ function Editing(props: HmdocEditorProps & { checked: Valid; own: { current: str
         Placeholder.configure({ placeholder: "Start writing…", showOnlyCurrent: true }),
         RichInputRules, PendingPictures, slashPlugin(slashKeys),
         richKeys(() => latest.current.onSave()),
-        Extension.create({
+        // The state just before the latest transaction: a refused change goes back to exactly it, so the cursor and the
+        // selection moves made since the last accepted change stay (R2-3).
+        Extension.create<unknown, { state: PMState | null }>({
           name: "hmdocBeforeState",
-          addProseMirrorPlugins: () => [new Plugin({ view: () => ({ update: (_view, prev) => { before.current = prev; } }) })],
+          addStorage: () => ({ state: null }),
+          addProseMirrorPlugins() {
+            const storage = this.storage;
+            return [new Plugin({ view: () => ({ update: (_view, prev) => { storage.state = prev; } }) })];
+          },
         }),
         tableViews(() => meta.current.views ?? {}, {
           // A sorted table is drawn as a copy by an editor of the same kind that cannot be edited (R1-10).

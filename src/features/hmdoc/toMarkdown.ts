@@ -14,7 +14,7 @@ import { tableSheet } from "./blocks/table/grid";
 
 export type ReportKey =
   | "mergedCells" | "richCells" | "cellBackgrounds" | "columnWidths" | "headerColumns" | "textColours" | "highlightColours"
-  | "columns" | "toggles" | "calloutIcons" | "formulas" | "cover" | "width" | "views";
+  | "columns" | "toggles" | "calloutIcons" | "listNumbers" | "formulas" | "cover" | "width" | "views";
 
 /** What each kind of loss is called in the report, in the order the report lists them. */
 export const REPORT_LABELS: Record<ReportKey, string> = {
@@ -28,6 +28,7 @@ export const REPORT_LABELS: Record<ReportKey, string> = {
   columns: "Column layouts (written one column after another)",
   toggles: "Toggles (written as folded callouts with the summary as the title)",
   calloutIcons: "Callout icons",
+  listNumbers: "List numbering (lists that start below 0 are numbered from 1)",
   formulas: "Formulas (written as their values)",
   cover: "Cover image",
   width: "Page width",
@@ -53,7 +54,7 @@ export const CLASSIFIED: Record<string, ReportKey | "internal"> = {
   "attr:table.id": "internal",
   // Uses of what both kinds of page have: a header cell below the first row, a formula, a cell of several blocks, and
   // the page's own settings.
-  "use:headerColumn": "headerColumns", "use:formula": "formulas", "use:richCell": "richCells",
+  "use:negativeListStart": "listNumbers", "use:headerColumn": "headerColumns", "use:formula": "formulas", "use:richCell": "richCells",
   "meta:cover": "cover", "meta:width": "width", "meta:views": "views",
 };
 
@@ -115,7 +116,9 @@ class Walk {
       case "horizontalRule": case "mathBlock": case "rawBlock":
         return [{ type: name, attrs: pick("nodes", name, n.attrs) }];
       default:
-        // Lists, quotes, footnote definitions and their items keep their structure.
+        // Lists, quotes, footnote definitions and their items keep their structure. A list that starts below 0 is written
+        // from 1 (R3-2).
+        if (name === "orderedList" && (n.attrs.start ?? 1) < 0) this.counts.listNumbers++;
         return [{ type: name, attrs: pick("nodes", name, n.attrs), content: this.children(n) }];
     }
   }
@@ -163,6 +166,7 @@ class Walk {
         if (n.type.name === "columns") this.counts.columns++;
         else if (n.type.name === "toggle") this.counts.toggles++;
         else if (n.type.name === "callout" && n.attrs.icon) this.counts.calloutIcons++;
+        else if (n.type.name === "orderedList" && (n.attrs.start ?? 1) < 0) this.counts.listNumbers++;
         n.forEach(take);
       }
     };
@@ -195,7 +199,11 @@ class Walk {
             cell.forEach((b) => { if (b.type.name === "paragraph" && !b.content.size) return; held++; if (b.type.name !== "paragraph") other = true; });
             if (held > 1 || other) this.counts.richCells++;
             const lines = this.cellInline(cell);
-            lines.forEach((line, i) => { if (i) content.push({ type: "rawInline", attrs: { value: "<br>", kind: "html" } }); content.push(...line); });
+            // Appended one by one: a line can hold more nodes than a call may take as arguments (R3-1).
+            lines.forEach((line, i) => {
+              if (i) content.push({ type: "rawInline", attrs: { value: "<br>", kind: "html" } });
+              for (const item of line) content.push(item);
+            });
           }
         }
         cells.push({ type: r === 0 ? "tableHeader" : "tableCell", content: [{ type: "paragraph", content }] });
@@ -231,7 +239,7 @@ function definitions(doc: PMNode): string[] {
 export function exportMarkdown(doc: PMNode, meta: Meta = {}): { text: string; report: ReportItem[] } {
   const walk = new Walk();
   const blocks: Json[] = [];
-  doc.forEach((b) => blocks.push(...walk.block(b)));
+  doc.forEach((b) => { for (const json of walk.block(b)) blocks.push(json); });
   const defs = definitions(doc);
   const parts: string[] = [];
   for (const json of blocks) {
