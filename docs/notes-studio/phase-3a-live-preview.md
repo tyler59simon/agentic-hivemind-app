@@ -61,4 +61,29 @@ Every construct renders, edits and round-trips through Source mode unchanged whe
 
 ## 6. Shipped
 
-(Filled in when the phase lands.)
+Code landed on 2026-11-21: Hivemind `398b956` (the phase), then `87a0a1f`, `fd7109e` and `f5cdc90` (fixes from three Codex review rounds) and `a1adac9` (fixes from the UI pass). No Living Memory change was needed.
+
+**What differs from sections 2 and 3.** The code follows the survey section above. The files are `src/features/editor/rich/{syntax,blocks,inline,widgets,tables,parse,commands,slash,attach,reading,context,index}.ts` and `src/features/editor/toolbar.tsx`; Rust adds `attach.rs` and the commands `file_attach_bytes` (raw body), `file_attach_dropped`, `open_dropped`, `claim_drop`, `unclaimed_drops` and `lmdoc_assets`. The `rich` prop is a separate Compartment beside `livePreview`, and memory notes never get it.
+
+**Verified**
+- `npm test` (99 files, 778 tests, one skipped: the 1 MB timing check, run with `VITE_RICH_BENCH=1`, passed), `npx tsc --noEmit`, `npm run build` (KaTeX in its own chunk), `cargo test --no-default-features` (619), `cargo clippy --all-targets` (the same older warning in `lib.rs`). `bridge::tests::a_script_that_fails_shows_its_stderr` failed once in a full run and passed alone; it stays tracked as its own bug.
+- `lmdoc::tests::live_pages_through_the_bridge` against a real Living Memory, now also attaching pasted bytes named `-draft.png`.
+- Three read-only Codex reviews (20, 8 and 5 findings), each finding checked before it was fixed, each fix with a regression test checked to fail without it: [reviews/ns3a-codex-review.md](reviews/ns3a-codex-review.md).
+
+**UI pass (2026-11-21).** The dev app ran against a scratch store (notebook `demo/plans`) and a folder notebook outside any bound folder, driven over WebView2 remote debugging:
+- A page with every construct rendered in Live: the table grid, both callouts, the Mermaid diagram, inline and display math, both picture syntaxes at their widths, the `![[Embedded#Goals]]` section, the footnote tooltip, the highlight and the links. Reading mode rendered the same, comment hidden and the folded callout as `<details>`.
+- Two table cells typed in the grid and Ctrl+S: the file was written with the table re-padded and every line ending still CRLF. The folded callout unfolded from its button.
+- A pasted picture (a synthetic clipboard paste) showed its marker, was saved to the folder notebook's `attachments/` and linked; on the Living Memory page the same paste went through `doc attach` and linked `assets/<sha8>-<name>`, and `![[that name|50]]` then found the asset.
+- The slash menu listed its items and inserted a padded table, shown as a grid once the cursor left it. The 1.1 MB page showed the banner and no rich rendering. A memory note's editor had no toolbar.
+- Not driven: a drop from Explorer (it needs a real desktop drag; the router, the token store and the attach path have tests).
+
+The pass found three problems, fixed in `a1adac9`: code in fences had no colors (the editor's highlight style had only Markdown tags), an embed showed blank lines between its blocks (the editor's `pre-wrap` reached the rendered HTML), and typing on a 950 KB page with 17,000 headings took about 0.7 s per key in Live and Source alike, almost all of it the "On this page" outline. After the fix the same page takes about 45 ms per key in the unminified dev build, Live adding 5 to 10 ms over Source; the rest is CodeMirror's own parse.
+
+**Known limits**
+- `![[Page]]` embeds resolve within the page's own notebook until NS-4A, so the S10 private-content flag waits for NS-4A.
+- Only top-level blocks render: a table or diagram inside a list item or quote shows as source.
+- `![[Page]]` inside other text stays a link; only a paragraph that is only the embed draws it.
+- A `%%comment%%` that spans paragraphs is not recognised.
+- `$$x$$` inside a list item inside a quote parses as inline math in both views.
+- A syntax-tree change without an edit (the parser catching up on a long page) redraws every block once.
+- A page over 1,000,000 characters keeps the plain preview.
