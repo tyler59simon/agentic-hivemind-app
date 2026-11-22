@@ -92,7 +92,9 @@ The intermittent `bridge::tests::a_script_that_fails_shows_its_stderr` has an ex
 
 ## Triage and fixes
 
-(Filled in when the fixes land.)
+Claude split the findings into two batches for Sonnet subagents and kept five for the user, because they change a shared design or lifecycle. Batch A (mostly Rust) landed in `f423f25`, batch B (mostly webview) in `bf8cb5d`. Claude reviewed both diffs, reran all checks, and checked DATA-1, tab closing, Replace with an unsaved page and UI-1 in the dev app.
+
+Open, for the user to decide: DATA-2 (split panes share one Memory draft), LM-2 (Memory drafts carry no store identity), LM-1 (a stalled bridge blocks every call), PROC-3 (agent completion and Windows Job Objects), and the startup re-check of a registered root replaced by a junction (the rest of PATH-1).
 
 ### Batch A
 
