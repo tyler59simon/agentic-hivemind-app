@@ -10,6 +10,22 @@ These rules come from the Codex review of the design ([reviews/ns0-codex-review.
 - Living Memory pages are searched through `search`'s `pages` array (both origins, README 5.8), gated on `docs.search`; before NS-2B ships, the Living Memory group is absent (C1).
 - Hivemind searches folder notebooks in its own index and takes only `origin: "lm"` entries from Living Memory's `pages`; `origin: "folder"` results are for agents. So a registered folder is never shown twice (C3).
 
+## Changes from the code survey before NS-4A
+
+Claude surveyed main at `604dbd1` on 2026-11-22. Where the sections below say otherwise, these win. At the user's request this phase has no Codex review; Claude reviews every diff.
+
+- **Scope of the schema.** The index holds `pages`, `fts`, `links` and `tags` only. `blocks` (NS-8B citations), `tasks` and `props` (NS-7B) are added by the phases that use them; the index is derived, so their schema version bump just rebuilds it.
+- **What is indexed.** Pages of registered folder notebooks with the extensions `.md`, `.markdown`, `.hmdoc`, `.canvas` and `.txt`, skipping the paths `files/watch.rs locate` skips (hidden files and folders, which covers `.hivemind`, `.git`, `.obsidian` and the trash, and `node_modules`). A file's first 2 MB are indexed. Private notebooks are indexed: Private stops AI and agents, not the user's own search.
+- **Keeping it current.** The watcher's callback reports changes made by other programs but drops Hivemind's own writes (`is_own_write`), so the writer thread is also told by the Rust commands that write notebook files (`file_save`, `file_create`, `file_rename`, `file_delete`, the attach commands, `notebook_add`, `notebook_remove`). It never depends on the frontend relaying `files-changed`.
+- **Living Memory pages.** The **Living Memory pages** group uses `doc search --all-domains` (pages only, private notebooks included on Hivemind's bridge), not `search`'s `pages` array, and shows only notebooks registered in Hivemind, since those are the ones a doc tab can open. It is present only when `capabilities.docs.search` is true; Hivemind never indexes Living Memory pages itself.
+- **Memory notes group.** The existing `search` command, a few results with a link to the full results on the Memory page.
+- **Where search lives.** The top bar's box stays the one search box. On the Notes page it reads "Search pages", and typing opens a results panel under it with the four groups, filters (notebook, folder, tag, kind, modified), arrow keys, Enter to open and Ctrl+Enter to open in a split; the open tabs stay visible. On every other page it searches memory as today. Ctrl+K and Ctrl+Shift+F keep focusing it.
+- **Ctrl+O.** The palette's note list also lists indexed pages, with the notebook as detail.
+- **Resolver.** `src/features/links/resolve.ts` keeps its same-notebook rules (exact path, same folder, shortest path, the Markdown twin over `.hmdoc`). When nothing in the page's own notebook matches, it tries other registered notebooks: `[[Notebook/Page]]` matches a notebook title as the first segment, a bare name searches every other notebook. Then memory notes by exact title; `[[mem:Title]]` names a memory note directly. Several equal answers show the picker, which writes the explicit form.
+- **Tags pane.** A collapsible section of the Notes navigator; a tag opens the search panel filtered to it.
+- **Link rewrite.** Renaming or moving a page or folder in the tree (both go through `file_rename`) offers the rewrite plan afterwards; each page is saved with its precondition and a page changed meanwhile is skipped and listed.
+- **The `.hmdoc` extractor twin** is checked against every pair in `src/features/hmdoc/fixtures/`, including the NS-3D embeds.
+
 ## 1. What the user sees
 
 - On the Notes page, Ctrl+K and Ctrl+Shift+F focus a search box over pages. Results are grouped: **This notebook**, **Other notebooks**, **Living Memory pages**, **Memory notes**. Filters: notebook, folder, tag, file kind, modified date. Snippets highlight matches; Enter opens, Ctrl+Enter opens in a split.
