@@ -33,7 +33,16 @@ vitest: model round trip with unknown fields, edge validation, colour mapping. E
 
 ## 4. Shipped
 
-Written on 2026-11-22 against main at `1377450` (survey `6007ce8`). Commit hashes, Claude's diff review and the UI pass are filled in by Claude.
+Shipped on 2026-11-22 in `aee2798` (survey `1377450`). At the user's request this phase had no Codex review; Claude reviewed the diff, reran every check and ran a UI pass.
+
+UI pass (Claude, dev app, scratch folder notebook):
+- An Obsidian-style canvas with unknown fields on a card, on an edge and at the top level opened as a board with all four cards (a coloured text card, a page card, a picture through the `hmfile` grant, a link card with Open in browser), the edge with its label and arrowhead, and no iframe. Opening, Fit and zoom left the page clean and the file untouched.
+- Dragging the text card with real mouse input and saving changed only that card's `y`; every other byte, the unknown fields included, stayed the same.
+- Adding a text card and its text took two undo steps; undoing both left the page clean. Dragging the Idea row from the tree onto the board made a page card where it was let go. Dragging from a card's side handle to another card made an edge (`right` to `top`) with a 16-hex-digit id.
+- New canvas made `Untitled.canvas` holding `{"nodes":[],"edges":[]}` and opened it as an empty board.
+- A canvas missing a card's `y` opened in Source with the reason, and nothing was written.
+- **Found and fixed in this pass:** that Source view was empty. `CodeEditor` returned its host element alone without the power bar and inside a fragment with it, so when a canvas switched from Board to Source after the first render, React replaced the host and the CodeMirror view stayed in the old one. The host now keeps its place (`CodeEditor.tsx`, test `CodeEditor.host.test.tsx`, which fails without the fix).
+- Not checked in the app: the conflict banner (Keep mine, Keep theirs, Save both), Memory note cards, group moves and 500-card performance; these are covered by `FileTab.canvas.test.tsx` and `CanvasBoard.test.tsx` only.
 
 **Rendering decision: plain DOM and CSS transforms; no new dependency.** `@xyflow/react` was not spiked. The phase needs pan, zoom, select, move, resize, join and label, which is small. The JSON Canvas file has to stay the model either way (unknown fields kept, a fixed key order), so a library's own node and edge objects would have been converted both ways. The 500-card requirement is met by moving one element: the board is a `translate` and `scale` on a single world element, cards and edges are memoized components, and a gesture hands out new objects only for the cards it changed. The cost is that hit testing, handles and the join line are written here and were only driven in jsdom (see Known limits).
 
