@@ -74,6 +74,10 @@ const canConvert = (l: Loaded) => !l.binary && (!l.readOnly || !!l.convertible);
 
 const dirtyOr = (s: DocState, text: string): Status => (s.base && text === s.base.text && !s.convert && !s.reformat ? "clean" : "dirty");
 
+/** Whether two reads of a file allow the same use: editable or not (and why), text or not. */
+const sameAccess = (a: Loaded, b: Loaded) =>
+  (a.readOnly ?? null) === (b.readOnly ?? null) && a.binary === b.binary && !!a.convertible === !!b.convertible && !!a.chooseEol === !!b.chooseEol;
+
 const sameFormat = (a: FileFormat, b: FileFormat) => a.encoding === b.encoding && a.bom === b.bom && a.eol === b.eol;
 
 export function reduce(s: DocState, e: DocEvent): DocState {
@@ -119,15 +123,20 @@ export function reduce(s: DocState, e: DocEvent): DocState {
       return { ...s, status: s.text || s.status !== "clean" ? "dirty" : "clean", saving: undefined, banner: { kind: "gone" } };
     }
     case "outsideChange": {
-      if (!s.base || e.theirs.stamp.sha256 === s.base.stamp.sha256) return s;
+      if (!s.base) return s;
+      // The same bytes can still be a different file: a read-only attribute set or cleared leaves the hash as it was
+      // (Codex review of 7320d7f, UI-2).
+      const sameBytes = e.theirs.stamp.sha256 === s.base.stamp.sha256;
+      if (sameBytes && sameAccess(e.theirs, s.base)) return s;
       // A kept draft is never dropped by following the file: once the file can take it, the store loads the page
       // again, which brings the draft back as edits (Codex final review of a34fafd, D3b).
       if (s.kept && !e.theirs.readOnly && !e.theirs.binary) return s;
       // A save in flight finds out for itself, and a merge in progress already has a newer version to look at.
       if (s.status === "saving" || s.status === "stale") return s;
-      if (s.status === "dirty") return { ...s, banner: { kind: "changed" }, theirs: e.theirs };
-      if (e.theirs.readOnly || e.theirs.binary) return { ...s, status: "readOnly", base: e.theirs, text: e.theirs.text, version: s.version + 1 };
-      return { ...s, status: "clean", base: e.theirs, text: e.theirs.text, version: s.version + 1, banner: { kind: "followed" }, theirs: undefined };
+      // Unsaved edits of a file whose bytes did not change have nothing to merge or warn about.
+      if (s.status === "dirty") return sameBytes ? s : { ...s, banner: { kind: "changed" }, theirs: e.theirs };
+      if (e.theirs.readOnly || e.theirs.binary) return { ...s, status: "readOnly", base: e.theirs, text: e.theirs.text, version: sameBytes ? s.version : s.version + 1 };
+      return { ...s, status: "clean", base: e.theirs, text: e.theirs.text, version: sameBytes ? s.version : s.version + 1, banner: sameBytes ? s.banner : { kind: "followed" }, theirs: undefined };
     }
     case "merged": {
       // The merged text is unsaved until the user saves it, now against the newer version. A converted page stays

@@ -8,7 +8,7 @@ import { create } from "zustand";
 import { isUnsaved } from "../../documents/session";
 import { refresh, useDocuments } from "../../documents/store";
 import { classify } from "../../lib/errors";
-import { globList, replaceApply, replacePreview, replaceUndo, type Applied, type FindQuery, type FindScope, type Preview } from "../../lib/findInFiles";
+import { globList, replaceApply, replacePreview, replaceUndo, type Applied, type FindQuery, type FindScope, type OpenDoc, type Preview } from "../../lib/findInFiles";
 import { otherFolders } from "../../lib/folders";
 import { notebooksQuery } from "../../lib/notebooks";
 import { isLoose } from "../../lib/opens";
@@ -31,11 +31,11 @@ export function openFindInFiles(scope?: FindScope) {
 const scopeValue = (s: FindScope) => (s.notebook ? `nb:${s.notebook}` : s.folder ? `folder:${s.folder}` : "");
 const scopeOf = (value: string, sub?: string): FindScope => (value.startsWith("nb:") ? { notebook: value.slice(3), ...(sub ? { sub } : {}) } : value.startsWith("folder:") ? { folder: value.slice(7) } : {});
 
-/** The pages with unsaved edits in a tab, as paths of `notebook`. */
-function unsavedIn(notebook: string | undefined): string[] {
-  if (!notebook) return [];
+/** The documents open in a tab, with whether each has unsaved edits. Rust matches them to the scope's files by where they
+ *  resolve to, for a notebook and a folder alike (Codex review of 7320d7f, NOTES-4). A Living Memory page has no file. */
+function openDocs(): OpenDoc[] {
   const { docs, refs } = useDocuments.getState();
-  return Object.entries(refs).filter(([key, ref]) => ref.notebook === notebook && isUnsaved(docs[key])).map(([, ref]) => ref.path);
+  return Object.entries(refs).filter(([, ref]) => !ref.notebook.startsWith("lm:")).map(([key, ref]) => ({ notebook: ref.notebook, path: ref.path, unsaved: isUnsaved(docs[key]) }));
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
@@ -62,7 +62,7 @@ export function FindInFilesTab() {
   const [exclude, setExclude] = useState("");
   const [result, setResult] = useState<Preview | null>(null);
   /** What the result was searched with: the replace button writes this, not what the boxes say now. */
-  const [searched, setSearched] = useState<{ scope: FindScope; query: FindQuery; replacement: string; replaced: boolean } | null>(null);
+  const [searched, setSearched] = useState<{ scope: FindScope; query: FindQuery; replacement: string; replaced: boolean; inputs: string } | null>(null);
   const [stale, setStale] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -83,9 +83,17 @@ export function FindInFilesTab() {
 
   const query: FindQuery = { pattern, regex, case: caseSensitive, word, include: globList(include), exclude: globList(exclude) };
   const touch = () => setStale(true);
+  // A preview is valid only for the exact scope, query, options and replacement it was made with, however they changed
+  // (a context menu can change the scope without touching the form), and a reply for older inputs is dropped (Codex review
+  // of 7320d7f, UI-1).
+  const inputs = JSON.stringify([scope, query, replacing ? replacement : null]);
+  const inputsNow = useRef(inputs);
+  inputsNow.current = inputs;
+  const latestRun = useRef(0);
 
   const run = async () => {
     if (!pattern || !effective) return;
+    const ticket = ++latestRun.current, asked = inputs;
     setBusy(true);
     setError("");
     setApplied(null);
@@ -93,35 +101,40 @@ export function FindInFilesTab() {
     try {
       const wanted = replacing ? replacement : null;
       const got = await replacePreview(scope, query, wanted);
+      if (ticket !== latestRun.current || asked !== inputsNow.current) return;
       setResult(got);
-      setSearched({ scope, query, replacement, replaced: replacing });
+      setSearched({ scope, query, replacement, replaced: replacing, inputs: asked });
       setStale(false);
       setTicked(Object.fromEntries(got.files.map((f) => [f.path, new Set(f.hunks.map((h) => h.index))])));
       setFolded(new Set());
     } catch (e) {
-      setError(classify(e).message);
+      if (ticket === latestRun.current && asked === inputsNow.current) setError(classify(e).message);
     } finally {
-      setBusy(false);
+      if (ticket === latestRun.current) setBusy(false);
     }
   };
 
   const chosen = useMemo(() => (result?.files ?? []).map((f) => ({ path: f.path, sha256: f.sha256, hunks: [...(ticked[f.path] ?? [])] })).filter((f) => f.hunks.length), [result, ticked]);
   const total = chosen.reduce((n, f) => n + f.hunks.length, 0);
 
-  const afterWrite = (done: Applied, scoped: FindScope) => {
-    if (scoped.notebook) void refresh(scoped.notebook, done.done.map((d) => d.path));
+  // The documents open on a file written read it again: the watcher does not report Hivemind's own writes.
+  const afterWrite = (done: Applied) => {
+    const byNotebook = new Map<string, string[]>();
+    for (const r of done.reread ?? []) byNotebook.set(r.notebook, [...(byNotebook.get(r.notebook) ?? []), r.path]);
+    for (const [notebook, paths] of byNotebook) void refresh(notebook, paths);
   };
+  const outdated = stale || (searched !== null && searched.inputs !== inputs);
   const apply = async () => {
-    if (!searched || !chosen.length) return;
+    if (!searched || !chosen.length || outdated) return;
     setBusy(true);
     setError("");
     try {
-      const done = await replaceApply(searched.scope, searched.query, searched.replacement, chosen, unsavedIn(searched.scope.notebook));
+      const done = await replaceApply(searched.scope, searched.query, searched.replacement, chosen, openDocs());
       setApplied(done);
       setUndone(null);
       // What was found is out of date now.
       setResult(null);
-      afterWrite(done, searched.scope);
+      afterWrite(done);
     } catch (e) {
       setError(classify(e).message);
     } finally {
@@ -132,10 +145,10 @@ export function FindInFilesTab() {
     if (!applied?.undo || !searched) return;
     setBusy(true);
     try {
-      const back = await replaceUndo(applied.undo, unsavedIn(searched.scope.notebook));
+      const back = await replaceUndo(applied.undo, openDocs());
       setUndone(back);
       setApplied({ ...applied, undo: null });
-      afterWrite(back, searched.scope);
+      afterWrite(back);
       toast(`Put back ${plural(back.done.length, "file")}${back.skipped.length ? `; ${back.skipped.length} skipped` : ""}`);
     } catch (e) {
       setError(classify(e).message);
@@ -159,7 +172,7 @@ export function FindInFilesTab() {
   };
 
   const mark = useMemo(() => markPattern(searched?.query.pattern ?? "", !!searched?.query.regex, !!searched?.query.case), [searched]);
-  const replaceMode = !!searched?.replaced && result !== null && !stale;
+  const replaceMode = !!searched?.replaced && result !== null && !outdated;
 
   return (
     <div className="note-page find-page">
@@ -213,7 +226,7 @@ export function FindInFilesTab() {
             <div className="find-summary">
               <span role="status">
                 {result.matches === 0 ? "No matches" : `${plural(result.matches, "match", "matches")} in ${plural(result.files.length, "file")}`}
-                {stale && <span className="muted"> (the search changed; press {replacing ? "Preview" : "Find"} again)</span>}
+                {outdated && <span className="muted"> (the search changed; press {replacing ? "Preview" : "Find"} again)</span>}
               </span>
               <span className="fill" />
               {replaceMode && (

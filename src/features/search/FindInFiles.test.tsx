@@ -21,6 +21,8 @@ const preview = {
 let applyAnswer: Record<string, unknown> = {};
 let undoAnswer: Record<string, unknown> = {};
 let failPreview = "";
+/** While set, `replace_preview` waits for it: a preview still running. */
+let previewGate: Promise<void> | null = null;
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string, a: Record<string, unknown>) => {
@@ -30,6 +32,7 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "get_settings": return { other_folders: ["C:\\code\\docs"] };
       case "replace_preview":
         if (failPreview) throw new Error(failPreview);
+        if (previewGate) await previewGate;
         return preview;
       case "replace_apply": return applyAnswer;
       case "replace_undo": return undoAnswer;
@@ -72,6 +75,7 @@ const last = (cmd: string) => { const calls = sent.filter((s) => s.cmd === cmd);
 beforeEach(() => {
   sent.length = 0;
   failPreview = "";
+  previewGate = null;
   applyAnswer = {};
   undoAnswer = {};
   useWorkspace.setState({ panes: [{ id: "p", tabs: [], active: null }], focused: "p", dirty: {} });
@@ -179,7 +183,7 @@ describe("replace in files", () => {
     applyAnswer = { done: [{ path: "Projects/Plan.md", replaced: 1 }], skipped: [], undo: "undo-1" };
     await press(/^Replace 1 match in 1 file$/);
     expect(last("replace_apply")).toEqual({
-      scope: { notebook: "nb-1" }, replacement: "bird", unsaved: [],
+      scope: { notebook: "nb-1" }, replacement: "bird", open: [],
       query: { pattern: "cat", regex: false, case: false, word: false, include: [], exclude: [] },
       files: [{ path: "Projects/Plan.md", sha256: "sha-plan", hunks: [0] }],
     });
@@ -215,7 +219,10 @@ describe("replace in files", () => {
       undo: "undo-2",
     };
     await press(/^Replace 3 matches/);
-    expect(last("replace_apply").unsaved).toEqual(["Inbox.md"]);
+    // Every open file document goes with its own notebook and path; Rust finds which file each one is.
+    expect(last("replace_apply").open).toEqual([
+      { notebook: "nb-1", path: "Inbox.md", unsaved: true }, { notebook: "nb-2", path: "Plan.md", unsaved: true }, { notebook: "nb-1", path: "Clean.md", unsaved: false },
+    ]);
     expect(el.textContent).toContain("Replaced 2 matches in 1 file.");
     const skipped = [...el.querySelectorAll(".find-skipped li")].map((li) => li.textContent);
     expect(skipped).toEqual(["Inbox.md: it has unsaved edits in a tab; save or discard them first", "Gone.md: it changed after the preview"]);
@@ -227,11 +234,75 @@ describe("replace in files", () => {
     await press(/^Replace 3 matches/);
     undoAnswer = { done: [{ path: "Projects/Plan.md", replaced: 0 }], skipped: [{ path: "Inbox.md", why: "it changed after the replace" }], undo: null };
     await press(/^Undo all$/);
-    expect(last("replace_undo")).toEqual({ undo: "undo-3", unsaved: [] });
+    expect(last("replace_undo")).toEqual({ undo: "undo-3", open: [] });
     expect(el.textContent).toContain("Put back 1 file.");
     expect(el.querySelector(".find-skipped")!.textContent).toBe("Inbox.md: it changed after the replace");
     // It cannot be undone twice.
     expect(button(/^Undo all$/)).toBeUndefined();
+  });
+
+  // Codex review of 7320d7f, UI-1: a preview is good only for the scope, query and replacement it was made with.
+  it("UI-1: a preview that arrives after the scope was changed is dropped", async () => {
+    await mount();
+    await select("Where to search", "nb:nb-1");
+    await type("Find", "cat");
+    await press(/^Replace$/);
+    await type("Replace with", "bird");
+    let open = () => {};
+    previewGate = new Promise<void>((resolve) => { open = resolve; });
+    await submit();
+    // The preview for notebook 1 is still running when the scope changes to notebook 2.
+    await select("Where to search", "nb:nb-2");
+    previewGate = null;
+    await act(async () => { open(); });
+    await settle();
+    expect(el.querySelector(".find-file")).toBeNull();
+    expect(button(/^Replace \d/)).toBeUndefined();
+    // The button comes back only for a preview of what the form says now.
+    await submit();
+    expect(last("replace_preview").scope).toEqual({ notebook: "nb-2" });
+    expect(button(/^Replace 3 matches/)).toBeDefined();
+    applyAnswer = { done: [], skipped: [], undo: null };
+    await press(/^Replace 3 matches/);
+    expect(last("replace_apply").scope).toEqual({ notebook: "nb-2" });
+  });
+
+  it("UI-1: a scope chosen from a menu takes the replace button away from the earlier preview", async () => {
+    await previewReplace();
+    expect(button(/^Replace 3 matches/)).toBeDefined();
+    await act(async () => { openFindInFiles({ notebook: "nb-2" }); });
+    await settle();
+    expect((el.querySelector("select[aria-label='Where to search']") as HTMLSelectElement).value).toBe("nb:nb-2");
+    expect(button(/^Replace 3 matches/)).toBeUndefined();
+    expect(el.textContent).toContain("the search changed");
+    await submit();
+    expect(button(/^Replace 3 matches/)).toBeDefined();
+  });
+
+  // Codex review of 7320d7f, NOTES-4: the files a replace wrote are read again by the documents open on them, for a folder scope too.
+  it("NOTES-4: open documents named in the answer read their file again, also for a folder scope", async () => {
+    useDocuments.setState({
+      refs: { "file:nb-1:a.md": { notebook: "nb-1", path: "a.md" } },
+      docs: { "file:nb-1:a.md": { status: "clean", base: { stamp: { sha256: "old" } }, text: "x", version: 1 } } as never,
+    });
+    await mount();
+    await select("Where to search", "folder:C:\\code\\docs");
+    await type("Find", "cat");
+    await press(/^Replace$/);
+    await type("Replace with", "bird");
+    await submit();
+    applyAnswer = { done: [{ path: "Notes/a.md", replaced: 1 }], skipped: [], undo: "undo-9", reread: [{ notebook: "nb-1", path: "a.md" }] };
+    sent.length = 0;
+    await press(/^Replace 3 matches/);
+    await settle();
+    expect(last("replace_apply").scope).toEqual({ folder: "C:\\code\\docs" });
+    expect(last("replace_apply").open).toEqual([{ notebook: "nb-1", path: "a.md", unsaved: false }]);
+    expect(sent.filter((c) => c.cmd === "file_read").map((c) => c.args)).toEqual([{ notebook: "nb-1", path: "a.md" }]);
+    sent.length = 0;
+    undoAnswer = { done: [{ path: "Notes/a.md", replaced: 0 }], skipped: [], undo: null, reread: [{ notebook: "nb-1", path: "a.md" }] };
+    await press(/^Undo all$/);
+    await settle();
+    expect(sent.filter((c) => c.cmd === "file_read").map((c) => c.args)).toEqual([{ notebook: "nb-1", path: "a.md" }]);
   });
 
   it("says when the search stopped at the limit", async () => {

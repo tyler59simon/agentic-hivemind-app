@@ -5,7 +5,7 @@ import { deleteDraft, getFileDraft, putDraft } from "../lib/drafts";
 import { isRichDoc, type Loaded as RawLoaded } from "../lib/notebooks";
 import { mergeBody } from "../features/editor/merge";
 import { isLm } from "./adapters/lmdoc";
-import { readDoc, reopenDoc, saveDoc } from "./io";
+import { createDoc, readDoc, reopenDoc, saveDoc } from "./io";
 import { docKey, draftKeyOf, movedPath, type FileRef } from "./keys";
 import { initial, isUnsaved, reduce, type DocEvent, type DocState, type FormatChange, type Loaded } from "./session";
 
@@ -525,14 +525,25 @@ export async function resolveMerge(key: string, text: string, theirs: Loaded) {
 }
 
 /** Drop unsaved edits and show what is on disk. Edits typed while the file is read cancel the reload (Codex review of
- *  32fd236, S5). Returns whether it happened. */
-export async function reload(key: string): Promise<boolean> {
+ *  32fd236, S5). Returns whether it happened.
+ *  `sent` is the text a request just wrote to this file (a page saved again after it was deleted): the page is compared
+ *  with that text, not with the text it has when the file is read, and text typed since then stays as unsaved edits on top
+ *  of the written file (Codex review of 7320d7f, DATA-3). */
+export async function reload(key: string, sent?: string): Promise<boolean> {
   const ref = useDocuments.getState().refs[key];
   const before = get(key), generation = generations.get(key);
   if (!ref || !before) return false;
+  const expected = sent ?? before.text;
   try {
     const theirs = toLoaded(await readDoc(ref));
-    if (!current(key, generation) || get(key)?.text !== before.text) return false;
+    if (!current(key, generation)) return false;
+    const now = get(key);
+    if (sent !== undefined && now && now.text !== expected) {
+      dispatch(key, { type: "merged", text: now.text, theirs });
+      scheduleDraft(key);
+      return true;
+    }
+    if (now?.text !== expected) return false;
     clearTimeout(timers.get(key)); timers.delete(key);
     dispatch(key, { type: "reloaded", theirs });
     await writeDraft(key);
@@ -543,6 +554,16 @@ export async function reload(key: string): Promise<boolean> {
     dispatch(key, { type: "failed", error: String(e) });
     return false;
   }
+}
+
+/** "Save it again here": a page whose file was deleted is created again from its text. Text typed while the file is
+ *  written stays as unsaved edits of the new file (Codex review of 7320d7f, DATA-3). */
+export async function recreate(key: string) {
+  const ref = useDocuments.getState().refs[key], d = get(key);
+  if (!ref || !d) return;
+  const sent = d.text;
+  await createDoc(ref.notebook, ref.path, sent, d.base?.format);
+  await reload(key, sent);
 }
 
 /** Read an open document's file again: a clean one follows it, a dirty one warns. A read that fails for another
@@ -557,7 +578,8 @@ async function recheck(key: string) {
     // A draft kept beside a read-only page comes back once the file can take it, through a load that merges it like
     // any draft (Codex final review of a34fafd, D3b).
     const s = get(key);
-    if (s.kept && s.base && theirs.stamp.sha256 !== s.base.stamp.sha256 && !theirs.readOnly && !theirs.binary) {
+    // The file can also take it without its bytes changing: a read-only attribute was cleared (Codex review of 7320d7f, UI-2).
+    if (s.kept && s.base && (theirs.stamp.sha256 !== s.base.stamp.sha256 || !!s.base.readOnly) && !theirs.readOnly && !theirs.binary) {
       await startLoad(key, ref);
       return;
     }
@@ -639,11 +661,22 @@ export function retarget(notebook: string, from: string, to: string) {
   });
 }
 
-/** Forget a document no tab shows any more; a dirty one keeps its draft for next time. During a move or delete it stays
- *  until that ends: a move writes edits typed meanwhile under the new name, and a failed delete gives the page back
- *  with its edits, even ones too large for a draft (Codex re-reviews of c496e1c and b82e9ab, N3 and D8). */
+/** Called when a page no tab shows any more could not be let go: its unsaved edits could not be written as a draft, so
+ *  the document stays open and the listener says so and puts it back in front of the user (Codex review of 7320d7f, DATA-5). */
+let releaseRefused: (key: string, ref: FileRef | undefined, reason: string) => void = () => {};
+export function onReleaseRefused(listener: (key: string, ref: FileRef | undefined, reason: string) => void) { releaseRefused = listener; }
+const releasing = new Set<string>();
+
+/** Forget a document no tab shows any more; a dirty one keeps its draft for next time. A dirty one whose latest edits are
+ *  on their way to the draft (typed since the last write, a write in flight, or one that failed) is let go only once the
+ *  draft is written: if it cannot be (over the draft size, or a write
+ *  error) it stays open, since closing the last tab would lose the edits (Codex review of 7320d7f, DATA-5). During a move
+ *  or delete it stays until that ends: a move writes edits typed meanwhile under the new name, and a failed delete gives
+ *  the page back with its edits, even ones too large for a draft (Codex re-reviews of c496e1c and b82e9ab, N3 and D8). */
 export function release(key: string) {
   if (isHeld(key)) return;
+  const doc = get(key);
+  if (doc && isUnsaved(doc) && kept.get(key) !== doc.text && (timers.has(key) || writing.has(key) || doc.draftError)) { void keepThenRelease(key); return; }
   const ref = useDocuments.getState().refs[key];
   if (retained.delete(key) && ref) draftLost(`${ref.path}: its unsaved edits belonged to another Living Memory store and could not be kept as a draft`);
   void flushDraft(key);
@@ -657,6 +690,26 @@ export function release(key: string) {
     delete docs[key]; delete refs[key];
     return { docs, refs };
   });
+}
+
+/** Write the draft of a page no tab shows, then let the sync try to release it again: it does so if the edits are kept
+ *  and no tab shows the page again, and otherwise leaves it open. */
+async function keepThenRelease(key: string) {
+  if (releasing.has(key)) return;
+  releasing.add(key);
+  try {
+    clearTimeout(timers.get(key));
+    timers.delete(key);
+    await writeDraft(key);
+  } finally { releasing.delete(key); }
+  const s = get(key);
+  if (!s) return;
+  if (isUnsaved(s) && kept.get(key) !== s.text && s.draftError && !isHeld(key)) {
+    releaseRefused(key, useDocuments.getState().refs[key], s.draftError);
+    return;
+  }
+  // Nothing changed in the store itself: wake the sync, which calls `release` again if still no tab shows the page.
+  useDocuments.setState((st) => ({ ...st }));
 }
 
 /** Drop a document and its draft (the file was deleted on purpose). `store` is the Living Memory store the delete ran in

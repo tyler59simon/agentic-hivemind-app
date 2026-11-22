@@ -73,6 +73,10 @@ vi.mock("@tauri-apps/api/core", () => ({
         if (a.convert) converted.push(path);
         return { status: "saved", sha256: sha(a.text as string), size: 1, mtimeMs: 2 };
       }
+      case "file_create":
+        if (files.has(path)) throw new Error(`${path} already exists`);
+        files.set(path, a.text as string);
+        return { sha256: sha(a.text as string), size: 1, mtimeMs: 1 };
       case "file_delete":
         if (flags.deleteError) throw new Error(flags.deleteError);
         files.delete(path); return `.hivemind/trash/${path}`;
@@ -410,7 +414,8 @@ describe("documents store", () => {
   it("S1 and S5: a refresh or reload that ends after its page was closed and reopened changes nothing", async () => {
     const reopen = async () => {
       ws().closeTab("p0", ws().panes[0].tabs[0].id);
-      expect(state("A.md")).toBeUndefined();
+      // A page with unsaved edits goes once its draft is written.
+      await until(() => state("A.md") === undefined);
       await docs.flushDraft(key("A.md"));
       ws().openTab({ kind: "file", file: ref("A.md") });
       await docs.open(ref("A.md"));
@@ -590,22 +595,49 @@ describe("documents store", () => {
     expect(state("Zone/P.md")).toMatchObject({ status: "dirty", text: "p and a draft" });
   });
 
-  it("N3 (round 3): a closed page whose last draft failed is reported, and the window waits for drafts in flight", async () => {
-    const lost: string[] = [];
-    docs.onDraftLost((line) => lost.push(line));
+  it("DATA-5 (was N3, round 3): closing the last tab of a page whose draft cannot be written keeps the page open and says so", async () => {
+    const { useToasts } = await import("../ui/toast");
+    useToasts.setState({ items: [] });
     ws().openTab({ kind: "file", file: ref("A.md") });
     await docs.open(ref("A.md"));
     docs.edit(key("A.md"), "typed, then the tab closed");
-    expect(docs.draftsPending()).toBe(true);
     flags.failDrafts = true;
     ws().closeTab("p0", ws().panes[0].tabs[0].id);
-    await vi.waitFor(() => expect(lost).toHaveLength(1));
-    expect(lost[0]).toContain("A.md");
+    // The page came back in a tab with its edits, and the user was told.
+    await until(() => ws().panes[0].tabs.length === 1);
+    expect(state("A.md")).toMatchObject({ status: "dirty", text: "typed, then the tab closed" });
+    expect(state("A.md").draftError).toContain("32 MB");
+    expect(useToasts.getState().items.some((t) => t.text.includes("A.md") && /could not be kept as a draft/.test(t.text))).toBe(true);
     expect(docs.draftsPending()).toBe(true);
-    expect(await docs.flushAllDrafts()).toEqual([expect.stringContaining("A.md")]);
-    docs.onDraftLost(() => {});
-    docs.discard(key("A.md"));
+    // The user saves it: nothing was lost, and the next close lets the page go.
+    await docs.save(key("A.md"));
+    expect(files.get("A.md")).toBe("typed, then the tab closed");
+    ws().closeTab("p0", ws().panes[0].tabs[0].id);
+    await until(() => state("A.md") === undefined);
     expect(docs.draftsPending()).toBe(false);
+  });
+
+  it("DATA-5: a page over the 12 MB draft cap stays open when its last tab closes, and discarding is explicit", async () => {
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    docs.edit(key("A.md"), "x".repeat(12 * 1024 * 1024 + 1));
+    ws().closeTab("p0", ws().panes[0].tabs[0].id);
+    await until(() => ws().panes[0].tabs.length === 1);
+    expect(state("A.md")).toMatchObject({ status: "dirty" });
+    expect(state("A.md").text).toHaveLength(12 * 1024 * 1024 + 1);
+    expect(state("A.md").draftError).toContain("12 MB");
+    docs.discard(key("A.md"));
+    expect(state("A.md")).toBeUndefined();
+  });
+
+  it("DATA-5: a page whose draft was written lets go at once, as before", async () => {
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    docs.edit(key("A.md"), "kept in a draft");
+    ws().closeTab("p0", ws().panes[0].tabs[0].id);
+    await until(() => state("A.md") === undefined);
+    expect(ws().panes[0].tabs).toHaveLength(0);
+    expect((drafts.get(await draftKeyOf(key("A.md"))) as { mine: string }).mine).toBe("kept in a draft");
   });
 
   it("N4 (round 3): a draft whose write failed is never read back from the cache", async () => {
@@ -1218,6 +1250,9 @@ describe("documents store", () => {
     try {
       docs.edit(k, "two\n");
       ws().closeTab("p0", ws().panes[0].tabs[0].id);
+      // The page goes once its draft is written; no timer runs before that.
+      await docs.flushAllDrafts();
+      expect(docs.useDocuments.getState().docs[k]).toBeUndefined();
       await vi.advanceTimersByTimeAsync(6000);
       expect(lmPages.get("A.md")).toBe("one\n");
       expect(drafts.get(await draftKeyOf(k))).toMatchObject({ mine: "two\n" });
@@ -1229,5 +1264,78 @@ describe("documents store", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("DATA-3: text typed while Save it again here writes the file stays as unsaved edits of the new file", async () => {
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    files.delete("A.md");
+    await docs.refresh("nb-1", ["A.md"]);
+    expect(state("A.md").banner).toMatchObject({ kind: "gone" });
+    const slow = gate("file_create A.md");
+    const creating = docs.recreate(key("A.md"));
+    await until(() => calls.includes("file_create A.md"));
+    docs.edit(key("A.md"), "one, and typed while the file was created");
+    slow();
+    await creating;
+    expect(files.get("A.md")).toBe("one");
+    expect(state("A.md")).toMatchObject({ status: "dirty", text: "one, and typed while the file was created" });
+    expect(state("A.md").banner).toBeUndefined();
+    await docs.save(key("A.md"));
+    expect(files.get("A.md")).toBe("one, and typed while the file was created");
+  });
+
+  it("DATA-3: with nothing typed meanwhile, the page follows the file it just created", async () => {
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    files.delete("A.md");
+    await docs.refresh("nb-1", ["A.md"]);
+    await docs.recreate(key("A.md"));
+    expect(state("A.md")).toMatchObject({ status: "clean", text: "one" });
+  });
+
+  it("UI-2: a file whose read-only attribute is cleared without its bytes changing becomes editable", async () => {
+    flags.locked.add("A.md");
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    expect(state("A.md")).toMatchObject({ status: "readOnly" });
+    flags.locked.delete("A.md");
+    await docs.refresh("nb-1", ["A.md"]);
+    expect(state("A.md")).toMatchObject({ status: "clean", text: "one" });
+    expect(state("A.md").base?.readOnly).toBeNull();
+    docs.edit(key("A.md"), "one, now edited");
+    expect(state("A.md").status).toBe("dirty");
+  });
+
+  it("UI-2: a draft kept beside a read-only page comes back when only the attribute is cleared", async () => {
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    docs.edit(key("A.md"), "one, mine");
+    await docs.flushAllDrafts();
+    ws().closeTab("p0", ws().panes[0].tabs[0].id);
+    await until(() => state("A.md") === undefined);
+    flags.locked.add("A.md");
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    expect(state("A.md")).toMatchObject({ status: "readOnly", kept: { text: "one, mine" } });
+    flags.locked.delete("A.md");
+    await docs.refresh("nb-1", ["A.md"]);
+    expect(state("A.md")).toMatchObject({ status: "dirty", text: "one, mine" });
+    expect(state("A.md").kept).toBeUndefined();
+  });
+
+  it("UI-2: a file that becomes read-only with the same bytes follows, and an edited page is left alone", async () => {
+    ws().openTab({ kind: "file", file: ref("A.md") });
+    await docs.open(ref("A.md"));
+    flags.locked.add("A.md");
+    await docs.refresh("nb-1", ["A.md"]);
+    expect(state("A.md")).toMatchObject({ status: "readOnly", text: "one" });
+    flags.locked.delete("A.md");
+    await docs.refresh("nb-1", ["A.md"]);
+    docs.edit(key("A.md"), "one, edited");
+    flags.locked.add("A.md");
+    await docs.refresh("nb-1", ["A.md"]);
+    expect(state("A.md")).toMatchObject({ status: "dirty", text: "one, edited" });
+    expect(state("A.md").banner).toBeUndefined();
   });
 });

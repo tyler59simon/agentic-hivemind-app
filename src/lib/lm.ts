@@ -149,9 +149,12 @@ export interface Note {
   /** Absent means not a rule. Only policy and preference notes can be rules. */
   rule?: boolean;
 }
-/** LM's own default is 16,000 characters; Hivemind asks for the most it allows (64,000). */
+/** The most of a note's body `read` returns: Living Memory caps `--max-chars` at 64,000 and has no way to read the rest
+ *  (`truncated` is true then). Text read at the cap is never a base for a write: a body sent back replaces the whole body. */
+export const LM_READ_LIMIT = 64000;
+/** LM's own default is 16,000 characters; Hivemind asks for the most it allows. */
 export const read = (ref: string, opts: { domain?: string; maxChars?: number } = {}) =>
-  run<Note>(view(["read", ref, "--max-chars", String(opts.maxChars ?? 64000), ...(opts.domain ? ["--domain", opts.domain] : [])]));
+  run<Note>(view(["read", ref, "--max-chars", String(opts.maxChars ?? LM_READ_LIMIT), ...(opts.domain ? ["--domain", opts.domain] : [])]));
 
 /** Properties only (no body): cheap, for origins and titles. */
 export const meta = (ref: string) => run<Omit<Note, "body" | "truncated">>(view(["read", ref, "--metadata-only"]));

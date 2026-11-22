@@ -2,6 +2,7 @@
 // index does (`src-tauri/src/notes_index/links.rs`): `[[wiki]]` and `[text](path)`, never inside code or a frontmatter
 // block. `planRewrite` works out, before the move, which links reach the moved pages and what each one must say
 // afterwards; `applyPlan` writes them, page by page, each only while it still has the bytes the index read.
+import { fromMarkdown } from "mdast-util-from-markdown";
 import { movedPath, type FileRef } from "../../documents/keys";
 import { fileName, folderOf, isRichDoc, type Loaded, type SaveOutcome, type Stamp, type FileFormat } from "../../lib/notebooks";
 import type { IncomingLink } from "../../lib/noteindex";
@@ -60,6 +61,21 @@ function mapText(text: string, fn: (link: WrittenLink) => string | null): string
   });
 }
 
+/** The lines of `body` (0-based) that CommonMark reads as code: fenced or indented blocks, also inside a quote or a list item.
+ *  A link written there is an example, not a link (Codex review of 7320d7f, NOTES-5). */
+function codeLines(body: string): Set<number> {
+  const found = new Set<number>();
+  const walk = (node: { type: string; position?: { start: { line: number }; end: { line: number } }; children?: unknown[] }) => {
+    if (node.type === "code" && node.position) {
+      for (let line = node.position.start.line; line <= node.position.end.line; line++) found.add(line - 1);
+      return;
+    }
+    (node.children as (typeof node)[] | undefined)?.forEach(walk);
+  };
+  try { walk(fromMarkdown(body)); } catch { /* the fence tracking in `mapLinks` still holds */ }
+  return found;
+}
+
 /** `text` with every link `fn` answers for rewritten: it gets the link's kind and page part and returns the new page
  *  part, or null to leave the link. Headings, aliases and titles stay as they were. */
 export function mapLinks(text: string, fn: (link: WrittenLink) => string | null): string {
@@ -69,6 +85,7 @@ export function mapLinks(text: string, fn: (link: WrittenLink) => string | null)
     const end = lines.findIndex((l, i) => i > 0 && /^(---|\.\.\.)\s*$/.test(l));
     if (end > 0) start = end + 1;
   }
+  const code = codeLines(lines.slice(start).join("\n"));
   let fence: { ch: string; size: number } | null = null;
   for (let i = start; i < lines.length; i++) {
     const found = /^\s*(`{3,}|~{3,})(.*)$/.exec(lines[i]);
@@ -77,7 +94,7 @@ export function mapLinks(text: string, fn: (link: WrittenLink) => string | null)
       if (!fence) { fence = { ch, size }; continue; }
       if (fence.ch === ch && size >= fence.size && !found[2].trim()) { fence = null; continue; }
     }
-    if (!fence) lines[i] = mapLine(lines[i], fn);
+    if (!fence && !code.has(i - start)) lines[i] = mapLine(lines[i], fn);
   }
   return lines.join("\n");
 }

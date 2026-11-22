@@ -3,8 +3,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { createPortal } from "react-dom";
 import { deleteDraft, getDraft, putDraft } from "../../lib/drafts";
 import { classify, type Problem } from "../../lib/errors";
-import { domainOf, read, taxonomy, taxonomyAdd, update } from "../../lib/lm";
-import { rewriteWikilinks } from "../../lib/note";
+import { domainOf, LM_READ_LIMIT, taxonomy, taxonomyAdd, update } from "../../lib/lm";
 import { useNoteTypes } from "../../lib/noteTypes";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
@@ -15,6 +14,7 @@ import { DirectDialog } from "../plans/DirectDialog";
 import { noteQuery } from "../viewer/NoteView";
 import { MarkdownEditor } from "./MarkdownEditor";
 import { MergeDialog } from "./MergeDialog";
+import { rewriteIncoming } from "./rewriteIncoming";
 import { PropertiesForm } from "./PropertiesForm";
 import { changedPayload, fieldsOf, isDirty, isEmpty, precheck, type Fields } from "./save";
 import { useTitles } from "./useTitles";
@@ -25,6 +25,8 @@ type Banner =
   | { kind: "outside" }
   | { kind: "problems"; problems: string[] }
   | { kind: "error"; problem: Problem };
+
+const TOO_LONG = `This note is now longer than ${LM_READ_LIMIT.toLocaleString("en-US")} characters, and Living Memory gives Hivemind only the start of it, so Hivemind cannot save changes to its text without deleting the rest. Edit the note in its file, or save a copy of your text.`;
 
 /** A banner for an LM refusal, with the one action that fixes it when there is one. */
 export function ProblemBanner({ problem, onRedact, onAddTags }: { problem: Problem; onRedact: () => void; onAddTags: (tags: string[]) => void }) {
@@ -64,6 +66,10 @@ export function NoteEditor({ tab, live, head }: { tab: Tab; live: boolean; head:
   const linksRef = useRef(links);
   linksRef.current = links;
   const dirty = st ? isDirty(st.base, st.mine) : false;
+  // Living Memory returned only the start of this note: a body sent back would replace the whole note, so the body is not editable.
+  const tooLong = !!note.data?.truncated;
+  const tooLongRef = useRef(tooLong);
+  tooLongRef.current = tooLong;
 
   // Load once: a stored draft wins over the saved note (it may be based on an older revision).
   useEffect(() => {
@@ -113,20 +119,10 @@ export function NoteEditor({ tab, live, head }: { tab: Tab; live: boolean; head:
     if (!sources.length) return;
     const run = async () => {
       setDialog(null);
-      let done = 0;
-      const failed: string[] = [];
-      for (const source of sources) {
-        try {
-          const n = await read(source.ref);
-          const body = rewriteWikilinks(n.body, oldTitle, newTitle);
-          if (body === n.body) continue;
-          const r = await update(source.ref, { body, expected_revision: n.revision });
-          recordOperation(r.operation_id);
-          done++;
-        } catch (e) { failed.push(`${source.title}: ${classify(e).message}`); }
-      }
+      const { done, failed, skipped } = await rewriteIncoming(sources, oldTitle, newTitle);
       refreshStore(client);
       toast(`Updated links in ${done} note${done === 1 ? "" : "s"}.`);
+      if (skipped.length) toast(`Not changed, too long to rewrite here (over ${LM_READ_LIMIT.toLocaleString("en-US")} characters): ${skipped.join(", ")}.`, "warn");
       failed.forEach((f) => toast(f, "error"));
     };
     setDialog(
@@ -145,6 +141,7 @@ export function NoteEditor({ tab, live, head }: { tab: Tab; live: boolean; head:
     if (!s) return;
     const payload = changedPayload(s.base, s.mine);
     if (isEmpty(payload)) { toast("Nothing to save."); return; }
+    if (payload.body !== undefined && tooLongRef.current) { setBanner({ kind: "error", problem: { kind: "other", message: TOO_LONG } }); return; }
     const problems = precheck(s.mine, tax.data?.tags ?? [], false, types.def(s.mine.type));
     const unknown = s.mine.tags.filter((t) => tax.data && !tax.data.tags.includes(t));
     if (unknown.length) { setBanner({ kind: "error", problem: { kind: "unknown-tags", message: "", tags: unknown } }); return; }
@@ -168,6 +165,7 @@ export function NoteEditor({ tab, live, head }: { tab: Tab; live: boolean; head:
       const problem = classify(e);
       if (problem.kind === "stale") {
         const fresh = await client.fetchQuery({ ...noteQuery(ref), staleTime: 0 });
+        if (fresh.truncated && payload.body !== undefined) { setBanner({ kind: "error", problem: { kind: "other", message: TOO_LONG } }); return; }
         setMerging({ base: s.base, mine: s.mine, theirs: fieldsOf(fresh), rev: fresh.revision });
       } else setBanner({ kind: "error", problem });
     } finally { setSaving(false); }
@@ -203,11 +201,12 @@ export function NoteEditor({ tab, live, head }: { tab: Tab; live: boolean; head:
       {banner?.kind === "problems" && <div className="banner error"><ul>{banner.problems.map((p) => <li key={p}>{p}</li>)}</ul></div>}
       {banner?.kind === "error" && <ProblemBanner problem={banner.problem} onRedact={() => save({ redact: true })} onAddTags={addTags} />}
       {dialog}
+      {tooLong && <div className="banner warn">This note is longer than {LM_READ_LIMIT.toLocaleString("en-US")} characters. Living Memory gives Hivemind only the start of it, so the text is read-only here: saving a change to it would delete the rest. Title, tags and the other properties can still be changed.</div>}
       <details className="props-toggle">
         <summary>Properties <span className="muted small">{st.mine.type} · {st.mine.tags.join(", ")}</span></summary>
         <PropertiesForm fields={st.mine} note={n} taxonomy={tax.data?.tags ?? []} onChange={edit} />
       </details>
-      <MarkdownEditor doc={st.mine.body} docVersion={st.version} live={live} titles={titles} reveal={reveal}
+      <MarkdownEditor doc={st.mine.body} docVersion={st.version} live={live} titles={titles} reveal={reveal} readOnly={tooLong}
         onChange={(body) => edit({ body })} onSave={() => save()}
         onOpenLink={(target, split) => {
           const node = links?.out.get(target.trim().toLowerCase());

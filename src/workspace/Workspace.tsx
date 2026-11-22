@@ -7,7 +7,8 @@ import { FileTab, saveFileTab } from "../features/notes/FileTab";
 import { NewFileTab } from "../features/notes/NewFileTab";
 import { CompareTab } from "../features/power/Compare";
 import { FindInFilesTab } from "../features/search/FindInFiles";
-import { keyOf } from "../documents/store";
+import { discard, keyOf, useDocuments } from "../documents/store";
+import { isUnsaved } from "../documents/session";
 import { newPageHere } from "../features/notes/actions";
 import { fileName, isMarkdown, isRichDoc, pageTitle } from "../lib/notebooks";
 import { announceDocumentLook, useWhitePaper } from "../lib/paper";
@@ -29,22 +30,31 @@ const label = (tab: Tab) => (tab.kind === "note" ? tab.title || tab.ref?.split("
   : tab.kind === "file" ? tab.title || pageTitle(tab.file?.path ?? "") || "Page"
   : tab.kind === "new-file" ? tab.title || "Untitled" : tab.kind === "compare" ? tab.title || "Compare" : tab.kind === "find" ? "Find in files" : tab.title || "New note");
 
+/** Whether a tab other than `tabId` shows the page at `key` (a split), which then keeps the page open. */
+const shownAgain = (key: string, tabId: string) =>
+  useWorkspace.getState().panes.some((p) => p.tabs.some((t) => t.id !== tabId && t.kind === "file" && t.file && keyOf(t.file) === key));
+
 /** Close a tab, asking first when it holds unsaved edits. */
 export function useCloseTab() {
-  const [asking, setAsking] = useState<{ paneId: string; tabId: string; file?: string; untitled?: boolean } | null>(null);
+  // `lost`: the page's edits cannot be kept as a draft (why), so closing it really drops them (Codex review of 7320d7f, DATA-5).
+  const [asking, setAsking] = useState<{ paneId: string; tabId: string; file?: string; untitled?: boolean; lost?: { key: string; why: string } } | null>(null);
   const closeTab = useWorkspace((s) => s.closeTab);
   const request = (paneId: string, tabId: string) => {
     const ws = useWorkspace.getState();
     const tab = ws.panes.find((p) => p.id === paneId)?.tabs.find((t) => t.id === tabId);
-    if (ws.dirty[tabId]) setAsking({ paneId, tabId, file: tab?.kind === "file" ? fileName(tab.file?.path ?? "") : tab?.kind === "compare" ? "the compared files" : undefined, untitled: tab?.kind === "new-file" });
+    const key = tab?.kind === "file" && tab.file ? keyOf(tab.file) : undefined;
+    const doc = key ? useDocuments.getState().docs[key] : undefined;
+    const lost = key && doc?.draftError && isUnsaved(doc) ? { key, why: doc.draftError } : undefined;
+    if (ws.dirty[tabId]) setAsking({ paneId, tabId, file: tab?.kind === "file" ? fileName(tab.file?.path ?? "") : tab?.kind === "compare" ? "the compared files" : undefined, untitled: tab?.kind === "new-file", lost });
     else closeTab(paneId, tabId);
   };
   const dialog = asking && (
     <Confirm title="Discard unsaved changes?" danger action="Discard"
       message={asking.untitled ? "This new text file was never saved. Its text is lost when the tab closes."
+        : asking.lost ? `The edits to ${asking.file} are not saved, and Hivemind could not keep them as a draft (${asking.lost.why}). They are lost if you discard them. Cancel, then save the page or save a copy first.`
         : asking.file ? `This tab has edits that are not saved to ${asking.file}. A draft is kept, and they come back when you open the page again.`
         : "This tab has edits that are not saved to Living Memory. A draft is kept until you discard it."}
-      onAnswer={(yes) => { if (yes) closeTab(asking.paneId, asking.tabId); setAsking(null); }} />
+      onAnswer={(yes) => { if (yes) { if (asking.lost && !shownAgain(asking.lost.key, asking.tabId)) discard(asking.lost.key); closeTab(asking.paneId, asking.tabId); } setAsking(null); }} />
   );
   return { request, dialog };
 }

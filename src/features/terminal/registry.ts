@@ -136,7 +136,8 @@ function watchDrops() {
     // The position is in physical pixels.
     const live = terminalAt(e.payload.position.x / window.devicePixelRatio, e.payload.position.y / window.devicePixelRatio);
     if (!live) return;
-    live.term.paste(quotePaths(e.payload.paths));
+    // A PowerShell tab expands `$` and backticks inside double quotes, so it gets single-quoted literals.
+    live.term.paste(quotePaths(e.payload.paths, sources.get(live.id)?.shell ? "powershell" : "other"));
     live.term.focus();
   }).catch(() => { dropListener = false; });
 }

@@ -4,7 +4,8 @@ import type { QueryClient } from "@tanstack/react-query";
 import type { FilesChanged } from "../lib/notebooks";
 import { lmContainer } from "./adapters/lmdoc";
 import { useWorkspace } from "../workspace/store";
-import { keyOf, refresh, release, retarget, useDocuments } from "./store";
+import { toast } from "../ui/toast";
+import { keyOf, onReleaseRefused, refresh, release, retarget, useDocuments } from "./store";
 import { isUnsaved } from "./session";
 
 let paused = false;
@@ -37,8 +38,14 @@ function apply() {
 /** Start keeping both stores in step; returns the stop function. */
 export function startDocumentSync() {
   const stops = [useWorkspace.subscribe(apply), useDocuments.subscribe(apply)];
+  // The last tab of a page was closed but its unsaved edits cannot be kept as a draft: the page comes back in a tab, which
+  // says so and offers to save it, save a copy or discard the edits (Codex review of 7320d7f, DATA-5).
+  onReleaseRefused((_key, file, reason) => {
+    if (file) useWorkspace.getState().openTab({ kind: "file", file });
+    toast(`${file?.path ?? "A page"} has unsaved edits that could not be kept as a draft (${reason}), so it stays open. Save it, save a copy or discard the edits.`, "error");
+  });
   apply();
-  return () => stops.forEach((stop) => stop());
+  return () => { stops.forEach((stop) => stop()); onReleaseRefused(() => {}); };
 }
 
 /** A page or folder moved: documents and tabs follow together (one at a time would let `apply` drop the document

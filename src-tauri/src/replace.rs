@@ -383,6 +383,57 @@ pub struct Applied {
     pub skipped: Vec<Skipped>,
     /// The id that Undo all takes; none when nothing was changed.
     pub undo: Option<String>,
+    /// The documents open in a tab that show a file written (or put back), so they read it again: the write is Hivemind's
+    /// own, which the watcher does not report.
+    pub reread: Vec<Reread>,
+}
+
+/// A document open in a tab, as the webview names it (a page of a notebook, or a loose file). `unsaved`: it has edits that
+/// are not in its file.
+#[derive(Deserialize, Debug, Clone)]
+pub struct OpenDoc {
+    pub notebook: String,
+    pub path: String,
+    pub unsaved: bool,
+}
+
+/// An open document whose file was written.
+#[derive(Serialize, Debug, PartialEq)]
+pub struct Reread {
+    pub notebook: String,
+    pub path: String,
+}
+
+/// The open documents that are files of `root`, each with its path below the root as the file system resolves it. A
+/// document is named by its own notebook and path, which may be spelled differently from the scope's (a folder that is
+/// also a notebook, or a notebook below the folder), so a file is the same file when it resolves to the same place.
+/// `resolve` gives a document's file.
+fn docs_below(root: &Path, open: Vec<OpenDoc>, resolve: impl Fn(&OpenDoc) -> Option<PathBuf>) -> Vec<(OpenDoc, String)> {
+    open.into_iter()
+        .filter_map(|doc| {
+            let full = resolve(&doc)?;
+            let rel = contain::resolved_rel(root, &full)?;
+            Some((doc, rel))
+        })
+        .collect()
+}
+
+/// The paths of the scope with unsaved edits in a tab.
+fn unsaved_of(below: &[(OpenDoc, String)]) -> Vec<String> {
+    below.iter().filter(|(doc, _)| doc.unsaved).map(|(_, rel)| rel.clone()).collect()
+}
+
+/// The open documents that show a file `applied` wrote.
+fn reread_of(below: &[(OpenDoc, String)], applied: &Applied) -> Vec<Reread> {
+    below
+        .iter()
+        .filter(|(_, rel)| applied.done.iter().any(|d| same_path(&d.path, rel)))
+        .map(|(doc, _)| Reread { notebook: doc.notebook.clone(), path: doc.path.clone() })
+        .collect()
+}
+
+fn open_below(state: &AppState, root: &Path, open: Vec<OpenDoc>) -> Vec<(OpenDoc, String)> {
+    docs_below(root, open, |doc| studio::resolve_file(state, &doc.notebook, &doc.path, false).ok().map(|(full, _)| full))
 }
 
 /// The files written (or put back) by `apply` and `undo`, for the index.
@@ -599,7 +650,8 @@ pub async fn replace_preview(state: State<'_, AppState>, scope: Scope, query: Qu
     crate::blocking(move || preview(&target, scope.sub.as_deref(), &query, replacement.as_deref())).await
 }
 
-/// Write the chosen replacements. `unsaved`: the paths (from the scope's folder) that have unsaved edits in a tab.
+/// Write the chosen replacements. `open`: the documents open in a tab; those with unsaved edits are matched to the scope's
+/// files by where they resolve to, and the ones that show a file written are named in the answer to read it again.
 #[tauri::command]
 pub async fn replace_apply(
     state: State<'_, AppState>,
@@ -607,11 +659,14 @@ pub async fn replace_apply(
     query: Query,
     replacement: String,
     files: Vec<Chosen>,
-    unsaved: Vec<String>,
+    open: Vec<OpenDoc>,
 ) -> Result<Applied, String> {
     let target = target(&state, &scope)?;
     let history = state.history_dir.clone();
+    let below = open_below(&state, &target.root, open);
+    let unsaved = unsaved_of(&below);
     let (mut applied, written) = crate::blocking(move || apply(&target, &history, &query, &replacement, &files, &unsaved)).await?;
+    applied.reread = reread_of(&below, &applied);
     tell_index(&state, &written.paths);
     if !written.undo.is_empty() {
         applied.undo = Some(state.replace_undos.keep(scope, written.undo));
@@ -621,11 +676,14 @@ pub async fn replace_apply(
 
 /// Undo a replace (the id `replace_apply` gave): files changed since are skipped.
 #[tauri::command]
-pub async fn replace_undo(state: State<'_, AppState>, undo: String, unsaved: Vec<String>) -> Result<Applied, String> {
+pub async fn replace_undo(state: State<'_, AppState>, undo: String, open: Vec<OpenDoc>) -> Result<Applied, String> {
     let (scope, entries) = state.replace_undos.take(&undo).ok_or("This replace can no longer be undone from here; restore the files from their History")?;
     let target = target(&state, &scope)?;
     let history = state.history_dir.clone();
-    let (applied, written) = crate::blocking(move || Ok(undo_all(&target, &history, &entries, &unsaved))).await?;
+    let below = open_below(&state, &target.root, open);
+    let unsaved = unsaved_of(&below);
+    let (mut applied, written) = crate::blocking(move || Ok(undo_all(&target, &history, &entries, &unsaved))).await?;
+    applied.reread = reread_of(&below, &applied);
     tell_index(&state, &written.paths);
     Ok(applied)
 }
@@ -950,6 +1008,45 @@ mod tests {
         assert_eq!(a.done.iter().map(|d| d.path.as_str()).collect::<Vec<_>>(), ["other.md"]);
         assert!(a.skipped[0].why.contains("unsaved edits"));
         assert_eq!(read(&t.root, "Open.md"), b"needle\n");
+    }
+
+    fn doc(notebook: &str, path: &str, unsaved: bool) -> OpenDoc {
+        OpenDoc { notebook: notebook.into(), path: path.into(), unsaved }
+    }
+
+    // Codex review of 7320d7f, NOTES-4: a folder searched as an Other Folder can also be, or hold, a notebook. A page open in
+    // that notebook is named by the notebook's own path, which is not the path below the folder.
+    #[test]
+    fn an_open_page_is_matched_to_the_scopes_file_by_where_it_resolves_not_by_its_notebook_path() {
+        let (t, h) = setup();
+        put(&t.root, "Notes/a.md", b"needle\n");
+        put(&t.root, "Notes/b.md", b"needle\n");
+        let notebook = t.root.join("Notes");
+        // Notebook `nb-1` is the Notes folder: its page `a.md` is the scope's `Notes/a.md`.
+        let open = vec![doc("nb-1", "a.md", true), doc("nb-1", "b.md", false), doc("nb-2", "elsewhere.md", true)];
+        let nowhere = scratch();
+        let below = docs_below(&t.root, open, |d| if d.notebook == "nb-1" { Some(notebook.join(&d.path)) } else { Some(nowhere.join(&d.path)) });
+        assert_eq!(unsaved_of(&below), ["Notes/a.md"]);
+        let q = query("needle");
+        let p = preview(&t, None, &q, Some("pin")).unwrap();
+        let (mut a, _) = apply(&t, &h, &q, "pin", &all(&p), &unsaved_of(&below)).unwrap();
+        assert_eq!(a.done.iter().map(|d| d.path.as_str()).collect::<Vec<_>>(), ["Notes/b.md"]);
+        assert!(a.skipped[0].path == "Notes/a.md" && a.skipped[0].why.contains("unsaved edits"));
+        assert_eq!(read(&t.root, "Notes/a.md"), b"needle\n");
+        // The page that was written is named, so its tab reads the file again; the skipped one is not.
+        a.reread = reread_of(&below, &a);
+        assert_eq!(a.reread, [Reread { notebook: "nb-1".into(), path: "b.md".into() }]);
+    }
+
+    #[test]
+    fn a_document_outside_the_scope_is_neither_unsaved_nor_reread_in_it() {
+        let (t, _) = setup();
+        let other = scratch();
+        put(&other, "a.md", b"x");
+        let below = docs_below(&t.root, vec![doc("nb-9", "a.md", true)], |d| Some(other.join(&d.path)));
+        assert!(below.is_empty());
+        let none = docs_below(&t.root, vec![doc("lm:d:n", "a.md", true)], |_| None);
+        assert!(none.is_empty());
     }
 
     #[test]

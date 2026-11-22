@@ -17,7 +17,58 @@ describe("mapLinks", () => {
 
   it("leaves code, frontmatter and look-alikes alone", () => {
     const text = "---\nrelated: \"[[Old]]\"\n---\n[[Old]] here\n```\n[[Old]]\n```\nand `[[Old]]` but [[Old]]\n~~~md\n[[Old]]\n~~~\n    [[Old]]";
-    expect(mapLinks(text, swap("Old", "New"))).toBe("---\nrelated: \"[[Old]]\"\n---\n[[New]] here\n```\n[[Old]]\n```\nand `[[Old]]` but [[New]]\n~~~md\n[[Old]]\n~~~\n    [[New]]");
+    expect(mapLinks(text, swap("Old", "New"))).toBe("---\nrelated: \"[[Old]]\"\n---\n[[New]] here\n```\n[[Old]]\n```\nand `[[Old]]` but [[New]]\n~~~md\n[[Old]]\n~~~\n    [[Old]]");
+  });
+
+  // Codex review of 7320d7f, NOTES-5: a link in an indented code block, or in fenced code inside a quote or a list, is an example.
+  it("leaves indented code, and fenced code inside a quote or a list, alone", () => {
+    const text = [
+      "[[Old]] live",
+      "",
+      "    [[Old]] in an indented block",
+      "    [x](Old.md)",
+      "",
+      "> quote [[Old]]",
+      "> ```",
+      "> [[Old]]",
+      "> ```",
+      "",
+      "- item [[Old]]",
+      "  ```",
+      "  [[Old]]",
+      "  ```",
+      "",
+      "1. numbered",
+      "",
+      "       [[Old]] indented under the item",
+      "",
+      "a paragraph line",
+      "    [[Old]] continues the paragraph, so it is a link",
+    ].join("\n");
+    const out = mapLinks(text, swap("Old", "New"));
+    expect(out.split("\n")).toEqual([
+      "[[New]] live",
+      "",
+      "    [[Old]] in an indented block",
+      "    [x](Old.md)",
+      "",
+      "> quote [[New]]",
+      "> ```",
+      "> [[Old]]",
+      "> ```",
+      "",
+      "- item [[New]]",
+      "  ```",
+      "  [[Old]]",
+      "  ```",
+      "",
+      "1. numbered",
+      "",
+      "       [[Old]] indented under the item",
+      "",
+      "a paragraph line",
+      "    [[New]] continues the paragraph, so it is a link",
+    ]);
   });
 
   it("rewrites a Markdown link's path, escaping spaces, and keeps its text, fragment and title", () => {

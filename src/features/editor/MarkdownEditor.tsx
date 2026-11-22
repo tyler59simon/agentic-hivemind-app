@@ -9,9 +9,11 @@ export interface EditorProps {
   titles: () => string[];
   onOpenLink: (target: string, split: boolean) => void;
   reveal?: { line: number; at: number } | null;
+  /** The text can be read and selected but not changed. */
+  readOnly?: boolean;
 }
 
 /** The note editor: Markdown, wrapped lines, no line numbers. */
 export function MarkdownEditor(props: EditorProps) {
-  return <CodeEditor {...props} language="markdown" readOnly={false} lineNumbers={false} placeholder="Write the summary first…" />;
+  return <CodeEditor {...props} language="markdown" readOnly={props.readOnly ?? false} lineNumbers={false} placeholder="Write the summary first…" />;
 }

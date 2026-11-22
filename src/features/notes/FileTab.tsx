@@ -1,11 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ellipsis, Save } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { convertToUtf8, discardKept, edit, inOwnStore, isArriving, isDeleting, keyOf, open, reformat, reload, resolveMerge, save, useDocuments } from "../../documents/store";
+import { convertToUtf8, discardKept, edit, inOwnStore, isArriving, isDeleting, keyOf, open, recreate as recreatePageAgain, reformat, reload, resolveMerge, save, useDocuments } from "../../documents/store";
 import { isUnsaved, mergeable, type DocState } from "../../documents/session";
 import { classify } from "../../lib/errors";
 import { assetLink, attachFile, openAttachment, parseLm } from "../../documents/adapters/lmdoc";
-import { createDoc, lmAssets, treeQuery } from "../../documents/io";
+import { lmAssets, treeQuery } from "../../documents/io";
 import { lmNotebooksQuery } from "../../lib/lm";
 import { fileName, folderOf, isMarkdown, isRichDoc, notebooksQuery, pageTitle, revealFile, type Notebook } from "../../lib/notebooks";
 import { assetBase, isLoose, recentQuery, recentRef } from "../../lib/opens";
@@ -146,7 +146,14 @@ function Banners({ doc, docKey, onMerge, onRecreate, conflict }: { doc: DocState
     );
   }
   if (doc.draftError && isUnsaved(doc)) {
-    out.push(<div key="draft" className="banner error note-banner">Your unsaved edits are not backed up as a draft ({doc.draftError}). Save the page to keep them.</div>);
+    out.push(
+      <div key="draft" className="banner error note-banner">Your unsaved edits are not backed up as a draft ({doc.draftError}). Save the page to keep them, or save a copy.
+        <div className="actions">
+          {ref && !doc.base?.binary && <button onClick={() => void copyAs(doc.text, fileName(ref.path))}>Save a copy as…</button>}
+          <button onClick={() => reloadPage(docKey)} title="Drop my edits and show the file as it is on disk">Discard my edits</button>
+        </div>
+      </div>,
+    );
   }
   if (doc.banner?.kind === "restored") {
     out.push(
@@ -283,7 +290,8 @@ export function FileTab({ tab }: { tab: Tab }) {
     if (!d) return;
     if (!inOwnStore(key)) { toast("This page belongs to another Living Memory store, so it was not created here.", "warn"); return; }
     // A Living Memory page comes back with the line endings and byte order mark it had (Codex review of 32fee20, D5).
-    createDoc(ref.notebook, ref.path, d.text, d.base?.format).then(() => reloadPage(key), (e) => toast(classify(e).message, "error"));
+    // Text typed while the file is created stays as unsaved edits of the new file (Codex review of 7320d7f, DATA-3).
+    recreatePageAgain(key).catch((e) => toast(classify(e).message, "error"));
   };
   /** Copy a file the user picks into the notebook's attachments and link it at the end of the page (NS-2C). A page that
    *  cannot take the link is said before anything is copied (Codex review of 32fee20, U2). */
