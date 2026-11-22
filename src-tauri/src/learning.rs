@@ -269,7 +269,7 @@ fn reviewer(usd: f64) -> crate::oneshot::Call<'static> {
 /// The reviewer's command line: print mode, no tools, no plugins, settings, MCP servers or saved session, a cost cap.
 #[cfg(test)]
 pub fn argv() -> Vec<String> {
-    crate::oneshot::argv(&reviewer(crate::settings::DEFAULT_REVIEW_CALL_USD))
+    crate::oneshot::argv(&reviewer(crate::settings::DEFAULT_REVIEW_CALL_USD), true)
 }
 
 #[derive(Deserialize, Debug, Default, PartialEq)]
@@ -377,6 +377,8 @@ pub struct Deps<'a> {
     pub bridge: &'a crate::bridge::Bridge,
     pub skills: &'a Skills,
     pub claude: String,
+    /// `Settings::claude_under_managed_policy`: the call runs although Claude Code managed policy is deployed.
+    pub allow_managed: bool,
     pub daily_usd: f64,
     /// The most one review may spend (`Settings::review_call_usd`).
     pub review_usd: f64,
@@ -478,7 +480,7 @@ Review these commits for knowledge worth keeping.
             memory: vec![], skill: None, skill_name: None, skill_applied: false, cost_usd: None, error: None,
         };
         let reservation = format!("review-{}-{}", subject.key, run.at);
-        let (value, cost) = crate::oneshot::run(&deps.claude, &self.dir, &self.ledger, deps.daily_usd, &reservation, &reviewer(deps.review_usd), input, TIMEOUT, deps.cancel.map(crate::oneshot::Cancel::flag));
+        let (value, cost) = crate::oneshot::run(&deps.claude, deps.allow_managed, &self.dir, &self.ledger, deps.daily_usd, &reservation, &reviewer(deps.review_usd), input, TIMEOUT, deps.cancel.map(crate::oneshot::Cancel::flag));
         let answer = answer_of(value);
         run.cost_usd = cost;
         let answer = match answer {
@@ -895,7 +897,7 @@ mod tests {
         let skills = Skills::new(dir.join("skills"), vec![]);
         let cancel = crate::oneshot::Cancel::default();
         assert!(cancel.cancel(|| Ok(())).unwrap());
-        let deps = Deps { bridge: &bridge, skills: &skills, claude: "missing-claude".into(), daily_usd: 1.0, review_usd: 0.25, auto_patch: false, cancel: Some(&cancel) };
+        let deps = Deps { bridge: &bridge, skills: &skills, claude: "missing-claude".into(), allow_managed: false, daily_usd: 1.0, review_usd: 0.25, auto_patch: false, cancel: Some(&cancel) };
         let run = learning.review_commits(&deps, "a1b2c3d4-e5f6a7b8", "Nightly commits", "p", "r", "commit e5f6a7b8
 
     Add retries");
@@ -910,7 +912,7 @@ mod tests {
         let learning = Learning::new(dir.clone());
         let bridge = crate::bridge::Bridge::new(crate::settings::Launch { program: "missing".into(), args: vec![], script: PathBuf::new(), root: None });
         let skills = Skills::new(dir.join("skills"), vec![]);
-        let deps = Deps { bridge: &bridge, skills: &skills, claude: "missing-claude".into(), daily_usd: 0.0, review_usd: 0.25, auto_patch: false, cancel: None };
+        let deps = Deps { bridge: &bridge, skills: &skills, claude: "missing-claude".into(), allow_managed: false, daily_usd: 0.0, review_usd: 0.25, auto_patch: false, cancel: None };
         let mut s = info();
         s.files_changed = Some(Totals { files: 1, added: 1, removed: 0 });
         assert!(learning.review(&deps, &s, &[], Trigger::Finished).is_none(), "waits for the decision");

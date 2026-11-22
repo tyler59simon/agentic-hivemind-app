@@ -48,9 +48,30 @@ fn native_codex(package: &Path) -> Option<PathBuf> {
         .find(|exe| exe.is_file())
 }
 
-/// The Codex program: the saved path, else the npm install's native binary, else `node` and the npm launcher script.
-/// `path_dirs` and `home` are parameters so tests never touch the real machine.
-pub fn locate_codex(saved: &Settings, path_dirs: &[PathBuf], home: &Path) -> Result<Cli, String> {
+/// Codex from an npm install in `dir` (the folder that holds `codex.cmd` and `node_modules`): its native binary, else `node` and
+/// the launcher script.
+fn npm_codex(dir: &Path) -> Option<Cli> {
+    let package = dir.join("node_modules").join("@openai").join("codex");
+    if let Some(exe) = native_codex(&package) {
+        return Some(Cli::direct(&exe));
+    }
+    let script = package.join("bin").join("codex.js");
+    script.is_file().then(|| Cli::node(&script))
+}
+
+/// Where a per-machine (all users) install of Codex may be. None of these is documented by Codex or recorded in this
+/// repository: `Codex` and `OpenAI\Codex` for a copy of the program, and `nodejs` for an npm install whose prefix an
+/// administrator set to Node's own folder. The Codex desktop app's copy under `WindowsApps` is not one of them, because it
+/// is not the command line program.
+pub fn machine_folders() -> Vec<PathBuf> {
+    crate::agent::claude::under_program_files(std::env::var_os("ProgramFiles").map(PathBuf::from), &["Codex", r"OpenAI\Codex", "nodejs"])
+}
+
+/// The Codex program: the saved path, else a per-machine install in `machine_dirs` (a `codex.exe`, else an npm install),
+/// else the npm install's native binary, else `node` and the npm launcher script. Per-machine folders come first because an
+/// application allow list (AppLocker) usually permits them and the user's own npm folders usually are not.
+/// `machine_dirs`, `path_dirs` and `home` are parameters so tests never touch the real machine.
+pub fn locate_codex(saved: &Settings, machine_dirs: &[PathBuf], path_dirs: &[PathBuf], home: &Path) -> Result<Cli, String> {
     let mut npm_folders: Option<Vec<PathBuf>> = None;
     if let Some(path) = saved.codex_path.as_deref().map(str::trim).map(Path::new).filter(|path| path.is_file()) {
         if !cfg!(windows) || extension_is(path, "exe") {
@@ -65,24 +86,28 @@ pub fn locate_codex(saved: &Settings, path_dirs: &[PathBuf], home: &Path) -> Res
     }
     if !cfg!(windows) {
         let usual = [PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/usr/local/bin"), home.join(".local").join("bin")];
-        return path_dirs
+        return machine_dirs
             .iter()
+            .chain(path_dirs.iter())
             .chain(usual.iter())
             .map(|dir| dir.join("codex"))
             .find(|path| path.is_file())
             .map(|path| Cli::direct(&path))
             .ok_or_else(|| NO_CODEX.to_string());
     }
-    let folders = npm_folders.unwrap_or_else(|| path_dirs.iter().filter(|dir| dir.join("codex.cmd").is_file()).cloned().collect());
-    for dir in folders {
-        let package = dir.join("node_modules").join("@openai").join("codex");
-        if let Some(exe) = native_codex(&package) {
+    // A saved `codex.cmd` names the npm folder to use, so it goes before the per-machine folders too.
+    for dir in machine_dirs.iter().filter(|_| npm_folders.is_none()) {
+        let exe = dir.join("codex.exe");
+        if exe.is_file() {
             return Ok(Cli::direct(&exe));
         }
-        let script = package.join("bin").join("codex.js");
-        if script.is_file() {
-            return Ok(Cli::node(&script));
+        if let Some(cli) = npm_codex(dir) {
+            return Ok(cli);
         }
+    }
+    let folders = npm_folders.unwrap_or_else(|| path_dirs.iter().filter(|dir| dir.join("codex.cmd").is_file()).cloned().collect());
+    if let Some(cli) = folders.iter().find_map(|dir| npm_codex(dir)) {
+        return Ok(cli);
     }
     path_dirs
         .iter()
@@ -96,7 +121,7 @@ pub fn locate_codex(saved: &Settings, path_dirs: &[PathBuf], home: &Path) -> Res
 pub fn codex(saved: &Settings) -> Result<Cli, String> {
     let home = dirs::home_dir().ok_or("Could not find your home folder")?;
     let path_dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
-    locate_codex(saved, &path_dirs, &home)
+    locate_codex(saved, &machine_folders(), &path_dirs, &home)
 }
 
 /// Claude Code for a PTY: `agent::claude::available`, with the bare name spelled `claude.exe` on Windows
@@ -350,28 +375,75 @@ mod tests {
             assert!(!cli.program.ends_with("codex"), "{}", cli.program);
         };
 
-        let found = locate_codex(&none, &dirs, &home).unwrap();
+        let found = locate_codex(&none, &[], &dirs, &home).unwrap();
         assert_eq!(found, Cli { program: exe.display().to_string(), args: vec![] });
         sane(&found);
 
         std::fs::remove_file(&exe).unwrap();
-        let found = locate_codex(&none, &dirs, &home).unwrap();
+        let found = locate_codex(&none, &[], &dirs, &home).unwrap();
         assert_eq!(found, Cli { program: "node".into(), args: vec![script.display().to_string()] });
         sane(&found);
 
         // A saved path that does not exist falls through to PATH.
         let gone = Settings { codex_path: Some(root.join("gone.exe").display().to_string()), ..Default::default() };
-        assert_eq!(locate_codex(&gone, &dirs, &home).unwrap().program, "node");
+        assert_eq!(locate_codex(&gone, &[], &dirs, &home).unwrap().program, "node");
 
         std::fs::remove_file(&script).unwrap();
-        assert_eq!(locate_codex(&none, &dirs, &home), Err(NO_CODEX.to_string()));
+        assert_eq!(locate_codex(&none, &[], &dirs, &home), Err(NO_CODEX.to_string()));
 
         // A saved program wins, whatever PATH holds.
         std::fs::write(&exe, "").unwrap();
         let chosen = root.join("x.exe");
         std::fs::write(&chosen, "").unwrap();
         let saved = Settings { codex_path: Some(chosen.display().to_string()), ..Default::default() };
-        assert_eq!(locate_codex(&saved, &dirs, &home).unwrap(), Cli { program: chosen.display().to_string(), args: vec![] });
+        assert_eq!(locate_codex(&saved, &[], &dirs, &home).unwrap(), Cli { program: chosen.display().to_string(), args: vec![] });
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_per_machine_codex_comes_before_path_and_npm() {   // REG-17
+        let root = temp("codex-machine");
+        let (npm, home) = (root.join("npm"), root.join("home"));
+        let (copy, prefix) = (root.join("Program Files").join("Codex"), root.join("Program Files").join("nodejs"));
+        let npm_script = npm.join("node_modules").join("@openai").join("codex").join("bin").join("codex.js");
+        let machine_script = prefix.join("node_modules").join("@openai").join("codex").join("bin").join("codex.js");
+        for file in [npm.join("codex.cmd"), npm_script.clone(), machine_script.clone(), copy.join("codex.exe")] {
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, "").unwrap();
+        }
+        let (none, path_dirs, machine) = (Settings::default(), [npm.clone()], [copy.clone(), prefix.clone()]);
+        let node = |script: &Path| Cli { program: "node".into(), args: vec![script.display().to_string()] };
+        // A codex.exe in a per-machine folder beats the npm install on PATH.
+        assert_eq!(locate_codex(&none, &machine, &path_dirs, &home).unwrap(), Cli { program: copy.join("codex.exe").display().to_string(), args: vec![] });
+        // Without it, a machine-wide npm install (here under the folder an administrator set as npm's prefix) still beats PATH.
+        std::fs::remove_file(copy.join("codex.exe")).unwrap();
+        assert_eq!(locate_codex(&none, &machine, &path_dirs, &home).unwrap(), node(&machine_script));
+        // With nothing per machine, PATH and the npm folders work as before.
+        assert_eq!(locate_codex(&none, &[], &path_dirs, &home).unwrap(), node(&npm_script));
+        assert_eq!(locate_codex(&none, std::slice::from_ref(&copy), &path_dirs, &home).unwrap(), node(&npm_script));
+        // The saved program still wins over everything.
+        let chosen = root.join("x.exe");
+        std::fs::write(&chosen, "").unwrap();
+        let saved = Settings { codex_path: Some(chosen.display().to_string()), ..Default::default() };
+        assert_eq!(locate_codex(&saved, &machine, &path_dirs, &home).unwrap(), Cli { program: chosen.display().to_string(), args: vec![] });
+        // So does a saved codex.cmd, which names the npm folder to use.
+        let saved_cmd = Settings { codex_path: Some(npm.join("codex.cmd").display().to_string()), ..Default::default() };
+        assert_eq!(locate_codex(&saved_cmd, &machine, &[], &home).unwrap(), node(&npm_script));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_per_machine_codex_comes_before_path() {   // REG-17
+        let root = temp("codex-machine");
+        let (machine, bin, home) = (root.join("opt"), root.join("bin"), root.join("home"));
+        for dir in [&machine, &bin] {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join("codex"), "").unwrap();
+        }
+        let found = locate_codex(&Settings::default(), std::slice::from_ref(&machine), &[bin], &home).unwrap();
+        assert_eq!(found, Cli { program: machine.join("codex").display().to_string(), args: vec![] });
         std::fs::remove_dir_all(root).ok();
     }
 
@@ -385,11 +457,11 @@ mod tests {
         let home = root.join("home");
         let found = bin.join("codex");
         std::fs::write(&found, "").unwrap();
-        assert_eq!(locate_codex(&none, &[bin.clone()], &home).unwrap(), Cli { program: found.display().to_string(), args: vec![] });
+        assert_eq!(locate_codex(&none, &[], &[bin.clone()], &home).unwrap(), Cli { program: found.display().to_string(), args: vec![] });
         std::fs::remove_file(&found).unwrap();
         // The fixed folders may hold a real codex on this machine, so only check the error without one.
         if !Path::new("/opt/homebrew/bin/codex").exists() && !Path::new("/usr/local/bin/codex").exists() {
-            assert_eq!(locate_codex(&none, &[bin], &home), Err(NO_CODEX.to_string()));
+            assert_eq!(locate_codex(&none, &[], &[bin], &home), Err(NO_CODEX.to_string()));
         }
         std::fs::remove_dir_all(root).ok();
     }

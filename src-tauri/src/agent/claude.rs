@@ -4,7 +4,7 @@ use super::events::{Decision, Outcome, RunEvent, clip};
 use super::scope::{Policy, PolicyMode, Spec, governed_memory_command};
 use crate::settings::Settings;
 use serde_json::{Value, json};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -154,7 +154,11 @@ impl Adapter for ClaudeCode {
         if spec.isolated {
             // No settings file at all (so no user allow rules), no MCP servers, skills or commands, and only the shell and the
             // to-do list: what may run is exactly the allow rules below.
-            command.args(["--restricted", "--tools", "Bash,PowerShell,TodoWrite", "--strict-mcp-config", "--disable-slash-commands"]);
+            command.args(["--restricted", "--tools", "Bash,PowerShell,TodoWrite"]);
+            if spec.strict_mcp {
+                command.arg("--strict-mcp-config");
+            }
+            command.arg("--disable-slash-commands");
         }
         command.args([if spec.resume { "--resume" } else { "--session-id" }, &spec.session_id]);
         command.args(["--max-budget-usd", &spec.budget_usd.to_string()]);
@@ -367,13 +371,96 @@ fn mode_of(line: &str) -> Option<PolicyMode> {
     }
 }
 
-/// The CLI to launch: the saved path, else the native installer's place, else `claude` on PATH.
+/// The oldest Claude Code that Hivemind's flags are recorded as checked on (REG-31). The spike (`docs/plans/spikes/claude-headless.md`)
+/// checked the session flags on 2.1.322. No document records the version for `--safe-mode`, `--restricted`,
+/// `--no-session-persistence` or `--disable-slash-commands`, so this is the highest version the repository names
+/// (2.1.329, in `managed.rs`).
+pub const MIN_VERSION: (u32, u32, u32) = (2, 1, 329);
+
+/// The version in the output of `claude --version` ("2.1.322 (Claude Code)"), as (major, minor, patch): the first word that
+/// reads as three numbers. None when no word does, so a changed output format is not mistaken for an old version.
+pub fn parse_version(output: &str) -> Option<(u32, u32, u32)> {
+    output.split_whitespace().find_map(|word| {
+        let mut parts = word.trim_start_matches('v').split('.').map(|part| part.chars().take_while(char::is_ascii_digit).collect::<String>().parse::<u32>().ok());
+        Some((parts.next()??, parts.next()??, parts.next()??))
+    })
+}
+
+/// The programs whose version passed the check, so `--version` runs once for each (a refused program is looked at again).
+static CHECKED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Refuse a Claude Code older than `MIN_VERSION`. `probe` prints `<program> --version`, or None when it could not run (the
+/// start then reports its own error). An output with no readable version is let through and logged, so a changed format does
+/// not lock users out.
+fn check_version(program: &str, probe: impl Fn(&str) -> Option<String>, checked: &std::sync::Mutex<Vec<String>>) -> Result<(), String> {
+    if checked.lock().unwrap().iter().any(|done| done == program) {
+        return Ok(());
+    }
+    let Some(output) = probe(program) else { return Ok(()) };
+    match parse_version(&output) {
+        Some(found) if found < MIN_VERSION => {
+            let name = |(major, minor, patch): (u32, u32, u32)| format!("{major}.{minor}.{patch}");
+            return Err(format!(
+                "Claude Code {} is installed, and Hivemind needs {} or newer. Update Claude Code, or set the path to a newer one in Settings.",
+                name(found),
+                name(MIN_VERSION)
+            ));
+        }
+        Some(_) => {}
+        None => eprintln!("Hivemind could not read a version from `{program} --version` ({:?}); starting it anyway", output.trim()),
+    }
+    checked.lock().unwrap().push(program.to_string());
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn probe(program: &str) -> Option<String> {
+    let mut command = Command::new(program);
+    command.arg("--version");
+    crate::git::run_with_timeout(command, Duration::from_secs(10)).ok()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// What `claude --version` prints in a test on this thread: nothing (it could not run) unless a test sets it, so no test
+    /// starts the real program.
+    static FAKE_VERSION: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn probe(_program: &str) -> Option<String> {
+    FAKE_VERSION.with(|fake| fake.borrow().clone())
+}
+
+/// The folders under Program Files named `names`, where a per-machine (all users) install may be; none off Windows, and none
+/// without `program_files`. A parameter so tests never read the real environment.
+pub fn under_program_files(program_files: Option<PathBuf>, names: &[&str]) -> Vec<PathBuf> {
+    if !cfg!(windows) {
+        return vec![];
+    }
+    program_files.into_iter().flat_map(|base| names.iter().map(move |name| base.join(name))).collect()
+}
+
+/// Where a per-machine install of Claude Code may be. None of these is documented by Claude Code or recorded in this
+/// repository: `ClaudeCode` is the folder Claude Code's managed settings use under Program Files (`managed.rs`), the others
+/// are the product's name spelled out.
+pub fn machine_folders() -> Vec<PathBuf> {
+    under_program_files(std::env::var_os("ProgramFiles").map(PathBuf::from), &["ClaudeCode", "Claude Code", r"Anthropic\ClaudeCode"])
+}
+
+/// The CLI to launch: the saved path, else a per-machine install in `machine_dirs`, else the native installer's place for
+/// the user, else `claude` on PATH. A per-machine folder comes first because it is the one an application allow list
+/// (AppLocker) usually permits, and the user's own folders usually are not.
 /// `on_path` says whether the bare name runs; it is a parameter so tests never start the real CLI.
-pub fn locate(saved: &Settings, home: &Path, on_path: impl Fn() -> bool) -> Result<String, String> {
+pub fn locate(saved: &Settings, machine_dirs: &[PathBuf], home: &Path, on_path: impl Fn() -> bool) -> Result<String, String> {
     if let Some(path) = saved.claude_path.as_deref().map(str::trim).filter(|path| Path::new(path).is_file()) {
         return Ok(path.to_string());
     }
-    let installed = home.join(".local").join("bin").join(if cfg!(windows) { "claude.exe" } else { "claude" });
+    let name = if cfg!(windows) { "claude.exe" } else { "claude" };
+    if let Some(machine) = machine_dirs.iter().map(|dir| dir.join(name)).find(|path| path.is_file()) {
+        return Ok(machine.display().to_string());
+    }
+    let installed = home.join(".local").join("bin").join(name);
     if installed.is_file() {
         return Ok(installed.display().to_string());
     }
@@ -383,19 +470,21 @@ pub fn locate(saved: &Settings, home: &Path, on_path: impl Fn() -> bool) -> Resu
     Err("Claude Code was not found. Install it, or set the path to its program in Settings.".into())
 }
 
+/// The Claude Code program to start, once its version is known to be new enough (`MIN_VERSION`).
 pub fn available(saved: &Settings) -> Result<String, String> {
     let home = dirs::home_dir().ok_or("Could not find your home folder")?;
-    locate(saved, &home, || {
+    let program = locate(saved, &machine_folders(), &home, || {
         let mut command = Command::new("claude");
         command.arg("--version");
         crate::git::run_with_timeout(command, Duration::from_secs(5)).is_ok()
-    })
+    })?;
+    check_version(&program, probe, &CHECKED)?;
+    Ok(program)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     fn parse(line: &str) -> Vec<RunEvent> {
         parse_line(line)
@@ -752,8 +841,25 @@ mod tests {
             model: None,
             deny: vec![],
             isolated: false,
+            strict_mcp: true,
             memory_root: None,
         }
+    }
+
+    #[test]
+    fn an_isolated_session_leaves_out_strict_mcp_config_when_asked() {   // REG-16
+        let mut executive = spec(Policy::PreApproved { allow: vec!["TodoWrite".into()] });
+        (executive.isolated, executive.strict_mcp) = (true, false);
+        let args = args_of(&ClaudeCode.command(&executive));
+        assert!(!args.iter().any(|a| a == "--strict-mcp-config"), "{args:?}");
+        for flag in ["--restricted", "--tools", "Bash,PowerShell,TodoWrite", "--disable-slash-commands"] {
+            assert!(args.iter().any(|a| a == flag), "{flag}");
+        }
+        // The flag order is as before, so only the one flag differs.
+        executive.strict_mcp = true;
+        let with = args_of(&ClaudeCode.command(&executive));
+        let without: Vec<String> = with.iter().filter(|a| *a != "--strict-mcp-config").cloned().collect();
+        assert_eq!(without, args);
     }
 
     #[test]
@@ -868,19 +974,109 @@ mod tests {
         let bin = home.join(".local").join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let nothing = Settings::default();
-        assert_eq!(locate(&nothing, &home, || true).unwrap(), "claude");
-        assert!(locate(&nothing, &home, || false).unwrap_err().contains("Settings"));
+        assert_eq!(locate(&nothing, &[], &home, || true).unwrap(), "claude");
+        assert!(locate(&nothing, &[], &home, || false).unwrap_err().contains("Settings"));
 
         let installed = bin.join(if cfg!(windows) { "claude.exe" } else { "claude" });
         std::fs::write(&installed, "").unwrap();
-        assert_eq!(locate(&nothing, &home, || false).unwrap(), installed.display().to_string());
+        assert_eq!(locate(&nothing, &[], &home, || false).unwrap(), installed.display().to_string());
 
         let chosen = home.join("my-claude");
         std::fs::write(&chosen, "").unwrap();
         let saved = |path: &Path| Settings { claude_path: Some(path.display().to_string()), ..Default::default() };
-        assert_eq!(locate(&saved(&chosen), &home, || false).unwrap(), chosen.display().to_string());
+        assert_eq!(locate(&saved(&chosen), &[], &home, || false).unwrap(), chosen.display().to_string());
         // A saved path that is not there falls through to the next place.
-        assert_eq!(locate(&saved(&home.join("gone")), &home, || false).unwrap(), installed.display().to_string());
+        assert_eq!(locate(&saved(&home.join("gone")), &[], &home, || false).unwrap(), installed.display().to_string());
         std::fs::remove_dir_all(home).ok();
+    }
+
+    #[test]
+    fn a_per_machine_install_comes_before_the_users_folder_and_path() {   // REG-17
+        let home = std::env::temp_dir().join(format!("hivemind-agent-machine-{}", std::process::id()));
+        let name = if cfg!(windows) { "claude.exe" } else { "claude" };
+        let (machine, empty) = (home.join("Program Files").join("ClaudeCode"), home.join("Program Files").join("Claude Code"));
+        let user = home.join(".local").join("bin").join(name);
+        for dir in [&machine, &empty, user.parent().unwrap()] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(&user, "").unwrap();
+        let (nothing, folders) = (Settings::default(), [empty.clone(), machine.clone()]);
+        // Nothing per machine yet: the user's folder, as before.
+        assert_eq!(locate(&nothing, &folders, &home, || true).unwrap(), user.display().to_string());
+        // A per-machine install beats the user's folder and PATH, in whichever folder of the list it is.
+        let installed = machine.join(name);
+        std::fs::write(&installed, "").unwrap();
+        assert_eq!(locate(&nothing, &folders, &home, || true).unwrap(), installed.display().to_string());
+        // The first folder of the list that has it wins.
+        let first = empty.join(name);
+        std::fs::write(&first, "").unwrap();
+        assert_eq!(locate(&nothing, &folders, &home, || true).unwrap(), first.display().to_string());
+        // The saved path still wins over everything, and one that is not there does not.
+        let chosen = home.join("my-claude");
+        std::fs::write(&chosen, "").unwrap();
+        let saved = |path: &Path| Settings { claude_path: Some(path.display().to_string()), ..Default::default() };
+        assert_eq!(locate(&saved(&chosen), &folders, &home, || true).unwrap(), chosen.display().to_string());
+        assert_eq!(locate(&saved(&home.join("gone")), &folders, &home, || true).unwrap(), first.display().to_string());
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    #[test]
+    fn per_machine_folders_are_under_program_files_on_windows_only() {   // REG-17
+        let folders = under_program_files(Some(PathBuf::from(r"C:\Program Files")), &["ClaudeCode", "Claude Code"]);
+        if cfg!(windows) {
+            assert_eq!(folders, [PathBuf::from(r"C:\Program Files").join("ClaudeCode"), PathBuf::from(r"C:\Program Files").join("Claude Code")]);
+        } else {
+            assert!(folders.is_empty());
+        }
+        assert!(under_program_files(None, &["ClaudeCode"]).is_empty(), "no Program Files variable, no folders");
+    }
+
+    #[test]
+    fn the_version_is_read_from_the_cli_output() {   // REG-31
+        assert_eq!(parse_version("2.1.322 (Claude Code)\n"), Some((2, 1, 322)));
+        assert_eq!(parse_version("Claude Code v2.1.400"), Some((2, 1, 400)));
+        assert_eq!(parse_version("2.2.0-beta.1 (Claude Code)"), Some((2, 2, 0)));
+        assert_eq!(parse_version("claude"), None);
+        assert_eq!(parse_version("2.1"), None);
+        assert_eq!(parse_version(""), None);
+    }
+
+    #[test]
+    fn an_old_claude_code_is_refused_and_a_new_or_unreadable_one_is_let_through() {   // REG-31
+        let checked = std::sync::Mutex::new(Vec::new());
+        let says = |text: &'static str| move |_: &str| Some(text.to_string());
+        let old = check_version("claude", says("2.1.328 (Claude Code)"), &checked).unwrap_err();
+        assert_eq!(old, "Claude Code 2.1.328 is installed, and Hivemind needs 2.1.329 or newer. Update Claude Code, or set the path to a newer one in Settings.");
+        assert!(check_version("claude", says("1.0.0"), &checked).is_err(), "a refusal is not remembered, so an update is seen at once");
+        assert!(check_version("claude", says("2.1.329 (Claude Code)"), &checked).is_ok(), "the minimum itself is allowed");
+        // A program that passed is not asked again.
+        assert!(check_version("claude", says("1.0.0"), &checked).is_ok());
+        // Another path is checked on its own: a newer one, an unreadable one, and one that could not run.
+        assert!(check_version("a", says("3.0.0"), &checked).is_ok());
+        assert!(check_version("b", says("Claude Code, new format"), &checked).is_ok());
+        assert!(check_version("c", |_: &str| None, &checked).is_ok());
+        assert_eq!(*checked.lock().unwrap(), ["claude", "a", "b"], "a program that could not run is looked at again");
+    }
+
+    #[test]
+    fn available_checks_the_version_of_the_program_it_found() {   // REG-31
+        let dir = std::env::temp_dir().join(format!("hivemind-agent-version-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let program = |name: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, "").unwrap();
+            Settings { claude_path: Some(path.display().to_string()), ..Default::default() }
+        };
+        let says = |text: Option<&str>| FAKE_VERSION.with(|fake| *fake.borrow_mut() = text.map(String::from));
+        says(Some("2.1.300 (Claude Code)"));
+        let refused = available(&program("old-claude")).unwrap_err();
+        assert!(refused.contains("2.1.300") && refused.contains("2.1.329"), "{refused}");
+        says(Some("2.1.329 (Claude Code)"));
+        let found = available(&program("new-claude")).unwrap();
+        assert!(found.ends_with("new-claude"), "{found}");
+        says(Some("not a version"));
+        assert!(available(&program("odd-claude")).is_ok());
+        says(None);
+        std::fs::remove_dir_all(dir).ok();
     }
 }

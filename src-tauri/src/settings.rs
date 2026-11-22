@@ -57,6 +57,10 @@ pub struct Settings {
     /// Engines the user hid from the interface ("claude", "codex"). Strings, so an unknown value never breaks loading.
     #[serde(default)]
     pub hidden_engines: Option<Vec<String>>,
+    /// Whether Claude calls run although Claude Code managed policy is deployed (default off): the executive chat, the reviewer
+    /// and the one-shot calls are refused otherwise. Managed hooks then run in them.
+    #[serde(default)]
+    pub claude_under_managed_policy: Option<bool>,
 }
 
 pub const DEFAULT_CAPTURE_SHORTCUT: &str = "CommandOrControl+Alt+M";
@@ -125,6 +129,10 @@ impl Settings {
 
     pub fn skills_auto_patch(&self) -> bool {
         self.skills_auto_patch.unwrap_or(false)
+    }
+
+    pub fn claude_under_managed_policy(&self) -> bool {
+        self.claude_under_managed_policy.unwrap_or(false)
     }
 
     /// Whether the user keeps the engine shown (default: both are).
@@ -263,6 +271,8 @@ mod tests {
         // Settings files from before these fields existed still load.
         let old: Settings = serde_json::from_str(r#"{"python":null,"script":null,"root":null}"#).unwrap();
         assert_eq!(old.close_to_tray, None);
+        assert_eq!(old.claude_under_managed_policy, None);
+        assert!(!old.claude_under_managed_policy(), "off unless the user turns it on");
         assert_eq!((old.claude_path, old.agent_budget_usd, old.architecture_suite_plugin), (None, None, None));
         assert_eq!(old.codex_path, None);
         assert_eq!((old.allowed_commands, old.learning_reviewer, old.learning_daily_usd, old.skills_auto_patch), (None, None, None, None));

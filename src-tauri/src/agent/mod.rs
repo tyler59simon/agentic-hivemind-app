@@ -370,6 +370,8 @@ pub struct Launch {
     pub budget_usd: f64,
     /// The store root the app's bridge is connected to (`bridge.launch().root`); becomes `Spec.memory_root`.
     pub memory_root: Option<PathBuf>,
+    /// Whether an isolated session passes `--strict-mcp-config` (`managed::strict_mcp`); becomes `Spec.strict_mcp`.
+    pub strict_mcp: bool,
 }
 
 #[derive(Serialize, Debug)]
@@ -1451,6 +1453,7 @@ impl Inner {
             model: info.model.clone(),
             deny: launch.scope.deny.clone(),
             isolated: launch.scope.isolated,
+            strict_mcp: launch.strict_mcp,
             memory_root: launch.memory_root.clone(),
         };
         let mut command = self.adapter_of(info).command(&spec);
@@ -1920,6 +1923,7 @@ pub fn start_task(
         program_args: cli.args.clone(),
         budget_usd,
         memory_root: bridge.launch().root,
+        strict_mcp: crate::managed::strict_mcp(saved.claude_under_managed_policy()),
     };
     let (project, repo, branch, change) = match &task {
         AgentTask::Work { project, repo, branch, change } => (project, repo, branch, change),
@@ -2001,11 +2005,18 @@ pub fn start_executive(
     check_combination(&task, options.engine, options.interface)?;
     let options = check_launch_options(saved, options)?;
     if options.engine == Engine::Claude {
-        crate::managed::refuse()?;
+        crate::managed::refuse(saved.claude_under_managed_policy())?;
     }
     let cli = chat_program(options.engine, saved)?;
     let scope = scope::executive(dir, format!("Executive: {}", scope::task_title(prompt)), domains)?;
-    let launch = Launch { scope, program: cli.program, program_args: cli.args, budget_usd: saved.agent_budget_usd(), memory_root: bridge.launch().root };
+    let launch = Launch {
+        scope,
+        program: cli.program,
+        program_args: cli.args,
+        budget_usd: saved.agent_budget_usd(),
+        memory_root: bridge.launch().root,
+        strict_mcp: crate::managed::strict_mcp(saved.claude_under_managed_policy()),
+    };
     manager.start(uuid::Uuid::new_v4().to_string(), task, launch, prompt, &options)
 }
 
@@ -2065,7 +2076,7 @@ pub fn send_task(
             let engine = Engine::of(&info.adapter);
             // A restarted executive chat is checked again: managed settings may have been deployed since it started.
             if engine == Engine::Claude && matches!(info.task, AgentTask::Executive { .. }) {
-                crate::managed::refuse()?;
+                crate::managed::refuse(saved.claude_under_managed_policy())?;
             }
             let cli = chat_program(engine, saved)?;
             let mut scope = scope::for_session(bridge, saved, info)?;
@@ -2076,6 +2087,7 @@ pub fn send_task(
                 program_args: cli.args,
                 budget_usd: saved.agent_budget_usd(),
                 memory_root: bridge.launch().root,
+                strict_mcp: crate::managed::strict_mcp(saved.claude_under_managed_policy()),
             })
         },
         held,
@@ -2338,7 +2350,7 @@ mod tests {
         }
 
         fn launch(&self, scope: Scope) -> Launch {
-            Launch { scope, program: "unused".into(), program_args: vec![], budget_usd: 5.0, memory_root: Some(self.dir.join("store")) }
+            Launch { scope, program: "unused".into(), program_args: vec![], budget_usd: 5.0, memory_root: Some(self.dir.join("store")), strict_mcp: true }
         }
 
         fn start(&self, required_plugin: Option<&str>) -> Result<SessionInfo, String> {
@@ -4126,6 +4138,32 @@ mod tests {
         let refused = started.unwrap_err();
         assert!(refused.contains(r"(C:\Program Files\ClaudeCode\managed-mcp.json)"), "{refused}");
         assert!(rig.manager.sessions().is_empty(), "no session was started");
+    }
+
+    #[test]
+    fn the_setting_starts_a_claude_executive_chat_under_managed_settings() {   // REG-16
+        let rig = Rig::scripted("executive-managed-allowed", &[&["<", INIT, RESULT, "<"], &["<", INIT, RESULT, "<"]]);
+        let harmless = if cfg!(windows) { std::env::var("ComSpec").unwrap_or_else(|_| "C:\\Windows\\System32\\cmd.exe".into()) } else { "/bin/sh".into() };
+        let allowed = Settings { claude_path: Some(harmless), claude_under_managed_policy: Some(true), ..Default::default() };
+        let bridge = Bridge::new(crate::settings::resolve(&allowed, |_| None));
+        let dir = rig.dir.join("executive").join("agent");
+        crate::managed::FAKE.with(|fake| *fake.borrow_mut() = Some(r"C:\Program Files\ClaudeCode\managed-settings.json".into()));
+        // Managed settings, no managed MCP file: the chat starts and keeps the flag.
+        let first = start_executive(&rig.manager, &bridge, &allowed, &dir, None, &[], String::new(), "What is overdue?", StartOptions::default());
+        let kept = rig.specs.lock().unwrap().last().map(|spec| spec.strict_mcp);
+        // A managed MCP file as well: the chat starts without the flag.
+        crate::managed::FAKE_MCP.with(|fake| fake.set(true));
+        let second = start_executive(&rig.manager, &bridge, &allowed, &dir, None, &[], String::new(), "And now?", StartOptions::default());
+        let dropped = rig.specs.lock().unwrap().last().map(|spec| spec.strict_mcp);
+        // The setting off: still refused.
+        let off = Settings { claude_under_managed_policy: None, ..allowed.clone() };
+        let refused = start_executive(&rig.manager, &bridge, &off, &dir, None, &[], String::new(), "Again?", StartOptions::default());
+        crate::managed::FAKE_MCP.with(|fake| fake.set(false));
+        crate::managed::FAKE.with(|fake| *fake.borrow_mut() = None);
+        assert!(first.is_ok() && second.is_ok(), "{first:?} {second:?}");
+        assert_eq!((kept, dropped), (Some(true), Some(false)));
+        assert!(refused.unwrap_err().contains("managed settings are deployed"));
+        assert_eq!(rig.manager.sessions().len(), 2, "the refused chat started nothing");
     }
 
     #[test]

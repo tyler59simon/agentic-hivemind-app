@@ -403,7 +403,7 @@ fn run_review(app: &AppHandle, id: &str, trigger: learning::Trigger) {
         }
     };
     let deps = learning::Deps {
-        bridge: &state.bridge, skills: &state.skills, claude, daily_usd: saved.learning_daily_usd(), review_usd: saved.review_call_usd(), auto_patch: saved.skills_auto_patch(),
+        bridge: &state.bridge, skills: &state.skills, claude, allow_managed: saved.claude_under_managed_policy(), daily_usd: saved.learning_daily_usd(), review_usd: saved.review_call_usd(), auto_patch: saved.skills_auto_patch(),
         cancel: None,
     };
     if let Some(run) = state.learning.review(&deps, &log.info, &log.events, trigger) {
@@ -645,7 +645,7 @@ impl automations::Doer for AppDoer {
                 }
                 let claude = agent::claude::available(&saved)?;
                 let deps = learning::Deps {
-                    bridge: &state.bridge, skills: &state.skills, claude, daily_usd: saved.learning_daily_usd(), review_usd: saved.review_call_usd(), auto_patch: false,
+                    bridge: &state.bridge, skills: &state.skills, claude, allow_managed: saved.claude_under_managed_policy(), daily_usd: saved.learning_daily_usd(), review_usd: saved.review_call_usd(), auto_patch: false,
                     cancel: Some(cancel),
                 };
                 // One key per batch: two batches of one backlog share HEAD, not their last commit.
@@ -1531,6 +1531,7 @@ fn exec_deps<'a>(state: &'a AppState, saved: &Settings) -> Result<executive::Dep
     }
     Ok(executive::Deps {
         claude: agent::claude::available(saved)?,
+        allow_managed: saved.claude_under_managed_policy(),
         ledger: state.learning.ledger(),
         cap: saved.learning_daily_usd(),
         call_usd: saved.executive_calls_usd(),

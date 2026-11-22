@@ -375,6 +375,8 @@ pub fn pack_text(pack: &Pack) -> String {
 /// What each call needs from the app.
 pub struct Deps<'a> {
     pub claude: String,
+    /// `Settings::claude_under_managed_policy`: the call runs although Claude Code managed policy is deployed.
+    pub allow_managed: bool,
     pub ledger: &'a Ledger,
     pub cap: f64,
     /// The most each call may spend, by call name (`Settings::executive_calls_usd`); a call left out uses its default.
@@ -480,7 +482,7 @@ pub fn style_schema() -> Value {
 fn call(deps: &Deps, dir: &std::path::Path, name: &str, policy: &str, schema: Value, input: &str) -> (Result<Value, String>, Option<f64>) {
     let who = Call { who: "The executive assistant", model: MODEL, policy, schema, budget_usd: deps.usd(name) };
     let id = format!("exec-{name}-{}", uuid::Uuid::new_v4().simple());
-    oneshot::run(&deps.claude, dir, deps.ledger, deps.cap, &id, &who, input, TIMEOUT, deps.cancel.map(oneshot::Cancel::flag))
+    oneshot::run(&deps.claude, deps.allow_managed, dir, deps.ledger, deps.cap, &id, &who, input, TIMEOUT, deps.cancel.map(oneshot::Cancel::flag))
 }
 
 pub const BRIEF_KINDS: [&str; 5] = ["weekly", "project", "priorities", "commitments", "risks"];
@@ -834,7 +836,7 @@ mod tests {
         let mut call_usd = crate::settings::Settings::default().executive_calls_usd();
         call_usd.insert("brief".into(), 0.9);
         call_usd.remove("style");
-        let deps = Deps { claude: String::new(), ledger: &ledger, cap: 2.0, call_usd, cancel: None };
+        let deps = Deps { claude: String::new(), allow_managed: false, ledger: &ledger, cap: 2.0, call_usd, cancel: None };
         assert_eq!((deps.usd("brief"), deps.usd("draft"), deps.usd("refine")), (0.9, 0.25, 0.15));
         assert_eq!(deps.usd("style"), 0.1, "a call left out uses its default");
     }
@@ -1105,7 +1107,7 @@ mod tests {
         let store = Store::new(base.join("executive"));
         store.put("milestone", json!({"project": "pay", "title": "Public beta", "due": "2026-12-05", "status": "planned", "note": ""}), 1).unwrap();
         let ledger = Ledger::new(base.join("spend.json"));
-        let deps = Deps { claude, ledger: &ledger, cap: 2.0, call_usd: Default::default(), cancel: None };
+        let deps = Deps { claude, allow_managed: false, ledger: &ledger, cap: 2.0, call_usd: Default::default(), cancel: None };
         let lm = viewer(&bridge);
         let notes = "Platform sync, 19 Nov.\nWe decided to keep event IDs for 30 days so late redeliveries are still deduplicated.\n\
             Dana will send the Q3 plan to the VP by 25 November.\nRisk: the provider may throttle replays; Sam owns a rate ceiling flag.\nBeta is still on track for 5 December.";
@@ -1206,7 +1208,7 @@ mod tests {
         let spec = |deny: Vec<String>| scope::Spec {
             session_id: uuid::Uuid::new_v4().to_string(), cwd: made.cwd.clone(), add_dirs: vec![], policy: made.policy.clone(), plugin_dirs: vec![],
             budget_usd: 0.5, schema: None, program: claude.clone(), program_args: vec![], resume: false, model: Some("haiku".into()),
-            deny, isolated: made.isolated, memory_root: bridge.launch().root,
+            deny, isolated: made.isolated, strict_mcp: true, memory_root: bridge.launch().root,
         };
         let write = "alm --json --domain pay capture --type knowledge --title 'Permission probe' --summary 'A probe.'";
         // A search for the word "capture": allowed by `alm --json --domain pay search *`, named by `*alm* capture`.

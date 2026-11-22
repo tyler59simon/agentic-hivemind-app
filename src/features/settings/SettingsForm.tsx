@@ -95,6 +95,13 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
       {claudeOn && field("claude_path", "Claude Code", "default: the installed claude command")}
       {shown.includes("codex") && field("codex_path", "Codex", "default: the codex installed with npm")}
       {field("architecture_suite_plugin", "Architecture Suite plugin folder", "only when the plugin is not installed in Claude Code")}
+      {claudeOn && (
+        <>
+          <label className="check"><input type="checkbox" checked={value.claude_under_managed_policy ?? false}
+            onChange={(e) => setValue({ ...value, claude_under_managed_policy: e.target.checked })} /> Allow Claude under managed policy</label>
+          <p className="muted small">Off by default. When your organization deploys Claude Code managed settings on this computer, Hivemind does not start Claude for the executive assistant, the session reviewer or the drafting and briefing calls, because the managed policy would still apply to them. Turn this on to run them anyway. Managed hooks then run in those calls, and when a managed MCP file (<code>managed-mcp.json</code>) is deployed Hivemind leaves out <code>--strict-mcp-config</code>, which Claude Code would otherwise exit on. Codex is not affected.</p>
+        </>
+      )}
       {!!live.length && (
         <>
           <h3>Allowed commands</h3>

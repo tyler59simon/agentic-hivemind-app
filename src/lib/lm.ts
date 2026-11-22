@@ -93,6 +93,8 @@ export interface Settings {
   architecture_rules?: Record<string, string> | null;
   /** Engines hidden from the interface; Rust refuses a save that hides both. */
   hidden_engines?: ("claude" | "codex")[] | null;
+  /** Run Claude calls although Claude Code managed policy is deployed (default off); managed hooks then run in them. */
+  claude_under_managed_policy?: boolean | null;
 }
 export interface CaptureStatus { shortcut: string | null; error: string | null; close_to_tray: boolean }
 

@@ -114,6 +114,9 @@ pub struct Spec {
     /// Start the CLI without the user's settings, skills or MCP servers, and with only the shell and its to-do list. Copied
     /// from the scope.
     pub isolated: bool,
+    /// Whether an isolated session passes `--strict-mcp-config`. False when a managed MCP file is deployed and the user
+    /// allowed Claude under managed policy: Claude Code exits on the flag then. Copied from the launch.
+    pub strict_mcp: bool,
     /// The Living Memory store the app is connected to; the CLI's hooks must use the same one. None when the app uses
     /// Living Memory's own default.
     pub memory_root: Option<PathBuf>,

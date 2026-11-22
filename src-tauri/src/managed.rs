@@ -1,7 +1,9 @@
 //! Claude Code's managed (organization) policy. Hivemind runs Claude isolated: the executive chat with `--restricted` and
 //! `--strict-mcp-config`, the one-shot calls with `--safe-mode` and `--strict-mcp-config`. Managed policy still applies under
 //! all of them, hooks included, and a deployed `managed-mcp.json` makes Claude Code exit on `--strict-mcp-config`. So
-//! Hivemind looks for managed policy before each Claude call and refuses the call when it finds one (EXEC-11, EXEC-R7).
+//! Hivemind looks for managed policy before each Claude call and refuses the call when it finds one (EXEC-11, EXEC-R7), unless
+//! the user turned on "Allow Claude under managed policy" (REG-16): then the calls run, managed hooks included, and a call
+//! leaves out `--strict-mcp-config` when a `managed-mcp.json` is deployed.
 //! Server-managed settings from the claude.ai console are found only once Claude Code has cached them
 //! (`remote-settings.json`); a policy it has not fetched yet leaves nothing to find, nor does a Windows policy that WSL inherits.
 use std::path::{Path, PathBuf};
@@ -12,6 +14,17 @@ const DROP_INS: &str = "managed-settings.d";
 /// The registry keys whose `Settings` value holds a managed policy on Windows.
 #[cfg_attr(not(any(windows, test)), allow(dead_code))]
 const KEYS: [&str; 2] = [r"HKLM\SOFTWARE\Policies\ClaudeCode", r"HKCU\SOFTWARE\Policies\ClaudeCode"];
+
+/// The folder where Claude Code looks for the managed files, by system.
+#[cfg(windows)]
+#[cfg_attr(test, allow(dead_code))]
+const FOLDER: &str = r"C:\Program Files\ClaudeCode";
+#[cfg(target_os = "macos")]
+#[cfg_attr(test, allow(dead_code))]
+const FOLDER: &str = "/Library/Application Support/ClaudeCode";
+#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg_attr(test, allow(dead_code))]
+const FOLDER: &str = "/etc/claude-code";
 
 /// The first managed policy source present: a file in `folder`, a drop-in file Claude Code would read (a `.json` file whose
 /// name does not start with a dot), a registry key in `keys` for which `has_settings` finds a `Settings` value, or one of
@@ -69,7 +82,7 @@ fn has_settings(key: &str) -> bool {
 /// The managed policy source on this computer, from the places Claude Code's documentation names for each system.
 #[cfg(all(windows, not(test)))]
 pub fn policy() -> Option<String> {
-    found(Path::new(r"C:\Program Files\ClaudeCode"), &KEYS, has_settings, &remote_cache())
+    found(Path::new(FOLDER), &KEYS, has_settings, &remote_cache())
 }
 
 #[cfg(all(target_os = "macos", not(test)))]
@@ -79,18 +92,26 @@ pub fn policy() -> Option<String> {
         others.push(PathBuf::from(format!("/Library/Managed Preferences/{user}/com.anthropic.claudecode.plist")));
     }
     others.extend(remote_cache());
-    found(Path::new("/Library/Application Support/ClaudeCode"), &[], |_| false, &others)
+    found(Path::new(FOLDER), &[], |_| false, &others)
 }
 
 #[cfg(all(not(any(windows, target_os = "macos")), not(test)))]
 pub fn policy() -> Option<String> {
-    found(Path::new("/etc/claude-code"), &[], |_| false, &remote_cache())
+    found(Path::new(FOLDER), &[], |_| false, &remote_cache())
+}
+
+/// Whether a `managed-mcp.json` is deployed in the managed folder.
+#[cfg(not(test))]
+fn mcp_file() -> bool {
+    Path::new(FOLDER).join("managed-mcp.json").is_file()
 }
 
 #[cfg(test)]
 thread_local! {
     /// What `policy` reports in a test on this thread: none unless a test sets one, so tests do not depend on the machine.
     pub static FAKE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    /// Whether `mcp_file` finds a managed MCP file in a test on this thread: no unless a test says so.
+    pub static FAKE_MCP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[cfg(test)]
@@ -98,8 +119,23 @@ pub fn policy() -> Option<String> {
     FAKE.with(|fake| fake.borrow().clone())
 }
 
-/// Refuse a Claude call while managed policy is present, naming where it was found.
-pub fn refuse() -> Result<(), String> {
+#[cfg(test)]
+fn mcp_file() -> bool {
+    FAKE_MCP.with(|fake| fake.get())
+}
+
+/// Whether a Claude call that isolates itself from MCP servers should pass `--strict-mcp-config`. Not when the user allowed
+/// Claude under managed policy and a managed MCP file is deployed: Claude Code exits on the flag then.
+pub fn strict_mcp(allowed: bool) -> bool {
+    !(allowed && mcp_file())
+}
+
+/// Refuse a Claude call while managed policy is present, naming where it was found. `allowed` is the user's setting to run
+/// Claude under managed policy anyway; the call then goes ahead.
+pub fn refuse(allowed: bool) -> Result<(), String> {
+    if allowed {
+        return Ok(());
+    }
     match policy() {
         Some(source) => Err(format!(
             "Hivemind does not start Claude Code on this computer because managed settings are deployed ({source}): they would \
@@ -145,10 +181,29 @@ mod tests {
 
     #[test]
     fn the_refusal_names_the_source() {
-        assert_eq!(refuse(), Ok(()));
+        assert_eq!(refuse(false), Ok(()));
         FAKE.with(|fake| *fake.borrow_mut() = Some(r"C:\Program Files\ClaudeCode\managed-mcp.json".into()));
-        let refused = refuse().unwrap_err();
+        let refused = refuse(false).unwrap_err();
         FAKE.with(|fake| *fake.borrow_mut() = None);
         assert!(refused.contains(r"(C:\Program Files\ClaudeCode\managed-mcp.json)"), "{refused}");
+    }
+
+    #[test]
+    fn the_setting_lets_a_call_run_under_managed_policy() {   // REG-16
+        FAKE.with(|fake| *fake.borrow_mut() = Some("/etc/claude-code/managed-settings.json".into()));
+        let (off, on) = (refuse(false), refuse(true));
+        FAKE.with(|fake| *fake.borrow_mut() = None);
+        assert!(off.is_err(), "off: the refusal stays");
+        assert_eq!(on, Ok(()), "on: no refusal");
+    }
+
+    #[test]
+    fn strict_mcp_is_dropped_only_for_a_managed_mcp_file_the_user_allowed() {   // REG-16
+        assert!(strict_mcp(false) && strict_mcp(true), "no managed MCP file: the flag stays");
+        FAKE_MCP.with(|fake| fake.set(true));
+        let (off, on) = (strict_mcp(false), strict_mcp(true));
+        FAKE_MCP.with(|fake| fake.set(false));
+        assert!(off, "a managed MCP file with the setting off: the call is refused before it gets here, the flag stays");
+        assert!(!on, "a managed MCP file with the setting on: Claude Code would exit on the flag");
     }
 }
