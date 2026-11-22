@@ -30,6 +30,9 @@ describe("progressLine", () => {
     expect(progressLine({ state: "idle", done: 5, total: 5, error: null })).toBeNull();
     expect(progressLine({ state: "scanning", done: 1200, total: 3400, error: null })).toBe("Indexing pages: 1,200 of 3,400");
     expect(progressLine({ state: "scanning", done: 0, total: 0, error: null })).toBe("Indexing pages…");
+    // NS-4B: the pass that makes the vectors for meaning search.
+    expect(progressLine({ state: "scanning", phase: "meaning", done: 50, total: 400, error: null })).toBe("Reading pages for meaning search: 50 of 400");
+    expect(progressLine({ state: "scanning", phase: "pages", done: 1, total: 2, error: null })).toBe("Indexing pages: 1 of 2");
   });
 });
 

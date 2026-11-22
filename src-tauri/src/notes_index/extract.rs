@@ -1,5 +1,6 @@
 //! What the index keeps of each kind of page: Markdown, rich pages (`.hmdoc`), canvases and plain text.
 use super::links::{self, Link, Scanned};
+use super::units::Line;
 use serde_json::Value;
 
 /// The first part of a file that is indexed; a longer file is cut here.
@@ -23,6 +24,8 @@ pub struct Extracted {
     pub title: String,
     pub headings: String,
     pub body: String,
+    /// The text as lines with paragraph breaks and heading levels, for cutting the page into units.
+    pub lines: Vec<Line>,
     pub tags: Vec<String>,
     pub links: Vec<Link>,
 }
@@ -64,12 +67,16 @@ pub fn extract(kind: &str, name: &str, bytes: &[u8]) -> Extracted {
         "md" => links::scan_markdown(&text_of(bytes)),
         "hmdoc" => hmdoc(bytes),
         "canvas" => canvas(bytes),
-        _ => Scanned { body: text_of(bytes), ..Scanned::default() },
+        _ => {
+            let body = text_of(bytes);
+            let lines = body.lines().map(|l| if l.trim().is_empty() { Line::Break } else { Line::Text(l.trim().to_string()) }).collect();
+            Scanned { body, lines, ..Scanned::default() }
+        }
     };
     let mut tags = scanned.tags;
     tags.sort();
     tags.dedup();
-    Extracted { title: scanned.title.filter(|t| !t.is_empty()).unwrap_or(stem), headings: scanned.headings.join("\n"), body: scanned.body, tags, links: scanned.links }
+    Extracted { title: scanned.title.filter(|t| !t.is_empty()).unwrap_or(stem), headings: scanned.headings.join("\n"), body: scanned.body, lines: scanned.lines, tags, links: scanned.links }
 }
 
 // ---- rich pages ----------------------------------------------------------------------------------------------------
@@ -194,6 +201,32 @@ pub fn hmdoc_text(content: &Value) -> String {
     out.join("\n")
 }
 
+/// The lines of a rich page for the cutter: a heading with its level, and each block's text as a paragraph of its own.
+fn rich_lines(n: &Value, out: &mut Vec<Line>) {
+    match node_type(n) {
+        "heading" => {
+            let text = one_line(&kids(n).iter().map(inline_text).collect::<String>());
+            if !text.is_empty() {
+                let level = n.get("attrs").and_then(|a| a.get("level")).and_then(Value::as_u64).unwrap_or(1).clamp(1, 6);
+                out.push(Line::Heading(level as u8, text));
+            }
+        }
+        "paragraph" | "codeBlock" | "calloutTitle" | "toggleSummary" | "table" | "mathBlock" | "noteCard" | "diagram" | "pdfPage" | "excalidraw" | "codeRange" | "gallery" | "freeform" | "rawBlock" => {
+            let mut parts = Vec::new();
+            block_text(n, &mut parts);
+            if !parts.is_empty() {
+                out.extend(parts.into_iter().map(Line::Text));
+                out.push(Line::Break);
+            }
+        }
+        _ => {
+            for c in kids(n) {
+                rich_lines(c, out);
+            }
+        }
+    }
+}
+
 /// Headings and links of a rich page, in document order.
 fn hmdoc_walk(n: &Value, headings: &mut Vec<String>, links: &mut Vec<Link>) {
     match node_type(n) {
@@ -232,6 +265,7 @@ fn hmdoc(bytes: &[u8]) -> Scanned {
     let Ok(file) = serde_json::from_slice::<Value>(bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes)) else { return Scanned::default() };
     let Some(content) = file.get("content") else { return Scanned::default() };
     let mut found = Scanned { body: hmdoc_text(content), ..Scanned::default() };
+    rich_lines(content, &mut found.lines);
     hmdoc_walk(content, &mut found.headings, &mut found.links);
     found.title = found.headings.first().cloned();
     links::tags_in(&found.body, &mut found.tags);
@@ -256,26 +290,37 @@ fn canvas(bytes: &[u8]) -> Scanned {
                 found.links.extend(inner.links.into_iter().map(|l| Link { line: 0, ..l }));
                 if !inner.body.is_empty() {
                     body.push(inner.body);
+                    found.lines.extend(inner.lines);
+                    found.lines.push(Line::Break);
                 }
             }
             "file" => {
                 let file = field(node, "file").replace('\\', "/");
                 if !file.is_empty() {
+                    found.lines.extend([Line::Text(file.clone()), Line::Break]);
                     body.push(file.clone());
                     if !links::name_key(&file).is_empty() {
                         found.links.push(Link { raw: file, kind: links::FILE, embed: false, line: 0, context: String::new() });
                     }
                 }
             }
-            "link" => body.push(field(node, "url")),
-            "group" => body.push(field(node, "label")),
+            "link" => {
+                found.lines.extend([Line::Text(field(node, "url")), Line::Break]);
+                body.push(field(node, "url"));
+            }
+            "group" => {
+                found.lines.extend([Line::Text(field(node, "label")), Line::Break]);
+                body.push(field(node, "label"));
+            }
             _ => {}
         }
     }
     for edge in file.get("edges").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]) {
+        found.lines.extend([Line::Text(field(edge, "label")), Line::Break]);
         body.push(field(edge, "label"));
     }
     body.retain(|text| !text.is_empty());
+    found.lines.retain(|l| !matches!(l, Line::Text(t) if t.is_empty()));
     found.body = body.join("\n");
     found.title = found.headings.first().cloned();
     found

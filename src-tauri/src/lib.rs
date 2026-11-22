@@ -214,6 +214,8 @@ async fn connect(app: AppHandle, state: State<'_, AppState>) -> Result<ConnectIn
     )?;
     *state.watcher.lock().unwrap() = Some(debouncer);
     *state.store_root.lock().unwrap() = Some(PathBuf::from(&root));
+    // Meaning search reads the model Living Memory installed in this store.
+    state.index.set_store(Some(PathBuf::from(&root)));
     let launch = state.bridge.launch();
     let user = std::env::var("USERNAME").or_else(|_| std::env::var("USER")).ok().filter(|name| !name.is_empty());
     Ok(ConnectInfo { version: version.result, root, program: launch.program, script: launch.script.display().to_string(), user, generation })
@@ -1962,7 +1964,7 @@ pub fn run() {
             studio::file_reveal, studio::asset_base, studio::lmdoc_assets, studio::notebook_add_dropped, studio::file_attach_bytes, studio::file_attach_dropped, opens::open_dropped, opens::claim_drop, opens::unclaimed_drops, studio::notebook_reach_record, lm_body, lmdoc_move, lmdoc_attach, studio::lmdoc_open_asset, opens::open_dialog, opens::open_pending, opens::open_recent,
             opens::open_forget, opens::file_save_as,
             notes_index::commands::index_search, notes_index::commands::index_links, notes_index::commands::index_incoming, notes_index::commands::index_pages,
-            notes_index::commands::index_tags, notes_index::commands::index_status, notes_index::commands::index_rebuild
+            notes_index::commands::index_tags, notes_index::commands::index_status, notes_index::commands::index_rebuild, notes_index::commands::index_related
         ])
         .build(context)
         .expect("error while running tauri application")

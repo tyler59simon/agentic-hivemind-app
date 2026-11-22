@@ -17,8 +17,9 @@ export function onIndexProgress(client: QueryClient, progress: IndexProgress) {
   timer = setTimeout(() => client.invalidateQueries({ queryKey: [INDEX_KEY] }), REFRESH_MS);
 }
 
-/** "Indexing pages: 120 of 800", or null while the index is idle. */
+/** "Indexing pages: 120 of 800" (or "Reading pages for meaning search: 120 of 800"), or null while the index is idle. */
 export function progressLine(progress: IndexProgress | null): string | null {
   if (!progress || progress.state !== "scanning") return null;
-  return progress.total ? `Indexing pages: ${progress.done.toLocaleString()} of ${progress.total.toLocaleString()}` : "Indexing pages…";
+  const what = progress.phase === "meaning" ? "Reading pages for meaning search" : "Indexing pages";
+  return progress.total ? `${what}: ${progress.done.toLocaleString()} of ${progress.total.toLocaleString()}` : `${what}…`;
 }

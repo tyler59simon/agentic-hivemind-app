@@ -5,27 +5,38 @@
 //! One writer thread owns the write connection. It is fed by the notebook watcher (changes other programs make), by the
 //! Rust commands that write notebook files (the watcher drops Hivemind's own writes), and by a scan at start and when a
 //! notebook is added, which compares each file's size and time with the row it has.
+//!
+//! Meaning search (NS-4B) adds units and vectors to the same writer: each page is cut into units, and while Living
+//! Memory's static model is installed each changed unit is embedded as the page is indexed. When the model appears or
+//! changes, a pass embeds every page that lacks vectors. The vectors are searched from memory (`matrix`).
 pub mod commands;
 pub mod extract;
 pub mod links;
+mod matrix;
 pub mod query;
 mod schema;
+pub mod semantic;
+pub mod units;
 mod writer;
 
 use crate::files::watch::Root;
 use rusqlite::Connection;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use writer::Mode;
 
 /// The `index-progress` event, and the state of the index.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Progress {
-    /// `scanning` while a scan or a rebuild runs, else `idle`.
+    /// `scanning` while a scan, a rebuild or the meaning pass runs, else `idle`.
     pub state: &'static str,
+    /// What `scanning` is doing: reading `pages`, or making the vectors for `meaning` search.
+    pub phase: &'static str,
     pub done: u64,
     pub total: u64,
     /// Why the index could not be kept current (a file that could not be read, a folder that is missing), or why it is
@@ -42,6 +53,7 @@ pub struct Status {
     pub pages: u64,
     pub notebooks: Vec<NotebookCount>,
     pub version: u32,
+    pub semantic: semantic::Status,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -59,6 +71,8 @@ enum Job {
     Rebuild(Vec<Root>),
     /// Bring these paths of one notebook up to date.
     Paths(Root, Vec<String>),
+    /// Give every page without vectors its vectors, with the model installed now.
+    Embed,
     /// Answers once every job before it is done (tests).
     #[cfg_attr(not(test), allow(dead_code))]
     Barrier(Sender<()>),
@@ -68,6 +82,11 @@ struct Shared {
     db: PathBuf,
     progress: Mutex<Progress>,
     reader: Mutex<Option<Connection>>,
+    semantic: semantic::Semantic,
+    /// The notebooks as the last `sync` named them, for the meaning pass.
+    roots: Mutex<Vec<Root>>,
+    /// A `Job::Embed` is waiting, so another is not sent.
+    embed_queued: AtomicBool,
 }
 
 /// A handle on the index; cloning it is cheap, and every clone talks to the same writer thread.
@@ -78,15 +97,29 @@ pub struct Index {
 }
 
 fn idle(error: Option<String>) -> Progress {
-    Progress { state: "idle", done: 0, total: 0, error }
+    Progress { state: "idle", phase: "pages", done: 0, total: 0, error }
 }
 
 impl Index {
     /// Open the index database in `dir` (making it, or making it again when its version is another or it is damaged) and
     /// start the writer thread. An index that cannot be opened is still returned, reporting why in its status.
     pub fn start(dir: &Path, emit: Emit) -> Index {
+        Index::start_with_idle(dir, emit, Duration::from_secs(30))
+    }
+
+    /// As `start`, with the time the model file stays open without use (tests make it short).
+    pub fn start_with_idle(dir: &Path, emit: Emit, idle_after: Duration) -> Index {
         let db = dir.join("index.sqlite3");
-        let shared = |error| Arc::new(Shared { db: db.clone(), progress: Mutex::new(idle(error)), reader: Mutex::new(None) });
+        let shared = |error| {
+            Arc::new(Shared {
+                db: db.clone(),
+                progress: Mutex::new(idle(error)),
+                reader: Mutex::new(None),
+                semantic: semantic::Semantic::new(idle_after),
+                roots: Mutex::new(Vec::new()),
+                embed_queued: AtomicBool::new(false),
+            })
+        };
         match schema::open(&db) {
             Ok((conn, _fresh)) => {
                 let shared = shared(None);
@@ -108,7 +141,31 @@ impl Index {
     /// Index every notebook in `roots` (a file with the size and time the index has is left alone) and forget the
     /// notebooks that are no longer there.
     pub fn sync(&self, roots: Vec<Root>) {
+        *self.shared.roots.lock().unwrap_or_else(|e| e.into_inner()) = roots.clone();
         self.send(Job::Sync(roots));
+    }
+
+    /// The Living Memory store whose `.models` folder holds the model meaning search reads. Meaning search starts as
+    /// soon as the model is found, and stops when it goes.
+    pub fn set_store(&self, root: Option<PathBuf>) {
+        self.shared.semantic.set_root(root);
+        self.semantic_status();
+    }
+
+    /// Where meaning search stands now. The marker is read each time, so an install or a remove shows at once, and a model
+    /// that is installed but not yet in the index starts the pass that puts it there.
+    pub fn semantic_status(&self) -> semantic::Status {
+        let status = self.shared.semantic.status();
+        match status.state {
+            "missing" => self.shared.semantic.forget_pass(),
+            "building" if self.jobs.is_some() && !self.shared.embed_queued.swap(true, Ordering::SeqCst) => self.send(Job::Embed),
+            _ => {}
+        }
+        status
+    }
+
+    pub fn semantic(&self) -> &semantic::Semantic {
+        &self.shared.semantic
     }
 
     /// Read every page of `roots` again.
@@ -153,7 +210,7 @@ impl Index {
     pub fn status(&self) -> Result<Status, String> {
         let progress = self.shared.progress.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let notebooks: Vec<NotebookCount> = if self.jobs.is_some() { self.read(query::counts)?.into_iter().map(|(id, pages)| NotebookCount { id, pages }).collect() } else { Vec::new() };
-        Ok(Status { pages: notebooks.iter().map(|n| n.pages).sum(), notebooks, progress, version: schema::VERSION })
+        Ok(Status { pages: notebooks.iter().map(|n| n.pages).sum(), notebooks, progress, version: schema::VERSION, semantic: self.semantic_status() })
     }
 }
 
@@ -162,7 +219,18 @@ fn run(mut conn: Connection, jobs: Receiver<Job>, shared: Arc<Shared>, emit: Emi
         *shared.progress.lock().unwrap_or_else(|e| e.into_inner()) = progress.clone();
         emit(&progress);
     };
-    while let Ok(job) = jobs.recv() {
+    // The model file is let go after it has been idle; the thread wakes now and then to check.
+    let poll = (shared.semantic.idle() / 4).clamp(Duration::from_millis(10), Duration::from_secs(5));
+    loop {
+        let job = match jobs.recv_timeout(poll) {
+            Ok(job) => job,
+            Err(RecvTimeoutError::Timeout) => {
+                shared.semantic.release_if_idle();
+                shared.semantic.matrix.release_if_idle(shared.semantic.matrix_idle());
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
         if let Job::Barrier(done) = job {
             let _ = done.send(());
             continue;
@@ -171,11 +239,17 @@ fn run(mut conn: Connection, jobs: Receiver<Job>, shared: Arc<Shared>, emit: Emi
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match &job {
             Job::Sync(roots) | Job::Rebuild(roots) => {
                 let (mode, prune) = if matches!(job, Job::Sync(_)) { (Mode::Scan, true) } else { (Mode::Force, false) };
-                let mut report = |done, total| set(Progress { state: "scanning", done, total, error: None });
+                let mut report = |done, total| set(Progress { state: "scanning", phase: "pages", done, total, error: None });
                 report(0, 0);
-                writer::scan(&mut conn, roots, mode, prune, &mut report)
+                writer::scan(&mut conn, &shared.semantic, roots, mode, prune, &mut report)
             }
-            Job::Paths(root, rels) => writer::update(&mut conn, root, rels),
+            Job::Paths(root, rels) => writer::update(&mut conn, &shared.semantic, root, rels),
+            Job::Embed => {
+                shared.embed_queued.store(false, Ordering::SeqCst);
+                let roots = shared.roots.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                let mut report = |done, total| set(Progress { state: "scanning", phase: "meaning", done, total, error: None });
+                writer::embed_pass(&mut conn, &shared.semantic, &roots, &mut report)
+            }
             Job::Barrier(_) => Ok(writer::Pass::default()),
         }));
         set(idle(match outcome {
@@ -568,6 +642,376 @@ mod tests {
         finish(index, &dir);
     }
 
+    // ---- meaning search (NS-4B) ---------------------------------------------------------------------------------------
+
+    use super::semantic::fixture;
+
+    fn store_of(dir: &Path) -> PathBuf {
+        dir.join("store")
+    }
+
+    /// Four pages whose text is one word of the tiny model each: alpha is (1,0,0,0), play (0.5,0,0.5,0), un (0,0,0,1) and
+    /// "!" (0.25,0,0,0.75). Against the word "alpha" their cosines are 1, 0.71, 0 and 0.32.
+    fn meaning_pages(nb: &Root) {
+        write(&nb.path, "P1.md", "# P1\nalpha alpha alpha");
+        write(&nb.path, "P2.md", "# P2\nplay play play");
+        write(&nb.path, "P3.md", "# P3\nun un un");
+        write(&nb.path, "P4.md", "# P4\n! ! !");
+    }
+
+    fn meaning(index: &Index, text: &str) -> Vec<String> {
+        index.read(|c| query::search_meaning(c, index.semantic(), text, &Filters::default(), 50)).unwrap().into_iter().map(|h| format!("{}:{}", h.notebook, h.path)).collect()
+    }
+
+    fn unit_vectors(index: &Index, path: &str) -> Vec<(String, Vec<f32>)> {
+        index
+            .read(|c| {
+                let mut stmt = c.prepare("SELECT u.heading || '|' || u.first_line, v.vec FROM units u JOIN pages p ON p.id = u.page LEFT JOIN vectors v ON v.unit = u.id WHERE p.path = ?1 ORDER BY u.ord")?;
+                let rows = stmt.query_map([path], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<Vec<u8>>>(1)?)))?;
+                rows.map(|r| r.map(|(name, blob)| (name, blob.map(|b| b.as_chunks::<4>().0.iter().map(|x| f32::from_le_bytes(*x)).collect()).unwrap_or_default()))).collect()
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn without_the_model_pages_have_units_but_no_vectors_and_meaning_search_is_word_search() {
+        let dir = scratch();
+        let nb = root(&dir, "nb-1");
+        meaning_pages(&nb);
+        let index = started(&dir);
+        index.set_store(Some(store_of(&dir)));
+        index.sync(vec![nb.clone()]);
+        index.flush();
+        // A title unit and one section unit per page; nothing embedded.
+        assert_eq!(unit_vectors(&index, "P1.md").iter().map(|(n, v)| (n.as_str(), v.len())).collect::<Vec<_>>(), [("|", 0), ("|alpha alpha alpha", 0)]);
+        assert_eq!(meaning(&index, "alpha"), ["nb-1:P1.md"]);
+        let semantic = index.status().unwrap().semantic;
+        assert_eq!((semantic.state, semantic.model), ("missing", None));
+        assert_eq!(index.semantic().embedded_texts(), 0);
+        finish(index, &dir);
+    }
+
+    #[test]
+    fn a_page_found_only_by_meaning_is_shown_from_the_floor_up_and_words_still_find_what_they_find() {
+        let dir = scratch();
+        let nb = root(&dir, "nb-1");
+        meaning_pages(&nb);
+        write(&nb.path, "P5.md", "# P5\nalpha ! ! ! ! ! ! ! !");
+        fixture::install(&store_of(&dir), &fixture::rows(), "h1");
+        let index = started(&dir);
+        index.sync(vec![nb.clone()]);
+        index.set_store(Some(store_of(&dir)));
+        index.flush();
+        assert_eq!(index.status().unwrap().semantic.state, "ready");
+        // P1 and P5 hold the word. P2 (cosine 0.71) is found by meaning alone; P4 (0.32) is under the 0.45 floor and P3
+        // (0) is unrelated, so neither shows. P5's cosine is 0.447 and it stays, because the word found it.
+        let found = meaning(&index, "alpha");
+        assert_eq!(found[0], "nb-1:P1.md");
+        let mut rest = found[1..].to_vec();
+        rest.sort();
+        assert_eq!(rest, ["nb-1:P2.md", "nb-1:P5.md"]);
+        // Without meaning the same query finds the two pages that hold the word.
+        assert_eq!(all(&index, "alpha"), ["nb-1:P1.md", "nb-1:P5.md"]);
+        // The snippet of a page found by meaning is its unit's first line, and its title carries no marks.
+        let hits = index.read(|c| query::search_meaning(c, index.semantic(), "alpha", &Filters::default(), 50)).unwrap();
+        let p2 = hits.iter().find(|h| h.path == "P2.md").unwrap();
+        assert_eq!((p2.snippet.as_str(), p2.title_marked.as_str()), ("play play play", "P2"));
+        // The filters apply to meaning too.
+        let narrowed = index.read(|c| query::search_meaning(c, index.semantic(), "alpha", &Filters { folder: Some("Nowhere".into()), ..Default::default() }, 50)).unwrap();
+        assert!(narrowed.is_empty());
+        let only_p2 = index.read(|c| query::search_meaning(c, index.semantic(), "alpha", &Filters { kind: Some("md".into()), notebook: Some("nb-1".into()), ..Default::default() }, 1)).unwrap();
+        assert_eq!(only_p2.len(), 1, "the limit applies");
+        // Words the model does not know give word search.
+        assert_eq!(meaning(&index, "zzz"), all(&index, "zzz"));
+        finish(index, &dir);
+    }
+
+    #[test]
+    fn the_matrix_follows_saves_and_deletes_without_a_restart() {
+        let dir = scratch();
+        let nb = root(&dir, "nb-1");
+        meaning_pages(&nb);
+        fixture::install(&store_of(&dir), &fixture::rows(), "h1");
+        let index = started(&dir);
+        index.set_store(Some(store_of(&dir)));
+        index.sync(vec![nb.clone()]);
+        index.flush();
+        assert_eq!(meaning(&index, "alpha"), ["nb-1:P1.md", "nb-1:P2.md"]);
+        // P3 now says "play": the next search finds it by meaning.
+        write(&nb.path, "P3.md", "# P3\nplay play play");
+        index.touch(nb.clone(), vec!["P3.md".into()]);
+        index.flush();
+        let mut found = meaning(&index, "alpha");
+        found.sort();
+        assert_eq!(found, ["nb-1:P1.md", "nb-1:P2.md", "nb-1:P3.md"]);
+        // P2 is deleted: gone from the matrix too.
+        std::fs::remove_file(nb.path.join("P2.md")).unwrap();
+        index.touch(nb.clone(), vec!["P2.md".into()]);
+        index.flush();
+        let mut found = meaning(&index, "alpha");
+        found.sort();
+        assert_eq!(found, ["nb-1:P1.md", "nb-1:P3.md"]);
+        finish(index, &dir);
+    }
+
+    #[test]
+    fn a_tie_between_the_two_rankings_keeps_the_order_of_the_words() {
+        // Both pages hold the word. By words X wins (a word that starts its title: "Alphabet", which the model does not
+        // know); by meaning Y does (cosine 1 against 0.61). 1/61 + 1/62 either way, so the words decide.
+        let dir = scratch();
+        let nb = root(&dir, "nb-1");
+        write(&nb.path, "X.md", "# Alphabet\n! ! ! alpha");
+        write(&nb.path, "Y.md", "# Y\nalpha alpha alpha");
+        fixture::install(&store_of(&dir), &fixture::rows(), "h1");
+        let index = started(&dir);
+        index.set_store(Some(store_of(&dir)));
+        index.sync(vec![nb.clone()]);
+        index.flush();
+        assert_eq!(all(&index, "alpha"), ["nb-1:X.md", "nb-1:Y.md"]);
+        assert_eq!(meaning(&index, "alpha"), ["nb-1:X.md", "nb-1:Y.md"]);
+        // A third page, second in both lists.
+        write(&nb.path, "C.md", "# Alphabet two\nalpha alpha alpha");
+        index.touch(nb.clone(), vec!["C.md".into()]);
+        index.flush();
+        // C is second by words and second by meaning (tied with Y at cosine 1): 1/62 + 1/62 is less than the 1/61 + 1/63 of X
+        // (first by words, third by meaning) and of Y (third by words, first by meaning), which tie and keep the word order.
+        assert_eq!(all(&index, "alpha"), ["nb-1:X.md", "nb-1:C.md", "nb-1:Y.md"]);
+        assert_eq!(meaning(&index, "alpha"), ["nb-1:X.md", "nb-1:Y.md", "nb-1:C.md"]);
+        finish(index, &dir);
+    }
+
+    #[test]
+    fn related_pages_are_the_nearest_others_at_or_above_the_floor() {
+        let dir = scratch();
+        let nb = root(&dir, "nb-1");
+        meaning_pages(&nb);
+        fixture::install(&store_of(&dir), &fixture::rows(), "h1");
+        let index = started(&dir);
+        index.set_store(Some(store_of(&dir)));
+        index.sync(vec![nb.clone()]);
+        index.flush();
+        let related = |path: &str| index.read(|c| query::related(c, index.semantic(), "nb-1", path, 5)).unwrap().into_iter().map(|h| h.path).collect::<Vec<_>>();
+        // P1 is "alpha": P2 (0.71) is near, P4 (0.32) is under the floor, P3 (0) is unrelated, and P1 is not its own relation.
+        assert_eq!(related("P1.md"), ["P2.md"]);
+        // P3 is "un" (0,0,0,1): P4 is near it (0.95), the others are not.
+        assert_eq!(related("P3.md"), ["P4.md"]);
+        assert_eq!(related("Missing.md"), Vec::<String>::new());
+        let hits = index.read(|c| query::related(c, index.semantic(), "nb-1", "P1.md", 5)).unwrap();
+        assert_eq!(hits[0].snippet, "play play play");
+        // Without the model there is nothing to say.
+        fixture::remove(&store_of(&dir));
+        assert!(related("P1.md").is_empty());
+        finish(index, &dir);
+    }
+
+    #[test]
+    fn a_model_that_appears_later_is_read_into_the_index_in_the_background_with_progress() {
+        let dir = scratch();
+        let nb = root(&dir, "nb-1");
+        meaning_pages(&nb);
+        let seen: Arc<Mutex<Vec<Progress>>> = Arc::default();
+        let log = seen.clone();
+        let index = Index::start(&dir.join("data"), Arc::new(move |p| log.lock().unwrap().push(p.clone())));
+        index.sync(vec![nb.clone()]);
+        index.set_store(Some(store_of(&dir)));
+        index.flush();
+        assert_eq!(meaning(&index, "alpha"), ["nb-1:P1.md"], "no model yet");
+        // `semantic install` finishes: the next look at the model's state starts the pass.
+        fixture::install(&store_of(&dir), &fixture::rows(), "h1");
+        assert_eq!(index.semantic_status().state, "building");
+        index.flush();
+        assert_eq!(index.semantic_status().state, "ready");
+        assert_eq!(meaning(&index, "alpha"), ["nb-1:P1.md", "nb-1:P2.md"]);
+        let meaning_progress: Vec<(u64, u64)> = seen.lock().unwrap().iter().filter(|p| p.phase == "meaning" && p.state == "scanning").map(|p| (p.done, p.total)).collect();
+        assert_eq!(meaning_progress.first(), Some(&(0, 4)));
+        assert_eq!(meaning_progress.last(), Some(&(4, 4)));
+        // Another look does not read the pages again.
+        let before = index.semantic().embedded_texts();
+        index.semantic_status();
+        index.flush();
+        assert_eq!(index.semantic().embedded_texts(), before);
+        finish(index, &dir);
+    }
+
+    #[test]
+    fn a_changed_model_drops_every_vector_and_embeds_again() {
+        let dir = scratch();
+        let nb = root(&dir, "nb-1");
+        meaning_pages(&nb);
+        fixture::install(&store_of(&dir), &fixture::rows(), "h1");
+        let index = started(&dir);
+        index.set_store(Some(store_of(&dir)));
+        index.sync(vec![nb.clone()]);
+        index.flush();
+        assert_eq!(unit_vectors(&index, "P1.md")[1].1, [1.0, 0.0, 0.0, 0.0]);
+        let key = |index: &Index| index.read(|c| c.query_row("SELECT value FROM meta WHERE key = 'model'", [], |r| r.get::<_, String>(0))).unwrap();
+        assert_eq!(key(&index), format!("{}:h1", semantic::MODEL));
+        // Another model: "alpha" is (0, 1, 0, 0) in it.
+        let mut changed = fixture::rows();
+        changed[1] = [0.0, 1.0, 0.0, 0.0];
+        fixture::install(&store_of(&dir), &changed, "h2");
+        assert_eq!(index.semantic_status().state, "building");
+        index.flush();
+        assert_eq!(key(&index), format!("{}:h2", semantic::MODEL));
+        assert_eq!(unit_vectors(&index, "P1.md")[1].1, [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(unit_vectors(&index, "P2.md")[1].1.len(), 4, "every page was embedded again");
+        // A query made with the new model finds the pages the new vectors say.
+        assert_eq!(meaning(&index, "alpha"), ["nb-1:P1.md"], "play is no longer near alpha");
+        finish(index, &dir);
+    }
+
+    #[test]
+    fn a_marker_removed_mid_run_stops_the_pass_and_the_next_one_finishes_it() {
+        let dir = scratch();
+        let nb = root(&dir, "nb-1");
+        for i in 0..120 {
+            write(&nb.path, &format!("Page{i:03}.md"), &format!("# Page{i:03}\nalpha alpha alpha"));
+        }
+        let store = store_of(&dir);
+        let gone = Arc::new(AtomicBool::new(false));
+        let (flag, at) = (gone.clone(), store.clone());
+        let last = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let reported = last.clone();
+        let index = Index::start(&dir.join("data"), Arc::new(move |p| {
+            if p.phase == "meaning" && p.state == "scanning" {
+                reported.store(p.done, Ordering::SeqCst);
+            }
+            // After the first 50 pages of the pass, `semantic remove` runs.
+            if p.phase == "meaning" && p.done >= 50 && !flag.swap(true, Ordering::SeqCst) {
+                fixture::remove(&at);
+            }
+        }));
+        index.sync(vec![nb.clone()]);
+        index.set_store(Some(store.clone()));
+        index.flush();
+        assert_eq!(index.semantic_status().state, "missing");
+        fixture::install(&store, &fixture::rows(), "h1");
+        index.semantic_status();
+        index.flush();
+        assert!(gone.load(Ordering::SeqCst), "the marker was removed during the pass");
+        assert_eq!(last.load(Ordering::SeqCst), 50, "the pass stopped at once and did not go on reading pages");
+        let embedded = |index: &Index| index.read(|c| c.query_row("SELECT count(*) FROM vectors", [], |r| r.get::<_, i64>(0))).unwrap();
+        let held = embedded(&index);
+        assert!(held > 0 && held < 240, "some pages were embedded before the marker went: {held}");
+        assert_eq!(index.semantic_status().state, "missing");
+        // Searching while it is gone is word search.
+        assert_eq!(meaning(&index, "alpha").len(), 50, "the limit of the helper, from 100 word matches");
+        // The model comes back: the pass finishes what was left.
+        fixture::install(&store, &fixture::rows(), "h1");
+        assert_eq!(index.semantic_status().state, "building");
+        index.flush();
+        assert_eq!(index.semantic_status().state, "ready");
+        assert_eq!(embedded(&index), 240, "every page has a title unit and a text unit, and unknown titles hold empty vectors");
+        finish(index, &dir);
+    }
+
+    #[test]
+    fn a_save_embeds_only_the_units_that_changed() {
+        let dir = scratch();
+        let nb = root(&dir, "nb-1");
+        write(&nb.path, "Doc.md", "# Doc\n\n## One\nalpha alpha alpha\n\n## Two\nbeta beta beta\n");
+        fixture::install(&store_of(&dir), &fixture::rows(), "h1");
+        let index = started(&dir);
+        index.set_store(Some(store_of(&dir)));
+        index.sync(vec![nb.clone()]);
+        index.flush();
+        let before = index.semantic().embedded_texts();
+        assert_eq!(before, 3, "the title and two sections");
+        let first = unit_vectors(&index, "Doc.md");
+        write(&nb.path, "Doc.md", "# Doc\n\n## One\nalpha alpha alpha\n\n## Two\ngamma gamma gamma\n");
+        index.touch(nb.clone(), vec!["Doc.md".into()]);
+        index.flush();
+        assert_eq!(index.semantic().embedded_texts(), before + 1, "only the section whose text changed");
+        let second = unit_vectors(&index, "Doc.md");
+        assert_eq!((second[0].1.clone(), second[1].1.clone()), (first[0].1.clone(), first[1].1.clone()));
+        assert_eq!(second[2].1, [0.0, 0.0, 1.0, 0.0]);
+        // A save that changes nothing embeds nothing.
+        index.touch(nb.clone(), vec!["Doc.md".into()]);
+        index.flush();
+        assert_eq!(index.semantic().embedded_texts(), before + 1);
+        finish(index, &dir);
+    }
+
+    #[test]
+    fn past_the_vector_budget_a_page_keeps_its_units_without_vectors() {
+        let dir = scratch();
+        let nb = root(&dir, "nb-1");
+        meaning_pages(&nb);
+        fixture::install(&store_of(&dir), &fixture::rows(), "h1");
+        let index = started(&dir);
+        index.set_store(Some(store_of(&dir)));
+        index.flush();
+        index.semantic().vectors.store(semantic::MAX_VECTORS - 1, Ordering::Relaxed);
+        index.sync(vec![nb.clone()]);
+        index.flush();
+        assert!(index.status().unwrap().semantic.full);
+        assert_eq!(unit_vectors(&index, "P1.md").iter().map(|(_, v)| v.len()).collect::<Vec<_>>(), [0, 0]);
+        assert_eq!(meaning(&index, "alpha"), ["nb-1:P1.md"]);
+        finish(index, &dir);
+    }
+
+    #[test]
+    fn the_matrix_is_released_when_idle_and_loaded_again_by_the_next_search_with_the_saves_made_meanwhile() {
+        let dir = scratch();
+        let nb = root(&dir, "nb-1");
+        meaning_pages(&nb);
+        fixture::install(&store_of(&dir), &fixture::rows(), "h1");
+        // The model is let go after 20 ms and the matrix after 400 ms.
+        let index = Index::start_with_idle(&dir.join("data"), Arc::new(|_| {}), Duration::from_millis(20));
+        index.set_store(Some(store_of(&dir)));
+        index.sync(vec![nb.clone()]);
+        index.flush();
+        assert_eq!(meaning(&index, "alpha"), ["nb-1:P1.md", "nb-1:P2.md"]);
+        assert!(index.semantic().matrix.size().0 > 0);
+        let mut released = false;
+        for _ in 0..200 {
+            if index.semantic().matrix.size().0 == 0 {
+                released = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(released, "the matrix is still in memory");
+        // A save while it is unloaded; the next search loads everything, the save included.
+        write(&nb.path, "P3.md", "# P3\nplay play play");
+        index.touch(nb.clone(), vec!["P3.md".into()]);
+        index.flush();
+        assert_eq!(index.semantic().matrix.size().0, 0, "a save does not load it");
+        let mut found = meaning(&index, "alpha");
+        found.sort();
+        assert_eq!(found, ["nb-1:P1.md", "nb-1:P2.md", "nb-1:P3.md"]);
+        assert!(index.semantic().matrix.size().0 > 0);
+        finish(index, &dir);
+    }
+
+    #[test]
+    fn the_model_file_is_let_go_while_nothing_uses_it() {
+        let dir = scratch();
+        let nb = root(&dir, "nb-1");
+        meaning_pages(&nb);
+        fixture::install(&store_of(&dir), &fixture::rows(), "h1");
+        let index = Index::start_with_idle(&dir.join("data"), Arc::new(|_| {}), Duration::from_millis(40));
+        index.set_store(Some(store_of(&dir)));
+        index.sync(vec![nb.clone()]);
+        index.flush();
+        assert!(index.semantic().embedded_texts() > 0);
+        // The writer thread wakes every few milliseconds and lets the file go.
+        let mut open = true;
+        for _ in 0..100 {
+            if !index.semantic().file_is_open() {
+                open = false;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!open, "the model file is still open");
+        // `semantic remove` can delete it now, and a search opens it again when it is back.
+        std::fs::remove_dir_all(store_of(&dir).join(".models")).unwrap();
+        fixture::install(&store_of(&dir), &fixture::rows(), "h1");
+        assert_eq!(meaning(&index, "alpha"), ["nb-1:P1.md", "nb-1:P2.md"]);
+        finish(index, &dir);
+    }
+
     /// NS-4A exit criterion: a 10,000-page notebook indexes, searches and answers backlinks quickly. Run with
     /// `cargo test --release notes_index::tests::ten_thousand -- --ignored --nocapture` for the real numbers.
     #[test]
@@ -645,6 +1089,109 @@ mod tests {
             assert!(each < std::time::Duration::from_millis(200), "{each:?}");
         }
         let _ = listed;
+        finish(index, &dir);
+    }
+
+    /// NS-4B exit criterion: meaning search over a 10,000-page notebook with the real model. Needs
+    /// `HIVEMIND_TEST_MODEL_DIR` (a folder with the three model files). Run with
+    /// `cargo test --release notes_index::tests::ten_thousand_pages_meaning -- --ignored --nocapture` for the real numbers.
+    #[test]
+    #[ignore = "slow: generates 10,000 pages and embeds them with the real model"]
+    fn ten_thousand_pages_meaning_search_and_related_quickly() {
+        let Ok(model) = std::env::var("HIVEMIND_TEST_MODEL_DIR") else {
+            println!("skipped: HIVEMIND_TEST_MODEL_DIR is not set");
+            return;
+        };
+        let dir = scratch();
+        let store = store_of(&dir);
+        let folder = store.join(".models").join(semantic::MODEL);
+        std::fs::create_dir_all(&folder).unwrap();
+        for name in ["config.json", "tokenizer.json", "model.safetensors"] {
+            std::fs::copy(Path::new(&model).join(name), folder.join(name)).unwrap();
+        }
+        // Words from the model's own vocabulary, so the pages look like text to it.
+        let vocab: serde_json::Value = serde_json::from_slice(&std::fs::read(folder.join("tokenizer.json")).unwrap()).unwrap();
+        let mut words: Vec<&str> = vocab["model"]["vocab"].as_object().unwrap().keys().map(String::as_str).filter(|w| w.len() >= 4 && w.chars().all(|c| c.is_ascii_lowercase())).collect();
+        words.sort();
+        let words: Vec<&str> = words.iter().step_by((words.len() / 3000).max(1)).copied().collect();
+        let nb = root(&dir, "nb-big");
+        let mut seed = 987_654_321u64;
+        let mut next = move || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as usize
+        };
+        for i in 0..10_000 {
+            let mut text = format!("# Page number {i}\n\n");
+            for section in 0..3 {
+                text.push_str(&format!("## Topic {section}\n\n"));
+                for _ in 0..2 {
+                    for _ in 0..40 {
+                        text.push_str(words[next() % words.len()]);
+                        text.push(' ');
+                    }
+                    text.push_str("\n\n");
+                }
+            }
+            write(&nb.path, &format!("Folder{}/Sub{}/Page number {i}.md", i % 100, i % 10), &text);
+        }
+        // First the pages alone, as NS-4A indexes them; then the model appears and the pass reads every page again.
+        let index = started(&dir);
+        index.set_store(Some(store.clone()));
+        let t = std::time::Instant::now();
+        index.sync(vec![nb.clone()]);
+        index.flush();
+        let pages_only = t.elapsed();
+        assert_eq!(index.status().unwrap().pages, 10_000);
+        let units: i64 = index.read(|c| c.query_row("SELECT count(*) FROM units", [], |r| r.get(0))).unwrap();
+        // The model files are there but not the marker, so the model is not in use until `semantic install` writes it.
+        std::fs::write(folder.join("verified.json"), r#"{"files":{"model.safetensors":"07609e5bd33aad37900b3fd62f4ec96f6daec88ca4d46b9d8b928bfababf6ea0"}}"#).unwrap();
+        let t = std::time::Instant::now();
+        assert_eq!(index.semantic_status().state, "building");
+        index.flush();
+        let embedding = t.elapsed();
+        assert_eq!(index.semantic_status().state, "ready");
+        let vectors: i64 = index.read(|c| c.query_row("SELECT count(*) FROM vectors WHERE length(vec) > 0", [], |r| r.get(0))).unwrap();
+        println!("pages indexed without the model: {pages_only:?}");
+        println!("{units} units; embedding every page (read the files again, cut, embed, store): {embedding:?}, {vectors} vectors");
+        let time = |label: &str, run: &dyn Fn()| {
+            let t = std::time::Instant::now();
+            run();
+            println!("{label}, first run: {:?}", t.elapsed());
+            let t = std::time::Instant::now();
+            for _ in 0..10 {
+                run();
+            }
+            let each = t.elapsed() / 10;
+            println!("{label}: {each:?}");
+            each
+        };
+        let query = format!("{} {} {}", words[100], words[1200], words[2500]);
+        let search = time("meaning search, three words (includes loading the matrix the first time)", &|| {
+            index.read(|c| query::search_meaning(c, index.semantic(), &query, &Filters::default(), 20)).unwrap();
+        });
+        let narrowed = time("meaning search with a folder filter", &|| {
+            index.read(|c| query::search_meaning(c, index.semantic(), &query, &Filters { folder: Some("Folder5".into()), ..Default::default() }, 20)).unwrap();
+        });
+        let related = time("related pages of one page", &|| {
+            index.read(|c| query::related(c, index.semantic(), "nb-big", "Folder5/Sub5/Page number 5505.md", 5)).unwrap();
+        });
+        let (rows, matrix_bytes) = index.semantic().matrix.size();
+        let (cached, cache_bytes) = index.semantic().cache_size();
+        println!("matrix: {rows} units, {:.1} MB; row cache: {cached} rows, {:.1} MB", matrix_bytes as f64 / 1e6, cache_bytes as f64 / 1e6);
+        // One save embeds only the changed section.
+        let t = std::time::Instant::now();
+        write(&nb.path, "Folder5/Sub5/Page number 5505.md", "# Page number 5505\n\n## Topic 0\n\nsomething entirely different about gardens and weather today\n");
+        index.touch(nb.clone(), vec!["Folder5/Sub5/Page number 5505.md".into()]);
+        index.flush();
+        println!("one saved page indexed and embedded: {:?}", t.elapsed());
+        let t = std::time::Instant::now();
+        index.read(|c| query::search_meaning(c, index.semantic(), &query, &Filters::default(), 20)).unwrap();
+        println!("the first search after a save (one page read again into the matrix): {:?}", t.elapsed());
+        if !cfg!(debug_assertions) {
+            for each in [search, narrowed, related] {
+                assert!(each < Duration::from_millis(200), "{each:?}");
+            }
+        }
         finish(index, &dir);
     }
 }

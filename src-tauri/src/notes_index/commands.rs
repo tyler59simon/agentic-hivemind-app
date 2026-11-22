@@ -14,17 +14,48 @@ pub struct SearchResult {
     pub ms: u64,
     /// `scanning` while the index is still being filled, so results may be missing pages.
     pub state: &'static str,
+    /// How meaning search stands: `off` when the search was not asked to use it, else `ready`, `building` (the pages are
+    /// still being read, so meaning finds only some), `missing` (no model installed) or `error`.
+    pub meaning: &'static str,
 }
 
-/// Pages matching `query` under `filters`, best first. With no words, the pages the filters keep.
+/// Pages matching `query` under `filters`, best first. With no words, the pages the filters keep. With `meaning`, pages
+/// found by what they are about are fused in, when the model is installed.
 #[tauri::command]
-pub async fn index_search(state: State<'_, AppState>, query: String, filters: Option<Filters>, limit: Option<usize>) -> Result<SearchResult, String> {
+pub async fn index_search(state: State<'_, AppState>, query: String, filters: Option<Filters>, limit: Option<usize>, meaning: Option<bool>) -> Result<SearchResult, String> {
     let index = state.index.clone();
     blocking(move || {
         let started = std::time::Instant::now();
         let filters = filters.unwrap_or_default();
-        let hits = index.read(|c| query::search(c, &query, &filters, limit.unwrap_or(30)))?;
-        Ok(SearchResult { hits, ms: started.elapsed().as_millis() as u64, state: index.state() })
+        let limit = limit.unwrap_or(30);
+        let by_meaning = meaning.unwrap_or(false);
+        let how = if by_meaning { index.semantic_status().state } else { "off" };
+        let hits = index.read(|c| if by_meaning { query::search_meaning(c, index.semantic(), &query, &filters, limit) } else { query::search(c, &query, &filters, limit) })?;
+        Ok(SearchResult { hits, ms: started.elapsed().as_millis() as u64, state: index.state(), meaning: how })
+    })
+    .await
+}
+
+#[derive(Serialize)]
+pub struct Related {
+    /// The pages nearest in meaning to the page.
+    pub pages: Vec<Hit>,
+    /// The page's title and the start of its text, for asking Living Memory for related memory notes.
+    pub query: String,
+    /// As `SearchResult.meaning`.
+    pub meaning: &'static str,
+}
+
+/// The pages whose meaning is nearest to a page's, and the words to look for related memory notes with.
+#[tauri::command]
+pub async fn index_related(state: State<'_, AppState>, notebook: String, path: String, limit: Option<usize>) -> Result<Related, String> {
+    let index = state.index.clone();
+    let roots = crate::studio::roots(&state);
+    blocking(move || {
+        let meaning = index.semantic_status().state;
+        let pages = index.read(|c| query::related(c, index.semantic(), &notebook, &path, limit.unwrap_or(5)))?;
+        let query = roots.iter().find(|r| r.id == notebook).map(|r| super::writer::related_text(&r.path, &path)).unwrap_or_default();
+        Ok(Related { pages, query, meaning })
     })
     .await
 }

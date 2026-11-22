@@ -160,6 +160,8 @@ export interface SearchHit {
   id: string; domain: string; title: string; type: NoteType; updated: string; tags: string[];
   status: Status; snippet: string; score: number; rank: number; engine: string; revision: string;
   sourceField: string; sourceScope: "active" | "global" | "foreign"; similarity?: number;
+  /** 0 for a note that only filled the list up; absent in older Living Memory versions. */
+  relevance?: number;
 }
 export interface SearchResult { mode: string; domains: string[]; fallback: boolean; results: SearchHit[] }
 export interface SearchOptions {
@@ -678,6 +680,8 @@ export async function docNotebooks(): Promise<DocNotebooks> {
 export interface DocSearchHit {
   domain: string; notebook: string; notebook_title: string; title: string; path: string; heading: string | null; snippet: string;
   line_start: number; line_end: number; revision: string | null; score: number; relevance: number;
+  /** The cosine of a hit found by meaning, when Living Memory's semantic search is on. */
+  similarity?: number;
 }
 /** Search the notebook pages of every domain, private notebooks included (Hivemind's bridge only). Needs `docs.search`.
  *  A hidden notebook is searched only when named, so it never appears here. */

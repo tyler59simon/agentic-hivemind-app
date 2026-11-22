@@ -174,6 +174,9 @@ pub fn rewatch(app: &AppHandle) {
     let Some(state) = app.try_state::<AppState>() else { return };
     let roots = roots(&state);
     state.index.sync(roots.clone());
+    // The store is known before the first connect (the launch settings name it), so meaning search can start at once. This
+    // comes after `sync`, which tells the index where the notebooks are for the pass that reads their pages.
+    state.index.set_store(store_root(&state));
     let mut slot = state.notebook_watcher.lock().unwrap_or_else(|e| e.into_inner());
     *slot = None;
     if roots.is_empty() {

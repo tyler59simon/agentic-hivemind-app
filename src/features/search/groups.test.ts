@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { DocSearchHit, SearchHit } from "../../lib/lm";
 import { MARK_CLOSE, MARK_OPEN, marked, type IndexHit } from "../../lib/noteindex";
-import { buildGroups, flatRows, moveActive, type GroupInput } from "./groups";
+import { buildGroups, flatRows, isRelatedNote, isRelevantPage, moveActive, type GroupInput } from "./groups";
 
 const page = (notebook: string, path: string, title = path): IndexHit => ({ notebook, path, kind: "md", title, titleMarked: `${MARK_OPEN}${title}${MARK_CLOSE}`, mtimeMs: 1, snippet: "a snippet" });
 const lmHit = (domain: string, notebook: string, path: string): DocSearchHit => ({
@@ -42,6 +42,19 @@ describe("buildGroups", () => {
     const groups = buildGroups(input({ lm: [lmHit("demo", "plans", "A.md"), lmHit("demo", "hidden-one", "B.md"), lmHit("elsewhere", "plans", "C.md")] }));
     expect(groups.find((g) => g.id === "lm")!.rows.map((r) => r.title)).toEqual(["A.md"]);
     expect(buildGroups(input({ lmNotebooks: [] })).some((g) => g.id === "lm")).toBe(false);
+  });
+
+  it("drops the pages Living Memory returns only to fill the list: relevance 0 and no near similarity (NS-4B follow-up)", () => {
+    const hit = (path: string, relevance: number, similarity?: number): DocSearchHit => ({ ...lmHit("demo", "plans", path), relevance, ...(similarity === undefined ? {} : { similarity }) });
+    const lm = [hit("Real.md", 1), hit("Pad.md", 0), hit("Padded-similar.md", 0, 0.0443), hit("Near.md", 0, 0.45), hit("Both.md", 0.3, 0.2), hit("Edge.md", 0, 0.449)];
+    expect(buildGroups(input({ lm })).find((g) => g.id === "lm")!.rows.map((r) => r.title)).toEqual(["Real.md", "Near.md", "Both.md"]);
+    // Everything was padding: no group at all.
+    expect(buildGroups(input({ lm: [hit("A.md", 0), hit("B.md", 0)] })).some((g) => g.id === "lm")).toBe(false);
+  });
+
+  it("isRelevantPage and isRelatedNote apply the floor of 0.45 and the relevance rule", () => {
+    expect([isRelevantPage({ relevance: 1 }), isRelevantPage({ relevance: 0 }), isRelevantPage({ relevance: 0, similarity: 0.45 }), isRelevantPage({ relevance: 0, similarity: 0.44 }), isRelevantPage({})]).toEqual([true, false, true, false, true]);
+    expect([isRelatedNote({ similarity: 0.45, relevance: 0 }), isRelatedNote({ similarity: 0.44, relevance: 1 }), isRelatedNote({ relevance: 0.1 }), isRelatedNote({ relevance: 0 }), isRelatedNote({})]).toEqual([true, false, true, false, true]);
   });
 
   it("leaves out a group with nothing in it, and calls the pages 'Notebooks' when no page is being read", () => {

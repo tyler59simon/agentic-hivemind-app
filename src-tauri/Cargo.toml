@@ -35,6 +35,8 @@ sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 sha2 = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 rusqlite = { version = "0.43", features = ["bundled"] }
+unicode-normalization = "0.1"
+unicode-general-category = "1"
 
 [target.'cfg(windows)'.dependencies]
 tauri-winrt-notification = "=0.8.1"

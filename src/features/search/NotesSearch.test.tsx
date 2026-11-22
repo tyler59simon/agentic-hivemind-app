@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // NS-4A: the Notes page's search box mounted for real: typing opens the panel with the groups, the arrow keys move, Enter
 // opens, Ctrl+Enter opens beside, Escape closes, a filter narrows the search, and the Living Memory group needs the capability.
+// NS-4B: the Meaning toggle asks the index for meaning, and the install hint appears when the model is missing.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -8,6 +9,7 @@ import { createRoot, type Root } from "react-dom/client";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const calls: { cmd: string; args: Record<string, unknown> }[] = [];
+let meaningState = "ready";
 const MARK = (s: string) => `\u0001${s}\u0002`;
 const hit = (notebook: string, path: string, title: string, snippet = "") => ({ notebook, path, kind: "md", title, titleMarked: MARK(title), mtimeMs: 1, snippet });
 vi.mock("@tauri-apps/api/core", () => ({
@@ -18,9 +20,10 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "index_tags": return [{ tag: "plan", count: 2 }];
       case "index_search": {
         const f = args.filters as { notebook?: string; excludeNotebook?: string; tag?: string };
-        if (f.notebook === "nb-1") return { hits: [hit("nb-1", "Projects/Plan.md", "Plan", `the ${MARK("plan")} for the quarter`), hit("nb-1", "Inbox.md", "Inbox")], ms: 1, state: "idle" };
-        if (f.excludeNotebook === "nb-1" || !f.notebook) return { hits: [hit("nb-2", "Plan.md", "Plan notes")], ms: 1, state: "idle" };
-        return { hits: [], ms: 1, state: "idle" };
+        const meaning = args.meaning ? meaningState : "off";
+        if (f.notebook === "nb-1") return { hits: [hit("nb-1", "Projects/Plan.md", "Plan", `the ${MARK("plan")} for the quarter`), hit("nb-1", "Inbox.md", "Inbox")], ms: 1, state: "idle", meaning };
+        if (f.excludeNotebook === "nb-1" || !f.notebook) return { hits: [hit("nb-2", "Plan.md", "Plan notes")], ms: 1, state: "idle", meaning };
+        return { hits: [], ms: 1, state: "idle", meaning };
       }
       case "lm": {
         const argv = args.argv as string[];
@@ -77,7 +80,8 @@ async function mount(lmSearch: boolean) {
 beforeEach(() => {
   calls.length = 0;
   opened.length = 0;
-  useNotesSearch.setState({ query: "", filters: NO_FILTERS, open: false, focusTick: 0 });
+  meaningState = "ready";
+  useNotesSearch.setState({ query: "", filters: NO_FILTERS, meaning: false, open: false, focusTick: 0 });
   useApp.setState({ domain: "demo" });
   // A page of notebook nb-1 is the one being read.
   useWorkspace.setState({
@@ -173,5 +177,57 @@ describe("the Notes page's search box", () => {
     await setValue(document.querySelector("select[aria-label='Kind']")!, "hmdoc");
     await settle();
     expect(calls.filter((c) => c.cmd === "index_search").some((c) => (c.args.filters as { kind?: string }).kind === "hmdoc")).toBe(true);
+  });
+});
+
+describe("the Meaning toggle (NS-4B)", () => {
+  const toggle = () => [...document.querySelectorAll<HTMLButtonElement>(".search-filters button")].find((b) => b.textContent === "Meaning")!;
+  const asked = () => calls.filter((c) => c.cmd === "index_search").map((c) => c.args);
+
+  it("is off at first, and turning it on asks the index for meaning, for this notebook and the others", async () => {
+    await mount(true);
+    await act(async () => input().focus());
+    await setValue(input(), "plan");
+    await settle();
+    expect(toggle().getAttribute("aria-pressed")).toBe("false");
+    expect(asked().every((a) => !("meaning" in a))).toBe(true);
+    expect(document.querySelector(".semantic-hint")).toBeNull();
+    calls.length = 0;
+    await act(async () => { toggle().click(); });
+    await settle();
+    expect(toggle().getAttribute("aria-pressed")).toBe("true");
+    expect(asked().length).toBeGreaterThanOrEqual(2);
+    expect(asked().every((a) => a.meaning === true)).toBe(true);
+    // The model is ready: results as before, and no hint.
+    expect(groupTitles()).toContain("This notebook");
+    expect(document.querySelector(".semantic-hint")).toBeNull();
+  });
+
+  it("says the model is missing, with a button that copies the install command, while the pages are still found by words", async () => {
+    meaningState = "missing";
+    const written: string[] = [];
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: async (t: string) => { written.push(t); } }, configurable: true });
+    await mount(true);
+    await act(async () => input().focus());
+    await setValue(input(), "plan");
+    await act(async () => { toggle().click(); });
+    await settle();
+    const hint = document.querySelector(".semantic-hint")!;
+    expect(hint.textContent).toContain("Semantic search needs the Living Memory model. Run alm semantic install.");
+    expect(hint.querySelector("code")?.textContent).toBe("alm semantic install");
+    expect(groupTitles()).toContain("This notebook");
+    await act(async () => { [...hint.querySelectorAll("button")].find((b) => b.textContent === "Copy command")!.click(); });
+    expect(written).toEqual(["alm semantic install"]);
+  });
+
+  it("says the pages are still being read while the vectors are made", async () => {
+    meaningState = "building";
+    await mount(true);
+    await act(async () => input().focus());
+    await setValue(input(), "plan");
+    await act(async () => { toggle().click(); });
+    await settle();
+    expect(document.querySelector(".search-panel")!.textContent).toContain("Meaning search is still reading your pages");
+    expect(document.querySelector(".semantic-hint")).toBeNull();
   });
 });

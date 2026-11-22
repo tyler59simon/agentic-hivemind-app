@@ -1,8 +1,12 @@
-//! Reading the index: search, backlinks and outgoing links, unlinked mentions, the page list and the tags.
+//! Reading the index: search, backlinks and outgoing links, unlinked mentions, the page list and the tags, and (NS-4B)
+//! search by meaning and related pages.
 use super::links::page_key;
+use super::matrix::{ranked, Best};
+use super::semantic::{Semantic, MIN_SIMILARITY};
 use rusqlite::types::Value as Sql;
 use rusqlite::{params, params_from_iter, Connection};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 
 /// Around a match in a title or a snippet; the webview splits on them, so page text never becomes markup.
 pub const MARK_OPEN: char = '\u{1}';
@@ -60,6 +64,17 @@ pub struct Filters {
     pub modified_after_ms: Option<i64>,
 }
 
+impl Filters {
+    fn is_empty(&self) -> bool {
+        self.notebook.is_none()
+            && self.exclude_notebook.is_none()
+            && self.folder.as_deref().is_none_or(|f| f.trim_matches('/').is_empty())
+            && self.tag.is_none()
+            && self.kind.is_none()
+            && self.modified_after_ms.is_none()
+    }
+}
+
 #[derive(Serialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Hit {
@@ -78,22 +93,8 @@ fn like_escape(text: &str) -> String {
     text.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
 }
 
-/// Pages matching `input` (best first) under `filters`; with no query, the pages the filters keep, newest first.
-pub fn search(conn: &Connection, input: &str, filters: &Filters, limit: usize) -> rusqlite::Result<Vec<Hit>> {
-    let query = fts_query(input);
-    if query.is_none() && !input.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut args: Vec<Sql> = Vec::new();
-    let mut sql = if let Some(q) = &query {
-        args.push(Sql::Text(q.clone()));
-        format!(
-            "SELECT p.notebook, p.path, p.kind, p.title, p.mtime_ms, highlight(fts, 0, '{MARK_OPEN}', '{MARK_CLOSE}'), snippet(fts, 2, '{MARK_OPEN}', '{MARK_CLOSE}', '…', 24) \
-             FROM fts JOIN pages p ON p.id = fts.rowid WHERE fts MATCH ?1"
-        )
-    } else {
-        "SELECT p.notebook, p.path, p.kind, p.title, p.mtime_ms, p.title, '' FROM pages p WHERE 1 = 1".to_string()
-    };
+/// Add the clauses of `filters` to a statement over `pages p`, numbering their arguments after those in `args`.
+fn apply_filters(filters: &Filters, sql: &mut String, args: &mut Vec<Sql>) {
     let mut add = |clause: &str, value: Sql| {
         args.push(value);
         sql.push_str(&clause.replace('?', &format!("?{}", args.len())));
@@ -116,6 +117,25 @@ pub fn search(conn: &Connection, input: &str, filters: &Filters, limit: usize) -
     if let Some(v) = filters.modified_after_ms {
         add(" AND p.mtime_ms >= ?", Sql::Integer(v));
     }
+}
+
+/// Pages matching `input` (best first) under `filters`; with no query, the pages the filters keep, newest first.
+pub fn search(conn: &Connection, input: &str, filters: &Filters, limit: usize) -> rusqlite::Result<Vec<Hit>> {
+    let query = fts_query(input);
+    if query.is_none() && !input.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut args: Vec<Sql> = Vec::new();
+    let mut sql = if let Some(q) = &query {
+        args.push(Sql::Text(q.clone()));
+        format!(
+            "SELECT p.notebook, p.path, p.kind, p.title, p.mtime_ms, highlight(fts, 0, '{MARK_OPEN}', '{MARK_CLOSE}'), snippet(fts, 2, '{MARK_OPEN}', '{MARK_CLOSE}', '…', 24) \
+             FROM fts JOIN pages p ON p.id = fts.rowid WHERE fts MATCH ?1"
+        )
+    } else {
+        "SELECT p.notebook, p.path, p.kind, p.title, p.mtime_ms, p.title, '' FROM pages p WHERE 1 = 1".to_string()
+    };
+    apply_filters(filters, &mut sql, &mut args);
     sql.push_str(if query.is_some() { " ORDER BY bm25(fts, 8.0, 3.0, 1.0, 4.0), p.path" } else { " ORDER BY p.mtime_ms DESC, p.path" });
     sql.push_str(&format!(" LIMIT {}", limit.clamp(1, 200)));
     let mut stmt = conn.prepare(&sql)?;
@@ -131,6 +151,135 @@ pub fn search(conn: &Connection, input: &str, filters: &Filters, limit: usize) -
         })
     })?;
     rows.collect()
+}
+
+// ---- search by meaning -----------------------------------------------------------------------------------------------
+
+/// The `k` of reciprocal rank fusion, as `RRF_K` in Living Memory's `search.py`.
+const RRF_K: f64 = 60.0;
+/// Pages the meaning ranking contributes to the fusion (`SEMANTIC_TOP` in `search.py`).
+const SEMANTIC_TOP: usize = 20;
+/// Pages the word search contributes to the fusion.
+const LEXICAL_CANDIDATES: usize = 100;
+
+struct PageInfo {
+    notebook: String,
+    path: String,
+    kind: String,
+    title: String,
+    mtime_ms: i64,
+}
+
+fn page_info(conn: &Connection, ids: &[i64]) -> rusqlite::Result<HashMap<i64, PageInfo>> {
+    let mut out = HashMap::new();
+    for chunk in ids.chunks(400) {
+        let marks = vec!["?"; chunk.len()].join(",");
+        let mut stmt = conn.prepare(&format!("SELECT id, notebook, path, kind, title, mtime_ms FROM pages WHERE id IN ({marks})"))?;
+        let rows = stmt.query_map(params_from_iter(chunk), |r| Ok((r.get::<_, i64>(0)?, PageInfo { notebook: r.get(1)?, path: r.get(2)?, kind: r.get(3)?, title: r.get(4)?, mtime_ms: r.get(5)? })))?;
+        for row in rows {
+            let (id, info) = row?;
+            out.insert(id, info);
+        }
+    }
+    Ok(out)
+}
+
+/// What to show under a page found by one of its units: the unit's first line, or its heading when it has no text of its own.
+fn unit_snippet(conn: &Connection, unit: i64) -> String {
+    conn.query_row("SELECT heading, first_line FROM units WHERE id = ?1", [unit], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map(|(heading, first)| if first.is_empty() { heading } else { first })
+        .unwrap_or_default()
+}
+
+fn hit_of(info: &PageInfo, snippet: String) -> Hit {
+    Hit {
+        notebook: info.notebook.clone(),
+        path: info.path.clone(),
+        kind: info.kind.clone(),
+        title: info.title.clone(),
+        title_marked: info.title.clone(),
+        mtime_ms: info.mtime_ms,
+        snippet,
+    }
+}
+
+/// The pages `filters` keep, or None when they keep every page.
+fn allowed_pages(conn: &Connection, filters: &Filters) -> rusqlite::Result<Option<HashSet<i64>>> {
+    if filters.is_empty() {
+        return Ok(None);
+    }
+    let mut args = Vec::new();
+    let mut sql = "SELECT p.id FROM pages p WHERE 1 = 1".to_string();
+    apply_filters(filters, &mut sql, &mut args);
+    let mut stmt = conn.prepare(&sql)?;
+    let ids = stmt.query_map(params_from_iter(args), |r| r.get(0))?.collect::<Result<HashSet<i64>, _>>()?;
+    Ok(Some(ids))
+}
+
+/// Bring the matrix up to date and check it holds the vectors of the model installed now; vectors of another model are
+/// not comparable with a query made by this one.
+fn ready_matrix(conn: &Connection, sem: &Semantic, identity: &super::semantic::Identity) -> rusqlite::Result<bool> {
+    sem.matrix.sync(conn)?;
+    Ok(sem.matrix.model().as_deref() == Some(identity.key().as_str()))
+}
+
+/// The pages nearest in meaning to `input` under `filters`, best first, by their best unit. Empty when meaning search is
+/// not available (no model, a model the index has not been filled for yet) or the model knows none of the words.
+fn meaning_ranking(conn: &Connection, sem: &Semantic, input: &str, filters: &Filters) -> rusqlite::Result<Vec<Best>> {
+    let Ok(done) = sem.embed(&[input.trim()]) else { return Ok(Vec::new()) };
+    let Some(Some(query)) = done.vectors.into_iter().next() else { return Ok(Vec::new()) };
+    if !ready_matrix(conn, sem, &done.identity)? {
+        return Ok(Vec::new());
+    }
+    let allowed = allowed_pages(conn, filters)?;
+    Ok(ranked(sem.matrix.best_per_page(&query, |page| allowed.as_ref().is_none_or(|a| a.contains(&page)))))
+}
+
+/// Pages matching `input` by words and by meaning, fused by reciprocal rank as Living Memory fuses its notes: a page scores
+/// 1 / (60 + its rank by words) plus 1 / (60 + its rank by meaning among the nearest 20). A page the words did not find is
+/// shown only when its cosine is at least the model's `min_similarity`. Without a usable model this is `search`.
+pub fn search_meaning(conn: &Connection, sem: &Semantic, input: &str, filters: &Filters, limit: usize) -> rusqlite::Result<Vec<Hit>> {
+    let limit = limit.clamp(1, 200);
+    let mut lexical = search(conn, input, filters, LEXICAL_CANDIDATES)?;
+    if input.trim().is_empty() {
+        lexical.truncate(limit);
+        return Ok(lexical);
+    }
+    let nearest: Vec<Best> = meaning_ranking(conn, sem, input, filters)?.into_iter().filter(|b| b.cosine > 0.0).take(SEMANTIC_TOP).collect();
+    if nearest.is_empty() {
+        lexical.truncate(limit);
+        return Ok(lexical);
+    }
+    let info = page_info(conn, &nearest.iter().map(|b| b.page).collect::<Vec<_>>())?;
+    let key = |notebook: &str, path: &str| format!("{notebook}\n{path}");
+    let by_words: HashMap<String, usize> = lexical.iter().enumerate().map(|(i, h)| (key(&h.notebook, &h.path), i)).collect();
+    let mut scored: Vec<(f64, usize, Hit)> = lexical.iter().cloned().enumerate().map(|(i, h)| (1.0 / (RRF_K + i as f64 + 1.0), i, h)).collect();
+    for (rank, best) in nearest.iter().enumerate() {
+        let Some(page) = info.get(&best.page) else { continue };
+        let share = 1.0 / (RRF_K + rank as f64 + 1.0);
+        match by_words.get(&key(&page.notebook, &page.path)) {
+            Some(i) => scored[*i].0 += share,
+            None if best.cosine >= MIN_SIMILARITY => scored.push((share, lexical.len() + rank, hit_of(page, unit_snippet(conn, best.unit)))),
+            None => {}
+        }
+    }
+    // Equal scores keep the order of the words, then of the meaning ranking (ties are rounded away as in `_fuse`).
+    scored.sort_by(|a, b| ((b.0 * 1e12).round()).total_cmp(&(a.0 * 1e12).round()).then(a.1.cmp(&b.1)));
+    Ok(scored.into_iter().take(limit).map(|(_, _, hit)| hit).collect())
+}
+
+/// The pages nearest in meaning to the page `path` of `notebook`: other pages whose best unit has a cosine of at least the
+/// model's `min_similarity` against the mean of the page's own units.
+pub fn related(conn: &Connection, sem: &Semantic, notebook: &str, path: &str, limit: usize) -> rusqlite::Result<Vec<Hit>> {
+    let Some(identity) = sem.identity() else { return Ok(Vec::new()) };
+    let Ok(id) = conn.query_row("SELECT id FROM pages WHERE notebook = ?1 AND path = ?2", params![notebook, path], |r| r.get::<_, i64>(0)) else { return Ok(Vec::new()) };
+    if !ready_matrix(conn, sem, &identity)? {
+        return Ok(Vec::new());
+    }
+    let Some(mean) = sem.matrix.page_vector(id) else { return Ok(Vec::new()) };
+    let near: Vec<Best> = ranked(sem.matrix.best_per_page(&mean, |page| page != id)).into_iter().take_while(|b| b.cosine >= MIN_SIMILARITY).take(limit).collect();
+    let info = page_info(conn, &near.iter().map(|b| b.page).collect::<Vec<_>>())?;
+    Ok(near.iter().filter_map(|b| info.get(&b.page).map(|p| hit_of(p, unit_snippet(conn, b.unit)))).collect())
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]

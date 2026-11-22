@@ -4,7 +4,7 @@ use rusqlite::Connection;
 use std::path::Path;
 
 /// Bump when a table, a column or what an extractor stores changes: the next start drops the database and indexes again.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 const TABLES: &str = "
 CREATE TABLE pages (
@@ -34,6 +34,17 @@ CREATE INDEX links_name ON links (target_name);
 CREATE TABLE tags (page INTEGER NOT NULL, tag TEXT NOT NULL);
 CREATE INDEX tags_page ON tags (page);
 CREATE INDEX tags_tag ON tags (tag);
+CREATE TABLE units (
+  id INTEGER PRIMARY KEY,
+  page INTEGER NOT NULL,
+  ord INTEGER NOT NULL,
+  heading TEXT NOT NULL,
+  first_line TEXT NOT NULL,
+  sha TEXT NOT NULL
+);
+CREATE INDEX units_page ON units (page);
+CREATE TABLE vectors (unit INTEGER PRIMARY KEY, vec BLOB NOT NULL);
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ";
 
 fn pragmas(conn: &Connection) -> rusqlite::Result<()> {

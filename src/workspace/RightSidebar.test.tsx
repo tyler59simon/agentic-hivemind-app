@@ -134,3 +134,22 @@ describe("the outline of a rich page (NS-3C UI-1)", () => {
     expect(el.textContent).toContain("No headings.");
   });
 });
+
+describe("the Related section (NS-4B)", () => {
+  const titles = () => [...document.querySelectorAll(".note-rail .section-head h2")].map((h) => h.textContent);
+
+  it("is beside a folder notebook page, after its links", async () => {
+    await rail("nb-1");
+    expect(titles()).toEqual(["On this page", "Backlinks", "Outgoing links", "Related", "File"]);
+  });
+
+  it("is not beside a Living Memory page, which the index does not hold", async () => {
+    await rail("lm:demo:plans");
+    expect(titles()).toEqual(["On this page", "File"]);
+  });
+
+  it("is not beside a loose file", async () => {
+    await rail("@abc123");
+    expect(titles()).toEqual(["On this page", "File"]);
+  });
+});

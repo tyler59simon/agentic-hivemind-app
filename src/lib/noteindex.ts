@@ -20,7 +20,12 @@ export interface IndexFilters {
   kind?: PageKind;
   modifiedAfterMs?: number;
 }
-export interface IndexSearch { hits: IndexHit[]; ms: number; state: "idle" | "scanning" }
+/** How meaning search stood for a search: `off` when it was not asked for, `missing` when the Living Memory model is not
+ *  installed, `building` while the pages are still being read into the index, `error` when the model cannot be read. */
+export type MeaningState = "off" | "ready" | "building" | "missing" | "error";
+export interface IndexSearch { hits: IndexHit[]; ms: number; state: "idle" | "scanning"; meaning?: MeaningState }
+/** The pages nearest in meaning to a page, and the words to look for related memory notes with. */
+export interface RelatedPages { pages: IndexHit[]; query: string; meaning: MeaningState }
 
 export interface OutgoingLink { raw: string; kind: "wiki" | "md" | "file"; embed: boolean; line: number; context: string }
 /** A link some page wrote whose target is named like the page asked about. Whether it reaches that page is for the
@@ -32,11 +37,15 @@ export interface IndexLinks { outgoing: OutgoingLink[]; incoming: IncomingLink[]
 export interface IndexedPage { notebook: string; path: string; kind: PageKind; title: string; mtimeMs: number }
 export interface TagCount { tag: string; count: number }
 
-export interface IndexProgress { state: "idle" | "scanning"; done: number; total: number; error: string | null }
-export interface IndexStatus extends IndexProgress { pages: number; notebooks: { id: string; pages: number }[]; version: number }
+/** `phase` says what `scanning` is doing: reading `pages`, or making the vectors for `meaning` search. */
+export interface IndexProgress { state: "idle" | "scanning"; phase?: "pages" | "meaning"; done: number; total: number; error: string | null }
+export interface SemanticStatus { state: "missing" | "building" | "ready" | "error"; model: string | null; error: string | null; full: boolean }
+export interface IndexStatus extends IndexProgress { pages: number; notebooks: { id: string; pages: number }[]; version: number; semantic?: SemanticStatus }
 
-export const indexSearch = (query: string, filters: IndexFilters = {}, limit = 30) =>
-  invoke<IndexSearch>("index_search", { query, filters, limit }).then((r) => r ?? { hits: [], ms: 0, state: "idle" as const });
+export const indexSearch = (query: string, filters: IndexFilters = {}, limit = 30, meaning = false) =>
+  invoke<IndexSearch>("index_search", { query, filters, limit, ...(meaning ? { meaning: true } : {}) }).then((r) => r ?? { hits: [], ms: 0, state: "idle" as const });
+export const indexRelated = (notebook: string, path: string) =>
+  invoke<RelatedPages>("index_related", { notebook, path }).then((r) => r ?? { pages: [], query: "", meaning: "off" as const });
 export const indexLinks = (notebook: string, path: string) =>
   invoke<IndexLinks>("index_links", { notebook, path }).then((r) => ({ outgoing: r?.outgoing ?? [], incoming: r?.incoming ?? [], unlinked: r?.unlinked ?? [] }));
 export const indexIncoming = (paths: string[]) => invoke<IncomingLink[]>("index_incoming", { paths }).then((r) => r ?? []);
@@ -50,6 +59,7 @@ export const INDEX_KEY = "index";
 export const pagesQuery = () => ({ queryKey: [INDEX_KEY, "pages"], queryFn: () => indexPages(), staleTime: 30_000 });
 export const tagsQuery = () => ({ queryKey: [INDEX_KEY, "tags"], queryFn: () => indexTags() });
 export const statusQuery = () => ({ queryKey: [INDEX_KEY, "status"], queryFn: indexStatus });
+export const relatedQuery = (notebook: string, path: string) => ({ queryKey: [INDEX_KEY, "related", notebook, path], queryFn: () => indexRelated(notebook, path) });
 export const linksQuery = (notebook: string, path: string) => ({ queryKey: [INDEX_KEY, "links", notebook, path], queryFn: () => indexLinks(notebook, path) });
 
 /** A title or snippet split at the index's marks: the pieces, with `on` set for the matched ones. */

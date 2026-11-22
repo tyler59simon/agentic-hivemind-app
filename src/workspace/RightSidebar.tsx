@@ -9,6 +9,7 @@ import { richOutline } from "../features/hmdoc/outline";
 import { SourceHistory } from "../features/history/HistoryViews";
 import { Backlinks, OutgoingLinks } from "../features/links/BacklinksPanel";
 import { LinksPanel, LocalGraphPanel } from "../features/links/LinksPanel";
+import { RelatedPages } from "../features/links/RelatedPanel";
 import { isLm } from "../documents/adapters/lmdoc";
 import { Outline } from "../features/outline/Outline";
 import { NoteDetails, noteQuery } from "../features/viewer/NoteView";
@@ -111,6 +112,7 @@ export function PageRail() {
         <>
           <Section title="Backlinks"><Backlinks file={tab.file} /></Section>
           <Section title="Outgoing links"><OutgoingLinks file={tab.file} /></Section>
+          <Section title="Related"><RelatedPages file={tab.file} /></Section>
         </>
       )}
       <Section title="File">

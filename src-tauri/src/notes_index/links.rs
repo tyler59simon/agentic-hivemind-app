@@ -2,6 +2,8 @@
 //! links, and `#tags` with the `tags` of a frontmatter block. Written by hand, one pass per line, so no regular
 //! expression crate is needed. Code (fenced blocks and spans) holds text but never links, tags or headings.
 
+use super::units::Line;
+
 /// How a link was written: `wiki` for `[[Page]]`, `md` for `[text](path)`, `file` for a canvas card.
 pub const WIKI: &str = "wiki";
 pub const MD: &str = "md";
@@ -26,6 +28,8 @@ pub struct Scanned {
     pub title: Option<String>,
     pub headings: Vec<String>,
     pub body: String,
+    /// The same text as lines with their paragraph breaks and heading levels, for cutting the page into units.
+    pub lines: Vec<Line>,
     pub tags: Vec<String>,
     pub links: Vec<Link>,
 }
@@ -316,7 +320,7 @@ fn inline(line: &str, cx: &mut Cx) -> String {
 }
 
 /// `#`s and a space, then the heading's text.
-fn heading(line: &str) -> Option<&str> {
+fn heading(line: &str) -> Option<(u8, &str)> {
     let stripped = line.trim_start_matches(' ');
     if line.len() - stripped.len() > 3 {
         return None;
@@ -331,7 +335,7 @@ fn heading(line: &str) -> Option<&str> {
         return None;
     }
     let text = rest.trim();
-    Some(text.trim_end_matches('#').trim_end())
+    Some((hashes as u8, text.trim_end_matches('#').trim_end()))
 }
 
 /// A table's delimiter row or a horizontal rule: no words in it.
@@ -437,14 +441,16 @@ pub fn scan_markdown(text: &str) -> Scanned {
         }
         if fence.is_some() {
             body.push((*raw).to_string());
+            found.lines.push(Line::Text((*raw).to_string()));
             continue;
         }
         let mut cx = Cx { links: &mut found.links, tags: &mut found.tags, line: line_no, context: raw };
-        if let Some(text) = heading(raw) {
+        if let Some((level, text)) = heading(raw) {
             let shown = inline(text, &mut cx).trim().to_string();
             if !shown.is_empty() {
                 found.title.get_or_insert_with(|| shown.clone());
                 body.push(shown.clone());
+                found.lines.push(Line::Heading(level, shown.clone()));
                 found.headings.push(shown);
             }
             continue;
@@ -455,7 +461,10 @@ pub fn scan_markdown(text: &str) -> Scanned {
         // Table cells and spaces left by removed markup run together.
         let shown = inline(strip_prefix(raw), &mut cx).split_whitespace().collect::<Vec<_>>().join(" ");
         if !shown.is_empty() {
-            body.push(shown);
+            body.push(shown.clone());
+            found.lines.push(Line::Text(shown));
+        } else if raw.trim().is_empty() {
+            found.lines.push(Line::Break);
         }
     }
     found.body = body.join("\n");
