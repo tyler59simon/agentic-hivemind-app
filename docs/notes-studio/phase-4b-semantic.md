@@ -40,7 +40,7 @@ Ungated unit tests with a tiny synthetic tokenizer and safetensors file. A gated
 
 ## 4. Shipped
 
-Commit hashes to be added by Claude. At the user's request this phase had no Codex review; Claude reviews the diff. New dependencies: `unicode-normalization` and `unicode-general-category`. No Living Memory change was needed.
+Code landed on 2026-11-22: Hivemind `f5e1a0b`, with the fixes from Claude's review and UI pass. At the user's request this phase had no Codex review; Claude reviewed the diff. New dependencies: `unicode-normalization` and `unicode-general-category`. No Living Memory change was needed.
 
 **What was built.**
 - `src-tauri/src/notes_index/semantic.rs`: the model reader. It reads `<store>/.models/potion-retrieval-32M/` only while `verified.json` is there (the marker is read before every embedding batch, so `semantic install` and `remove` take effect without a restart), tokenizes as `core/semantic.py` does, and reads rows with `seek_read` through a 1,024-row cache. The file is closed, and the cache emptied, after 30 s of no use (the writer thread wakes every 5 s to check). A model that cannot be read (another tokenizer, a damaged matrix, a vocabulary past the matrix) is reported in `index_status` and not tried again until the marker's hash changes. F16 matrices are read too.
@@ -87,5 +87,13 @@ The first search after a start is just over the 200 ms target because it loads t
 - **UI-2, the Living Memory pages group drops padding.** `isRelevantPage`: a hit with `relevance` 0 is dropped unless its `similarity` is at least 0.45 (`DocSearchHit` gained the optional `similarity`); a group of only padding is absent. Applied in `buildGroups`; tests in `groups.test.ts`. This works around Living Memory returning every page after the real hits; the Living Memory bug itself is tracked separately. The Memory notes group of the search panel (NS-4A) is unchanged.
 
 **Verified**: `cargo test`, `cargo clippy --all-targets -- -D warnings`, the whole `npx vitest run`, `npx tsc --noEmit` and `npm run build`.
+
+**UI pass (2026-11-22).** The dev app ran against a scratch store with the model installed by `semantic install --from` (a copy of the model, never the user's store) and the NS-4A notebooks plus three pages about bread, a kitchen and a puppy:
+- Meaning on, "pastry dough recipe" (no word shared with any page) found Cooking; the puppy page did not show.
+- Related on Cooking listed Kitchen and not Pets.
+- `semantic remove` while the app ran: the panel showed the install hint with Copy command and word search kept working. `semantic install --from` again: meaning search worked without a restart. Remove reported `leftover` for `model.safetensors`; the holder was Living Memory's own `serve --stdio` bridge (it memory-maps the model): with that process stopped the file deleted, and Hivemind's reader opens the file with delete sharing.
+- The gated tests, run by Claude: identical token ids on 26 texts, worst cosine 0.9999999929; `semantic install --from` and `remove` succeed with Hivemind's reader holding the model, `leftover` none.
+
+The review and the pass found three problems, fixed before the commit: the vector matrix was never released (R-1), Related listed a memory note with similarity 0.04 (UI-1), and the Living Memory pages group showed the zero-relevance rows `doc search` pads its results with when Living Memory's model is installed (UI-2; the Living Memory side is tracked as its own bug).
 
 **Known limits.** Python's and Rust's Unicode tables can differ in version, so a rare character may tokenize differently (no difference showed in the 26 texts). Setext headings (underlined with `===`) are not headings for the cutter, as for the NS-4A extractor. A rich page's headings inside a container (a toggle, a column) are found, but a heading inside a table cell is text. Every pass after a start re-checks which pages lack vectors; it reads files only for those. A notebook at the vector budget keeps pages without vectors until others are removed.
