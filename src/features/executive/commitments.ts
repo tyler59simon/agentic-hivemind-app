@@ -1,19 +1,15 @@
 // Commitments are Living Memory action items written `Send the Q3 plan (owner: Dana, due: 2026-11-25)`, on a project's
 // "Commitments: <Project>" plan note or any other plan, risk or bug note. This file reads and writes that convention.
 import type { OpenItem } from "../../lib/lm";
+import { displayText, fieldsOf } from "../notes/tasks";
 
 export interface Commitment { task: string; owner: string; due: string }
 export type Timing = "overdue" | "soon" | "later" | "undated";
 
-const TAIL = /\s*\(([^()]*\b(?:owner|due)\s*:[^()]*)\)\s*$/i;
-
-/** Split an action item into its task, owner and due date. Text without the trailing parentheses is all task. */
+/** Split an action item into its task, owner and due date, by the one rule `fieldsOf` holds (the tail, or a Tasks date mark). */
 export function parseCommitment(item: string): Commitment {
-  const m = item.match(TAIL);
-  if (!m) return { task: item.trim(), owner: "", due: "" };
-  const field = (name: string) => m[1].split(",").map((p) => p.trim()).find((p) => p.toLowerCase().startsWith(`${name}:`))?.slice(name.length + 1).trim() ?? "";
-  const due = field("due");
-  return { task: item.slice(0, m.index).trim(), owner: field("owner"), due: /^\d{4}-\d{2}-\d{2}$/.test(due) ? due : "" };
+  const f = fieldsOf(item);
+  return { task: displayText(item), owner: f.owner ?? "", due: f.due ?? "" };
 }
 
 export function formatCommitment(c: Commitment): string {

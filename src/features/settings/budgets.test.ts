@@ -11,15 +11,15 @@ describe("budgets", () => {
   });
 
   it("sets or removes one call's limit and keeps the others", () => {
-    const all = { brief: 0.8, draft: 0.3 };
-    expect(withCallLimit(all, "brief", 1)).toEqual({ brief: 1, draft: 0.3 });
-    expect(withCallLimit(all, "brief", null)).toEqual({ draft: 0.3 });
+    const all = { brief: 0.8, extract: 0.3 };
+    expect(withCallLimit(all, "brief", 1)).toEqual({ brief: 1, extract: 0.3 });
+    expect(withCallLimit(all, "brief", null)).toEqual({ extract: 0.3 });
     expect(withCallLimit({ brief: 0.8 }, "brief", null)).toBeNull();
-    expect(withCallLimit(null, "style", 0.2)).toEqual({ style: 0.2 });
-    expect(all).toEqual({ brief: 0.8, draft: 0.3 });
+    expect(withCallLimit(null, "extract", 0.2)).toEqual({ extract: 0.2 });
+    expect(all).toEqual({ brief: 0.8, extract: 0.3 });
   });
 
-  it("lists the five executive calls Rust knows", () => {
-    expect(EXECUTIVE_CALLS.map((c) => c.id)).toEqual(["brief", "draft", "refine", "extract", "style"]);
+  it("lists the two executive calls Rust knows", () => {
+    expect(EXECUTIVE_CALLS.map((c) => c.id)).toEqual(["brief", "extract"]);
   });
 });

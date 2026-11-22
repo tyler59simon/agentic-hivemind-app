@@ -31,8 +31,8 @@ function useCrumbs(): Crumb[] {
   const systemsOn = useSystemsEnabled();
   const sessions = useQuery({ ...sessionsQuery(), enabled: systemsOn && route.page === "agents" });
   const systems = useQuery({ ...systemsQuery(), enabled: systemsOn && route.page === "architecture" });
-  const root: Crumb = { label: project?.name ?? (other ? "Other folders" : "All memory"), go: () => go({ page: "overview" }) };
-  if (route.page === "overview") return route.view === "work" ? [root, { label: "Open work" }] : [{ label: "Projects" }, { label: root.label }];
+  const root: Crumb = { label: project?.name ?? (other ? "Other folders" : "All memory"), go: () => go({ page: "home" }) };
+  if (route.page === "home") return [{ label: "Projects" }, { label: root.label }];
   const section: Crumb = { label: SECTIONS.find((s) => s.page === route.page)?.label ?? route.page, go: () => go({ page: route.page }) };
   if (route.page === "notes" && page && isLoose(page)) return [root, section, { label: "Opened files" }, { label: fileName(page.path) }];
   if (route.page === "notes" && page) {

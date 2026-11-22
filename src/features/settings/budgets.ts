@@ -4,10 +4,7 @@
 /** The executive workspace's calls with their default limits in US dollars (settings.rs EXECUTIVE_CALLS), as Settings lists them. */
 export const EXECUTIVE_CALLS = [
   { id: "brief", label: "Briefing", usd: 0.5 },
-  { id: "draft", label: "Draft", usd: 0.25 },
-  { id: "refine", label: "Refine a draft", usd: 0.15 },
   { id: "extract", label: "Capture from notes", usd: 0.25 },
-  { id: "style", label: "Learn your writing style", usd: 0.1 },
 ] as const;
 
 export const BUDGET_DEFAULTS = { agentRun: 5, automationsDaily: 5, learningDaily: 1, review: 0.25 } as const;

@@ -5,7 +5,7 @@ import { activeTab, useWorkspace, type Pane } from "./store";
 const ws = () => useWorkspace.getState();
 const reset = () => {
   useWorkspace.setState({ panes: [{ id: "p0", tabs: [], active: null }], focused: "p0", dirty: {}, rail: true, railSplit: false, reveal: null });
-  useApp.setState({ route: { page: "overview" }, back: [] });
+  useApp.setState({ route: { page: "home" }, back: [] });
 };
 const page = (path: string, notebook = "nb-1") => ({ kind: "file" as const, file: { notebook, path } });
 const options = () => useWorkspace.persist.getOptions();
@@ -34,7 +34,7 @@ describe("workspace with notebook pages", () => {
     expect(useApp.getState().route).toEqual({ page: "notes" });
     ws().openNote("d:1");
     expect(useApp.getState().route).toEqual({ page: "notes" });
-    useApp.setState({ route: { page: "overview" } });
+    useApp.setState({ route: { page: "home" } });
     ws().openNote("d:2");
     expect(useApp.getState().route).toEqual({ page: "memory", view: "notes" });
     ws().openTab(page("B.md"));

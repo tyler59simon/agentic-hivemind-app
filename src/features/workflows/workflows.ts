@@ -116,7 +116,7 @@ export const ACTION_HELP: Record<ActionKind, string> = {
   skill_upkeep: "Proposes archiving skills unused for 30 days or mostly rejected. Nothing is archived until you approve.",
   commit_capture: "The reviewer reads the new commits and drafts notes for Review. Counts against the learning budget.",
   architecture_check: "Runs the Architecture Suite's diff, check and verify on a system and notifies you when its output has drifted. Regenerating stays your decision.",
-  executive_briefing: "Writes a briefing from Living Memory and your executive records, about the project picked below or all active projects, and keeps it on the Executive page. Counts against the learning budget.",
+  executive_briefing: "Writes a briefing from Living Memory and your executive records, about the project picked below or all active projects, and keeps it on Home. Counts against the learning budget.",
 };
 
 /** An action of another kind with sensible defaults. */

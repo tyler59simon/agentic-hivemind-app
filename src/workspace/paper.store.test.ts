@@ -11,7 +11,7 @@ const tabs = () => ws().panes.flatMap((p) => p.tabs);
 beforeEach(() => {
   localStorage.clear();
   useWorkspace.setState({ panes: [{ id: "p0", tabs: [], active: null }], focused: "p0", dirty: {}, rail: true, railSplit: false, reveal: null });
-  useApp.setState({ route: { page: "overview" }, back: [] });
+  useApp.setState({ route: { page: "home" }, back: [] });
 });
 
 describe("a tab's paper choice", () => {

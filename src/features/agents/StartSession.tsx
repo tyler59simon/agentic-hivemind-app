@@ -98,7 +98,7 @@ export function StartSession() {
         : !project.repos.length ? (
           <div className="empty-state">
             <p className="muted">This project has no repositories. Add one to the project first.</p>
-            <ArrowLink onClick={() => go({ page: "overview" })}>Open the project</ArrowLink>
+            <ArrowLink onClick={() => go({ page: "home" })}>Open the project</ArrowLink>
           </div>
         ) : <StartForm key={project.slug} project={project} />}
     </div>

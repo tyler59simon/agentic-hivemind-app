@@ -1,12 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
-import type { Briefing, CaptureItem, Draft, Health, Milestone } from "../../lib/executive";
+import { describe, expect, it } from "vitest";
+import type { Briefing, CaptureItem, Health, Milestone } from "../../lib/executive";
 import type { NoteRow, OpenItem, Project } from "../../lib/lm";
 import { acceptKey, acceptWrite, blocked, commitmentsNote, hasAction, itemBody, planWrite, replaceable, tagsFor, type Context } from "./items";
 import { addDays, commitmentRows, formatCommitment, parseCommitment, timing } from "./commitments";
 import { healthView, signals, suggestHealth } from "./health";
-import { learnFromEdits } from "./learn";
 import { attention, crossProject, portfolio } from "./portfolio";
-import { allGaps, briefingMarkdown, edited, emlText, knownCitations, numbered, plainText, unsupported } from "./texts";
+import { allGaps, briefingMarkdown, knownCitations, numbered, unsupported } from "./texts";
 
 const TODAY = "2026-11-19";
 const project = (slug: string, name: string, charter = `${slug}:c1`): Project => ({
@@ -32,6 +31,16 @@ describe("commitments", () => {
     expect(formatCommitment({ task: "Send it", owner: "", due: "" })).toBe("Send it");
     const round = "Ship it (owner: Sam, due: 2026-12-01)";
     expect(formatCommitment(parseCommitment(round))).toBe(round);
+  });
+
+  it("reads the fields by the one rule `fieldsOf` holds", () => {   // CON-3
+    expect(parseCommitment("Ship it (Owner: Sam, DUE: 2026-12-01, priority: high)")).toEqual({ task: "Ship it", owner: "Sam", due: "2026-12-01" });
+    expect(parseCommitment("Ship it ⏫ 📅 2026-12-01")).toEqual({ task: "Ship it", owner: "", due: "2026-12-01" });
+    expect(parseCommitment("Ship it due:: 2026-12-02")).toMatchObject({ due: "2026-12-02" });
+    expect(parseCommitment("Ship it (due: 2026-02-30)")).toEqual({ task: "Ship it", owner: "", due: "" });
+    expect(parseCommitment("Ship it (owner: Sam, due: 2026-12-01) (due: 2027-01-01)").due).toBe("2027-01-01");
+    const rows = commitmentRows([item("p:1", "Late one 📅 2026-11-01", 1), item("p:1", "Soon one (owner: Dana, due: 2026-11-21)", 2)], TODAY);
+    expect(rows.map((r) => [r.task, r.owner, r.due, r.timing])).toEqual([["Late one", "", "2026-11-01", "overdue"], ["Soon one", "Dana", "2026-11-21", "soon"]]);
   });
 
   it("sorts overdue first and knows what is due soon", () => {
@@ -217,41 +226,5 @@ describe("texts", () => {
     expect(n.summary).toBe("Beta holds [1]. Two risks remain [2, 1].");
     expect(n.sections[0].bullets[0]).toEqual({ text: "Replays may hit the rate limit.", nums: [2, 3] });
     expect(n.cited.map((x) => x.id)).toEqual(["E5", "E2", "E7"]);
-  });
-
-  it("makes plain text and an unsent email", () => {
-    expect(plainText("## Hi\n**Bold** and *it* [link](http://x)\n* item")).toBe("Hi\nBold and it link\n- item");
-    expect(emlText("a@b.c", "Re:\nhi", "Line")).toBe("To: a@b.c\r\nSubject: Re: hi\r\nX-Unsent: 1\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nLine");
-  });
-
-  it("learns only from real edits", () => {
-    expect(edited("Hello there,\n\nThe plan ships Friday.", "Hello  there,\nThe plan ships Friday.")).toBe(false);
-    expect(edited("The plan ships Friday.", "The plan ships Friday. Please confirm the budget by Monday.")).toBe(true);
-    expect(edited("The plan ships Friday.", "The plan ships Monday.")).toBe(false);
-  });
-
-  // EXEC-10: the draft was marked learned from before the call ran, so a failed call was never tried again. The backend now
-  // marks it after a success (mark_learned); here, overlapping sends share one call and a failure frees the next one.
-  it("learns from one draft text once at a time, and a failure is tried again", async () => {
-    const d = { id: "d1", generated: "The plan ships Friday.", body: "", subject: "Plan" } as Draft;
-    const body = "The plan ships Friday. Please confirm the budget by Monday.";
-    let finish: (ok: boolean) => void = () => undefined;
-    const learn = vi.fn(() => new Promise<boolean>((done) => { finish = done; }));
-    const first = learnFromEdits(d, "Plan", body, learn);
-    expect(await learnFromEdits(d, "Plan", body, learn)).toBe(false);
-    expect(learn).toHaveBeenCalledTimes(1);
-    expect(learn).toHaveBeenCalledWith("d1", d.generated, body, "Plan");
-    finish(true);
-    expect(await first).toBe(true);
-
-    const failing = vi.fn(() => Promise.reject(new Error("budget used")));
-    await expect(learnFromEdits(d, "Plan", body, failing)).rejects.toThrow("budget used");
-    await expect(learnFromEdits(d, "Plan", body, failing)).rejects.toThrow("budget used");
-    expect(failing).toHaveBeenCalledTimes(2);
-
-    const none = vi.fn(async () => true);
-    expect(await learnFromEdits({ ...d, learnedFrom: d.generated }, "Plan", body, none)).toBe(false);
-    expect(await learnFromEdits(d, "Plan", "The plan ships Friday.", none)).toBe(false);
-    expect(none).not.toHaveBeenCalled();
   });
 });

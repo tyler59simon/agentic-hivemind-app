@@ -1,11 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, BriefcaseBusiness, ChevronDown, Database, GitBranch, House, LayoutDashboard, Network, NotebookPen, Wrench, ScrollText, Sparkles, SquareCheck, Terminal, Workflow, type LucideIcon } from "lucide-react";
+import { BookOpen, ChevronDown, Database, GitBranch, House, LayoutDashboard, Network, NotebookPen, Wrench, Sparkles, SquareCheck, Terminal, Workflow, type LucideIcon } from "lucide-react";
 import logo from "../assets/logo.png";
 import { ProjectSwitcher } from "../features/projects/ProjectSwitcher";
 import { dotOf, useAttention } from "../features/terminal/attention";
 import { sessionsQuery } from "../lib/agent";
-import { useMaintenanceEnabled, useRecapEnabled, useSystemsEnabled, useViewsEnabled, useWikiEnabled } from "../lib/connection";
+import { useMaintenanceEnabled, useSystemsEnabled, useViewsEnabled, useWikiEnabled } from "../lib/connection";
 import type { ConnectInfo } from "../lib/lm";
 import { refreshStore } from "../lib/refresh";
 import { useApp, type Page } from "../store";
@@ -16,8 +16,7 @@ import { useHidden } from "./hidden";
 
 /** The sections, in the order the sidebar lists them. */
 export const SECTIONS: { page: Page; label: string; icon: LucideIcon }[] = [
-  { page: "overview", label: "Overview", icon: House },
-  { page: "executive", label: "Executive", icon: BriefcaseBusiness },
+  { page: "home", label: "Home", icon: House },
   { page: "agents", label: "Agent Workspace", icon: Terminal },
   { page: "changes", label: "Changes", icon: GitBranch },
   { page: "architecture", label: "Architecture", icon: Network },
@@ -25,7 +24,6 @@ export const SECTIONS: { page: Page; label: string; icon: LucideIcon }[] = [
   { page: "notes", label: "Notes", icon: NotebookPen },
   { page: "dashboards", label: "Dashboards", icon: LayoutDashboard },
   { page: "wiki", label: "Wiki", icon: BookOpen },
-  { page: "recap", label: "Recap", icon: ScrollText },
   { page: "maintenance", label: "Maintenance", icon: Wrench },
   { page: "review", label: "Review", icon: SquareCheck },
   { page: "skills", label: "Skills", icon: Sparkles },
@@ -35,7 +33,7 @@ export const SECTIONS: { page: Page; label: string; icon: LucideIcon }[] = [
 /** The sections this store offers (some need a newer Living Memory), whether or not the user hid them. */
 export function useAvailableSections() {
   const on: Partial<Record<Page, boolean>> = {
-    dashboards: useViewsEnabled(), wiki: useWikiEnabled(), recap: useRecapEnabled(), maintenance: useMaintenanceEnabled(),
+    dashboards: useViewsEnabled(), wiki: useWikiEnabled(), maintenance: useMaintenanceEnabled(),
   };
   return SECTIONS.filter((s) => on[s.page] ?? true);
 }
@@ -78,7 +76,7 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
       <nav className="nav" aria-label="Sections" ref={nav}>
         {available.filter((s) => !hidden.includes(s.page)).map(({ page: p, label, icon: Icon }) => (
           <button key={p} className={`nav-item ${page === p ? "on" : ""}`} aria-current={page === p ? "page" : undefined} onClick={() => go({ page: p })}
-            onContextMenu={(e) => { e.preventDefault(); setMenu(p === "overview" ? null : { page: p, x: e.clientX, y: e.clientY, from: e.currentTarget }); }}>
+            onContextMenu={(e) => { e.preventDefault(); setMenu(p === "home" ? null : { page: p, x: e.clientX, y: e.clientY, from: e.currentTarget }); }}>
             <Icon size="1.35em" aria-hidden /><span className="grow">{label}</span>
             {mark(p) && <span className={`nav-dot ${p === "agents" && waiting ? "waiting" : p === "agents" && attention === "done" ? "done" : p === "memory" || p === "notes" ? "unsaved" : ""}`} title={mark(p)!} aria-label={mark(p)!} />}
           </button>

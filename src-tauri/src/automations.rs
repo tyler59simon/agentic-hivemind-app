@@ -54,7 +54,7 @@ pub enum Action {
     /// Work out a system's architecture drift (commits since its output, hand edits, structural changes, rule findings).
     ArchitectureCheck { system: String },
     /// Write an executive briefing (`briefing` is weekly, project, priorities, commitments or risks) over the last `days`
-    /// days, about the automation's project or all active projects, and keep it on the Executive page.
+    /// days, about the automation's project or all active projects, and keep it on Home.
     ExecutiveBriefing { briefing: String, days: u32 },
 }
 

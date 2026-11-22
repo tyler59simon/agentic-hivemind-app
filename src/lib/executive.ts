@@ -1,10 +1,10 @@
-// The executive workspace's records and calls. Operational records (milestones, health, stakeholders, drafts, briefings and
+// The executive workspace's records and calls. Operational records (milestones, health, stakeholders, briefings and
 // capture batches) live in Hivemind's app data through these commands; durable knowledge stays in Living Memory (lib/lm.ts).
 // Rust builds every prompt and gathers the evidence; the webview names the task and sends what the user typed.
 import { invoke } from "@tauri-apps/api/core";
 import type { SessionInfo, StartOptions } from "./agent";
 
-export type RecordKind = "milestone" | "health" | "stakeholder" | "draft" | "briefing" | "capture";
+export type RecordKind = "milestone" | "health" | "stakeholder" | "briefing" | "capture";
 interface Stamped { id: string; created: number; updated: number }
 
 export type MilestoneStatus = "planned" | "at_risk" | "done" | "missed";
@@ -20,25 +20,15 @@ export interface Pack { evidence: Evidence[]; gaps: string[] }
 
 export const BRIEFING_KINDS = ["weekly", "project", "priorities", "commitments", "risks"] as const;
 export type BriefingKind = (typeof BRIEFING_KINDS)[number];
+export const BRIEFING_LABEL: Record<BriefingKind, string> = {
+  weekly: "Weekly leadership report", project: "Project summary", priorities: "Priorities", commitments: "Outstanding commitments", risks: "Risk assessment",
+};
 export interface Bullet { text: string; evidence: string[] }
 export interface Briefing extends Stamped {
   kind: BriefingKind; project: string | null; days: number; origin: string;
   title: string; summary: string; sections: { heading: string; bullets: Bullet[] }[];
   /** What the model said is missing, and what the evidence pack found missing. */
   gaps: string[]; packGaps: string[]; evidence: Evidence[]; costUsd: number | null;
-}
-
-export const DRAFT_KINDS = ["email", "stakeholder update", "escalation", "executive summary"] as const;
-export type DraftKind = (typeof DRAFT_KINDS)[number];
-export interface Generated { subject: string; body: string; evidence: Evidence[]; assumptions: string[]; gaps: string[]; packGaps?: string[]; costUsd: number | null }
-export interface DraftVersion { at: number; subject: string; body: string; note: string }
-export interface Draft extends Stamped {
-  kind: DraftKind; channel: "email" | "message" | "document"; audience: string; tone: string; points: string; project: string | null;
-  subject: string; body: string;
-  /** The text as generated (or last refined), for learning from the user's edits. */
-  generated: string; evidence: Evidence[]; assumptions: string[]; gaps: string[]; versions: DraftVersion[];
-  /** The generated text the style learner last read, so one set of edits is learned from once. */
-  learnedFrom?: string;
 }
 
 export const ITEM_KINDS = ["decision", "risk", "commitment", "status", "milestone", "knowledge", "preference"] as const;
@@ -55,7 +45,7 @@ export interface CaptureItem {
    *  ran, so a retry repeats it instead of planning another one from edited fields. */
   intent?: { write: unknown; superseded?: string };
 }
-export interface CaptureSource { kind: "paste" | "agent-session" | "draft-edits"; label: string; session?: string }
+export interface CaptureSource { kind: "paste" | "agent-session"; label: string; session?: string }
 export interface CaptureBatch extends Stamped { source: CaptureSource; project: string | null; text: string; items: CaptureItem[]; questions: string[]; costUsd: number | null }
 
 export const listRecords = <T>(kind: RecordKind) => invoke<T[]>("exec_list", { kind });
@@ -65,14 +55,8 @@ export const recordsQuery = <T>(kind: RecordKind) => ({ queryKey: ["executive", 
 
 export const pack = (project: string | null, days?: number) => invoke<Pack>("exec_pack", { project, days });
 export const brief = (kind: BriefingKind, project: string | null, days: number) => invoke<Briefing>("exec_brief", { kind, project, days });
-export interface DraftRequest { kind: DraftKind; audience: string; tone: string; points: string; project: string | null }
-export const draft = (request: DraftRequest) => invoke<Generated>("exec_draft", { request });
-export const refine = (subject: string, body: string, evidence: Evidence[], instruction: string) =>
-  invoke<Generated>("exec_refine", { subject, body, evidence, instruction });
 /** Null: nothing worth keeping was found. */
 export const extract = (text: string, project: string | null, label?: string) => invoke<CaptureBatch | null>("exec_extract", { text, project, label });
-/** True when preferences were staged in the capture inbox. The draft is then recorded as learned from. */
-export const learnStyle = (draft: string, generated: string, kept: string, label: string) => invoke<boolean>("exec_learn_style", { draft, generated, kept, label });
 export const agentStart = (project: string | null, prompt: string, options: Pick<StartOptions, "engine" | "model">) =>
   invoke<SessionInfo>("exec_agent_start", { project, prompt, options });
 export const sessionCapture = (id: string) => invoke<CaptureBatch | null>("exec_session_capture", { id });

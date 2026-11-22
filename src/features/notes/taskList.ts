@@ -23,6 +23,8 @@ export interface TaskItem {
   /** An action item's note ref and the index of its item in the note. */
   ref?: string;
   index?: number;
+  /** An action item's note was last updated (ISO), for ordering Home's undated groups. */
+  updated?: string;
 }
 
 export type DueFilter = "any" | "overdue" | "today" | "week" | "none";

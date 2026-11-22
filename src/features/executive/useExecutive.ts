@@ -1,4 +1,4 @@
-// Data for the Executive page: Hivemind's records (key ["executive", kind], refreshed by `executive-changed`) and one
+// Data for Home's portfolio, health and capture: Hivemind's records (key ["executive", kind], refreshed by `executive-changed`) and one
 // all-domain read of Living Memory's notes and open items (keys start with "list" and "open", so store changes refetch them).
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";

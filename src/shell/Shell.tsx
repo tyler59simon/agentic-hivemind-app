@@ -5,10 +5,8 @@ import { ChangesPage } from "../features/changes/ChangesPage";
 import { DashboardsPage } from "../features/dashboards/DashboardsPage";
 import { MemoryPage } from "../features/library/MemoryPage";
 import { NotesPage } from "../features/notes/NotesPage";
-import { ExecutivePage } from "../features/executive/ExecutivePage";
-import { OverviewPage } from "../features/projects/OverviewPage";
+import { HomePage } from "../features/home/HomePage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
-import { RecapPage } from "../features/recap/RecapPage";
 import { ReviewPage } from "../features/review/ReviewPage";
 import { SkillsPage } from "../features/skills/SkillsPage";
 import { WorkflowsPage } from "../features/workflows/WorkflowsPage";
@@ -21,8 +19,7 @@ import { Topbar } from "./Topbar";
 
 /** What each sidebar section shows. A section's sub-views are its own business (see the page components). */
 const PAGES: Record<Page, () => ReactNode> = {
-  overview: () => <OverviewPage />,
-  executive: () => <ExecutivePage />,
+  home: () => <HomePage />,
   agents: () => <AgentWorkspace />,
   changes: () => <ChangesPage />,
   architecture: () => <ArchitecturePage />,
@@ -30,7 +27,6 @@ const PAGES: Record<Page, () => ReactNode> = {
   notes: () => <NotesPage />,
   dashboards: () => <DashboardsPage />,
   wiki: () => <WikiPage />,
-  recap: () => <RecapPage />,
   maintenance: () => <MaintenancePage />,
   review: () => <ReviewPage />,
   skills: () => <SkillsPage />,

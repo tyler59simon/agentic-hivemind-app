@@ -4,6 +4,12 @@ import type { Project, System } from "../../lib/lm";
 const norm = (path: string) => path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 const within = (inner: string, outer: string) => inner === outer || inner.startsWith(outer + "/");
 
+/** Whether `path` is one of `repos` or inside one (slashes and case do not matter). */
+export function insideRepos(path: string, repos: string[]): boolean {
+  const p = norm(path);
+  return repos.map(norm).filter(Boolean).some((r) => within(p, r));
+}
+
 /** Systems with a repository that is, contains, or sits inside one of the project's repositories. */
 export function systemsForProject(project: Pick<Project, "repos">, systems: System[]): System[] {
   const repos = project.repos.map(norm).filter(Boolean);

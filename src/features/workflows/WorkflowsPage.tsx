@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Clock, GitFork, Plus, Workflow } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ENGINE_LABELS, repoBranches, rolesQuery, type Engine, type Role } from "../../lib/agent";
-import { BRIEFING_KINDS, type BriefingKind } from "../../lib/executive";
+import { BRIEFING_KINDS, BRIEFING_LABEL, type BriefingKind } from "../../lib/executive";
 import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import {
@@ -18,7 +18,6 @@ import { Confirm } from "../../ui/Modal";
 import { ArrowLink, PageHeader, Row, Section, Tabs } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useShownEngines } from "../agents/engines";
-import { BRIEFING_LABEL } from "../executive/BriefingsTab";
 import { repoName } from "../agents/session";
 import { projectsQuery } from "../projects/useProject";
 import { systemsForProject } from "../projects/scope";

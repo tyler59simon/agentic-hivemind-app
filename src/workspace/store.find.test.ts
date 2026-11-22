@@ -5,7 +5,7 @@ import { knownKinds, useWorkspace } from "./store";
 
 beforeEach(() => {
   useWorkspace.setState({ panes: [{ id: "p0", tabs: [], active: null }], focused: "p0", dirty: {} });
-  useApp.setState({ route: { page: "overview" } as never });
+  useApp.setState({ route: { page: "home" } as never });
 });
 
 describe("the find in files tab", () => {

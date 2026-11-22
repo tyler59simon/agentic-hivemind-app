@@ -618,7 +618,7 @@ impl automations::Doer for AppDoer {
                 let record = executive::brief(&executive::viewer(&state.bridge), &state.executive, &deps, briefing, scope, *days, &origin, today())?;
                 let _ = self.0.emit("executive-changed", "briefing");
                 let title = record.get("title").and_then(Value::as_str).unwrap_or("Your briefing").to_string();
-                Ok(Started::Done { detail: format!("{title} is ready on the Executive page"), cost: record.get("costUsd").and_then(Value::as_f64) })
+                Ok(Started::Done { detail: format!("{title} is ready on Home"), cost: record.get("costUsd").and_then(Value::as_f64) })
             }
             Action::SkillUpkeep => {
                 let made = state.skills.upkeep(agent::now_ms());
@@ -1527,7 +1527,7 @@ fn today() -> chrono::NaiveDate {
 /// What an executive call needs: Claude Code (the calls run on it) and the daily cap the reviewer shares.
 fn exec_deps<'a>(state: &'a AppState, saved: &Settings) -> Result<executive::Deps<'a>, String> {
     if !saved.shows(agent::Engine::Claude) {
-        return Err("Drafting, briefings and capture run on Claude Code, which is hidden in Settings. Show it again to use them.".into());
+        return Err("Briefings and capture run on Claude Code, which is hidden in Settings. Show it again to use them.".into());
     }
     Ok(executive::Deps {
         claude: agent::claude::available(saved)?,
@@ -1581,26 +1581,6 @@ async fn exec_brief(app: AppHandle, kind: String, project: Option<String>, days:
     .await
 }
 
-#[tauri::command]
-async fn exec_draft(app: AppHandle, request: executive::DraftRequest) -> Result<Value, String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        let saved = settings::load(&state.settings_path);
-        executive::draft(&executive::viewer(&state.bridge), &state.executive, &exec_deps(&state, &saved)?, &request, today())
-    })
-    .await
-}
-
-#[tauri::command]
-async fn exec_refine(app: AppHandle, subject: String, body: String, evidence: Vec<executive::Evidence>, instruction: String) -> Result<Value, String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        let saved = settings::load(&state.settings_path);
-        executive::refine(&state.executive, &exec_deps(&state, &saved)?, &subject, &body, &evidence, &instruction)
-    })
-    .await
-}
-
 /// Extract decisions, commitments, risks and the rest from pasted text into a capture batch. None: nothing worth keeping.
 #[tauri::command]
 async fn exec_extract(app: AppHandle, text: String, project: Option<String>, label: Option<String>) -> Result<Option<Value>, String> {
@@ -1611,27 +1591,6 @@ async fn exec_extract(app: AppHandle, text: String, project: Option<String>, lab
         let source = executive::Source { kind: "paste".into(), label, session: None, upto: None };
         let staged = executive::extract(&executive::viewer(&state.bridge), &state.executive, &exec_deps(&state, &saved)?, &text, project.as_deref(), source, today())?;
         let _ = app.emit("executive-changed", "capture");
-        Ok(staged)
-    })
-    .await
-}
-
-/// Learn writing preferences from the user's edits to a generated draft; the suggestions wait in the capture inbox. True
-/// when some were staged. The webview records the draft as learned from only when this succeeds, so a failure is retried.
-#[tauri::command]
-async fn exec_learn_style(app: AppHandle, draft: String, generated: String, kept: String, label: String) -> Result<bool, String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        let saved = settings::load(&state.settings_path);
-        let deps = exec_deps(&state, &saved)?;
-        let staged = executive::learn_style(&executive::viewer(&state.bridge), &state.executive, &deps, &generated, &kept, &label)?.is_some();
-        if staged {
-            let _ = app.emit("executive-changed", "capture");
-        }
-        // Only `learnedFrom` changes, and only on the same draft text, so a deleted or refined draft is left alone.
-        if executive::mark_learned(&state.executive, &draft, &generated)? {
-            let _ = app.emit("executive-changed", "draft");
-        }
         Ok(staged)
     })
     .await
@@ -1979,10 +1938,7 @@ pub fn run() {
             exec_delete,
             exec_pack,
             exec_brief,
-            exec_draft,
-            exec_refine,
             exec_extract,
-            exec_learn_style,
             exec_agent_start,
             exec_session_capture,
             exec_export,

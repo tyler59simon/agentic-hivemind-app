@@ -1,7 +1,6 @@
 //! The executive workspace's backend. It keeps the operational records Living Memory does not hold (milestones, project
-//! health, stakeholders, communication drafts, generated briefings and capture batches waiting for review), builds the
-//! evidence pack that grounds every generated text, and runs the tool-free calls that extract, draft, refine, brief and learn
-//! a writing style. Durable knowledge stays in Living Memory: this module only reads it, and the webview writes there only
+//! health, stakeholders, generated briefings and capture batches waiting for review), builds the evidence pack that grounds
+//! every generated text, and runs the tool-free calls that extract and brief. Durable knowledge stays in Living Memory: this module only reads it, and the webview writes there only
 //! when the user accepts an item.
 //!
 //! Files under `app_data_dir/executive`: `<kind>/<id>.json`, one per record, and `agent/`, the executive chat's empty
@@ -17,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
-pub const KINDS: [&str; 6] = ["milestone", "health", "stakeholder", "draft", "briefing", "capture"];
+pub const KINDS: [&str; 5] = ["milestone", "health", "stakeholder", "briefing", "capture"];
 const MAX_RECORD: usize = 1 << 20;
 const TIMEOUT: Duration = Duration::from_secs(300);
 const MODEL: &str = "sonnet";
@@ -114,28 +113,6 @@ impl Store {
         std::fs::write(&temp, text).map_err(|e| e.to_string())?;
         std::fs::rename(&temp, &path).map_err(|e| e.to_string())?;
         Ok(record)
-    }
-
-    /// Change one stored record under the lock, leaving its other fields and its `updated` time as they are. `change` returns
-    /// false to leave the record alone. False when the record is gone or was left alone.
-    pub fn update(&self, kind: &str, id: &str, change: impl FnOnce(&mut serde_json::Map<String, Value>) -> bool) -> Result<bool, String> {
-        if !valid_id(id) {
-            return Err(format!("Not a record id: {id}"));
-        }
-        let path = self.kind_dir(kind)?.join(format!("{id}.json"));
-        let _guard = self.lock.lock().unwrap();
-        let Some(mut record) = read_record(&path).map_err(|_| format!("Could not read the {kind} record {}", path.display()))? else { return Ok(false) };
-        if !record.as_object_mut().is_some_and(change) {
-            return Ok(false);
-        }
-        let text = serde_json::to_string(&record).map_err(|e| e.to_string())?;
-        if text.len() > MAX_RECORD {
-            return Err("The record is too large to save".into());
-        }
-        let temp = path.with_extension("tmp");
-        std::fs::write(&temp, text).map_err(|e| e.to_string())?;
-        std::fs::rename(&temp, &path).map_err(|e| e.to_string())?;
-        Ok(true)
     }
 
     /// How far capture has read the executive conversation `session` (an event seq). Kept beside the record kinds, which
@@ -252,8 +229,6 @@ fn day(stamp: &str) -> &str {
 /// The plan note of commitments that belong to no single project (`commitmentsTitle` in the frontend).
 const CROSS_PROJECT: &str = "Commitments: Cross-project";
 
-const STYLE_WORDS: [&str; 7] = ["writ", "tone", "email", "style", "communicat", "wording", "draft"];
-
 /// What Living Memory and Hivemind's records know about one project (or all active ones) over the last `days` days,
 /// in priority order, within `PACK_CHARS`.
 pub fn pack(lm: &Lm, store: &Store, project: Option<&str>, days: u32, today: NaiveDate) -> Result<Pack, String> {
@@ -326,7 +301,7 @@ fn pack_within(lm: &Lm, store: &Store, project: Option<&str>, days: u32, today: 
             }
         }
     }
-    // Commitments that belong to no project live on one plan note with no project tag; Today shows them, so does the pack.
+    // Commitments that belong to no project live on one plan note with no project tag; Home shows them, so does the pack.
     if project.is_none() {
         let open = lm(&["open", "--all-domains", "--limit", "500"])?;
         for item in array(&open, "items").filter(|i| text(i, "title") == CROSS_PROJECT) {
@@ -334,13 +309,6 @@ fn pack_within(lm: &Lm, store: &Store, project: Option<&str>, days: u32, today: 
             let late = due_of(&line).filter(|d| *d < today).map(|d| format!(" Overdue since {d}.")).unwrap_or_default();
             found.push(Evidence { kind: "action item".into(), title: line.clone(), reference: Some(text(item, "ref")), date: due_of(&line).map(|d| d.to_string()),
                 text: format!("Cross-project commitment: {line}.{late}"), ..Default::default() });
-        }
-    }
-    let prefs =lm(&["list", "--all-domains", "--type", "preference", "--status", "active", "--with-summary", "--limit", "200"])?;
-    for r in array(&prefs, "notes") {
-        let words = format!("{} {}", text(r, "title"), text(r, "summary")).to_lowercase();
-        if STYLE_WORDS.iter().any(|w| words.contains(w)) {
-            found.push(Evidence { kind: "writing preference".into(), title: text(r, "title"), reference: Some(text(r, "ref")), text: text(r, "summary"), ..Default::default() });
         }
     }
     let mut used = 0;
@@ -417,16 +385,6 @@ stated plainly, medium when loosely phrased, low when unsure it is meant). Skip 
 decision. Put questions the user should answer (a commitment with no owner, an unclear project) in questions. An empty list is a fine answer. \
 Write plainly. Never include secrets, tokens or passwords.";
 
-const DRAFT: &str = "You draft professional communications for an engineering leader: emails, stakeholder updates, escalations and executive \
-summaries. Use the request (kind, audience, tone, key points) and the evidence. Follow the writing preferences in the evidence. Match the \
-length to the kind: an email or escalation fits on one screen; an update uses short headed sections. An escalation states the problem, the \
-impact, what is needed from the reader and by when. Return the subject, the body in Markdown without citation marks, the evidence ids the draft \
-rests on, the assumptions you made, and gaps: facts the draft needs that the evidence does not give. Where such a fact belongs in the body, \
-write a placeholder in square brackets, for example [date].";
-
-const REFINE: &str = "You revise a draft written for an engineering leader as instructed. Keep its facts; add no fact that is not in the \
-evidence. Return the same fields as the draft: subject, body in Markdown without citation marks, the evidence ids used, assumptions and gaps.";
-
 const BRIEF: &str = "You write briefings for an engineering leader from the evidence: what changed in the period, project health, priorities, \
 outstanding commitments and risks. Every bullet cites the evidence ids it rests on; leave out anything you cannot cite. Say plainly when a \
 commitment or milestone is overdue. In gaps list what a leadership reader would expect that the evidence does not show. Kinds: weekly (a \
@@ -434,11 +392,6 @@ leadership report: summary, status and health per project, decisions, risks, com
 priorities (what needs attention first and why), commitments (outstanding commitments by owner and due date, overdue first), risks (a risk \
 assessment: impact and likelihood as stated, mitigations, owners). The summary is two or three sentences and may cite ids inline, for \
 example [E3].";
-
-const LEARN_STYLE: &str = "Compare a draft Hivemind generated with the version the user kept. Name at most 3 durable writing preferences the \
-edits show, for example shorter subject lines, no greeting, bullets instead of paragraphs, the ask in the first line. Skip one-off content \
-changes and facts. Each preference has a title starting with \"Writing preference: \", a summary of one or two sentences, and a short example \
-from the edits. An empty list is a fine answer.";
 
 fn string() -> Value {
     json!({"type": "string"})
@@ -463,20 +416,10 @@ pub fn extract_schema() -> Value {
     object(&["items", "questions"], json!({"items": {"type": "array", "maxItems": 25, "items": item}, "questions": strings()}))
 }
 
-pub fn draft_schema() -> Value {
-    object(&["subject", "body", "evidence", "assumptions", "gaps"],
-        json!({"subject": string(), "body": string(), "evidence": strings(), "assumptions": strings(), "gaps": strings()}))
-}
-
 pub fn brief_schema() -> Value {
     let bullet = object(&["text", "evidence"], json!({"text": string(), "evidence": strings()}));
     let section = object(&["heading", "bullets"], json!({"heading": string(), "bullets": {"type": "array", "items": bullet}}));
     object(&["title", "summary", "sections", "gaps"], json!({"title": string(), "summary": string(), "sections": {"type": "array", "items": section}, "gaps": strings()}))
-}
-
-pub fn style_schema() -> Value {
-    let pref = object(&["title", "summary", "example"], json!({"title": string(), "summary": string(), "example": string()}));
-    object(&["preferences"], json!({"preferences": {"type": "array", "maxItems": 3, "items": pref}}))
 }
 
 fn call(deps: &Deps, dir: &std::path::Path, name: &str, policy: &str, schema: Value, input: &str) -> (Result<Value, String>, Option<f64>) {
@@ -519,58 +462,10 @@ pub fn brief(lm: &Lm, store: &Store, deps: &Deps, kind: &str, project: Option<&s
     }
 }
 
-/// What the webview asks a draft for. Names only: the evidence is gathered here.
-#[derive(Deserialize, Debug, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct DraftRequest {
-    pub kind: String,
-    #[serde(default)]
-    pub audience: String,
-    #[serde(default)]
-    pub tone: String,
-    #[serde(default)]
-    pub points: String,
-    #[serde(default)]
-    pub project: Option<String>,
-}
-
-/// A new draft (not saved: the webview saves it as the user edits). The answer plus the evidence it may cite.
-pub fn draft(lm: &Lm, store: &Store, deps: &Deps, request: &DraftRequest, today: NaiveDate) -> Result<Value, String> {
-    let pack = pack(lm, store, request.project.as_deref(), 30, today)?;
-    let input = format!(
-        "# Request\nKind: {}. Audience: {}. Tone: {}. Today: {today}.\nKey points from the user:\n{}\n\n{}",
-        request.kind, or_none(&request.audience), or_none(&request.tone), or_none(&request.points), pack_text(&pack)
-    );
-    let (answer, cost) = call(deps, &store.dir, "draft", &format!("{DRAFT}\n\n{GROUNDING}"), draft_schema(), &input);
-    let mut out = answer?;
-    out["evidence"] = json!(pack.evidence.iter().filter(|e| array(&out, "evidence").any(|id| id.as_str() == Some(e.id.as_str()))).collect::<Vec<_>>());
-    out["packGaps"] = json!(pack.gaps);
-    out["costUsd"] = json!(cost);
-    Ok(out)
-}
-
-fn or_none(s: &str) -> &str {
-    if s.trim().is_empty() { "not given" } else { s.trim() }
-}
-
-/// Revise a draft. `evidence` is what the draft was written from (the webview keeps it with the draft).
-pub fn refine(store: &Store, deps: &Deps, subject: &str, body: &str, evidence: &[Evidence], instruction: &str) -> Result<Value, String> {
-    if instruction.trim().is_empty() {
-        return Err("Say how to change the draft".into());
-    }
-    let pack = Pack { evidence: evidence.to_vec(), gaps: vec![] };
-    let input = format!("# Instruction\n{}\n\n# Draft\nSubject: {subject}\n\n{body}\n\n{}", instruction.trim(), pack_text(&pack));
-    let (answer, cost) = call(deps, &store.dir, "refine", &format!("{REFINE}\n\n{GROUNDING}"), draft_schema(), &input);
-    let mut out = answer?;
-    out["evidence"] = json!(evidence.iter().filter(|e| array(&out, "evidence").any(|id| id.as_str() == Some(e.id.as_str()))).collect::<Vec<_>>());
-    out["costUsd"] = json!(cost);
-    Ok(out)
-}
-
 /// Where a capture batch came from. Later connectors (mail, chat, tickets) add kinds here, behind the same review.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct Source {
-    /// "paste", "agent-session" or "draft-edits".
+    /// "paste" or "agent-session".
     pub kind: String,
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -669,33 +564,6 @@ pub fn extract(lm: &Lm, store: &Store, deps: &Deps, input: &str, project: Option
     let framed = extract_input(lm, &clip(input, SOURCE_CHARS), project, &source, today)?;
     let (answer, cost) = call(deps, &store.dir, "extract", EXTRACT, extract_schema(), &framed);
     stage(lm, store, &answer?, source, project, input, cost, crate::agent::now_ms())
-}
-
-/// Preferences the user's edits to a generated draft show, staged for review like any capture.
-/// Record that the draft `id` was learned from, if it still exists with the same generated text (it may have been deleted
-/// or refined during the call). Only `learnedFrom` changes, so edits saved meanwhile are kept.
-pub fn mark_learned(store: &Store, id: &str, generated: &str) -> Result<bool, String> {
-    store.update("draft", id, |draft| {
-        if draft.get("generated").and_then(Value::as_str) != Some(generated) {
-            return false;
-        }
-        draft.insert("learnedFrom".into(), json!(generated));
-        true
-    })
-}
-
-pub fn learn_style(lm: &Lm, store: &Store, deps: &Deps, generated: &str, kept: &str, label: &str) -> Result<Option<Value>, String> {
-    if generated.trim() == kept.trim() {
-        return Ok(None);
-    }
-    let input = format!("# Generated\n{}\n\n# Kept by the user\n{}", clip(generated, 8000), clip(kept, 8000));
-    let (answer, cost) = call(deps, &store.dir, "style", LEARN_STYLE, style_schema(), &input);
-    let items: Vec<Value> = array(&answer?, "preferences").map(|p| json!({
-        "kind": "preference", "project": "", "title": text(p, "title"), "summary": text(p, "summary"), "details": [format!("Example: {}", text(p, "example"))],
-        "owner": "", "due": "", "quote": text(p, "example"), "confidence": "medium",
-    })).collect();
-    let source = Source { kind: "draft-edits".into(), label: format!("Your edits to \"{}\"", clip(label, 80)), session: None, upto: None };
-    stage(lm, store, &json!({"items": items, "questions": []}), source, None, kept, cost, crate::agent::now_ms())
 }
 
 const PREAMBLE: &str = "You are the executive assistant of an engineering leader, inside Hivemind. Answer from what is known: the evidence \
@@ -835,10 +703,10 @@ mod tests {
         let ledger = Ledger::new(temp("limits").join("spend.json"));
         let mut call_usd = crate::settings::Settings::default().executive_calls_usd();
         call_usd.insert("brief".into(), 0.9);
-        call_usd.remove("style");
+        call_usd.remove("extract");
         let deps = Deps { claude: String::new(), allow_managed: false, ledger: &ledger, cap: 2.0, call_usd, cancel: None };
-        assert_eq!((deps.usd("brief"), deps.usd("draft"), deps.usd("refine")), (0.9, 0.25, 0.15));
-        assert_eq!(deps.usd("style"), 0.1, "a call left out uses its default");
+        assert_eq!(deps.usd("brief"), 0.9);
+        assert_eq!(deps.usd("extract"), 0.25, "a call left out uses its default");
     }
 
     fn temp(name: &str) -> PathBuf {
@@ -872,7 +740,8 @@ mod tests {
         store.delete("milestone", &id).unwrap();
         store.delete("milestone", &id).unwrap();
         assert!(store.list("milestone").unwrap().is_empty());
-        assert!(store.list("draft").unwrap().is_empty(), "a kind with no folder yet lists nothing");
+        assert!(store.list("capture").unwrap().is_empty(), "a kind with no folder yet lists nothing");
+        assert!(store.put("draft", json!({}), 1).is_err() && store.list("draft").is_err(), "the draft kind is gone");
         // Any other read error is reported, not shown as no records, and a file that cannot be read is not set aside
         // (EXEC-8).
         std::fs::write(dir.join("briefing"), "not a folder").unwrap();
@@ -889,27 +758,6 @@ mod tests {
     }
 
     #[test]
-    fn a_learned_draft_is_marked_only_if_it_is_still_the_same() {   // Codex review of 34c668a
-        let dir = temp("learned");
-        let store = Store::new(dir.clone());
-        let d = store.put("draft", json!({"subject": "Plan", "body": "Edited later", "generated": "v1"}), 5).unwrap();
-        let id = text(&d, "id");
-        assert!(mark_learned(&store, &id, "v1").unwrap());
-        let now = &store.list("draft").unwrap()[0];
-        assert_eq!((text(now, "learnedFrom"), text(now, "body"), now["updated"].as_u64()), ("v1".into(), "Edited later".into(), Some(5)));
-        store.put("draft", json!({"id": id, "generated": "v2", "created": 5}), 9).unwrap();
-        assert!(!mark_learned(&store, &id, "v1").unwrap(), "a refined draft is not marked by the older call");
-        // The size limit holds here too (Codex re-review of 61a3474).
-        let big = "x".repeat(MAX_RECORD / 2 + 10);
-        store.put("draft", json!({"id": id, "generated": big, "created": 5}), 10).unwrap();
-        assert!(mark_learned(&store, &id, &big).unwrap_err().contains("too large"));
-        store.delete("draft", &id).unwrap();
-        assert!(!mark_learned(&store, &id, "v2").unwrap());
-        assert!(store.list("draft").unwrap().is_empty(), "a deleted draft is not recreated");
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
     fn due_dates_are_read_from_the_commitment_convention() {
         assert_eq!(due_of("Send the plan (owner: Dana, due: 2026-11-25)"), NaiveDate::from_ymd_opt(2026, 11, 25));
         assert_eq!(due_of("Send the plan (Due:2026-01-02)"), NaiveDate::from_ymd_opt(2026, 1, 2));
@@ -917,7 +765,7 @@ mod tests {
         assert_eq!(due_of("Send the plan"), None);
     }
 
-    /// A fake Living Memory: one project with an overdue commitment, a decision, a risk, an old status and a style note.
+    /// A fake Living Memory: one project with an overdue commitment, a decision, a risk, an old status.
     fn fake(argv: &[&str]) -> Result<Value, String> {
         Ok(match argv[0] {
             "projects" => json!({"projects": [
@@ -927,9 +775,6 @@ mod tests {
             "open" => json!({"items": [
                 {"ref": "paystream:p1", "title": "Commitments: PayStream", "item": "Send the Q3 plan (owner: Dana, due: 2026-11-10)"},
                 {"ref": "paystream:x1", "title": "Commitments: Cross-project", "item": "Hire a staff engineer (owner: Lee, due: 2026-12-15)"}]}),
-            "list" if argv.contains(&"preference") => json!({"notes": [
-                {"ref": "_global:w1", "title": "Writing preference: no greeting", "type": "preference", "summary": "Skip greetings in email.", "updated": "2026-11-01"},
-                {"ref": "_global:w2", "title": "Use tabs", "type": "preference", "summary": "Indent code with tabs.", "updated": "2026-11-01"}]}),
             "list" => json!({"notes": [
                 {"ref": "paystream:d1", "title": "Use event IDs as keys", "type": "decision", "summary": "Dedupe by event ID.", "updated": "2026-11-18T10:00:00"},
                 {"ref": "paystream:d0", "title": "Old decision", "type": "decision", "summary": "Long ago.", "updated": "2026-01-01T10:00:00"},
@@ -952,7 +797,6 @@ mod tests {
         assert!(titles.contains(&"Beta") && titles.contains(&"Use event IDs as keys") && titles.contains(&"Provider rate limit"), "{titles:?}");
         assert!(titles.contains(&"PayStream status"), "the latest status is kept even when old");
         assert!(!titles.contains(&"Old decision"), "a decision outside the period is left out");
-        assert!(titles.contains(&"Writing preference: no greeting") && !titles.contains(&"Use tabs"));
         let commitment = pack.evidence.iter().find(|e| e.kind == "action item").unwrap();
         assert!(commitment.text.contains("Overdue since 2026-11-10") && commitment.reference.as_deref() == Some("paystream:p1"));
         assert!(pack.evidence.iter().find(|e| e.title == "Beta").unwrap().text.contains("Overdue."));
@@ -1002,7 +846,7 @@ mod tests {
 
     #[test]
     fn schemas_are_valid_json_objects() {
-        for schema in [extract_schema(), draft_schema(), brief_schema(), style_schema()] {
+        for schema in [extract_schema(), brief_schema()] {
             assert_eq!(schema["type"], "object");
             assert!(schema["required"].as_array().is_some_and(|r| !r.is_empty()));
         }
@@ -1124,14 +968,6 @@ mod tests {
         assert!(!cited.is_empty() && cited.iter().all(|c| ids.contains(c)), "every citation is in the pack: {briefing:#}");
         assert_eq!(store.list("briefing").unwrap().len(), 1);
 
-        let request = DraftRequest { kind: "escalation".into(), audience: "VP Engineering".into(), tone: "direct".into(), points: "Replays may delay alerts; we need the rate ceiling flag before beta.".into(), project: Some("pay".into()) };
-        let drafted = draft(&lm, &store, &deps, &request, today()).unwrap();
-        assert!(!text(&drafted, "subject").is_empty() && !text(&drafted, "body").is_empty(), "{drafted:#}");
-        let evidence: Vec<Evidence> = serde_json::from_value(drafted["evidence"].clone()).unwrap();
-        let shorter = refine(&store, &deps, &text(&drafted, "subject"), &text(&drafted, "body"), &evidence, "Make it at most four sentences").unwrap();
-        assert!(!text(&shorter, "body").is_empty());
-        let kept = format!("{}\n\nNo greeting, no sign-off: the ask is in the first line.", text(&shorter, "body").lines().skip(1).collect::<Vec<_>>().join("\n"));
-        learn_style(&lm, &store, &deps, &text(&shorter, "body"), &kept, "Escalation").unwrap();
         assert!(ledger.used(crate::agent::now_ms()) > 0.0, "the calls are counted");
         drop(lm);
         drop(bridge);

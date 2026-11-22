@@ -1,6 +1,6 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
-import { Check, ChevronDown, CircleCheck, CircleX, CodeXml, FileText, GitBranch, Layers, Lightbulb, Link as LinkIcon, LoaderCircle, MessageSquare, Network, Plus, Shield, ShieldCheck, Sparkle, SquareTerminal } from "lucide-react";
+import { Check, ChevronDown, CircleCheck, CircleX, CodeXml, FileText, GitBranch, Inbox, Layers, Lightbulb, Link as LinkIcon, LoaderCircle, MessageSquare, Network, Plus, Shield, ShieldCheck, Sparkle, SquareTerminal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import logo from "../../assets/logo.png";
 import { agentCancel, agentEnd, agentSession, agentSetPolicy, engineOf, enginesQuery, enginesText, sessionsQuery, type Engine, type Interface, type Policy, type ResourceUsage, type SeqEvent, type SessionInfo } from "../../lib/agent";
@@ -8,6 +8,7 @@ import { PROFILE_HELP, PROFILE_LABELS } from "./start";
 import { learningQuery, learningReview } from "../../lib/skills";
 import { lastRun, runText } from "../skills/skills";
 import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
+import { sessionCapture } from "../../lib/executive";
 import { connect } from "../../lib/lm";
 import { openChange, openProject, openReview, openSession, openSystem, openWorkflows, startSession, useApp } from "../../store";
 import { Markdown } from "../../ui/Markdown";
@@ -331,6 +332,7 @@ function Session({ id }: { id: string }) {
   const sessions = useQuery(sessionsQuery());
   const systems = useQuery(systemsQuery());
   const usage = useResources(id);
+  const [capturing, setCapturing] = useState(false);
   const info = sessions.data?.find((s) => s.id === id) ?? log.data?.info;
 
   if (log.isLoading) return <p className="muted pad">Loading…</p>;
@@ -344,6 +346,16 @@ function Session({ id }: { id: string }) {
   const interactive = info.mode === "interactive";
   const live = { ...info, status };
   const review = info.worktree ? () => openReview(info.id) : undefined;
+  // What an Executive Assistant conversation decided is captured when it ends; this takes it again, and opens the review.
+  const captureChat = async () => {
+    setCapturing(true);
+    try {
+      const batch = await sessionCapture(info.id);
+      if (batch) useApp.getState().go({ page: "home", capture: batch.id });
+      else toast("Nothing to capture from this conversation yet.");
+    } catch (e) { toast(String(e), "error"); }
+    finally { setCapturing(false); }
+  };
   return (
     <>
       <div className="chat-thread">
@@ -355,6 +367,11 @@ function Session({ id }: { id: string }) {
           {usage && <span className="muted small" title="The agent program and every process it started">{usageText(usage)}</span>}
           {info.origin?.startsWith("workflow:") && <button className="linked-chip" title="Open the workflow" onClick={() => openWorkflows({ run: info.origin!.split(":")[1] })}>Workflow task</button>}
           {info.origin?.startsWith("automation:") && <button className="linked-chip" title="Open the automation" onClick={() => openWorkflows({ automation: info.origin!.split(":")[1] })}>Automation</button>}
+          {info.task.kind === "executive" && isEnded(live) && (
+            <button className="linked-chip" disabled={capturing || info.turns === 0} onClick={captureChat} title="Pull decisions, commitments and risks out of this conversation for review">
+              {capturing ? <LoaderCircle className="spin" size="1.1em" aria-hidden /> : <Inbox size="1.1em" aria-hidden />}Capture from this chat
+            </button>
+          )}
           {work?.change != null && (
             <button className="linked-chip" style={{ flexBasis: "100%" }} title="Open the change" onClick={() => openChange(work.change!)}>
               <LinkIcon size="1.1em" aria-hidden />{displayId(work.change)}

@@ -1,9 +1,8 @@
-// Pure helpers for the Recap page, which draws the result of Living Memory's `recap` command.
+// Pure helpers for Home's "since you were last here", which draws the result of Living Memory's `recap` command.
 import type { Recap, RecapChange, RecapGroup } from "../../lib/lm";
 
-/** The order the page lists change groups in. */
+/** The order the change groups are listed in. */
 export const GROUP_ORDER: RecapGroup[] = ["created", "updated", "resolved", "superseded", "archived", "restored", "deleted"];
-export const DAY_CHOICES = [7, 14, 30] as const;
 
 /** The non-empty change groups in display order, each with its notes and how many times they changed. */
 export function changeGroups(r: Pick<Recap, "changes">): { group: RecapGroup; items: RecapChange[]; total: number }[] {

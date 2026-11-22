@@ -6,7 +6,7 @@ const ws = () => useWorkspace.getState();
 const reset = () => {
   const pane = { id: "p0", tabs: [], active: null };
   useWorkspace.setState({ panes: [pane], focused: "p0", dirty: {}, rail: true, railSplit: false, reveal: null });
-  useApp.setState({ route: { page: "overview" }, back: [] });
+  useApp.setState({ route: { page: "home" }, back: [] });
 };
 
 describe("workspace", () => {
@@ -68,7 +68,7 @@ describe("workspace", () => {
   it("opening a note or a new note shows the Memory page's notes", () => {
     ws().openNote("d:1");
     expect(useApp.getState().route).toEqual({ page: "memory", view: "notes" });
-    useApp.getState().go({ page: "overview" });
+    useApp.getState().go({ page: "home" });
     ws().openNote("d:1"); // already open: still brought into view
     expect(useApp.getState().route).toEqual({ page: "memory", view: "notes" });
   });

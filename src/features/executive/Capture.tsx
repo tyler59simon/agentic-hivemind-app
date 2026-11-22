@@ -8,7 +8,7 @@ import { extract, ITEM_KINDS, listRecords, putRecord, type CaptureBatch, type Ca
 import { addAction, capture, read, type Project } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
-import { openExecutive, setLeaveGuard } from "../../store";
+import { setLeaveGuard, useApp } from "../../store";
 import { Confirm, Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 import { NoteLink } from "../preview/NoteLink";
@@ -35,7 +35,7 @@ export function CaptureDialog({ projects, project, onClose }: { projects: Projec
       keep("");
       onClose();
       if (!batch) toast("Nothing worth keeping was found in that text.");
-      else openExecutive({ capture: batch.id });
+      else useApp.getState().go({ page: "home", capture: batch.id });
     } catch (e) { setError(String(e)); }
     finally { setBusy(false); }
   };

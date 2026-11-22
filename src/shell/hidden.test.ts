@@ -9,9 +9,9 @@ describe("hidden sidebar sections", () => {
   beforeEach(() => useHidden.setState({ hidden: [] }));
 
   it("hides a section and shows it again", () => {
-    setShown("executive", false);
-    expect(hidden()).toEqual(["executive"]);
-    setShown("executive", true);
+    setShown("skills", false);
+    expect(hidden()).toEqual(["skills"]);
+    setShown("skills", true);
     expect(hidden()).toEqual([]);
   });
 
@@ -21,8 +21,8 @@ describe("hidden sidebar sections", () => {
     expect(hidden()).toEqual(["wiki"]);
   });
 
-  it("never hides Overview", () => {
-    setShown("overview", false);
+  it("never hides Home", () => {
+    setShown("home", false);
     expect(hidden()).toEqual([]);
   });
 });

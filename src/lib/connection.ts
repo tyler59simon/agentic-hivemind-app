@@ -58,7 +58,7 @@ export const useAgentWikiEnabled = () => useConnection((s) => (s.capabilities?.w
 /** The `history` capability level: 2 adds `log` summaries, 3 adds summary and actor to `history` rows. */
 export const useHistoryLevel = () => useConnection((s) => s.capabilities?.history ?? 0);
 
-/** The Recap page needs history level 2 and the `recap` command. */
+/** Home's "since you were last here" needs history level 2 and the `recap` command. */
 export const useRecapEnabled = () => useConnection((s) => (s.capabilities?.history ?? 0) >= 2 && s.commands.includes("recap"));
 
 /** The Maintenance page needs the `maintenance` capability and command. */

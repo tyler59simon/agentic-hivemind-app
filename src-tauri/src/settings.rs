@@ -69,7 +69,7 @@ pub const DEFAULT_LEARNING_DAILY_USD: f64 = 1.0;
 pub const DEFAULT_AUTOMATION_DAILY_USD: f64 = 5.0;
 pub const DEFAULT_REVIEW_CALL_USD: f64 = 0.25;
 /// The executive workspace's calls and the most each may spend by default.
-pub const EXECUTIVE_CALLS: [(&str, f64); 5] = [("brief", 0.5), ("draft", 0.25), ("refine", 0.15), ("extract", 0.25), ("style", 0.1)];
+pub const EXECUTIVE_CALLS: [(&str, f64); 2] = [("brief", 0.5), ("extract", 0.25)];
 
 /// A daily cap as saved: zero or more; anything else is the default.
 fn daily(saved: Option<f64>, default: f64) -> f64 {
@@ -285,8 +285,8 @@ mod tests {
         let defaults = Settings::default();
         assert_eq!((defaults.learning_daily_usd(), defaults.automation_daily_usd(), defaults.review_call_usd()), (1.0, 5.0, 0.25));
         let calls = defaults.executive_calls_usd();
-        assert_eq!(calls.len(), 5);
-        assert_eq!((calls["brief"], calls["draft"], calls["refine"], calls["extract"], calls["style"]), (0.5, 0.25, 0.15, 0.25, 0.1));
+        assert_eq!(calls.len(), 2);
+        assert_eq!((calls["brief"], calls["extract"]), (0.5, 0.25));
 
         // Daily caps: zero turns spending off; a bad value is the default.
         let caps = |usd: Option<f64>| {
@@ -301,12 +301,14 @@ mod tests {
         // Per-call limits: more than zero, else the default; never above the daily cap they draw from.
         let mut executive = BTreeMap::new();
         executive.insert("brief".to_string(), 0.8);
-        executive.insert("draft".to_string(), 0.0);
+        executive.insert("extract".to_string(), 0.0);
         executive.insert("unknown".to_string(), 9.0);
+        // A limit saved for a call that no longer exists (drafting and style learning were removed) is ignored too.
+        executive.insert("draft".to_string(), 9.0);
         let s = Settings { review_call_usd: Some(0.4), executive_call_usd: Some(executive), learning_daily_usd: Some(2.0), ..Default::default() };
         assert_eq!(s.review_call_usd(), 0.4);
         let calls = s.executive_calls_usd();
-        assert_eq!((calls["brief"], calls["draft"], calls.len()), (0.8, 0.25, 5), "zero is the default; an unknown call is ignored");
+        assert_eq!((calls["brief"], calls["extract"], calls.len()), (0.8, 0.25, 2), "zero is the default; an unknown call is ignored");
         let low_cap = Settings { review_call_usd: Some(0.4), learning_daily_usd: Some(0.3), ..s.clone() };
         assert_eq!((low_cap.review_call_usd(), low_cap.executive_calls_usd()["brief"]), (0.3, 0.3));
         let off = Settings { learning_daily_usd: Some(0.0), ..s };

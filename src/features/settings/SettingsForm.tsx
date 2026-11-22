@@ -25,7 +25,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const theme = useTheme();
   const paper = usePaperDefault();
-  const sections = useAvailableSections().filter((s) => s.page !== "overview");
+  const sections = useAvailableSections().filter((s) => s.page !== "home");
   const hidden = useHidden((s) => s.hidden);
   const setShown = useHidden((s) => s.setShown);
   const projectsOn = useProjectsEnabled();
@@ -99,7 +99,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
         <>
           <label className="check"><input type="checkbox" checked={value.claude_under_managed_policy ?? false}
             onChange={(e) => setValue({ ...value, claude_under_managed_policy: e.target.checked })} /> Allow Claude under managed policy</label>
-          <p className="muted small">Off by default. When your organization deploys Claude Code managed settings on this computer, Hivemind does not start Claude for the executive assistant, the session reviewer or the drafting and briefing calls, because the managed policy would still apply to them. Turn this on to run them anyway. Managed hooks then run in those calls, and when a managed MCP file (<code>managed-mcp.json</code>) is deployed Hivemind leaves out <code>--strict-mcp-config</code>, which Claude Code would otherwise exit on. Codex is not affected.</p>
+          <p className="muted small">Off by default. When your organization deploys Claude Code managed settings on this computer, Hivemind does not start Claude for the executive assistant, the session reviewer or the briefing and capture calls, because the managed policy would still apply to them. Turn this on to run them anyway. Managed hooks then run in those calls, and when a managed MCP file (<code>managed-mcp.json</code>) is deployed Hivemind leaves out <code>--strict-mcp-config</code>, which Claude Code would otherwise exit on. Codex is not affected.</p>
         </>
       )}
       {!!live.length && (
@@ -135,7 +135,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
       {money("automation_daily_usd", "Automations per day", BUDGET_DEFAULTS.automationsDaily)}
       <p className="muted small">Sessions and workflows that automations start. A run starts only when its own budget (set on each automation) fits in what is left today. A workflow is checked for one session's budget and can spend up to that much per task. Only Claude Code sessions are counted: Codex uses your ChatGPT plan. Follow-up messages you send to an automation's session, and tasks you retry in its workflow, count as your own spending.</p>
       {money("learning_daily_usd", "Learning and executive per day", BUDGET_DEFAULTS.learningDaily)}
-      <p className="muted small">The session reviewer, the Executive page's briefings, drafts and capture, and the commit reviews and briefings that automations ask for.</p>
+      <p className="muted small">The session reviewer, the briefings and capture on Home, and the commit reviews and briefings that automations ask for.</p>
       <details>
         <summary>Per-call limits</summary>
         <p className="muted small">The most one call may spend, in whole cents. A limit above its daily budget is lowered to that budget. Empty uses the default.</p>

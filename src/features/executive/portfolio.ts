@@ -22,10 +22,10 @@ export interface ProjectRow {
 const newestFirst = (a: NoteRow, b: NoteRow) => b.updated.localeCompare(a.updated);
 const byDue = (a: Milestone, b: Milestone) => (a.due || "9999").localeCompare(b.due || "9999");
 
-/** The open items whose note carries `tag`. */
-export function itemsTagged(items: OpenItem[], rows: NoteRow[], tag: string): OpenItem[] {
+/** The open items whose note carries `tag` (an item is anything with the note's `ref`, such as Home's action items). */
+export function itemsTagged<T extends { ref?: string }>(items: T[], rows: NoteRow[], tag: string): T[] {
   const refs = new Set(rows.filter((r) => r.tags.includes(tag)).map((r) => r.ref));
-  return items.filter((i) => refs.has(i.ref));
+  return items.filter((i) => i.ref !== undefined && refs.has(i.ref));
 }
 
 export function projectRow(project: Project, rows: NoteRow[], items: OpenItem[], milestones: Milestone[], health: Health[], today: string): ProjectRow {
@@ -58,9 +58,13 @@ export function portfolio(projects: Project[], rows: NoteRow[], items: OpenItem[
     .sort((a, b) => RANK[a.health.status] - RANK[b.health.status] || a.project.name.localeCompare(b.project.name));
 }
 
+/** The notes that belong to no project and hold commitments (the cross-project commitments note, mostly). */
+export const looseRefs = (rows: NoteRow[]) =>
+  new Set(rows.filter((r) => r.status === "active" && r.title.startsWith("Commitments:") && !r.tags.some((t) => t.startsWith("project/"))).map((r) => r.ref));
+
 /** Commitments on notes that belong to no project (the cross-project commitments note, mostly). */
 export function crossProject(items: OpenItem[], rows: NoteRow[], today: string): CommitmentRow[] {
-  const loose = new Set(rows.filter((r) => r.status === "active" && r.title.startsWith("Commitments:") && !r.tags.some((t) => t.startsWith("project/"))).map((r) => r.ref));
+  const loose = looseRefs(rows);
   return commitmentRows(items.filter((i) => loose.has(i.ref)), today);
 }
 
