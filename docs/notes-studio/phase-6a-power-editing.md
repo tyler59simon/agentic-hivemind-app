@@ -2,6 +2,18 @@
 
 Read [README.md](README.md) and [phase-1b-open-any-file.md](phase-1b-open-any-file.md) first. This phase brings Notepad++ text workflows to Source mode and plain text files up to about 8 MB.
 
+## Changes from the code survey before NS-6A
+
+Claude surveyed main on 2026-11-22 (after NS-5). Where the sections below say otherwise, these win. At the user's request this phase has no Codex review; Claude reviews the diff.
+
+- **Where it applies.** Source mode of Markdown pages and every plain text file tab. Memory notes and Live, Rich and Reading modes are unchanged: `editorExtensions` in `src/features/editor/CodeEditor.tsx` promises a note the same extension list as always, so the power extensions sit behind a prop the file tab sets.
+- **Multi-cursor.** `searchKeymap` already binds Ctrl+D (select next occurrence) and Ctrl+Shift+L (select all occurrences); what is missing is `EditorState.allowMultipleSelections`, `rectangularSelection()` and `crosshairCursor()` (Alt), plus folding and bracket matching for code languages only.
+- **Macros.** Ctrl+Shift+R can reload the page in WebView2. The editor's keymap takes it with `preventDefault`; Claude checks in the dev app that the page does not reload, and if it does the binding moves to Ctrl+Alt+R. Ctrl+Shift+P is free (the app's palette takes Ctrl+P only without Shift).
+- **Line tools** are in the editor toolbar's menu and in the palette while a file tab is active; each runs as one transaction, so one Undo reverts it.
+- **Encodings and line endings.** A new Rust `file_reopen(notebook, path, encoding)` decodes the file again with a chosen encoding from NS-1B's editable list (`src-tauri/src/files/encoding.rs`); the webview refuses it while the buffer has unsaved edits. Convert to and the LF or CRLF choice change the `format` the next save writes. A file with mixed line endings is read-only today (`files/mod.rs`); choosing LF or CRLF in the status line converts the buffer, marks it unsaved and makes it editable.
+- **Compare** opens as a tab in the pane that is not restored after a restart (the workspace drops kinds it does not persist). Copying a hunk across edits the open document of that side through the document store, with its undo; it never writes a file directly. "A file from disk" uses the existing open dialog (`opens.rs open_dialog`).
+- **Language** comes from the file extension through `@codemirror/language-data` (already a dependency, loaded lazily), with a picker in the status line.
+
 ## 1. What the user sees
 
 - **Status line** (clickable): encoding, line endings, indentation, language. Actions: **Reopen with encoding…** (decode again with a chosen encoding; refused if the buffer is dirty), **Convert to…** encoding (on save), **Line endings: LF / CRLF** (converts the buffer), **Choose a line ending** for mixed files (makes them editable).

@@ -44,7 +44,7 @@ Claude surveyed main at `f88e919` on 2026-11-22. Where the sections below say ot
 
 ## 4. Shipped
 
-Commits: (to be filled in by Claude).
+Code landed on 2026-11-22: Hivemind `cf4fe96` (decisions in `0ccb353`), with the fixes from Claude's review and UI pass. At the user's request this phase had no Codex review; Claude reviewed the diff.
 
 **Rust**
 - `src-tauri/src/history.rs`: the store. `history/<first 16 hex of sha256(normalised absolute path)>/index.json` plus `objects/<sha256>.gz` (`flate2`, now a direct dependency). Entries are `{ id, time, sha256, size, source, pinned }`. Retention runs on every write and drops a version only when it is unpinned, not among the newest 100 and older than 90 days. A damaged or missing `index.json` is rebuilt from the objects (times from file mtimes, source `recovered`, pins lost) and written back. Files over 16 MB add nothing, and `history_list` says `tooLarge`. `moved` carries the old key's entries into the new key (old entries first, ids renumbered, objects copied, old folder removed), for a file or for every file under a renamed folder; a case-only rename is the same key on Windows. Commands: `history_list`, `history_read`, `history_pin`, `git_file_log`, `git_file_commit`.
