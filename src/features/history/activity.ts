@@ -8,6 +8,7 @@ export const BOOKKEEPING = new Set(["overlay_state", "overlay_sync", "overlay_vi
 const PLAN_KINDS = new Set(["delete", "merge", "bulk_retag",
   "reference_remap", "taxonomy_expansion", "ingest", "import", "restore", "schema_migration", "note_type_migration", "overlay_delete",
   "project_create", "project_update", "project_archive", "system_create", "system_update", "system_retire",
+  // legacy journal kind (Changes removed, CON-17)
   "change_create", "change_update", "change_close"]);
 
 const VERBS: Record<string, string> = {
@@ -18,6 +19,7 @@ const VERBS: Record<string, string> = {
   import: "imported a bundle", restore: "restored a backup", schema_migration: "migrated note files", note_type_migration: "migrated note types",
   project_create: "created project", project_update: "updated project", project_archive: "archived project",
   system_create: "created system", system_update: "updated system", system_retire: "retired system",
+  // legacy journal kind (Changes removed, CON-17)
   change_create: "started change", change_update: "updated change", change_close: "closed change",
   overlay_auto_update: "edited in Obsidian", overlay_capture: "captured in Obsidian", overlay_delete: "deleted in Obsidian",
 };

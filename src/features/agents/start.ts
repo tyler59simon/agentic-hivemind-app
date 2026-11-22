@@ -63,7 +63,7 @@ export function terminalsIn(sessions: SessionInfo[], path: string): SessionInfo[
 export interface StartForm {
   engine: Engine; face: Interface; where: Where;
   /** The picked project's slug; null under "Other folders". */
-  project: string | null; repo: string; branch: string; change: number | null; folder: string | null;
+  project: string | null; repo: string; branch: string; folder: string | null;
   task: string; policy: Policy; access: Access; model: string; effort: string;
   context: string[]; briefing?: string; system?: string;
   /** Chat only: the role to start in (none when null), and whether the session runs without anyone answering prompts. */
@@ -82,11 +82,10 @@ export const PROFILE_LABELS: Record<Profile, string> = { read_only: "Read only",
 /** What `agentStart` is called with. The task text is trimmed; a terminal may have none. */
 export function buildStart(f: StartForm): { task: AgentTask; prompt: string; options: StartOptions } {
   const prompt = f.task.trim();
-  const change = f.change !== null ? { change: f.change } : {};
   if (f.face === "chat") {
     if (!f.project) throw new Error("Chat needs a project");
     return {
-      task: { kind: "work", project: f.project, repo: f.repo, branch: f.branch, ...change }, prompt,
+      task: { kind: "work", project: f.project, repo: f.repo, branch: f.branch }, prompt,
       options: {
         policy: f.policy, context: f.context, briefing: f.briefing, model: f.engine === "claude" ? f.model || undefined : undefined, system: f.system, engine: f.engine, interface: "chat",
         ...(f.role ? { role: f.role, ...(f.unattended ? { unattended: true } : {}) } : {}),
@@ -102,7 +101,7 @@ export function buildStart(f: StartForm): { task: AgentTask; prompt: string; opt
     ...(asksNobody(f.access) ? { confirmedRisky: true } : {}),
   };
   const task: AgentTask = folder ? { kind: "folder", path: f.folder! }
-    : { kind: "work", project: f.project!, repo: f.repo, ...(f.where === "worktree" ? { branch: f.branch } : {}), ...change };
+    : { kind: "work", project: f.project!, repo: f.repo, ...(f.where === "worktree" ? { branch: f.branch } : {}) };
   return { task, prompt, options };
 }
 

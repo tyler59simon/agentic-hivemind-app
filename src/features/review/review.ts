@@ -1,19 +1,9 @@
 // Pure helpers for the Review page: which sessions it lists, how they are headed and labelled, and where it goes after a decision.
 import type { SessionInfo } from "../../lib/agent";
 import { waitingForReview } from "../agents/session";
-import { displayId, engineName } from "../changes/changes";
 
 export const fileKey = (sessionId: string, path: string) => `file:${sessionId}:${path}`;
 export const baseName = (path: string) => path.split("/").pop() ?? path;
-
-/** The change a session belongs to, if any. */
-export const changeOf = (info: SessionInfo): number | undefined => (info.task.kind === "work" ? info.task.change ?? undefined : undefined);
-
-/** "CHG-014 · Claude Code" for a session of a change, else the session's title. */
-export function sessionHeading(info: SessionInfo, display?: string): string {
-  const change = changeOf(info);
-  return change === undefined ? info.title : `${display ?? displayId(change)} · ${engineName(info.adapter)}`;
-}
 
 /** The sessions the Code section lists: edits not yet approved or dismissed, plus the one the route names. */
 export function reviewSessions(all: SessionInfo[], project: string | undefined, routed: string | undefined): SessionInfo[] {

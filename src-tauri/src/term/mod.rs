@@ -1113,7 +1113,7 @@ mod tests {
                 id: id.to_string(),
                 adapter: "claude".into(),
                 cli_version: None,
-                task: AgentTask::Work { project: "paystream".into(), repo: "api".into(), branch: None, change: None },
+                task: AgentTask::Work { project: "paystream".into(), repo: "api".into(), branch: None },
                 title: "Fix the bug".into(),
                 workspace: vec![],
                 status: Status::Idle,

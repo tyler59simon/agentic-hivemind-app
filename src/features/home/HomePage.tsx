@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Ellipsis, Plus } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { sessionsQuery } from "../../lib/agent";
-import { useChangesEnabled } from "../../lib/connection";
+import { useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import type { Milestone } from "../../lib/executive";
 import { writeProject, type NoteRow, type Project } from "../../lib/lm";
@@ -13,11 +13,10 @@ import { sections } from "../../lib/note";
 import { openProject, openSession, startSession, useApp } from "../../store";
 import { Menu } from "../../ui/Menu";
 import { Modal } from "../../ui/Modal";
-import { dayMonth, PageHeader, Section, Split } from "../../ui/Page";
+import { dayMonth, PageHeader, Section, Split, Tabs } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
 import { isEnded, sessionForNote, waitingForReview } from "../agents/session";
-import { useChangeIntent } from "../changes/intent";
 import { isoToday } from "../executive/commitments";
 import { CaptureDialog, ReviewDialog } from "../executive/Capture";
 import { HealthChip } from "../executive/parts";
@@ -32,6 +31,7 @@ import { dashboardSections, progress } from "../projects/projects";
 import { ProjectWizard } from "../projects/ProjectWizard";
 import { Triage } from "../projects/TriageDialog";
 import { useCurrentProject, useGitActivity, useProject } from "../projects/useProject";
+import { ArchitectureTab } from "../systems/ArchitectureTab";
 import { AskBox } from "./AskBox";
 import { BriefingCard, BriefingModals } from "./BriefingCard";
 import { HealthCard } from "./HealthCard";
@@ -62,6 +62,20 @@ function useCapture(projects: Project[], project: Project | undefined): { start:
       </>
     ),
   };
+}
+
+type HomeTab = "overview" | "architecture";
+
+/** The Overview and Architecture tabs under the page header. Architecture needs the systems registry. The tab is kept in the route
+ *  and swapped in place, so Back does not step through tab switches. */
+function useHomeTabs(): { tab: HomeTab; tabs: ReactNode } {
+  const systemsOn = useSystemsEnabled();
+  const route = useApp((s) => (s.route.page === "home" ? s.route : undefined));
+  const go = useApp((s) => s.go);
+  const tab: HomeTab = systemsOn && route?.tab === "architecture" ? "architecture" : "overview";
+  if (!systemsOn) return { tab, tabs: null };
+  const change = (next: HomeTab) => go(next === "architecture" ? { ...route, page: "home", tab: "architecture" } : { page: "home" }, { replace: true });
+  return { tab, tabs: <Tabs label="Home" value={tab} onChange={change} items={[{ id: "overview", label: "Overview" }, { id: "architecture", label: "Architecture" }]} /> };
 }
 
 const CaptureButton = ({ onClick }: { onClick: () => void }) => (
@@ -96,8 +110,8 @@ function ProjectHome({ project }: { project: Project }) {
   const notes = useNotes();
   const milestones = useRecords<Milestone>("milestone");
   const git = useGitActivity(project.slug);
-  const changesOn = useChangesEnabled();
   const capture = useCapture(data.projects, project);
+  const { tab, tabs } = useHomeTabs();
   const ticks = useTick();
   const [editing, setEditing] = useState(false);
   const [archiving, setArchiving] = useState(false);
@@ -135,7 +149,6 @@ function ProjectHome({ project }: { project: Project }) {
                 {project.charter && <li role="none"><button role="menuitem" onClick={() => { close(); useWorkspace.getState().openNote(project.charter!, { title: `${project.name} charter` }); }}>Open charter</button></li>}
                 <li role="none"><button role="menuitem" onClick={() => { close(); setDialog("new"); }}>Milestones…</button></li>
                 <li role="none"><button role="menuitem" onClick={() => { close(); startSession(); }}>Start a session</button></li>
-                {changesOn && <li role="none"><button role="menuitem" onClick={() => { close(); useChangeIntent.getState().open(); }}>New change</button></li>}
                 <li role="none"><button role="menuitem" onClick={() => { close(); void copy(); }}>Copy briefing for an agent</button></li>
                 <li role="none"><button role="menuitem" onClick={() => { close(); setEditing(true); }}>Edit project…</button></li>
                 <li role="none"><button role="menuitem" onClick={() => { close(); setTriage(true); }}>Find notes for this project…</button></li>
@@ -144,8 +157,9 @@ function ProjectHome({ project }: { project: Project }) {
             )}
           </Menu>
         </>} />
-      <Continue project={project} members={members} />
-      <Split rail={<>
+      {tabs}
+      {tab === "architecture" ? <ArchitectureTab /> : <Continue project={project} members={members} />}
+      {tab === "overview" && <Split rail={<>
         <NeedsReview project={project} />
         {row && <HealthCard row={row} />}
         <BriefingCard project={project} />
@@ -159,7 +173,7 @@ function ProjectHome({ project }: { project: Project }) {
           <OpenList sections={openSections} today={today} ticks={ticks} onMilestone={setDialog} empty="No open work for this project. Items are open action items on notes tagged with the project, and tasks in notebooks inside its repositories." />
         </Section>
         <Since days={days} project={project.slug} git={project.repos.length ? { loading: git.isLoading, error: git.error, repos: git.data ?? [] } : undefined} />
-      </Split>
+      </Split>}
       {dialog && <MilestonesDialog project={project} milestones={milestones.data ?? []} initial={dialog} onClose={() => setDialog(null)} />}
       {capture.dialogs}
       <BriefingModals project={project} projects={data.projects} />
@@ -190,6 +204,7 @@ function AllHome({ projectsOn }: { projectsOn: boolean }) {
   const notes = useNotes();
   const milestones = useRecords<Milestone>("milestone");
   const capture = useCapture(data.projects, undefined);
+  const { tab, tabs } = useHomeTabs();
   const ticks = useTick();
   const failed = useRecordsError();
   const rows = notes.rows.data?.notes ?? [];
@@ -209,8 +224,10 @@ function AllHome({ projectsOn }: { projectsOn: boolean }) {
           <CaptureButton onClick={capture.start} />
           {projectsOn && <button className="primary big" onClick={() => useProjectIntent.getState().openWizard()}><Plus size="1.2em" aria-hidden />New project</button>}
         </>} />
-      {!projectsOn && <div className="banner warn">Projects, open work and review need a newer Living Memory (API 2 with the <code>projects</code> command). Notes, search, the graph and activity work as they are.</div>}
-      <Split rail={projectsOn && <>
+      {tabs}
+      {tab === "architecture" && <ArchitectureTab />}
+      {tab === "overview" && !projectsOn && <div className="banner warn">Projects, open work and review need a newer Living Memory (API 2 with the <code>projects</code> command). Notes, search, the graph and activity work as they are.</div>}
+      {tab === "overview" && <Split rail={projectsOn && <>
         <NeedsReview />
         <BriefingCard project={undefined} />
         <AskBox project={undefined} />
@@ -254,7 +271,7 @@ function AllHome({ projectsOn }: { projectsOn: boolean }) {
           </>
         )}
         <Since days={days} />
-      </Split>
+      </Split>}
       {capture.dialogs}
       <BriefingModals project={undefined} projects={data.projects} />
     </div>

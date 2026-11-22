@@ -12,7 +12,7 @@ import { proposalOf, proposedUpdate } from "./passport";
 
 export const systemsQuery = () => ({ queryKey: ["systems"], queryFn: () => systems() });
 
-/** The create wizard is opened from the sidebar and from the command palette. */
+/** The create wizard is opened from the Architecture tab and from the command palette. */
 export const useSystemIntent = create<{ wizard: boolean; openWizard: () => void; closeWizard: () => void }>((set) => ({
   wizard: false,
   openWizard: () => set({ wizard: true }),

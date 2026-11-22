@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Review, SessionInfo } from "../../lib/agent";
-import { afterDecision, directBase, proposedFiles, reviewActions, reviewLabel, reviewSessions, reviewVersion, sessionHeading, step } from "./review";
+import { afterDecision, directBase, proposedFiles, reviewActions, reviewLabel, reviewSessions, reviewVersion, step } from "./review";
 
 const tree = { repo: "C:/code/ingestion", path: "C:/data/worktrees/x/1", branch: "hivemind/1", baseBranch: "main", baseSha: "a".repeat(40) };
 const base: SessionInfo = {
@@ -21,13 +21,6 @@ describe("review helpers", () => {
   const f = make("f", { project: "other" });
   const g = make("g", { worktree: null });
   const all = [a, b, c, d, e, f, g];
-
-  it("heads a session by its change", () => {
-    const work = make("w", { task: { kind: "work", project: "p", repo: "r", change: 14 } });
-    expect(sessionHeading(work, "CHG-014")).toBe("CHG-014 · Claude Code");
-    expect(sessionHeading(work)).toBe("CHG-014 · Claude Code");
-    expect(sessionHeading(a)).toBe("Add a flag");
-  });
 
   it("lists sessions with undecided edits", () => {
     expect(reviewSessions(all, "p", undefined).map((s) => s.id)).toEqual(["a", "e"]);

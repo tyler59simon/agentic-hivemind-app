@@ -1925,8 +1925,8 @@ pub fn start_task(
         memory_root: bridge.launch().root,
         strict_mcp: crate::managed::strict_mcp(saved.claude_under_managed_policy()),
     };
-    let (project, repo, branch, change) = match &task {
-        AgentTask::Work { project, repo, branch, change } => (project, repo, branch, change),
+    let (project, repo, branch) = match &task {
+        AgentTask::Work { project, repo, branch } => (project, repo, branch),
         AgentTask::Folder { path } => {
             let folder = scope::other_folder(saved, path)?;
             return start_direct(manager, terminals, &id, task.clone(), &folder, prompt, &options);
@@ -1946,9 +1946,6 @@ pub fn start_task(
     let policy = options.policy.unwrap_or(PolicyMode::Ask);
     let entry = crate::git::project_entry(bridge, project)?;
     let repo = scope::project_repo(&entry, repo)?;
-    if let Some(id) = change {
-        scope::check_change(&scope::change_entry(bridge, *id)?, project, &repo.to_string_lossy())?;
-    }
     if place == Place::Checkout {
         return start_direct(manager, terminals, &id, task.clone(), &repo, prompt, &options);
     }
@@ -2028,7 +2025,7 @@ pub fn import_task(cli_id: &str, target: &crate::term::ShellTarget) -> Result<Ag
         return Err("That is not a conversation id".into());
     }
     match target {
-        ShellTarget::Checkout { project, repo } => Ok(AgentTask::Work { project: project.clone(), repo: repo.clone(), branch: None, change: None }),
+        ShellTarget::Checkout { project, repo } => Ok(AgentTask::Work { project: project.clone(), repo: repo.clone(), branch: None }),
         ShellTarget::Folder(path) => Ok(AgentTask::Folder { path: path.clone() }),
         ShellTarget::Session(_) => Err("Pick a project or a folder".into()),
     }
@@ -2181,7 +2178,7 @@ mod tests {
     }
 
     fn work_task() -> AgentTask {
-        AgentTask::Work { project: "paystream".into(), repo: "repo".into(), branch: None, change: None }
+        AgentTask::Work { project: "paystream".into(), repo: "repo".into(), branch: None }
     }
 
     fn git_available() -> bool {
@@ -3889,7 +3886,7 @@ mod tests {
         }
         assert_eq!(import_task(good, &folder).unwrap(), AgentTask::Folder { path: "C:/picked".into() });
         let checkout = ShellTarget::Checkout { project: "paystream".into(), repo: "C:/repo".into() };
-        assert_eq!(import_task(good, &checkout).unwrap(), AgentTask::Work { project: "paystream".into(), repo: "C:/repo".into(), branch: None, change: None });
+        assert_eq!(import_task(good, &checkout).unwrap(), AgentTask::Work { project: "paystream".into(), repo: "C:/repo".into(), branch: None });
         assert!(import_task(good, &ShellTarget::Session("x".into())).is_err());
 
         // A folder the picker never gave is refused before anything is made.

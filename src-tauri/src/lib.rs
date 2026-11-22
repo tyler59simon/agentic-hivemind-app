@@ -569,7 +569,7 @@ impl automations::Doer for AppDoer {
                     briefing: Some(format!("## Automation\nThe automation \"{}\" started this session; nobody is watching it. Finish in one turn.", a.name)),
                     engine: *engine, interface: agent::Interface::Chat, role: Some(*role), unattended: true, origin: Some(origin), budget_usd: a.budget_usd, ..Default::default()
                 };
-                let task = agent::scope::AgentTask::Work { project, repo, branch: None, change: None };
+                let task = agent::scope::AgentTask::Work { project, repo, branch: None };
                 let info = agent::start_task(&state.agents, &state.bridge, &saved, &state.worktrees_dir, &state.terminals_dir, task, &automations::fill(prompt, vars), options)?;
                 Ok(Started::Session(info.id))
             }

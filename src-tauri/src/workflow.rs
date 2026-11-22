@@ -574,7 +574,7 @@ impl Workflows {
                 ..Default::default()
             };
             let started = branch.and_then(|(branch, start)| {
-                let work = AgentTask::Work { project: run.project.clone(), repo: run.repo.clone(), branch, change: None };
+                let work = AgentTask::Work { project: run.project.clone(), repo: run.repo.clone(), branch };
                 host.start(work, &task.spec.prompt, StartOptions { start, ..options })
             });
             let mut runs = self.runs.lock().unwrap();

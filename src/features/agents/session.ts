@@ -72,8 +72,6 @@ export interface BriefingInput {
   architecture: { system: string; generated: string | null; behind: number | null; element: string | null; containers: string[] } | null;
   /** The project context pack: `buildBriefing(...)` with a 5,000 character limit. */
   pack: string;
-  /** The change the session works on: a "## Change" block is written for it. */
-  change?: { display: string; title: string; stage: string; briefTitle: string; steps: string[]; evidence: string[] } | null;
   /** Set for a terminal session: where it runs. The CLI's own permission mode applies there, so no permission line is written. */
   place?: Place;
   now?: Date;
@@ -92,13 +90,6 @@ export function sessionBriefing(input: BriefingInput): string {
       ? "- File edits apply at once, and so can simple file commands in this folder. Other commands wait for the user's approval unless something already allows them."
       : "- File edits wait for the user's approval, and so do commands that nothing has allowed yet. A wait can be long; do not work around it.",
   ].filter(Boolean).join("\n");
-  const change = input.change && [
-    "## Change",
-    `- This session works on ${input.change.display} ${input.change.title} (stage: ${input.change.stage}).`,
-    ...(input.change.steps.length ? [`- Open steps: ${input.change.steps.join("; ")}`] : []),
-    ...(input.change.evidence.length ? [`- Acceptance evidence still to show: ${input.change.evidence.join("; ")}`] : []),
-    `- Link every note you capture for this change to its brief: \`--link '[[${input.change.briefTitle}]]'\`.`,
-  ].join("\n");
   const architecture = arch && [
     "## Architecture",
     `- System: ${arch.system}.${arch.generated ? ` Model generated ${arch.generated}${arch.behind ? `, ${arch.behind} commit${arch.behind === 1 ? "" : "s"} behind the repository` : ""}.` : ""}`,
@@ -108,12 +99,12 @@ export function sessionBriefing(input: BriefingInput): string {
   const memory = [
     "## Living Memory",
     `- Record decisions and gotchas with \`--project ${project.slug}\`${domain ? ` \`--domain ${domain}\`` : ""}.`,
-    "- Do not run its plan, apply or undo commands, or its archive, rewrite, remap, promote, taxonomy add, source, project, system or change writes; describe the change and the user will apply it.",
+    "- Do not run its plan, apply or undo commands, or its archive, rewrite, remap, promote, taxonomy add, source, project or system writes; describe the change and the user will apply it.",
   ].join("\n");
   return [
     `# Session briefing: ${project.name}`,
     `> Built by Hivemind from Living Memory on ${isoDay(now)}. Reference only: check the code before acting on it.`,
-    workspace, change, noteBlock(input.notes, "Included memory"), architecture, memory, "---", input.pack,
+    workspace, noteBlock(input.notes, "Included memory"), architecture, memory, "---", input.pack,
   ].filter(Boolean).join("\n\n");
 }
 

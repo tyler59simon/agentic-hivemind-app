@@ -44,8 +44,6 @@ pub enum AgentTask {
         repo: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         branch: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        change: Option<u64>,
     },
     /// Work in a folder the user picked with the native dialog, in place. Terminal only.
     Folder { path: String },
@@ -227,37 +225,6 @@ pub fn project_repo(entry: &Value, repo: &str) -> Result<PathBuf, String> {
     let repos = entry.get("repos").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
     let mut found = repos.filter(|candidate| same_path(candidate, repo));
     found.next().map(PathBuf::from).ok_or_else(|| "That repository is not registered for this project".into())
-}
-
-/// A change's registry entry, by number.
-pub fn change_entry(bridge: &Bridge, id: u64) -> Result<Value, String> {
-    let reply = bridge.call(&["changes".into(), "--actor".into(), "viewer".into()], None)?;
-    if reply.exit_code != 0 {
-        return Err(format!("Living Memory could not list changes (is it up to date?): {}", reply.error));
-    }
-    reply
-        .result
-        .get("changes")
-        .and_then(Value::as_array)
-        .and_then(|all| all.iter().find(|c| c.get("id").and_then(Value::as_u64) == Some(id)))
-        .cloned()
-        .ok_or_else(|| format!("Unknown change: CHG-{id:03}"))
-}
-
-/// A session may carry a change only if the change is active, in the task's project and not tied to another repository.
-pub fn check_change(entry: &Value, project: &str, repo: &str) -> Result<(), String> {
-    let text = |key: &str| entry.get(key).and_then(Value::as_str).unwrap_or_default();
-    let display = format!("CHG-{:03}", entry.get("id").and_then(Value::as_u64).unwrap_or_default());
-    if text("project") != project {
-        return Err(format!("{display} belongs to project {}, not {project}", text("project")));
-    }
-    if text("status") != "active" {
-        return Err(format!("{display} is {}; reopen it before starting a session", text("status")));
-    }
-    if !text("repo").is_empty() && !same_path(text("repo"), repo) {
-        return Err(format!("{display} is tied to another repository: {}", text("repo")));
-    }
-    Ok(())
 }
 
 /// What a work session may touch: its worktree, and nothing without asking beyond reading it.
@@ -505,15 +472,14 @@ pub fn for_session(bridge: &Bridge, saved: &Settings, info: &SessionInfo) -> Res
 }
 
 /// The Living Memory commands only the user may run, through Hivemind's own dialogs: applying, undoing and recovering a
-/// plan, and every direct write (archive, rewrite, remap, promote, taxonomy add and the source, project, system and change
+/// plan, and every direct write (archive, rewrite, remap, promote, taxonomy add and the source, project and system
 /// registries), since a user allow rule would let any one missing here run without a question. Writing a plan (merge-plan,
 /// delete-plan, ...) is the agent's way to propose such a change, so it is allowed; Living Memory's own guard agrees. A
 /// phrase such as `project create` keeps a search for the word "project" from matching.
-const GOVERNED_COMMANDS: [&str; 20] = [
+const GOVERNED_COMMANDS: [&str; 17] = [
     "apply", "undo", "recover",
     "archive", "rewrite", "remap", "promote", "taxonomy add", "source add", "source remove", "source implicit",
     "project create", "project update", "project archive", "system create", "system update", "system retire",
-    "change create", "change update", "change close",
 ];
 
 /// A shell command that would apply or undo a plan or make a direct write to the Living Memory store. Its hook lets read,
@@ -585,18 +551,6 @@ pub fn governed_rules() -> Vec<String> {
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn change_must_fit_the_task() {
-        let entry = json!({"id": 14, "project": "paystream", "status": "active", "repo": "C:/work/paystream"});
-        assert!(check_change(&entry, "paystream", r"c:\work\paystream\").is_ok());
-        assert_eq!(check_change(&entry, "ledger", "C:/work/paystream").unwrap_err(), "CHG-014 belongs to project paystream, not ledger");
-        let done = json!({"id": 14, "project": "paystream", "status": "done", "repo": "C:/work/paystream"});
-        assert_eq!(check_change(&done, "paystream", "C:/work/paystream").unwrap_err(), "CHG-014 is done; reopen it before starting a session");
-        assert_eq!(check_change(&entry, "paystream", "C:/work/other").unwrap_err(), "CHG-014 is tied to another repository: C:/work/paystream");
-        let free = json!({"id": 14, "project": "paystream", "status": "active", "repo": null});
-        assert!(check_change(&free, "paystream", "C:/anything").is_ok());
-    }
 
     /// A temp folder with a repo and an installed suite runtime; the caller removes it.
     fn fixture(name: &str) -> (PathBuf, PathBuf) {
@@ -703,12 +657,21 @@ mod tests {
 
         let bare = json!({"kind": "work", "project": "paystream", "repo": "C:/r"});
         let work: AgentTask = serde_json::from_value(bare.clone()).unwrap();
-        assert_eq!(work, AgentTask::Work { project: "paystream".into(), repo: "C:/r".into(), branch: None, change: None });
+        assert_eq!(work, AgentTask::Work { project: "paystream".into(), repo: "C:/r".into(), branch: None });
         assert_eq!(serde_json::to_value(&work).unwrap(), bare);
-        let full = json!({"kind": "work", "project": "paystream", "repo": "C:/r", "branch": "main", "change": 14});
+        let full = json!({"kind": "work", "project": "paystream", "repo": "C:/r", "branch": "main"});
         let work: AgentTask = serde_json::from_value(full.clone()).unwrap();
-        assert_eq!(work, AgentTask::Work { project: "paystream".into(), repo: "C:/r".into(), branch: Some("main".into()), change: Some(14) });
+        assert_eq!(work, AgentTask::Work { project: "paystream".into(), repo: "C:/r".into(), branch: Some("main".into()) });
         assert_eq!(serde_json::to_value(&work).unwrap(), full);
+    }
+
+    /// A session record stored while Changes existed carries `"change": 14`; it still loads, and the field is not written back.
+    #[test]
+    fn a_legacy_work_task_with_a_change_still_deserializes() {
+        let old = json!({"kind": "work", "project": "paystream", "repo": "C:/r", "branch": "main", "change": 14});
+        let work: AgentTask = serde_json::from_value(old).unwrap();
+        assert_eq!(work, AgentTask::Work { project: "paystream".into(), repo: "C:/r".into(), branch: Some("main".into()) });
+        assert_eq!(serde_json::to_value(&work).unwrap(), json!({"kind": "work", "project": "paystream", "repo": "C:/r", "branch": "main"}));
     }
 
     #[test]
@@ -730,7 +693,6 @@ mod tests {
             r#"python "C:\x\living_memory.py" --domain a archive x"#,
             r#"python "C:\x\living_memory.py" project create --payload-file p.json"#,
             r#"python "C:\x\living_memory.py" taxonomy add concern/security"#,
-            r#"python "C:\x\living_memory.py" change close"#,
             r#"python "C:\x\LIVING_MEMORY.PY" undo 123"#,
             // The word `apply` is there even inside a search; a refused search is the safe side.
             r#"python "C:\x\living_memory.py" search "apply the plan""#,
@@ -775,8 +737,8 @@ mod tests {
     #[test]
     fn governed_rules_cover_every_command_for_both_shells() {
         let rules = governed_rules();
-        assert_eq!(rules.len(), 80);
-        assert_eq!(rules.iter().collect::<std::collections::HashSet<_>>().len(), 80, "all different");
+        assert_eq!(rules.len(), 68);
+        assert_eq!(rules.iter().collect::<std::collections::HashSet<_>>().len(), 68, "all different");
         for rule in [
             "Bash(*living_memory.py* apply *)",
             "Bash(*living_memory.py* apply)",
@@ -918,7 +880,7 @@ mod tests {
     #[test]
     fn every_session_is_denied_destructive_git() {
         let rules = deny_rules();
-        assert_eq!(&rules[..80], governed_rules().as_slice());
+        assert_eq!(&rules[..68], governed_rules().as_slice());
         for rule in ["Bash(*git push*)", "PowerShell(*git reset --hard*)", "Bash(*git clean*)", "PowerShell(*git branch -D*)"] {
             assert!(rules.iter().any(|r| r == rule), "{rule}");
         }

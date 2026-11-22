@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { LmError, addAction, archiveNote, isPlan, supersedeNote, taxonomyAdd, undo, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, ruleAllowed, setPin, setRule, writeChange, changesArgs, list, listArgs, logArgs, openArgs, writeProject, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setDetail, setTransport, writeSystem, systemsArgs, update, setBridgeGeneration, noteTypes, typeWrite, timelineArgs, wikiModel, agentWikiModel, type Invoke } from "./lm";
+import { LmError, addAction, archiveNote, isPlan, supersedeNote, taxonomyAdd, undo, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, ruleAllowed, setPin, setRule, list, listArgs, logArgs, openArgs, writeProject, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setTransport, writeSystem, systemsArgs, update, setBridgeGeneration, noteTypes, typeWrite, timelineArgs, wikiModel, agentWikiModel, type Invoke } from "./lm";
 
 afterEach(() => setTransport(invoke as Invoke));
 
@@ -92,14 +92,10 @@ describe("run", () => {
     expect(systemsArgs()).toEqual(["systems", "--actor", "viewer"]);
   });
 
-  it("changes read as viewer and change writes carry the payload", async () => {
-    expect(changesArgs()).toEqual(["changes", "--actor", "viewer"]);
-    expect(changesArgs({ status: "active", project: "paystream" })).toEqual(["changes", "--status", "active", "--project", "paystream", "--actor", "viewer"]);
+  it("addAction appends one action item with no stdin", async () => {
     const calls = fake({ exit_code: 0, result: { ok: true }, error: null });
-    await writeChange("update", { id: 14, stage: "design" });
-    expect(calls[0]).toEqual(["lm", { argv: ["change", "update"], stdin: '{"id":14,"stage":"design"}' }]);
     await addAction("demo:abc", "Ship it");
-    expect(calls[1]).toEqual(["lm", { argv: ["update", "demo:abc", "--domain", "demo", "--add-action", "Ship it"], stdin: null }]);
+    expect(calls[0]).toEqual(["lm", { argv: ["update", "demo:abc", "--domain", "demo", "--add-action", "Ship it"], stdin: null }]);
   });
 
   it("lifecycle and taxonomy writes are direct commands, and undo may return a plan", async () => {
@@ -116,21 +112,13 @@ describe("run", () => {
 
   it("log reads as viewer and only sends the filters given", () => {
     expect(logArgs({})).toEqual(["log", "--actor", "viewer"]);
-    expect(logArgs({ domain: "d", project: "hive", since: "2026-11-01", until: "2026-11-09", note: "CHG-014", type: "decision", event: "created", limit: 20 }))
-      .toEqual(["log", "--domain", "d", "--project", "hive", "--since", "2026-11-01", "--until", "2026-11-09", "--note", "CHG-014", "--type", "decision", "--event", "created", "--limit", "20", "--actor", "viewer"]);
+    expect(logArgs({ domain: "d", project: "hive", since: "2026-11-01", until: "2026-11-09", note: "demo:abc", type: "decision", event: "created", limit: 20 }))
+      .toEqual(["log", "--domain", "d", "--project", "hive", "--since", "2026-11-01", "--until", "2026-11-09", "--note", "demo:abc", "--type", "decision", "--event", "created", "--limit", "20", "--actor", "viewer"]);
   });
 
   it("recap covers every domain, narrowed by project and days", () => {
     expect(recapArgs({})).toEqual(["recap", "--all-domains", "--actor", "viewer"]);
     expect(recapArgs({ days: 30, project: "hive" })).toEqual(["recap", "--all-domains", "--days", "30", "--project", "hive", "--actor", "viewer"]);
-  });
-
-  it("set-detail puts the revision in argv and sends no stdin", async () => {
-    const calls = fake({ exit_code: 0, result: { ok: true }, error: null });
-    await setDetail("demo:abc", "**Where it stands:** now", "rev1");
-    await setDetail("demo:abc", "**Where it stands:** now");
-    expect(calls[0]).toEqual(["lm", { argv: ["update", "demo:abc", "--domain", "demo", "--set-detail", "**Where it stands:** now", "--expected-revision", "rev1"], stdin: null }]);
-    expect(calls[1]).toEqual(["lm", { argv: ["update", "demo:abc", "--domain", "demo", "--set-detail", "**Where it stands:** now"], stdin: null }]);
   });
 });
 

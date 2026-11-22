@@ -1,5 +1,4 @@
-import { engineName } from "../changes/changes";
-import type { SessionInfo } from "../../lib/agent";
+import { engineName, type SessionInfo } from "../../lib/agent";
 import type { TermInfo } from "../../lib/term";
 import { isShellId, shellLabel } from "./shells";
 import { tabLabel } from "./tabs";

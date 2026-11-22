@@ -6,15 +6,15 @@ It runs on Tauri 2 with React and TypeScript, on Windows, macOS and Linux. It is
 
 ## What it does
 
-- **Layout:** a sidebar with a project picker and its sections (Overview, Agent Workspace, Changes, Architecture, Memory, Dashboards, Wiki, Recap, Maintenance, Review, Skills, Workflows), and a top bar with a breadcrumb and a search field. Every section is scoped to the picked project, or to all memory.
+- **Layout:** a sidebar with a project picker and its sections (Home, Agent Workspace, Memory, Dashboards, Wiki, Recap, Maintenance, Review, Skills, Workflows), and a top bar with a breadcrumb and a search field. Every section is scoped to the picked project, or to all memory.
 - **Memory:**
   - a library with search, tabs by note type, and Status, Scope (project, domain, all domains) and Tag filters; the selected note is previewed beside the list
   - a quick switcher (Ctrl+O) and a command palette (Ctrl+P)
   - live refresh when agents write
 - **Notes:** open as tabs, side by side in up to three panes. A note page has Reading, Source and History tabs, and a context rail with its connections (backlinks, outgoing links, replaces / replaced by, links to missing notes), recent history, outline, details and a local graph. Hovering a note link shows its summary.
-- **Overview:** the picked project's current plan, next open items, recent notes and commits, and what needs review.
-- **Changes and Review:** the project's plans with their steps and linked notes; notes due for confirmation and registry updates an agent proposed.
-- **Architecture:** a system's containers drawn from its Architecture Suite model (context and container levels, pan, zoom, select a box to inspect it), with its decisions, runbooks and weaknesses. Background agent sessions are listed in Agent Workspace.
+- **Home:** the picked project's current plan, next open items, recent notes and commits, and what needs review. Its Architecture tab shows the project's systems (all systems when no project is picked).
+- **Review:** agent edits waiting for approval, notes due for confirmation and registry updates an agent proposed.
+- **Architecture** (Home tab): a system's containers drawn from its Architecture Suite model (context and container levels, pan, zoom, select a box to inspect it), with its decisions, runbooks and weaknesses. Background agent sessions are listed in Agent Workspace.
 - **Editor:**
   - CodeMirror with Obsidian-style live preview, plus a plain Source mode
   - a properties form, `[[` title autocomplete, and Ctrl+S to save

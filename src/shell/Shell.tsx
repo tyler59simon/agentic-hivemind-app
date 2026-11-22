@@ -1,7 +1,5 @@
 import type { ReactNode } from "react";
 import { AgentWorkspace } from "../features/agents/AgentWorkspace";
-import { ChangeWizardHost } from "../features/changes/ChangeWizard";
-import { ChangesPage } from "../features/changes/ChangesPage";
 import { DashboardsPage } from "../features/dashboards/DashboardsPage";
 import { MemoryPage } from "../features/library/MemoryPage";
 import { NotesPage } from "../features/notes/NotesPage";
@@ -11,7 +9,6 @@ import { ReviewPage } from "../features/review/ReviewPage";
 import { SkillsPage } from "../features/skills/SkillsPage";
 import { WorkflowsPage } from "../features/workflows/WorkflowsPage";
 import { WikiPage } from "../features/wiki/WikiPage";
-import { ArchitecturePage } from "../features/systems/ArchitecturePage";
 import type { ConnectInfo } from "../lib/lm";
 import { useApp, type Page } from "../store";
 import { Sidebar } from "./Sidebar";
@@ -21,8 +18,6 @@ import { Topbar } from "./Topbar";
 const PAGES: Record<Page, () => ReactNode> = {
   home: () => <HomePage />,
   agents: () => <AgentWorkspace />,
-  changes: () => <ChangesPage />,
-  architecture: () => <ArchitecturePage />,
   memory: () => <MemoryPage />,
   notes: () => <NotesPage />,
   dashboards: () => <DashboardsPage />,
@@ -43,7 +38,6 @@ export function Shell({ info, onSettings, onReconnect }: { info: ConnectInfo; on
         <Topbar />
         <main className="page-host">{PAGES[page]()}</main>
       </div>
-      <ChangeWizardHost />
     </div>
   );
 }

@@ -61,7 +61,7 @@ pub fn docs_changed(domains_dir: &Path, paths: impl IntoIterator<Item = impl AsR
 /// Store-level config files the UI cares about, when a changed path is one of them directly under the store root.
 pub fn store_file(root: &Path, path: &Path) -> Option<String> {
     let name = path.file_name()?.to_str()?;
-    (path.parent()? == root && matches!(name, "projects.json" | "systems.json" | "changes.json" | "views.json" | "tag_taxonomy.json" | "note_types.json")).then(|| name.to_string())
+    (path.parent()? == root && matches!(name, "projects.json" | "systems.json" | "views.json" | "tag_taxonomy.json" | "note_types.json")).then(|| name.to_string())
 }
 
 /// Watch note folders (recursively) and the store root (non-recursively, for config files).
@@ -144,11 +144,11 @@ mod tests {
         assert_eq!(store_file(&root, &root.join("projects.json")).as_deref(), Some("projects.json"));
         assert_eq!(store_file(&root, &root.join("systems.json")).as_deref(), Some("systems.json"));
         assert_eq!(store_file(&root, &root.join("tag_taxonomy.json")).as_deref(), Some("tag_taxonomy.json"));
-        assert_eq!(store_file(&root, &root.join("changes.json")).as_deref(), Some("changes.json"));
         assert_eq!(store_file(&root, &root.join("views.json")).as_deref(), Some("views.json"));
         assert_eq!(store_file(&root, &root.join("note_types.json")).as_deref(), Some("note_types.json"));
         assert_eq!(store_file(&root, &root.join(".projects.json.tmp")), None);
         assert_eq!(store_file(&root, &root.join(".changes.json.tmp")), None);
+        assert_eq!(store_file(&root, &root.join("changes.json")), None);
         assert_eq!(store_file(&root, &root.join(".tag_taxonomy.json")), None);
         assert_eq!(store_file(&root, &root.join("projects.json.bak")), None);
         assert_eq!(store_file(&root, &root.join("domains").join("projects.json")), None);

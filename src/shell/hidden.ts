@@ -9,6 +9,13 @@ interface HiddenState {
   setShown: (page: Page, shown: boolean) => void;
 }
 
+/** Version 2: the Architecture and Changes sections were removed (CON-4, CON-17), so a saved hide of either is dropped. */
+export function migrateHidden(persisted: unknown): unknown {
+  const saved = persisted as { hidden?: string[] } | null;
+  if (!Array.isArray(saved?.hidden)) return persisted;
+  return { ...saved, hidden: saved.hidden.filter((p) => p !== "architecture" && p !== "changes") };
+}
+
 export const useHidden = create<HiddenState>()(persist((set) => ({
   hidden: [],
   setShown: (page, shown) => {
@@ -17,7 +24,8 @@ export const useHidden = create<HiddenState>()(persist((set) => ({
   },
 }), {
   name: "hivemind.sidebar",
-  version: 1,
+  version: 2,
   storage: createJSONStorage(() => safeStorage),
+  migrate: (persisted, version) => (version < 2 ? migrateHidden(persisted) : persisted) as HiddenState,
   partialize: (s) => ({ hidden: s.hidden }),
 }));

@@ -4,7 +4,6 @@ import { useProjectsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { domains, log, type LogRow } from "../../lib/lm";
 import { typeClass } from "../../lib/noteTypes";
-import { openChange } from "../../store";
 import { useWorkspace } from "../../workspace/store";
 import { HoverPreview } from "../preview/HoverPreview";
 import { projectsQuery } from "../projects/useProject";
@@ -16,7 +15,6 @@ const time = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour
 function Title({ row }: { row: LogRow }) {
   const target = targetOf(row);
   if (!target) return <span className="small">{row.event === "session" ? sessionLine(row) : row.title}</span>;
-  if (target.kind === "change") return <button className="link-row" onClick={() => openChange(target.id)}>{row.ref} {row.title}</button>;
   return (
     <HoverPreview refId={target.ref}>
       <button className="link-row" onClick={() => useWorkspace.getState().openNote(target.ref, { title: row.title })}>{row.title}</button>
@@ -24,7 +22,7 @@ function Title({ row }: { row: LogRow }) {
   );
 }
 
-/** The journal of note, change and session events from the `log` command, newest first, grouped by day. */
+/** The journal of note and session events from the `log` command, newest first, grouped by day. */
 export function LogView() {
   const projectsOn = useProjectsEnabled();
   const [domain, setDomain] = useState("");

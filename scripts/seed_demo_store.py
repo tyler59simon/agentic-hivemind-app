@@ -85,12 +85,6 @@ def body(summary, details=(), links=()):
     return "\n\n".join(parts)
 
 
-def add_section(ref, text):
-    """Append a custom section to a note's body (there is no flag for one; the whole body is sent)."""
-    current = lm("read", ref, "--max-chars", "64000")
-    lm("update", ref, "--domain", ref.split(":")[0], payload={"body": current["body"] + "\n\n" + text})
-
-
 def remove(path):
     def retry(function, target, _exc):  # git objects are read-only on Windows
         os.chmod(target, stat.S_IWRITE); function(target)
@@ -367,19 +361,7 @@ def main():
 
     # ---- Lifecycle: finish and resolve a plan, archive a note, make two notes due for review.
     for _ in range(2): lm("check", refs["plan_review"], "--index", "1", "--domain", "paystream")
-    if "changes" in lm("version")["commands"]:
-        adopt = lambda key, title, **kw: lm("change", "create", payload={"project": "paystream", "title": title, "brief": refs[key], **kw})
-        adopt("plan_review", "Review retry policy", stage="validate")                                              # CHG-001
-        adopt("plan_extract", "Extract notification delivery", stage="design", repo=repo, system="paystream", element="Delivery")   # CHG-002
-        adopt("plan_dupes", "Prevent duplicate payment alerts", stage="implement", repo=repo, branch="feature/idempotency",
-              system="paystream", element="Ingestion")                                                             # CHG-003
-        add_section(refs["plan_dupes"], "## Acceptance evidence\n- [ ] Replay produces no duplicate alert\n- [ ] Suppression survives a restart")
-        made = lm("change", "create", payload={"project": "paystream", "title": "Decide the key retention window", "repo": repo,
-                  "brief": {"body": body("Choose between a 30-day key window and rejecting late events.", links=["[[Key retention period]]"])}})  # CHG-004
-        lm("update", made["summary"]["brief"], "--domain", "paystream", "--review-by", (date.today() - timedelta(days=2)).isoformat())
-        lm("change", "close", payload={"id": 1})                                                       # resolves the brief too
-    else:
-        lm("resolve", refs["plan_review"], "--domain", "paystream")
+    lm("resolve", refs["plan_review"], "--domain", "paystream")
     lm("archive", refs["archived"], "--domain", "paystream")
     lm("update", refs["risk"], "--domain", "paystream", "--pin")  # one pinned note for the Pin toggle
     if lm("version").get("capabilities", {}).get("rule", 0) >= 1:  # LM releases before rule notes refuse --rule
@@ -409,8 +391,6 @@ def main():
     print(f"links (active): {len(links['nodes'])} nodes, {len(links['edges'])} edges, {len(links['unresolved'])} unresolved "
           f"{sorted({u['target'] for u in links['unresolved']})} | any status: {len(links_any['nodes'])} nodes, {len(links_any['edges'])} edges")
     print("doctor:", json.dumps(doctor, ensure_ascii=False)[:700])
-    if "changes" in version["commands"]:
-        print("changes:", ", ".join(f"{c['display']} [{c['status']}/{c['stage']}]" for c in lm("changes")["changes"]))
     print("version: api", version["api"], "python", version["python"], "commands", len(version["commands"]))
     for label, key in (("superseded", "old_retry"), ("superseded by", "retry"), ("resolved plan", "plan_review"), ("archived", "archived"),
                        ("due for review", "map"), ("due for review", "risk")):

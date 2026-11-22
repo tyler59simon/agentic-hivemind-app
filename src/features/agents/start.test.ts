@@ -3,7 +3,7 @@ import type { AgentModels, SessionInfo } from "../../lib/agent";
 import { accessLines, buildStart, conversationAction, defaultAccess, effortOptions, historyTarget, terminalsIn, withApproval, type StartForm } from "./start";
 
 const form = (o: Partial<StartForm> = {}): StartForm => ({
-  engine: "claude", face: "terminal", where: "checkout", project: "paystream", repo: "C:/src/app", branch: "main", change: null, folder: null,
+  engine: "claude", face: "terminal", where: "checkout", project: "paystream", repo: "C:/src/app", branch: "main", folder: null,
   task: "  Fix it  ", policy: "ask", access: defaultAccess("claude"), model: "", effort: "", context: ["a:1"], briefing: "BRIEF", system: "ingestion", ...o,
 });
 
@@ -15,9 +15,9 @@ describe("buildStart", () => {
     expect(r.options).toEqual({ policy: "ask", context: ["a:1"], briefing: "BRIEF", system: "ingestion", engine: "claude", interface: "terminal", place: "checkout", access: { engine: "claude", mode: "manual" } });
   });
 
-  it("starts a terminal in a new worktree on the picked branch, linked to a change", () => {
-    const r = buildStart(form({ where: "worktree", change: 7 }));
-    expect(r.task).toEqual({ kind: "work", project: "paystream", repo: "C:/src/app", branch: "main", change: 7 });
+  it("starts a terminal in a new worktree on the picked branch", () => {
+    const r = buildStart(form({ where: "worktree" }));
+    expect(r.task).toEqual({ kind: "work", project: "paystream", repo: "C:/src/app", branch: "main" });
     expect(r.options.place).toBe("worktree");
   });
 

@@ -14,7 +14,7 @@ import { openSession, openSystem, startSession, useApp } from "../../store";
 import { Menu } from "../../ui/Menu";
 import { Modal } from "../../ui/Modal";
 import { Markdown } from "../../ui/Markdown";
-import { ArrowLink, dayMonth, PageHeader, Section, Split } from "../../ui/Page";
+import { ArrowLink, dayMonth, Section, Split } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
 import { useSessionDraft } from "../agents/draft";
@@ -444,10 +444,11 @@ function SystemView({ system, all }: { system: System; all: System[] }) {
   );
 }
 
-/** Architecture: the system behind the picked project (or any system from the list), its diagrams and what is known about it. */
-export function ArchitecturePage() {
+/** Home's Architecture tab: the system behind the picked project (or any system from the list), its diagrams and what is known about it. */
+export function ArchitectureTab() {
   const enabled = useSystemsEnabled();
-  const routed = useApp((s) => (s.route.page === "architecture" ? s.route.system : undefined));
+  const go = useApp((s) => s.go);
+  const routed = useApp((s) => (s.route.page === "home" ? s.route.system : undefined));
   const registry = useQuery({ ...systemsQuery(), enabled });
   const { project } = useCurrentProject();
   const { wizard, openWizard, closeWizard } = useSystemIntent();
@@ -457,13 +458,14 @@ export function ArchitecturePage() {
   const system = all.find((s) => s.slug === routed) ?? matched[0] ?? (project ? undefined : live[0]);
   const warnings = registry.data?.warnings ?? [];
   const discuss = () => { if (!system) return; useSessionDraft.getState().setSystem(system.slug); startSession(); };
+  const pick = (slug: string) => go({ page: "home", tab: "architecture", system: slug }, { replace: true });
 
   return (
-    <div className="page">
-      <PageHeader title="Architecture" subtitle="Explore the system and the decisions behind it."
-        actions={enabled && <>
+    <>
+      {enabled && (
+        <div className="tab-toolbar">
           {!!all.length && (
-            <select value={system?.slug ?? ""} onChange={(e) => openSystem(e.target.value)} aria-label="System">
+            <select value={system?.slug ?? ""} onChange={(e) => pick(e.target.value)} aria-label="System">
               {!system && <option value="">Choose a system…</option>}
               {!!matched.length && <optgroup label="This project">{matched.map((s) => <option key={s.slug} value={s.slug}>{s.name}</option>)}</optgroup>}
               <optgroup label={matched.length ? "Other systems" : "Systems"}>
@@ -473,7 +475,8 @@ export function ArchitecturePage() {
           )}
           <button className="text" onClick={openWizard}><Plus size="1.1em" aria-hidden />New system</button>
           {system && <button className="primary big" onClick={discuss}><MessageCircle size="1.2em" aria-hidden />Discuss with agent</button>}
-        </>} />
+        </div>
+      )}
       {!enabled ? <p className="muted">Systems need a newer Living Memory (one with the <code>systems</code> command).</p>
         : registry.isLoading ? <p className="muted">Loading…</p>
         : registry.error ? <p className="error">{classify(registry.error).message}</p>
@@ -484,14 +487,14 @@ export function ArchitecturePage() {
               : (
                 <div className="empty-state">
                   <p className="muted">{project && all.length
-                    ? `No system is registered for the repositories of ${project.name}. Pick one from the list, or register one.`
+                    ? `No system is linked to ${project.name}. Pick one from the list, or register one.`
                     : "No systems yet. A system is something you run or depend on: a service, an app, a platform."}</p>
                   <button className="primary" onClick={openWizard}><Plus size="1.15em" aria-hidden />New system</button>
                 </div>
               )}
           </>
         )}
-      {wizard && <SystemWizard mode="create" onClose={closeWizard} onDone={(slug) => openSystem(slug)} />}
-    </div>
+      {wizard && <SystemWizard mode="create" onClose={closeWizard} onDone={pick} />}
+    </>
   );
 }

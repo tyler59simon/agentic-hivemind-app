@@ -6,7 +6,7 @@ import type { ShellTarget } from "./term";
 
 export type AgentTask =
   | { kind: "system_passport"; slug: string }
-  | { kind: "work"; project: string; repo: string; branch?: string; change?: number }
+  | { kind: "work"; project: string; repo: string; branch?: string }
   /** A folder chosen with `folderPick`; terminal only. It always runs in place. */
   | { kind: "folder"; path: string }
   /** The executive assistant's chat: no repository, Living Memory read only. Started with `exec_agent_start`. */
@@ -102,6 +102,9 @@ export interface SessionInfo {
 
 /** The engine of a session, whatever adapter name older code stored. */
 export const engineOf = (s: Pick<SessionInfo, "adapter">): Engine => (s.adapter === "codex" ? "codex" : "claude");
+
+/** A session's engine as the mocks name it. The Claude Code adapter stores "claude-code"; Phase 5 adds Codex. */
+export const engineName = (adapter: string) => ({ "claude-code": "Claude Code", codex: "Codex" } as Record<string, string>)[adapter] ?? adapter;
 
 export const ENGINES: Engine[] = ["claude", "codex"];
 export const ENGINE_LABELS: Record<Engine, string> = { claude: "Claude Code", codex: "Codex" };

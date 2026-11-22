@@ -7,12 +7,11 @@ export type Shelf = "active" | "archived" | "any";
 
 /** One page per sidebar section. Memory also holds the open notes (`view: "notes"`) and its sub-views; Notes holds the
  *  notebooks and shows the same open documents. Home shows the picked project (or all of them); `view: "briefings"` opens its
- *  list of briefings, `briefing` one briefing, and `capture` the review of one capture batch. */
+ *  list of briefings, `briefing` one briefing, and `capture` the review of one capture batch; `tab: "architecture"` shows the
+ *  Architecture tab, on one system when `system` is given. */
 export type Route =
-  | { page: "home"; view?: "briefings"; briefing?: string; capture?: string }
+  | { page: "home"; view?: "briefings"; briefing?: string; capture?: string; tab?: "architecture"; system?: string }
   | { page: "agents"; session?: string; view?: "new" }
-  | { page: "changes"; id?: number; view?: "detail"; ref?: string }
-  | { page: "architecture"; system?: string }
   | { page: "dashboards"; ref?: string }
   | { page: "memory"; view?: "notes" | "graph" | "activity" | "history" | "tags"; q?: string }
   | { page: "notes"; notebook?: string; path?: string; view?: "tasks" | "views" }
@@ -65,12 +64,20 @@ const stopped = (proceed: () => void) => !!leaveGuard && !leaveGuard(proceed);
 const whenFree = (move: () => void) => { if (!stopped(move)) move(); };
 
 /** Version 2 of the saved navigation: the Overview, Executive and Recap pages became Home. A capture or a briefing the Executive
- *  route pointed at stays on the Home route. */
+ *  route pointed at stays on the Home route. Version 3: the Architecture page became Home's Architecture tab (its system is kept)
+ *  and the Changes page was removed (CON-4, CON-17); a saved route to a removed page would have no page to show. */
 export function migrateNav(persisted: unknown): unknown {
-  const saved = persisted as { route?: { page?: string; capture?: string; briefing?: string } } | null;
+  const saved = persisted as { route?: { page?: string; capture?: string; briefing?: string; system?: string } } | null;
   const route = saved?.route;
-  if (!route || (route.page !== "overview" && route.page !== "executive" && route.page !== "recap")) return persisted;
-  const home: Route = { page: "home", ...(route.page === "executive" && route.capture ? { capture: route.capture } : {}), ...(route.page === "executive" && route.briefing ? { briefing: route.briefing } : {}) };
+  if (!route) return persisted;
+  let home: Route;
+  if (route.page === "overview" || route.page === "executive" || route.page === "recap") {
+    home = { page: "home", ...(route.page === "executive" && route.capture ? { capture: route.capture } : {}), ...(route.page === "executive" && route.briefing ? { briefing: route.briefing } : {}) };
+  } else if (route.page === "architecture") {
+    home = { page: "home", tab: "architecture", ...(route.system ? { system: route.system } : {}) };
+  } else if (route.page === "changes") {
+    home = { page: "home" };
+  } else return persisted;
   return { ...saved, route: home };
 }
 
@@ -96,16 +103,17 @@ export const useApp = create<AppState>()(persist((set) => ({
   },
 }), {
   name: "hivemind.nav",
-  version: 2,
+  version: 3,
   storage: createJSONStorage(() => safeStorage),
-  migrate: (persisted, version) => (version < 2 ? migrateNav(persisted) : persisted) as AppState,
+  migrate: (persisted, version) => (version < 3 ? migrateNav(persisted) : persisted) as AppState,
   partialize: (s) => ({ project: s.project, domain: s.domain, route: s.route }),
 }));
 
 const app = () => useApp.getState();
 /** Pick a project (null for all memory) and show its Home. */
 export const openProject = (slug: string | null) => whenFree(() => { app().setProject(slug); app().go({ page: "home" }, { force: true }); });
-export const openSystem = (slug: string) => app().go({ page: "architecture", system: slug });
+/** Show a system on Home's Architecture tab, whichever project is picked. */
+export const openSystem = (slug: string) => app().go({ page: "home", tab: "architecture", system: slug });
 export const openSession = (session: string) => app().go({ page: "agents", session });
 /** Show the Review page, on one session's edits (and one file) when given. */
 export const openReview = (session?: string, file?: string) => app().go({ page: "review", session, file });
@@ -113,4 +121,3 @@ export const openSkills = (skill?: string) => app().go({ page: "skills", skill }
 export const openWorkflows = (to: { tab?: "runs" | "automations"; run?: string; automation?: string } = {}) =>
   app().go({ page: "workflows", ...to, tab: to.automation ? "automations" : to.run ? "runs" : to.tab }, { replace: app().route.page === "workflows" });
 export const startSession = () => app().go({ page: "agents", view: "new" });
-export const openChange = (id: number) => app().go({ page: "changes", id, view: "detail" });

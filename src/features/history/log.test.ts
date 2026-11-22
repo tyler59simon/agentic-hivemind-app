@@ -14,7 +14,7 @@ describe("log view", () => {
 
   it("picks what a row opens", () => {
     expect(targetOf(row())).toEqual({ kind: "note", ref: "demo:abc12345" });
-    expect(targetOf(row({ event: "change_update", ref: "CHG-014" }))).toEqual({ kind: "change", id: 14 });
+    expect(targetOf(row({ event: "change_update", ref: "CHG-014" }))).toBeNull(); // a row of the removed Changes registry
     expect(targetOf(row({ event: "session", ref: "demo:abc12345" }))).toBeNull();
     expect(targetOf(row({ ref: "" }))).toBeNull();
   });

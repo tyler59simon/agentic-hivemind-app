@@ -14,8 +14,8 @@ export const useProjectsEnabled = () => useConnection((s) => s.api >= 2 && s.com
 /** The systems registry needs an LM that has the `systems` command. */
 export const useSystemsEnabled = () => useConnection((s) => s.commands.includes("systems"));
 
-/** Numbered changes need an LM that has the `changes` command. */
-export const useChangesEnabled = () => useConnection((s) => s.commands.includes("changes"));
+/** A system's `project` field needs the `systems.project` capability (the systems command alone is not enough). */
+export const useSystemProjectEnabled = () => useConnection((s) => (s.capabilities?.systems?.project ?? 0) >= 1 && s.commands.includes("systems"));
 
 /** Custom note types need an LM that has the `types` command. */
 export const useNoteTypesEnabled = () => useConnection((s) => s.commands.includes("types"));
@@ -73,5 +73,5 @@ export const usePinEnabled = () => useConnection((s) => (s.capabilities?.pin ?? 
 /** Making a note a rule needs the `rule` capability. */
 export const useRuleEnabled = () => useConnection((s) => (s.capabilities?.rule ?? 0) >= 1);
 
-/** Hivemind writes archive, project, system, change and taxonomy edits as direct commands, which an older Living Memory only has as plans. */
+/** Hivemind writes archive, project, system and taxonomy edits as direct commands, which an older Living Memory only has as plans. */
 export const needsLmUpdate = (v: { capabilities?: Capabilities }) => (v.capabilities?.direct_writes ?? 0) < 1;

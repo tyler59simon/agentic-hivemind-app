@@ -220,7 +220,7 @@ mod tests {
     /// An interactive session that was in the middle of a turn.
     fn interactive(n: u64, status: Status, worktree: Option<Worktree>) -> SessionInfo {
         SessionInfo {
-            task: AgentTask::Work { project: "paystream".into(), repo: "C:/demo/repos/paystream".into(), branch: None, change: None },
+            task: AgentTask::Work { project: "paystream".into(), repo: "C:/demo/repos/paystream".into(), branch: None },
             mode: Mode::Interactive,
             policy: PolicyMode::Ask,
             project: Some("paystream".into()),
@@ -252,7 +252,7 @@ mod tests {
         let work = SessionInfo {
             id: "0f9e8d7c-1111-4222-8333-444455556666".into(),
             cli_version: Some("2.1.322".into()),
-            task: AgentTask::Work { project: "paystream".into(), repo: "C:/demo/repos/paystream".into(), branch: Some("main".into()), change: None },
+            task: AgentTask::Work { project: "paystream".into(), repo: "C:/demo/repos/paystream".into(), branch: Some("main".into()) },
             title: "Add a retry ceiling flag to the replay tool".into(),
             workspace: vec![path.into()],
             status: Status::Idle,

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Page } from "../store";
-import { useHidden } from "./hidden";
+import { migrateHidden, useHidden } from "./hidden";
 
 const hidden = () => useHidden.getState().hidden;
 const setShown = (page: Page, shown: boolean) => useHidden.getState().setShown(page, shown);
@@ -19,6 +19,12 @@ describe("hidden sidebar sections", () => {
     setShown("wiki", false);
     setShown("wiki", false);
     expect(hidden()).toEqual(["wiki"]);
+  });
+
+  it("drops a saved hide of the removed Architecture and Changes sections", () => {
+    expect(migrateHidden({ hidden: ["architecture", "wiki", "changes"] })).toEqual({ hidden: ["wiki"] });
+    expect(migrateHidden(null)).toBeNull();
+    expect(useHidden.persist.getOptions().version).toBe(2);
   });
 
   it("never hides Home", () => {

@@ -1,7 +1,6 @@
-import { accessLabel as cliAccessLabel, engineOf, type SessionInfo } from "../../lib/agent";
+import { accessLabel as cliAccessLabel, engineName, engineOf, type SessionInfo } from "../../lib/agent";
 import { OTHER_FOLDERS } from "../../lib/folders";
 import { POLICIES, repoName } from "../agents/session";
-import { engineName } from "../changes/changes";
 
 /** "Other folders" lists the sessions that belong to no project (the ones in a picked folder). */
 const inProject = (s: SessionInfo, project: string | null) => project === null || (project === OTHER_FOLDERS ? s.project === null : s.project === project);

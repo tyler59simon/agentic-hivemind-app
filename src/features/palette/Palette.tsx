@@ -1,6 +1,6 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { useChangesEnabled, useProjectsEnabled, useSystemsEnabled, useWikiEnabled } from "../../lib/connection";
+import { useProjectsEnabled, useSystemsEnabled, useWikiEnabled } from "../../lib/connection";
 import { domains, list } from "../../lib/lm";
 import { folderOf, notebooksQuery, pageTitle, treeQuery } from "../../lib/notebooks";
 import { pagesQuery } from "../../lib/noteindex";
@@ -23,7 +23,6 @@ import { LINE_TOOLS } from "../power/lineTools";
 import { playMacro, toggleRecording, useRecorder, type Target } from "../power/macros";
 import { toolRunner } from "../power/PowerBar";
 import { editorOf } from "../power/registry";
-import { useChangeIntent } from "../changes/intent";
 import { useProjectIntent } from "../projects/intent";
 import { projectsQuery } from "../projects/useProject";
 import { systemsQuery, useSystemIntent } from "../systems/useSystem";
@@ -46,7 +45,6 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
   const projectsOn = useProjectsEnabled();
   const registry = useQuery({ ...projectsQuery(), enabled: projectsOn && app.palette === "commands" });
   const systemsOn = useSystemsEnabled();
-  const changesOn = useChangesEnabled();
   const wikiOn = useWikiEnabled();
   const hidden = useHidden((s) => s.hidden);
   const systems = useQuery({ ...systemsQuery(), enabled: systemsOn && app.palette === "commands" });
@@ -122,8 +120,6 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "tags", label: "Manage tags", run: page({ page: "memory", view: "tags" }) },
       { key: "review", label: "Review", section: "review" as Page, run: page({ page: "review" }) },
       ...(wikiOn ? [{ key: "wiki", label: "Wiki", section: "wiki" as Page, run: page({ page: "wiki" }) }] : []),
-      { key: "changes", label: "Changes", section: "changes" as Page, run: page({ page: "changes" }) },
-      ...(changesOn ? [{ key: "new-change", label: "Start a change…", run: () => { close(); useChangeIntent.getState().open(); } }] : []),
       ...(projectsOn ? [
         { key: "new-project", label: "New project…", run: () => { close(); useProjectIntent.getState().openWizard(); } },
         { key: "new-session", label: "Start an agent session", run: page({ page: "agents", view: "new" }) },
@@ -134,8 +130,8 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
         })),
       ] : []),
       ...(systemsOn ? [
-        { key: "architecture", label: "Architecture", section: "architecture" as Page, run: page({ page: "architecture" }) },
-        { key: "new-system", label: "New system…", run: () => { close(); app.go({ page: "architecture" }); useSystemIntent.getState().openWizard(); } },
+        { key: "architecture", label: "Architecture", run: page({ page: "home", tab: "architecture" }) },
+        { key: "new-system", label: "New system…", run: () => { close(); app.go({ page: "home", tab: "architecture" }); useSystemIntent.getState().openWizard(); } },
         { key: "sessions", label: "Agent Workspace (sessions)", section: "agents" as Page, run: page({ page: "agents" }) },
         ...(systems.data?.systems ?? []).filter((s) => s.status !== "retired").map((s) => ({
           key: "system:" + s.slug, label: `Open system: ${s.name}`, detail: s.tag,
@@ -158,7 +154,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       })),
     ];
     return all.filter((e) => !e.section || !hidden.includes(e.section));
-  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, changesOn, wikiOn, hidden, client, onSettings, onReconnect, notebooks.data, trees, indexed.data, addNotebook, recent.data]);
+  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, wikiOn, hidden, client, onSettings, onReconnect, notebooks.data, trees, indexed.data, addNotebook, recent.data]);
 
   const shown = useMemo(() => {
     const best = entries

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import fixtures from "./__fixtures__/note-format.json";
 import {
-  actionItems, addEvidence, allowsActions, builtinDef, defaultTags, evidenceItems, formatBody, outline, parts, rewriteWikilinks, sectionKey, sections,
-  setEvidence, stepParts, stripTitle, template, TEMPLATE_PROMPTS, wikilinks,
+  actionItems, allowsActions, builtinDef, defaultTags, formatBody, outline, parts, rewriteWikilinks, sectionKey, sections,
+  stripTitle, template, TEMPLATE_PROMPTS, wikilinks,
 } from "./note";
 import type { NoteTypeDef } from "./lm";
 
@@ -181,63 +181,13 @@ describe("new notes", () => {
   });
 });
 
-describe("acceptance evidence", () => {
-  const callout = "> **Important:** Mind the replay window.";
+describe("action items", () => {
   const body = [
-    "Summary.", "", callout, "", "## Acceptance evidence", "- [ ] Replay produces no duplicate alert", "- [x] Suppression survives a restart", "",
+    "Summary.", "", "> **Important:** Mind the replay window.", "",
     "## Details", "- Detail", "", "## Action items", "- [ ] Define a durable event key", "- [x] Add the dedupe store", "",
   ].join("\n");
 
   it("lists the section's task lines and nothing else", () => {
-    expect(evidenceItems(body).map((e) => [e.index, e.done, e.text])).toEqual([
-      [1, false, "Replay produces no duplicate alert"], [2, true, "Suppression survives a restart"],
-    ]);
-    expect(actionItems(body).map((a) => a.text)).toEqual(["Define a durable event key", "Add the dedupe store"]);
-  });
-
-  it("matches the heading on its letters", () => {
-    expect(evidenceItems(body.replace("## Acceptance evidence", "## ✅ ACCEPTANCE EVIDENCE"))).toHaveLength(2);
-    expect(evidenceItems(body.replace("## Acceptance evidence", "## Evidence"))).toEqual([]);
-  });
-
-  it("ignores a look-alike heading inside a code fence", () => {
-    expect(evidenceItems("Summary.\n\n```\n## Acceptance evidence\n- [ ] fake\n```\n")).toEqual([]);
-  });
-
-  it("ticks one line in place", () => {
-    const ticked = setEvidence(body, 1, true).split("\n");
-    const before = body.split("\n");
-    expect(ticked.length).toBe(before.length);
-    expect(ticked.filter((l, i) => l !== before[i])).toEqual(["- [x] Replay produces no duplicate alert"]);
-    expect(setEvidence(setEvidence(body, 1, true), 1, false)).toBe(body.replace(/\r\n/g, "\n"));
-    expect(() => setEvidence(body, 3, true)).toThrow(RangeError);
-  });
-
-  it("adds to an existing section", () => {
-    const next = addEvidence(body, " Third\nitem ");
-    const items = evidenceItems(next);
-    expect(items).toHaveLength(3);
-    expect(items[2]).toMatchObject({ done: false, text: "Third item" });
-    expect(next.indexOf("## Details")).toBeGreaterThan(next.indexOf("- [ ] Third item"));
-  });
-
-  it("creates the section where LM's set_section would: before Details, Links or Action items, else at the end", () => {
-    const bare = ["Summary.", "", callout, "", "## Why", "Because.", "", "## Links", "- [[a]]", "", "## Action items", "- [ ] One"].join("\n");
-    const next = addEvidence(bare, "X");
-    const lines = next.split("\n");
-    expect(lines.indexOf("## Acceptance evidence")).toBeGreaterThan(lines.indexOf("Because."));
-    expect(lines.indexOf("## Acceptance evidence")).toBeLessThan(lines.indexOf("## Links"));
-    expect(parts(next).map((p) => p.key ?? p.heading)).toEqual(["summary", "important", "Why", "Acceptance evidence", "links", "actions"]);
-    // A legacy body with the callout last: the section still goes before Action items.
-    const legacy = ["## 📌 Executive Summary", "S", "", "## 🟩 Action Items", "- [ ] One", "", "> ℹ️ **Important Note:** careful"].join("\n");
-    const old = addEvidence(legacy, "X").split("\n");
-    expect(old.indexOf("## Acceptance evidence")).toBeLessThan(old.indexOf("## 🟩 Action Items"));
-    expect(addEvidence("Summary.\n", "X").endsWith("## Acceptance evidence\n- [ ] X")).toBe(true);
-  });
-
-  it("splits a step at the first spaced em dash and unwraps links", () => {
-    expect(stepParts("Define a durable event key — Establish the event ID.")).toEqual({ title: "Define a durable event key", detail: "Establish the event ID." });
-    expect(stepParts("Dedupe — decided in [[Use event ID as the idempotency key]]").detail).toBe("decided in Use event ID as the idempotency key");
-    expect(stepParts("Ship [[Plan|the plan]]")).toEqual({ title: "Ship the plan", detail: "" });
+    expect(actionItems(body).map((a) => [a.index, a.done, a.text])).toEqual([[1, false, "Define a durable event key"], [2, true, "Add the dedupe store"]]);
   });
 });

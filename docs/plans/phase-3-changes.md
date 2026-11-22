@@ -1,5 +1,7 @@
 # Phase 3: Changes
 
+Retired by CON-17 (2026-11-22); kept as design history.
+
 Read [README.md](README.md) first. This document goes deeper on Phase 3 and does not repeat the README. Where the two disagree on a shared name or shape, the README wins; say so in your final report.
 
 Written on 2026-11-10 against:

@@ -43,6 +43,8 @@ export function passportBody({ purpose, boundaries, operations, guidance }: Pass
 export interface SystemForm {
   name: string; purpose: string; owners: string; capabilities: string; repos: string;
   dependsOn: string[]; architecture: string; status: SystemStatus;
+  /** The project slug, or "" for none. Sent only when the connected Living Memory has the `systems.project` capability. */
+  project: string;
 }
 
 /** Problems LM would reject, in plain words (empty when the form is ready for a plan). `slug` is checked only on create. */
@@ -89,13 +91,14 @@ export function formFields(form: SystemForm) {
 
 export const formOf = (system: System): SystemForm => ({
   name: system.name, purpose: system.description ?? "", owners: system.owners.join(", "), capabilities: system.capabilities.join("\n"),
-  repos: system.repos.join("\n"), dependsOn: system.depends_on, architecture: system.architecture ?? "", status: system.status,
+  repos: system.repos.join("\n"), dependsOn: system.depends_on, architecture: system.architecture ?? "", status: system.status, project: system.project ?? "",
 });
 
 const same = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
 
-/** A SystemUpdate with only what changed (plus the slug), or null when nothing did. */
-export function changedSystem(before: System, form: SystemForm): SystemUpdate | null {
+/** A SystemUpdate with only what changed (plus the slug), or null when nothing did. `withProject` is the `systems.project`
+ *  capability: without it the project field is neither shown nor sent. */
+export function changedSystem(before: System, form: SystemForm, withProject = false): SystemUpdate | null {
   const next = formFields(form);
   const update: SystemUpdate = { slug: before.slug };
   if (next.name !== before.name) update.name = next.name;
@@ -106,5 +109,6 @@ export function changedSystem(before: System, form: SystemForm): SystemUpdate | 
   if (!same([...next.depends_on].sort(), [...before.depends_on].sort())) update.depends_on = next.depends_on;
   if (next.architecture !== (before.architecture ?? null)) update.architecture = next.architecture;
   if (form.status !== before.status) update.status = form.status;
+  if (withProject && (form.project || null) !== (before.project ?? null)) update.project = form.project || null;
   return Object.keys(update).length > 1 ? update : null;
 }

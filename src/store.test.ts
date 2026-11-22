@@ -45,7 +45,8 @@ describe("navigation", () => {
     openProject("paystream");
     expect([app().project, app().route]).toEqual(["paystream", { page: "home" }]);
     openSystem("ingestion");
-    expect(app().route).toEqual({ page: "architecture", system: "ingestion" });
+    expect(app().route).toEqual({ page: "home", tab: "architecture", system: "ingestion" });
+    expect(app().project).toBe("paystream");
     openSession("s1");
     expect(app().route).toEqual({ page: "agents", session: "s1" });
     openProject(null);
@@ -122,10 +123,10 @@ describe("navigation", () => {
 });
 
 describe("saved navigation", () => {
-  const migrate = (route: object) => useApp.persist.getOptions().migrate!({ project: "pay", domain: "demo", route }, 1);
+  const migrate = (route: object, version = 1) => useApp.persist.getOptions().migrate!({ project: "pay", domain: "demo", route }, version);
 
-  it("is version 2, and moves the Overview, Executive and Recap pages to Home", () => {
-    expect(useApp.persist.getOptions().version).toBe(2);
+  it("is version 3, and moves the Overview, Executive and Recap pages to Home", () => {
+    expect(useApp.persist.getOptions().version).toBe(3);
     for (const page of ["overview", "executive", "recap"]) expect(migrate({ page })).toEqual({ project: "pay", domain: "demo", route: { page: "home" } });
     expect(migrate({ page: "overview", view: "work" })).toMatchObject({ route: { page: "home" } });
   });
@@ -136,5 +137,20 @@ describe("saved navigation", () => {
     expect(migrate({ page: "memory", view: "graph" })).toMatchObject({ route: { page: "memory", view: "graph" } });
     expect(migrateNav(null)).toBeNull();
     expect(migrateNav({ project: "pay" })).toEqual({ project: "pay" });
+  });
+
+  // CON-4, CON-17: a saved route to a removed page would make the shell look up a page that no longer exists.
+  it("moves a saved Architecture route to Home's Architecture tab, keeping its system and the picked project", () => {
+    expect(migrate({ page: "architecture", system: "ingestion" }, 2)).toEqual({ project: "pay", domain: "demo", route: { page: "home", tab: "architecture", system: "ingestion" } });
+    expect(migrate({ page: "architecture" }, 2)).toMatchObject({ route: { page: "home", tab: "architecture" } });
+    expect(migrate({ page: "architecture" }, 1)).toEqual({ project: "pay", domain: "demo", route: { page: "home", tab: "architecture" } });
+  });
+
+  it("moves a saved Changes route to Home", () => {
+    expect(migrate({ page: "changes", id: 14, view: "detail" }, 2)).toEqual({ project: "pay", domain: "demo", route: { page: "home" } });
+  });
+
+  it("does not migrate a version 3 save", () => {
+    expect(migrate({ page: "home", tab: "architecture", system: "s" }, 3)).toMatchObject({ route: { page: "home", tab: "architecture", system: "s" } });
   });
 });

@@ -59,6 +59,8 @@ const view = (argv: string[]) => [...argv, "--actor", "viewer"];
 export interface Capabilities {
   direct_writes?: number; history?: number; restore?: number; pin?: number; rule?: number; maintenance?: { version: number; actions: string[] };
   wiki_agent?: { version: number }; note_types?: number;
+  /** 1: a system has a `project` field. */
+  systems?: { project?: number };
   /** Notebook pages (NS-2A, NS-2B). */
   docs?: { version: number; max_page_bytes: number; max_asset_bytes: number; notebook_only_domains?: boolean; search?: boolean; folder_policy?: boolean | number; accept_edited?: boolean };
 }
@@ -252,10 +254,9 @@ export const check = (ref: string, index: number, done: boolean) =>
 export const confirm = (ref: string) =>
   run<WriteResult & { confirmed?: string[]; review_by?: string }>(["confirm", ref, "--domain", domainOf(ref)]);
 
-/** Replace (or add) the detail bullet with this label. LM ignores stdin when a section flag is given,
- *  so the expected revision goes in argv and no payload is sent. */
-export const setDetail = (ref: string, text: string, expectedRevision?: string) =>
-  run<WriteResult>(["update", ref, "--domain", domainOf(ref), "--set-detail", text, ...(expectedRevision ? ["--expected-revision", expectedRevision] : [])]);
+/** Append one open Action Item; the rest of the body is kept. */
+export const addAction = (ref: string, text: string) =>
+  run<WriteResult>(["update", ref, "--domain", domainOf(ref), "--add-action", text]);
 
 // ---- Direct writes: one journaled step, no plan. The receipt names the operation, so it can be undone. ----
 
@@ -388,11 +389,11 @@ export function timelineArgs(o: TimelineOptions): string[] {
 }
 export const timeline = (o: TimelineOptions) => run<TimelineResult>(timelineArgs(o));
 
-/** One line of the `log` command: a journaled note event, a change event or an agent session. */
+/** One line of the `log` command: a journaled note event or an agent session. */
 export interface LogRow {
   time: string; event: string; ref: string; title: string; type: string; domain: string; projects: string[]; op?: string;
   detail?: string;
-  /** Note and change rows: what changed, and who did it (maintenance, auto_resolve, obsidian, undo, plan, agent:HARNESS or command). */
+  /** Note rows: what changed, and who did it (maintenance, auto_resolve, obsidian, undo, plan, agent:HARNESS or command). */
   summary?: string; actor?: string;
   /** Session rows only. */
   harness?: string; notes?: string[]; /** How many files the session changed (a count, not paths). */ files?: number;
@@ -421,6 +422,8 @@ export type SystemStatus = "active" | "deprecated" | "retired";
 export interface System {
   slug: string; name: string; status: SystemStatus; description: string; owners: string[]; capabilities: string[];
   repos: string[]; depends_on: string[]; architecture: string | null; passport: string | null;
+  /** The project slug the system belongs to; null or absent when none is set. */
+  project?: string | null;
   created: string; updated: string; tag: string; tag_registered: boolean; dependents: string[];
 }
 export interface SystemsResult { ok: boolean; systems: System[]; warnings: string[] }
@@ -429,61 +432,14 @@ export const systems = (o: { status?: SystemStatus | "any" } = {}) => run<System
 
 export interface SystemCreate {
   slug: string; name: string; description?: string; owners?: string[]; capabilities?: string[]; repos?: string[];
-  depends_on?: string[]; architecture?: string | null; passport: { domain?: string; title?: string; body: string };
+  depends_on?: string[]; architecture?: string | null; project?: string | null; passport: { domain?: string; title?: string; body: string };
 }
 export interface SystemUpdate {
   slug: string; name?: string; description?: string; status?: SystemStatus; owners?: string[]; capabilities?: string[];
-  repos?: string[]; depends_on?: string[]; architecture?: string | null; passport?: string;
+  repos?: string[]; depends_on?: string[]; architecture?: string | null; project?: string | null; passport?: string;
 }
 export const writeSystem = (action: "create" | "update" | "retire", payload: SystemCreate | SystemUpdate | { slug: string }) =>
   direct(["system", action], payload);
-
-// ---- Changes (an LM that has the `changes` command). ----
-
-export const STAGES = ["explore", "design", "implement", "validate"] as const;
-export type ChangeStage = (typeof STAGES)[number];
-export type ChangeStatus = "active" | "done" | "cancelled";
-
-/** One row of `changes`: the registry entry plus `display`, `brief_status` and `actions`. */
-export interface Change {
-  id: number; display: string; title: string; project: string;
-  /** `domain:id` of the brief where it lives now. */
-  brief: string;
-  stage: ChangeStage; status: ChangeStatus;
-  repo: string | null; branch: string | null; system: string | null; element: string | null;
-  created: string; updated: string;
-  /** The brief note's status, whatever it is: an archived or superseded note still resolves and reports that status.
-   *  Null only when no note with the brief's id exists any more (deleted, or the stored ref is broken). */
-  brief_status: Status | null;
-  actions: { open: number; done: number };
-}
-export interface ChangesResult { ok: boolean; changes: Change[]; warnings: string[] }
-
-export interface ChangeCreate {
-  project: string; title: string;
-  /** A new brief to write, or the ref of an existing active plan note to adopt. */
-  brief: { domain?: string; title?: string; body: string } | string;
-  stage?: ChangeStage; repo?: string | null; branch?: string | null; system?: string | null; element?: string | null;
-}
-export interface ChangeUpdate {
-  id: number | string; title?: string; stage?: ChangeStage; status?: ChangeStatus;
-  repo?: string | null; branch?: string | null; system?: string | null; element?: string | null;
-}
-export interface ChangeClose { id: number | string; status?: "done" | "cancelled" }
-export interface ChangeSummary {
-  id: number; display: string; title: string; fields: string[]; files: number;
-  brief?: string; adopted?: boolean; brief_action?: "resolve" | "reopen" | null;
-}
-export type ChangeReceipt = Receipt & { summary: ChangeSummary };
-
-export const changesArgs = (o: { status?: ChangeStatus | "any"; project?: string } = {}) =>
-  view(["changes", ...(o.status ? ["--status", o.status] : []), ...(o.project ? ["--project", o.project] : [])]);
-export const changes = (o: { status?: ChangeStatus | "any"; project?: string } = {}) => run<ChangesResult>(changesArgs(o));
-export const writeChange = (action: "create" | "update" | "close", payload: ChangeCreate | ChangeUpdate | ChangeClose) =>
-  direct(["change", action], payload) as Promise<ChangeReceipt>;
-/** Append one open Action Item; the rest of the body is kept. */
-export const addAction = (ref: string, text: string) =>
-  run<WriteResult>(["update", ref, "--domain", domainOf(ref), "--add-action", text]);
 
 // ---- Note views (an LM that has the `views` command): a note kept as an HTML dashboard. ----
 

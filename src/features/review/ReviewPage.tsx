@@ -2,7 +2,7 @@ import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleCheck, FileText, Layers, Lightbulb, Network, Sparkles } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { reviewFiles, reviewRefresh, sessionsQuery, type FileChange, type SessionInfo } from "../../lib/agent";
-import { useChangesEnabled, useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
+import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { systemStaleness, type Staleness } from "../../lib/architecture";
 import { classify } from "../../lib/errors";
 import { list as listNotes, meta, proposalsList, review, writeSystem, type MemoryProposal, type ReviewKind, type ReviewRow, type System, type SystemUpdate } from "../../lib/lm";
@@ -13,7 +13,6 @@ import { openSession, openSystem, useApp } from "../../store";
 import { sections } from "../../lib/note";
 import { Markdown } from "../../ui/Markdown";
 import { ArrowLink, PageHeader, Tabs } from "../../ui/Page";
-import { changesQuery } from "../changes/useChanges";
 import { DirectDialog } from "../plans/DirectDialog";
 import { ProposedFields } from "../systems/ProposedFields";
 import { systemsForProject } from "../projects/scope";
@@ -22,7 +21,7 @@ import { systemsQuery, useSystemProposals } from "../systems/useSystem";
 import { noteQuery } from "../viewer/NoteView";
 import { ReviewQueue } from "../work/ReviewQueue";
 import { FilePane, ReviewBar, SessionPane } from "./CodeReview";
-import { afterDecision, baseName, changeOf, fileKey, reviewLabel, reviewSessions, reviewVersion, sessionHeading, step } from "./review";
+import { afterDecision, baseName, fileKey, reviewLabel, reviewSessions, reviewVersion, step } from "./review";
 import { candidates, CANDIDATES, unconfirmed } from "./memory";
 import { countLine, kindCounts } from "./worklist";
 
@@ -66,7 +65,6 @@ export function ReviewPage() {
   const routed = route.page === "review" ? route : { page: "review" as const };
   const projectsOn = useProjectsEnabled();
   const systemsOn = useSystemsEnabled();
-  const changesOn = useChangesEnabled();
   const { project } = useCurrentProject();
 
   // Code: the sessions with edits to review, and each one's files.
@@ -78,8 +76,6 @@ export function ReviewPage() {
       queryKey: ["agent", "review-files", g.id, reviewVersion(g)], queryFn: () => reviewFiles(g.id), staleTime: 0, retry: false,
     })),
   });
-  const changes = useQuery({ ...changesQuery(), enabled: changesOn && groups.some((g) => changeOf(g) !== undefined) });
-  const displayOf = (info: SessionInfo) => changes.data?.changes.find((c) => c.id === changeOf(info))?.display;
 
   // Memory and Architecture.
   const mine = useProject(project?.slug).due;
@@ -207,7 +203,6 @@ export function ReviewPage() {
   const memoryRows = showMemory && projectsOn;
   const info = selected && (selected.type === "file" || selected.type === "session") ? selected.info : null;
   const infoFiles = info ? lists[groups.findIndex((g) => g.id === info.id)]?.data?.length ?? info.filesChanged?.files ?? 0 : 0;
-  const changeTitle = info && changes.data?.changes.find((c) => c.id === changeOf(info))?.title;
 
   return (
     <div className="page fill-page">
@@ -231,7 +226,7 @@ export function ReviewPage() {
                 return (
                   <Fragment key={g.id}>
                     <h2 className="review-group">
-                      {sessionHeading(g, displayOf(g))}
+                      {g.title}
                       {g.status === "running" || g.status === "waiting" ? <span className="status-chip running">Working…</span>
                         : label?.tone === "busy" ? <span className="status-chip busy">{label.text}</span> : null}
                     </h2>
@@ -296,7 +291,7 @@ export function ReviewPage() {
                 </div>
               ) : <div className="review-pane" />}
           </div>
-          {info && <ReviewBar key={info.id} info={info} files={infoFiles} title={changeTitle ?? info.title}
+          {info && <ReviewBar key={info.id} info={info} files={infoFiles} title={info.title}
             onDecided={() => { setPicked(null); go(afterDecision(groups, info.id), { replace: true }); }} />}
           </>
         )}

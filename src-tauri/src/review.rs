@@ -554,7 +554,7 @@ mod tests {
             id: id(n),
             adapter: "claude-code".into(),
             cli_version: None,
-            task: AgentTask::Work { project: "paystream".into(), repo: "repo".into(), branch: None, change: None },
+            task: AgentTask::Work { project: "paystream".into(), repo: "repo".into(), branch: None },
             title: "Fix the bug".into(),
             workspace: vec![],
             status: Status::Idle,
@@ -1094,7 +1094,7 @@ mod tests {
     }
 
     fn checkout_session(n: u32, repo: &Path, direct: Direct) -> SessionInfo {
-        let task = AgentTask::Work { project: "paystream".into(), repo: repo.display().to_string(), branch: None, change: None };
+        let task = AgentTask::Work { project: "paystream".into(), repo: repo.display().to_string(), branch: None };
         SessionInfo { task, direct: Some(direct), status: Status::Ended, ..session(n, None) }
     }
 

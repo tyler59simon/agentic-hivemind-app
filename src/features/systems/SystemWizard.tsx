@@ -1,10 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { domains, systems, writeSystem, type System, type SystemStatus } from "../../lib/lm";
+import { useSystemProjectEnabled } from "../../lib/connection";
+import { domains, projects as listProjects, systems, writeSystem, type Project, type System, type SystemStatus } from "../../lib/lm";
 import { Modal } from "../../ui/Modal";
 import { useWorkspace } from "../../workspace/store";
 import { useDirect } from "../plans/DirectDialog";
 import { defaultCharterDomain, MAX_DESCRIPTION, parseRepos, slugify } from "../projects/wizard";
+import { useCurrentProject } from "../projects/useProject";
 import { changedSystem, formFields, formOf, passportBody, validateSystem, type SystemForm } from "./wizard";
 
 export interface SystemWizardProps {
@@ -21,13 +23,30 @@ export function SystemWizard(props: SystemWizardProps) {
   return props.mode === "edit" && props.system ? <EditSystem {...props} system={props.system} /> : <CreateSystem {...props} />;
 }
 
-const EMPTY: SystemForm = { name: "", purpose: "", owners: "", capabilities: "", repos: "", dependsOn: [], architecture: "", status: "active" };
+const EMPTY: SystemForm = { name: "", purpose: "", owners: "", capabilities: "", repos: "", dependsOn: [], architecture: "", status: "active", project: "" };
+
+/** The projects a system can belong to, or undefined when the connected Living Memory has no `project` field on systems. */
+function useProjectChoices(): Project[] | undefined {
+  const on = useSystemProjectEnabled();
+  // Keyed under ["projects"] so invalidating that refreshes it; every status, since a paused project is a fine home.
+  const registry = useQuery({ queryKey: ["projects", "any"], queryFn: () => listProjects({ status: "any" }), enabled: on });
+  return on ? registry.data?.projects ?? [] : undefined;
+}
 
 /** The registry fields both forms share. */
-function Fields({ form, set, others }: { form: SystemForm; set: (patch: Partial<SystemForm>) => void; others: System[] }) {
+function Fields({ form, set, others, projects }: { form: SystemForm; set: (patch: Partial<SystemForm>) => void; others: System[]; projects?: Project[] }) {
   const toggle = (slug: string, on: boolean) => set({ dependsOn: on ? [...form.dependsOn, slug] : form.dependsOn.filter((s) => s !== slug) });
   return (
     <>
+      {projects && (
+        <label className="field"><span>Project</span>
+          <select value={form.project} onChange={(e) => set({ project: e.target.value })}>
+            <option value="">None</option>
+            {/* An archived project stays listed while a system still names it. */}
+            {projects.filter((p) => p.status !== "archived" || p.slug === form.project).map((p) => <option key={p.slug} value={p.slug}>{p.name}</option>)}
+          </select>
+          <span className="muted small">Systems with a project show on its Home. Without one, a system matches by repository.</span></label>
+      )}
       <label className="field"><span>Purpose</span>
         <textarea rows={2} value={form.purpose} maxLength={MAX_DESCRIPTION} placeholder="What is this system for? One or two sentences." onChange={(e) => set({ purpose: e.target.value })} /></label>
       <label className="field"><span>Capabilities</span>
@@ -60,7 +79,9 @@ function CreateSystem({ onClose, onDone }: SystemWizardProps) {
   const known = useQuery({ queryKey: ["domains"], queryFn: domains });
   // Every system, retired included, since a slug stays taken. Keyed under ["systems"] so invalidating that refreshes it.
   const existing = useQuery({ queryKey: ["systems", "any"], queryFn: () => systems({ status: "any" }) });
-  const [form, setForm] = useState<SystemForm>(EMPTY);
+  const projects = useProjectChoices();
+  const picked = useCurrentProject().project?.slug ?? "";
+  const [form, setForm] = useState<SystemForm>({ ...EMPTY, project: picked });
   const [slug, setSlug] = useState("");
   const [slugTouched, setSlugTouched] = useState(false);
   const [domain, setDomain] = useState<string | null>(null); // null: follow the detected default
@@ -80,6 +101,7 @@ function CreateSystem({ onClose, onDone }: SystemWizardProps) {
   const payload = () => ({
     slug: effectiveSlug,
     ...formFields(form),
+    ...(projects && form.project ? { project: form.project } : {}),
     passport: { domain: passportDomain, body: passportBody({ purpose: form.purpose, boundaries, operations, guidance }) },
   });
 
@@ -97,7 +119,7 @@ function CreateSystem({ onClose, onDone }: SystemWizardProps) {
         <label className="field"><span>Slug</span>
           <input value={effectiveSlug} onChange={(e) => { setSlugTouched(true); setSlug(e.target.value); }} />
           <span className="muted small">Tags the notes of the system as <code>system/{effectiveSlug || "…"}</code>.</span></label>
-        <Fields form={form} set={(patch) => setForm({ ...form, ...patch })} others={all.filter((s) => s.status !== "retired")} />
+        <Fields form={form} set={(patch) => setForm({ ...form, ...patch })} others={all.filter((s) => s.status !== "retired")} projects={projects} />
         <h3>Passport note</h3>
         <label className="field"><span>Domain</span>
           <select value={passportDomain} onChange={(e) => setDomain(e.target.value)}>
@@ -126,10 +148,11 @@ function EditSystem({ system, onClose, onDone }: SystemWizardProps & { system: S
   const client = useQueryClient();
   const existing = useQuery({ queryKey: ["systems", "any"], queryFn: () => systems({ status: "any" }) });
   const [form, setForm] = useState<SystemForm>(() => formOf(system));
+  const projects = useProjectChoices();
   const { busy, error, go } = useDirect();
 
   const problems = validateSystem(form);
-  const change = changedSystem(system, form);
+  const change = changedSystem(system, form, !!projects);
   // A dependency that was since retired stays listed so it can be unticked.
   const others = (existing.data?.systems ?? []).filter((s) => s.slug !== system.slug && (s.status !== "retired" || form.dependsOn.includes(s.slug)));
 
@@ -144,7 +167,7 @@ function EditSystem({ system, onClose, onDone }: SystemWizardProps & { system: S
       <form className="settings" onSubmit={(e) => { e.preventDefault(); if (change && !problems.length) save(); }}>
         <label className="field"><span>Name</span><input autoFocus value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
         <label className="field"><span>Slug</span><input value={system.slug} readOnly disabled /></label>
-        <Fields form={form} set={(patch) => setForm({ ...form, ...patch })} others={others} />
+        <Fields form={form} set={(patch) => setForm({ ...form, ...patch })} others={others} projects={projects} />
         <label className="field"><span>Status</span>
           <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as SystemStatus })}>
             <option value="active">active</option>

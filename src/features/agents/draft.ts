@@ -7,8 +7,6 @@ interface SessionDraft {
   task: string;
   /** Note refs, no duplicates, in the order added. */
   context: string[];
-  /** Always null until changes exist (Phase 3). */
-  change: number | null;
   /** The system whose architecture line goes in the briefing. */
   system: string | null;
   /** A canvas element's name attached with it. */
@@ -24,8 +22,8 @@ interface SessionDraft {
   reset: () => void;
 }
 
-const EMPTY: Pick<SessionDraft, "task" | "context" | "change" | "system" | "element" | "engine" | "interface"> = {
-  task: "", context: [], change: null, system: null, element: null, engine: "claude", interface: "chat",
+const EMPTY: Pick<SessionDraft, "task" | "context" | "system" | "element" | "engine" | "interface"> = {
+  task: "", context: [], system: null, element: null, engine: "claude", interface: "chat",
 };
 
 export const useSessionDraft = create<SessionDraft>()((set) => ({

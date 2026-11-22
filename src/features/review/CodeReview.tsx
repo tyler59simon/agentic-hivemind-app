@@ -15,7 +15,7 @@ import { isEnded, repoName } from "../agents/session";
 import { dispose } from "../terminal/registry";
 import { tabLabel } from "../terminal/tabs";
 import { CodeDiff } from "./CodeDiff";
-import { baseName, directBase, DIRECT_NOTE, EARLIER_NOTE, filesWord, NOT_GIT_NOTE, reviewActions, reviewVersion, sessionHeading } from "./review";
+import { baseName, directBase, DIRECT_NOTE, EARLIER_NOTE, filesWord, NOT_GIT_NOTE, reviewActions, reviewVersion } from "./review";
 import { validation, type Check } from "./validation";
 
 /** The selected file of a session: its diff and what the agent ran to check its work. */
@@ -117,7 +117,7 @@ function Validation({ info }: { info: SessionInfo }) {
 export function SessionPane({ info }: { info: SessionInfo }) {
   return (
     <div className="review-pane">
-      <h2>{sessionHeading(info)}</h2>
+      <h2>{info.title}</h2>
       <p>
         {info.review?.state === "approved"
           ? `Approved. The edits are commit ${(info.review.commit ?? "").slice(0, 7)} on ${info.worktree?.branch ?? "its branch"}.`

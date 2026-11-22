@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useChangesEnabled, useRestoreEnabled } from "../../lib/connection";
+import { useRestoreEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { archiveNote, domainOf, plan, reopenNote, resolveNote, restoreNote, supersedeNote } from "../../lib/lm";
 import { resolvable, useNoteTypes } from "../../lib/noteTypes";
@@ -10,8 +10,6 @@ import { skillFromNote } from "../../lib/skills";
 import { openReview } from "../../store";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
-import { useChangeIntent } from "../changes/intent";
-import { changesQuery } from "../changes/useChanges";
 import { noteQuery } from "../viewer/NoteView";
 import { MergeComposer } from "./MergeComposer";
 import { NotePicker } from "./NotePicker";
@@ -21,11 +19,9 @@ import { PlanDialog } from "./PlanDialog";
 /** Lifecycle actions for a note. Delete and merge are reviewed Living Memory plans; the rest are direct, journaled writes with Undo. */
 export function NoteMenu({ refId, paper }: { refId: string; paper?: { white: boolean; flip: () => void } }) {
   const note = useQuery(noteQuery(refId));
-  const changesOn = useChangesEnabled();
   const restoreOn = useRestoreEnabled();
   const client = useQueryClient();
   const types = useNoteTypes();
-  const all = useQuery({ ...changesQuery(), enabled: changesOn });
   const [open, setOpen] = useState(false);
   const [dialog, setDialog] = useState<ReactNode>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -41,7 +37,6 @@ export function NoteMenu({ refId, paper }: { refId: string; paper?: { white: boo
   }, [open]);
   const n = note.data;
   if (!n) return null;
-  const adoptable = changesOn && n.type === "plan" && n.status === "active" && !(all.data?.changes ?? []).some((c) => c.brief === refId);
   const canResolve = resolvable(n.type, types.def(n.type));
   const close = () => setDialog(null);
   const restore = () => {
@@ -69,7 +64,6 @@ export function NoteMenu({ refId, paper }: { refId: string; paper?: { white: boo
     { label: "Merge into…", show: n.status === "active", act: () => run(
       <NotePicker title="Merge this note into…" domain={n.domain} exclude={refId} onClose={close}
         onPick={(t) => setDialog(<MergeComposer source={{ ref: refId, title: n.title }} target={t} onClose={close} />)} />) },
-    { label: "Adopt as change…", show: adoptable, act: () => { setOpen(false); useChangeIntent.getState().open({ mode: "adopt", ref: refId, title: n.title }); } },
     { label: "Make a skill…", show: n.type === "runbook" && n.status === "active", act: () => {
       setOpen(false);
       skillFromNote(refId).then((p) => {

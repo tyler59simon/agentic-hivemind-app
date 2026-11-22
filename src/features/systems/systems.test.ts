@@ -58,6 +58,14 @@ describe("wizard", () => {
     expect(changedSystem(system({ depends_on: ["a", "b"] }), form({ dependsOn: ["b", "a"] }))).toBeNull();
     expect(changedSystem(system(), form({ dependsOn: [] }))).toEqual({ slug: "billing", depends_on: [] });
   });
+
+  it("sends the project only with the capability, and only when it changed", () => {
+    expect(changedSystem(system(), form({ project: "pay" }))).toBeNull();
+    expect(changedSystem(system(), form({ project: "pay" }), true)).toEqual({ slug: "billing", project: "pay" });
+    expect(changedSystem(system({ project: "pay" }), form({ project: "pay" }), true)).toBeNull();
+    expect(changedSystem(system({ project: null }), form({ project: "" }), true)).toBeNull();
+    expect(changedSystem(system({ project: "pay" }), form({ project: "" }), true)).toEqual({ slug: "billing", project: null });
+  });
 });
 
 describe("passportSections", () => {

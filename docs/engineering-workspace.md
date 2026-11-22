@@ -80,7 +80,7 @@ An automation starts work on its own while Hivemind runs (the tray keeps it runn
 
 ## Architecture drift
 
-The Drift panel on the Architecture page, and the architecture-check automation, run the Architecture Suite's command line (`skills/architecture-suite-runtime/scripts/architecture-suite.py` in the plugin folder set in Settings) with the interpreter its one-time setup installs (`~/.architecture-suite/runtime`, or `HIVEMIND_ARCHSUITE_PYTHON`). Results go to `architecture-runs/<system>/<time>/`; the system's architecture folder is only read.
+The Drift panel on Home's Architecture tab, and the architecture-check automation, run the Architecture Suite's command line (`skills/architecture-suite-runtime/scripts/architecture-suite.py` in the plugin folder set in Settings) with the interpreter its one-time setup installs (`~/.architecture-suite/runtime`, or `HIVEMIND_ARCHSUITE_PYTHON`). Results go to `architecture-runs/<system>/<time>/`; the system's architecture folder is only read.
 
 A drift check reports:
 - commits on the repository since the output was made (from the passport session's source commit);

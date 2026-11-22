@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Layers, Search } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
-import { displayId } from "../features/changes/changes";
 import { NotesSearchBox } from "../features/search/NotesSearch";
 import { useCurrentProject } from "../features/projects/useProject";
 import { systemsQuery } from "../features/systems/useSystem";
@@ -30,9 +29,12 @@ function useCrumbs(): Crumb[] {
   const notebook = useNotebookTitle(page && !isLoose(page) ? page.notebook : undefined, route.page === "notes");
   const systemsOn = useSystemsEnabled();
   const sessions = useQuery({ ...sessionsQuery(), enabled: systemsOn && route.page === "agents" });
-  const systems = useQuery({ ...systemsQuery(), enabled: systemsOn && route.page === "architecture" });
+  const systems = useQuery({ ...systemsQuery(), enabled: systemsOn && route.page === "home" && route.tab === "architecture" });
   const root: Crumb = { label: project?.name ?? (other ? "Other folders" : "All memory"), go: () => go({ page: "home" }) };
-  if (route.page === "home") return [{ label: "Projects" }, { label: root.label }];
+  if (route.page === "home") {
+    const system = route.tab === "architecture" ? systems.data?.systems.find((s) => s.slug === route.system)?.name : undefined;
+    return system ? [{ label: "Projects" }, root, { label: system }] : [{ label: "Projects" }, { label: root.label }];
+  }
   const section: Crumb = { label: SECTIONS.find((s) => s.page === route.page)?.label ?? route.page, go: () => go({ page: route.page }) };
   if (route.page === "notes" && page && isLoose(page)) return [root, section, { label: "Opened files" }, { label: fileName(page.path) }];
   if (route.page === "notes" && page) {
@@ -40,9 +42,7 @@ function useCrumbs(): Crumb[] {
   }
   const leaf = route.page === "memory" ? (route.view === "notes" ? noteTitle : route.view && MEMORY_VIEWS[route.view])
     : route.page === "agents" ? (route.view === "new" ? "New session" : sessions.data?.find((s) => s.id === route.session)?.title)
-    : route.page === "architecture" ? systems.data?.systems.find((s) => s.slug === route.system)?.name
     : route.page === "wiki" ? route.domain ?? domain ?? undefined
-    : route.page === "changes" && route.view === "detail" && route.id ? displayId(route.id)
     : undefined;
   return leaf ? [root, section, { label: leaf }] : [root, section];
 }

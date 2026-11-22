@@ -20,7 +20,7 @@ describe("session draft", () => {
     draft().setSystem("pay", "Ingestion");
     expect([draft().task, draft().context, draft().system, draft().element]).toEqual(["Fix it", ["a"], "pay", "Ingestion"]);
     draft().reset();
-    expect(draft()).toMatchObject({ task: "", context: [], change: null, system: null, element: null });
+    expect(draft()).toMatchObject({ task: "", context: [], system: null, element: null });
   });
 
   it("keeps the engine and the interface", () => {

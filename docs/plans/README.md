@@ -5,7 +5,7 @@ Hivemind is being rebuilt to the UX of a set of ten mock screens. Phase 1 (theme
 | Phase | Document | Mock screens | Depends on |
 | --- | --- | --- | --- |
 | 2 | [phase-2-interactive-sessions.md](phase-2-interactive-sessions.md) | 02 Start Agent Session, 03 Agent Workspace Chat | Phase 1 |
-| 3 | [phase-3-changes.md](phase-3-changes.md) | 05 Changes List, 06 Change Detail | Phases 1 and 2 |
+| 3 | [phase-3-changes.md](phase-3-changes.md) (retired by CON-17, 2026-11-22) | 05 Changes List, 06 Change Detail | Phases 1 and 2 |
 | 4 | [phase-4-review.md](phase-4-review.md) | 10 Agent Code Review | Phases 1, 2 and 3 |
 | 5 | [phase-5-codex-and-terminal.md](phase-5-codex-and-terminal.md) | 04 Agent Workspace Codex Terminal | Phases 1 and 2 (4 for the "Review diff" link) |
 | 6 | [phase-6-terminal-parity.md](phase-6-terminal-parity.md) | 04 (the terminal behaves like the real CLI) | Phases 4 and 5 |
@@ -23,10 +23,10 @@ Hivemind is being rebuilt to the UX of a set of ten mock screens. Phase 1 (theme
 The user made these on 2026-11-10.
 
 1. **Full parity with the mocks, in phases**, including backends that did not exist.
-2. **Sections are pages; only notes are tabs.** The sidebar has six sections (Overview, Agent Workspace, Changes, Architecture, Memory, Review), each one page with a breadcrumb. Notes, and only notes, open as tabs and side by side in up to three panes, inside Memory. Do not add tabs or split panes for sessions, changes, diffs or anything else, with one exception already decided: Phase 5's terminal has its own tab strip, and since Phase 6 (user decision 2026-11-15) up to two terminal panes side by side. Superseded on 2026-11-20 by Notes Studio: pages and files are tabs too, in one workspace shared by the Memory and Notes pages (see [../notes-studio/README.md](../notes-studio/README.md)).
+2. **Sections are pages; only notes are tabs.** The sidebar has one page per section (Overview, Agent Workspace, Memory, Review and the sections later phases added), each with a breadcrumb. Changes was retired by CON-17 and Architecture became a Home tab by CON-4 (both 2026-11-22). Notes, and only notes, open as tabs and side by side in up to three panes, inside Memory. Do not add tabs or split panes for sessions, changes, diffs or anything else, with one exception already decided: Phase 5's terminal has its own tab strip, and since Phase 6 (user decision 2026-11-15) up to two terminal panes side by side. Superseded on 2026-11-20 by Notes Studio: pages and files are tabs too, in one workspace shared by the Memory and Notes pages (see [../notes-studio/README.md](../notes-studio/README.md)).
 3. **Brand:** the hex/wasp symbol and the word "Hivemind". The name or wordmark "Vesparc" appears nowhere in the product, the code or the documents' user-facing copy. The mock images carry that wordmark; ignore it.
 4. **Dark only** at first. Later decisions added themes in Settings: Emerald Enterprise Dark beside Purple (2026-11-15) and Emerald Enterprise Light (2026-11-17), whose sidebar and terminals stay dark.
-5. **A change (Phase 3)** is a `plan` note (the brief) plus an entry in a new Living Memory `changes` registry. Change numbers (CHG-014) are unique across the whole store.
+5. **A change (Phase 3; retired by CON-17, 2026-11-22)** was a `plan` note (the brief) plus an entry in a new Living Memory `changes` registry. Change numbers (CHG-014) are unique across the whole store.
 6. **Approve (Phase 4)** commits the session's edits on the session's own worktree branch. It never merges and never pushes.
 7. **The terminal (Phase 5)** is a real embedded terminal that runs the actual `claude` and `codex` terminal programs. Approvals inside it happen in the CLI's own prompts. This knowingly differs from mock 04, which draws Hivemind buttons inside the terminal.
 8. **Order of work:** one phase per session, in order. Each phase ships a working app and is a separate branch and pull request. Since 2026-11-17 the user lets Hivemind work go straight to main (commit, Codex review, push); Notes Studio phases follow that (see [../notes-studio/README.md](../notes-studio/README.md) section 4).
@@ -69,9 +69,8 @@ Stack: Tauri 2 (Rust) + React 19 + TypeScript 6 + Vite 8; Zustand 5 for client s
 | `src/features/projects/briefing.ts` | `buildBriefing`: the Markdown context pack for an agent. | `export function buildBriefing` |
 | `src/features/agents/AgentWorkspace.tsx` | Agent Workspace (mock 03, read-only): session list, `Transcript`, context rail. | `export function Transcript`, `function Session(` |
 | `src/features/agents/events.ts` | Pure reducer from `SeqEvent`s to a transcript (`apply`, `build`, `merge`). Tested. | `export function apply(` |
-| `src/features/changes/ChangesPage.tsx` | Changes over plan notes (no numbers, no stages yet). | `export function ChangesPage()` |
 | `src/features/review/ReviewPage.tsx` | Review over notes due and agent-proposed registry updates. | `export function ReviewPage()` |
-| `src/features/systems/ArchitecturePage.tsx` | Architecture: system picker, `AgentActions` ("Generate with agent"), canvas, inspector, sections. | `function SystemView(`, `function AgentActions(` |
+| `src/features/systems/ArchitectureTab.tsx` | Home's Architecture tab: system picker, `AgentActions` ("Generate with agent"), canvas, inspector, sections. | `function SystemView(`, `function AgentActions(` |
 | `src/features/systems/canvas.ts`, `ArchitectureCanvas.tsx` | The canvas: `canvasGraph`, `layoutGraph` (pure, tested) and the pan/zoom component. | `export function canvasGraph` |
 | `src/features/systems/useSystem.ts` | `useSystem(slug)`, `useSystemProposals`, `useDiagram`. | `export function useSystemProposals` |
 | `src/features/library/MemoryPage.tsx`, `library.ts` | Memory: library with search, type tabs and Status / Scope / Tag filters; sub-views Graph, Activity, Tags; hosts the note workspace. | `function Library()` |
@@ -84,8 +83,7 @@ Routes today (`src/store.ts`):
 export type Route =
   | { page: "overview"; view?: "work" }
   | { page: "agents"; session?: string }
-  | { page: "changes"; ref?: string }
-  | { page: "architecture"; system?: string }
+  | { page: "home"; tab?: "architecture"; system?: string }  // Architecture is a Home tab since CON-4
   | { page: "memory"; view?: "notes" | "graph" | "activity" | "tags"; q?: string }
   | { page: "review" };
 ```
@@ -181,7 +179,7 @@ These names and shapes are shared by more than one phase. A phase may add fields
 ```ts
 type AgentTask =
   | { kind: "system_passport"; slug: string }                                           // exists today
-  | { kind: "work"; project: string; repo: string; branch?: string; change?: number };  // Phase 2; `change` is filled from Phase 3 on
+  | { kind: "work"; project: string; repo: string; branch?: string };  // Phase 2; the Phase 3 `change` field was removed by CON-17 (a stored record that carries it still loads)
 ```
 
 `project` is a project slug. `repo` must be one of that project's registered `repos` (compared after normalising slashes and case); Rust rejects anything else. `branch` is the branch to start from; when absent, the repository's current branch.
@@ -218,9 +216,11 @@ Three safety rules hold for every session, whatever its mode or interface:
 
 Worktrees live under the app data folder, in `worktrees/<repo folder name>-<8 hex of a hash of the repo path>/<first 8 of the session id>`, on a branch named `hivemind/<first 8 of the session id>` created from the start branch. Rust module: `src-tauri/src/worktree.rs`.
 
-Frontend additions other phases build on: the route `{ page: "agents"; session?: string; view?: "new" }`; a session-draft store `src/features/agents/draft.ts` exporting `useSessionDraft` with `task` (the task text the user typed, a string), `context: string[]` (note refs), `change: number | null`, and `addContext(ref)`, `removeContext(ref)`, `reset()` (the repository, branch and permissions are the Start screen's own state, not the draft's); the buttons "Use in agent session" (note page) and "Add to agent context" (library preview) call `addContext`.
+Frontend additions other phases build on: the route `{ page: "agents"; session?: string; view?: "new" }`; a session-draft store `src/features/agents/draft.ts` exporting `useSessionDraft` with `task` (the task text the user typed, a string), `context: string[]` (note refs), and `addContext(ref)`, `removeContext(ref)`, `reset()` (the repository, branch and permissions are the Start screen's own state, not the draft's); the buttons "Use in agent session" (note page) and "Add to agent context" (library preview) call `addContext`.
 
 ### 7.2 Changes (introduced by Phase 3)
+
+Retired by CON-17 (2026-11-22): the registry, its commands, the app page and `task.change` are gone. This section is design history.
 
 Living Memory registry file `changes.json` at the store root: `{"changes": [...], "version": 1}`, entries sorted by `id`. Entry fields: `id` (integer, store-wide), `title`, `project` (slug), `brief` (`domain:id` of a `plan` note), `stage` (`explore | design | implement | validate`), `status` (`active | done | cancelled`), `repo`, `branch`, `system`, `element` (each a string or null), `created`, `updated`.
 

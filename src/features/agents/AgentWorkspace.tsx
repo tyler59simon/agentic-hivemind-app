@@ -3,21 +3,20 @@ import { listen } from "@tauri-apps/api/event";
 import { Check, ChevronDown, CircleCheck, CircleX, CodeXml, FileText, GitBranch, Inbox, Layers, Lightbulb, Link as LinkIcon, LoaderCircle, MessageSquare, Network, Plus, Shield, ShieldCheck, Sparkle, SquareTerminal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import logo from "../../assets/logo.png";
-import { agentCancel, agentEnd, agentSession, agentSetPolicy, engineOf, enginesQuery, enginesText, sessionsQuery, type Engine, type Interface, type Policy, type ResourceUsage, type SeqEvent, type SessionInfo } from "../../lib/agent";
+import { agentCancel, agentEnd, agentSession, agentSetPolicy, engineName, engineOf, enginesQuery, enginesText, sessionsQuery, type Engine, type Interface, type Policy, type ResourceUsage, type SeqEvent, type SessionInfo } from "../../lib/agent";
 import { PROFILE_HELP, PROFILE_LABELS } from "./start";
 import { learningQuery, learningReview } from "../../lib/skills";
 import { lastRun, runText } from "../skills/skills";
 import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { sessionCapture } from "../../lib/executive";
 import { connect } from "../../lib/lm";
-import { openChange, openProject, openReview, openSession, openSystem, openWorkflows, startSession, useApp } from "../../store";
+import { openProject, openReview, openSession, openSystem, openWorkflows, startSession, useApp } from "../../store";
 import { Markdown } from "../../ui/Markdown";
 import { Menu } from "../../ui/Menu";
 import { Confirm } from "../../ui/Modal";
 import { ArrowLink, PageHeader, Row, Section, Tabs } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
-import { displayId, engineName } from "../changes/changes";
 import { dayLabel } from "../history/activity";
 import { projectsQuery } from "../projects/useProject";
 import { systemsQuery } from "../systems/useSystem";
@@ -342,7 +341,6 @@ function Session({ id }: { id: string }) {
   const resume = resumeCommand(info);
   const passport = info.task.kind === "system_passport" ? info.task : null;
   const system = passport ? systems.data?.systems.find((s) => s.slug === passport.slug) : undefined;
-  const work = info.task.kind === "work" ? info.task : null;
   const interactive = info.mode === "interactive";
   const live = { ...info, status };
   const review = info.worktree ? () => openReview(info.id) : undefined;
@@ -370,11 +368,6 @@ function Session({ id }: { id: string }) {
           {info.task.kind === "executive" && isEnded(live) && (
             <button className="linked-chip" disabled={capturing || info.turns === 0} onClick={captureChat} title="Pull decisions, commitments and risks out of this conversation for review">
               {capturing ? <LoaderCircle className="spin" size="1.1em" aria-hidden /> : <Inbox size="1.1em" aria-hidden />}Capture from this chat
-            </button>
-          )}
-          {work?.change != null && (
-            <button className="linked-chip" style={{ flexBasis: "100%" }} title="Open the change" onClick={() => openChange(work.change!)}>
-              <LinkIcon size="1.1em" aria-hidden />{displayId(work.change)}
             </button>
           )}
         </header>
@@ -454,7 +447,7 @@ export function AgentWorkspace() {
           <div className="empty-state">
             <p className="muted">No agent sessions yet.</p>
             <button className="primary" onClick={startSession}><Plus size="1.2em" aria-hidden />Start a session</button>
-            <ArrowLink onClick={() => go({ page: "architecture" })}>Open Architecture</ArrowLink>
+            <ArrowLink onClick={() => go({ page: "home", tab: "architecture" })}>Open Architecture</ArrowLink>
           </div>
         ) : terminalView ? <TerminalWorkspace sessions={all} selected={currentInfo} onEmpty={() => { setAsked("terminal"); go({ page: "agents" }); }} />
         : (
