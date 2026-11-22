@@ -54,7 +54,7 @@ cargo: schema rebuild on version change, incremental update, deleted file remova
 
 ## 5. Shipped
 
-Built on main at `8748c85`; the commit hashes are added when the phase is committed.
+Code landed on 2026-11-22: Hivemind `f559359` (the phase) and `9a9f32c` (fixes from the UI pass). At the user's request this phase had no Codex review; Claude reviewed the diff. `rusqlite` (bundled) is the only new dependency; no Living Memory change was needed.
 
 **What differs from sections 2 and 3 and the survey above.**
 - The commands live in `src-tauri/src/notes_index/commands.rs`, not in `lib.rs`, and there are three beyond the four in README 5.7: `index_pages` (every indexed page, for Ctrl+O and the resolver), `index_tags` and `index_incoming` (the links whose target is named like any of a list of pages, for the rename plan). `index_links` returns `{ outgoing, incoming, unlinked }`. The event `index-progress` carries `{ state, done, total, error }`.
@@ -86,4 +86,13 @@ The file reads are the operating system's: the same reads took 3.4 s from one te
 
 **Verified**: `cargo test`, `cargo clippy --all-targets -- -D warnings`, the whole `npx vitest run`, `npx tsc --noEmit` and `npm run build`. The `.hmdoc` extractor's Rust twin gives byte-identical text for all four fixture pairs (`rich_page_text_is_what_the_fixture_beside_it_holds`), and JavaScript's `\s` and `trim()` set is written out in Rust because it differs from `char::is_whitespace` at U+0085 and U+FEFF. The main tests were checked to fail with the code they cover changed: FTS escaping, the version rebuild, deletion on a missing path, the whitespace twin, the Living Memory group's gate, the resolver's step into other notebooks, the rewrite's hash precondition and the panel's arrow keys.
 
-**Known limits.** Planning a rewrite resolves every candidate link against every page of its notebook, which is quick for a page or a small folder and slow for a folder of thousands of pages that are linked everywhere. A notebook whose folder is missing at start keeps its rows and says so in its settings. Not driven in the running app: the panel, the rail, the Tags pane, the rename dialog and Rebuild index.
+**UI pass (2026-11-22).** The dev app ran against a scratch store with Living Memory notebooks and two scratch folder notebooks (Alpha with pages in folders, a frontmatter tag, a rich page and links of every kind; Beta with one page), driven over WebView2 remote debugging:
+- The index was created at start; searching a word in both notebooks grouped the results as This notebook and Other notebooks, and a word in a Living Memory page showed the Living Memory pages group through `doc search`; Enter opened that page in its tab.
+- The rail of Home listed Ideas as a backlink and its outgoing links: the ambiguous `[[Plan]]` as several pages, `[[Roadmap]]` in Beta, the memory note named by `[[mem:...]]`, and `[[Missing page]]` with Create page. Ideas listed Home as an unlinked mention, and a `[[Target]]` inside a code fence was not counted.
+- Following `[[Plan]]` opened the picker with `archive/Plan.md` and `projects/Plan.md`; choosing one opened it and wrote `[[projects/Plan]]` into Home as an unsaved edit, leaving the file alone until Save.
+- Renaming `notes/Target.md` to `Destination` offered to update three links (a wiki link, a Markdown link and a rich page's `wikiLink`). Ideas was changed on disk before Update links: it was skipped and listed as changed, the other two were written, and the open Home tab showed `[[Destination]]`. The outside edit also reached the index through the watcher.
+- The Tags pane listed `#tag-one` (2) and `#alpha-tag` (1); a tag opened the panel filtered to it. Ctrl+O listed Roadmap with its notebook. Notebook settings showed "6 pages are searchable" and Rebuild index ran.
+
+The pass found two problems, fixed in `9a9f32c`: a match on the selected result was invisible because its highlight had the selection's colour, and Living Memory page snippets had no highlight (`doc search` returns them unmarked, so Hivemind marks the query's words).
+
+**Known limits.** Planning a rewrite resolves every candidate link against every page of its notebook, which is quick for a page or a small folder and slow for a folder of thousands of pages that are linked everywhere. A notebook whose folder is missing at start keeps its rows and says so in its settings. Relative Markdown links inside a page that moves to another folder are not rewritten (wiki links by name are unaffected). The release exe size was not measured; spike S4 measured about 1.7 MB for `rusqlite`.
