@@ -1,14 +1,15 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, ChevronDown, ChevronRight, Ellipsis, File, FileText, Folder, FolderPlus, Inbox, LayoutPanelTop, Plus } from "lucide-react";
+import { CalendarDays, ChevronDown, ChevronRight, Ellipsis, File, FileText, Folder, FolderPlus, Inbox, LayoutPanelTop, Plus, Workflow } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { classify } from "../../lib/errors";
 import { treeQuery } from "../../documents/io";
 import type { DocNotebook } from "../../lib/lm";
-import { isMarkdown, isRichDoc, metaQuery, revealFile, type Notebook } from "../../lib/notebooks";
+import { isCanvas, isMarkdown, isRichDoc, metaQuery, revealFile, type Notebook } from "../../lib/notebooks";
 import { Menu } from "../../ui/Menu";
 import { toast } from "../../ui/toast";
 import { activeTab, useWorkspace } from "../../workspace/store";
-import { convertToRich, movePath, newPage, newRichPage, newSection, openPage, renamed, trashPath } from "./actions";
+import { dropOnBoard } from "../canvas/treeDrop";
+import { convertToRich, movePath, newCanvas, newPage, newRichPage, newSection, openPage, renamed, trashPath } from "./actions";
 import { openToday } from "./dailyActions";
 import { useTemplateIntent } from "./DailyViews";
 import { runExport } from "./richActions";
@@ -54,6 +55,8 @@ export function useRowDrag(root: string, onDrop: (from: string, target: Node | n
       dragged.current = true;
       setTimeout(() => { dragged.current = false; }, 0);
       if (drag.over !== null) onDrop(drag.path, drag.over === "" ? null : nodes.get(low(drag.over)) ?? null);
+      // A file let go outside the tree goes to a canvas board under the pointer, if there is one; no other place takes it.
+      else if (nodes.get(low(drag.path))?.kind !== "dir") dropOnBoard({ notebook: root, path: drag.path }, e.clientX, e.clientY);
       setDrag(null);
     };
     window.addEventListener("pointermove", move);
@@ -150,6 +153,11 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals }: {
     const folder = folderFor(node);
     newRichPage(client, notebook.id, folder).then(() => { if (node) toggle(node.path, true); }, fail);
   };
+  /** A canvas board (NS-7C) is a file of a folder notebook: Living Memory notebooks have none. */
+  const createCanvas = (node: Node | null) => {
+    const folder = folderFor(node);
+    newCanvas(client, notebook.id, folder).then(() => { if (node) toggle(node.path, true); }, fail);
+  };
   const commitRename = () => {
     const r = renaming;
     setRenaming(null);
@@ -187,6 +195,7 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals }: {
             <>
               <li><button role="menuitem" onClick={() => { close(); useTemplateIntent.getState().open(notebook.id); }}>New page from template…</button></li>
               {!lm && <li><button role="menuitem" onClick={() => { close(); createRich(null); }}>New rich page</button></li>}
+              {!lm && <li><button role="menuitem" onClick={() => { close(); createCanvas(null); }}>New canvas</button></li>}
               <li><button role="menuitem" onClick={() => { close(); onSettings(); }}>Notebook settings…</button></li>
               {lm
                 ? <li><button role="menuitem" onClick={() => { close(); onProposals?.(); }}>Agent proposals…</button></li>
@@ -209,7 +218,7 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals }: {
           {tree.data && !rows.length && !naming && <p className="muted pad">No pages yet. <button className="link" onClick={() => create(null)}>Create one</button></p>}
           {rows.map(({ node, depth, open: isOpen }) => {
             // A rich page has its own icon, so it is told from the Markdown page of the same name (UI-2).
-            const Icon = node.kind === "dir" ? Folder : node.kind === "page" ? (isRichDoc(node.path) ? LayoutPanelTop : FileText) : File;
+            const Icon = node.kind === "dir" ? Folder : node.kind === "page" ? (isRichDoc(node.path) ? LayoutPanelTop : FileText) : isCanvas(node.path) ? Workflow : File;
             const branch = node.kind === "dir" || node.children.length > 0;
             const target = drag && drag.over && low(drag.over) === low(node.path) && dropTarget(drag.path, node);
             return (
@@ -258,6 +267,7 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals }: {
                 {n.kind !== "dir" && item("Open beside", () => openPage({ notebook: notebook.id, path: n.path }, { split: true }))}
                 {n.kind !== "other" && !sharesFolder(n) && item(n.kind === "dir" ? "New page here" : "New subpage", () => create(n))}
                 {!lm && n.kind !== "other" && !sharesFolder(n) && item(n.kind === "dir" ? "New rich page here" : "New rich subpage", () => createRich(n))}
+                {!lm && n.kind === "dir" && item("New canvas here", () => createCanvas(n))}
                 {n.kind === "dir" && item("New page from template…", () => useTemplateIntent.getState().open(notebook.id, folderFor(n)))}
                 {!lm && n.kind === "page" && isMarkdown(n.path) && item("Convert to rich page", () => convertToRich(client, { notebook: notebook.id, path: n.path }).catch(fail))}
                 {!lm && n.kind === "page" && isRichDoc(n.path) && item("Export to Markdown…", () => runExport(client, { notebook: notebook.id, path: n.path }, setDialog))}

@@ -3,12 +3,12 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { movedPath, sameDoc, type FileRef } from "../documents/keys";
-import { isMarkdown } from "../lib/notebooks";
+import { isCanvas, isMarkdown } from "../lib/notebooks";
 import type { NoteType } from "../lib/lm";
 import { prefs } from "../lib/prefs";
 import { safeStorage, useApp } from "../store";
 
-export type Mode = "reading" | "live" | "rich" | "source" | "history" | "bigfile" | "hex";
+export type Mode = "reading" | "live" | "rich" | "source" | "history" | "bigfile" | "hex" | "board";
 export type TabKind = "note" | "new-note" | "file" | "new-file" | "compare" | "find";
 const KINDS: readonly string[] = ["note", "new-note", "file", "new-file", "compare", "find"];
 export type { FileRef };
@@ -71,7 +71,7 @@ export function showTab(tab: Pick<Tab, "kind">) {
 }
 
 /** The mode a second view of a tab opens in. */
-const splitMode = (tab: Tab): Mode => (tab.mode === "bigfile" || tab.mode === "hex" ? tab.mode : tab.kind === "file" && tab.file && !isMarkdown(tab.file.path) ? "source" : "reading");
+const splitMode = (tab: Tab): Mode => (tab.mode === "bigfile" || tab.mode === "hex" ? tab.mode : tab.kind === "file" && tab.file && !isMarkdown(tab.file.path) ? (isCanvas(tab.file.path) ? "board" : "source") : "reading");
 
 export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
   const initial = firstPane();

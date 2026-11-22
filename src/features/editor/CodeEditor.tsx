@@ -294,7 +294,9 @@ export function CodeEditor(props: CodeEditorProps) {
   const toolbarRich = useMemo(() => latestRich(latest), []);
   const editor = <div className={props.language === "markdown" ? "md-editor" : "md-editor text-editor"} ref={host} />;
   const bar = powered ? <PowerBar view={() => view.current} readOnly={props.readOnly} /> : null;
-  if (!props.rich || props.language !== "markdown") return bar ? <>{bar}{editor}</> : editor;
+  // The editor keeps its place whether or not the power bar shows: the view is made once in its host, and a host React
+  // unmounted and made again would be left empty (a canvas that opens as Source turns the bar on after the first render).
+  if (!props.rich || props.language !== "markdown") return <>{bar}{editor}</>;
   return (
     <>
       <Toolbar view={() => view.current} rich={toolbarRich} readOnly={props.readOnly} />

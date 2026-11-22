@@ -10,9 +10,10 @@ import { classify } from "../../lib/errors";
 import { bridgeGeneration, lmNotebooksQuery } from "../../lib/lm";
 import { forgetMoved } from "../../lib/drafts";
 import { createDoc, createSection, deleteDoc, moveDoc, readDoc } from "../../documents/io";
+import { NEW_CANVAS_TEXT } from "../canvas/model";
 import { newPageText } from "../hmdoc/envelope";
 import { planFor, useRewritePlan } from "../links/plan";
-import { fileName, folderOf, isMarkdown, isRichDoc, notebooksQuery, pageTitle } from "../../lib/notebooks";
+import { fileName, folderOf, isCanvas, isMarkdown, isRichDoc, notebooksQuery, pageTitle } from "../../lib/notebooks";
 import { isLoose, saveAs } from "../../lib/opens";
 import { untitledText } from "./untitled";
 import { useApp } from "../../store";
@@ -23,7 +24,7 @@ const join = (folder: string, name: string) => (folder ? `${folder}/${name}` : n
 
 /** Open a page in the focused pane (or beside it with `split`). Markdown opens for editing with a live preview. */
 export function openPage(ref: FileRef, opts: { split?: boolean } = {}) {
-  useWorkspace.getState().openTab({ kind: "file", file: ref, mode: isMarkdown(ref.path) ? "live" : "source", title: pageTitle(ref.path) }, opts);
+  useWorkspace.getState().openTab({ kind: "file", file: ref, mode: isMarkdown(ref.path) ? "live" : isCanvas(ref.path) ? "board" : "source", title: pageTitle(ref.path) }, opts);
   // A list that fills the Notes page (Tasks, Views) gives way to the page that was opened from it, or from anywhere.
   const app = useApp.getState();
   if (app.route.page === "notes" && app.route.view) app.go({ page: "notes" }, { replace: true });
@@ -76,6 +77,16 @@ export async function newRichPage(client: QueryClient, notebook: string, folder 
   return path;
 }
 
+/** A new canvas board (NS-7C): `Untitled.canvas` with no cards, under a free name. A folder notebook only: Living Memory
+ *  keeps Markdown pages. */
+export async function newCanvas(client: QueryClient, notebook: string, folder = "", title = "Untitled") {
+  folderOnly(notebook);
+  const path = await createUnique(notebook, folder, title, NEW_CANVAS_TEXT, "canvas");
+  client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
+  openPage({ notebook, path });
+  return path;
+}
+
 /** The text of a page as it is now: an open page's, unsaved edits included, else the file's. */
 async function currentText(ref: FileRef): Promise<string> {
   const open = useDocuments.getState().docs[keyOf(ref)];
@@ -107,10 +118,12 @@ export async function exportToMarkdown(client: QueryClient, ref: FileRef, text?:
   return { path, report: out.report };
 }
 
-/** A conflict on a rich page: the user's version goes to `Name (my edits).hmdoc` beside it, under a free name. */
+/** A conflict on a rich page or a canvas: the user's version goes to `Name (my edits).hmdoc` (or `.canvas`) beside it, under
+ *  a free name. */
 export async function saveBothVersions(client: QueryClient, ref: FileRef, text: string) {
   folderOnly(ref.notebook);
-  const path = await createUnique(ref.notebook, folderOf(ref.path), `${pageTitle(ref.path)} (my edits)`, text, "hmdoc");
+  const canvas = isCanvas(ref.path);
+  const path = await createUnique(ref.notebook, folderOf(ref.path), `${canvas ? pageTitle(ref.path).replace(/\.canvas$/i, "") : pageTitle(ref.path)} (my edits)`, text, canvas ? "canvas" : "hmdoc");
   client.invalidateQueries({ queryKey: ["notebook-tree", ref.notebook] });
   return path;
 }
@@ -188,7 +201,7 @@ export async function saveUntitled(tabId: string, text: string, suggested: strin
     }
     const ws = useWorkspace.getState();
     ws.setDirty(tabId, false);
-    ws.updateTab(tabId, { kind: "file", file: ref, title: pageTitle(ref.path), mode: isMarkdown(ref.path) ? "live" : "source" });
+    ws.updateTab(tabId, { kind: "file", file: ref, title: pageTitle(ref.path), mode: isMarkdown(ref.path) ? "live" : isCanvas(ref.path) ? "board" : "source" });
     return ref;
   } finally {
     savingUntitled.delete(tabId);

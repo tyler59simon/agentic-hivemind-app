@@ -7,7 +7,7 @@ import { classify } from "../../lib/errors";
 import { assetLink, attachFile, openAttachment, parseLm } from "../../documents/adapters/lmdoc";
 import { lmAssets, treeQuery } from "../../documents/io";
 import { lmNotebooksQuery } from "../../lib/lm";
-import { fileName, folderOf, isMarkdown, isRichDoc, notebooksQuery, pageTitle, revealFile, type Notebook } from "../../lib/notebooks";
+import { fileName, folderOf, isCanvas, isMarkdown, isRichDoc, notebooksQuery, pageTitle, revealFile, type Notebook } from "../../lib/notebooks";
 import { assetBase, isLoose, recentQuery, recentRef } from "../../lib/opens";
 import { useWhitePaper } from "../../lib/paper";
 import { Menu } from "../../ui/Menu";
@@ -29,6 +29,7 @@ import { useRichPage } from "./richPage";
 import { RICH_LIMIT } from "../editor/rich/context";
 import { isPicture } from "../editor/rich/parse";
 import { oversizeReason } from "../hmdoc/envelope";
+import { canvasProblem } from "../canvas/model";
 import { DayNav } from "./DailyViews";
 import { runExport } from "./richActions";
 import { useComparePicker } from "../power/ComparePicker";
@@ -39,6 +40,10 @@ const MODES: { id: Mode; label: string }[] = [{ id: "reading", label: "Reading" 
 /** A text file has its source and its history; a rich page has no modes of its own (NS-3C), only the page and its history. */
 const TEXT_MODES: { id: Mode; label: string }[] = [{ id: "source", label: "Source" }, HISTORY];
 const RICH_MODES: { id: Mode; label: string }[] = [{ id: "live", label: "Page" }, HISTORY];
+/** A canvas (NS-7C) is a board, its JSON source and its history. */
+const CANVAS_MODES: { id: Mode; label: string }[] = [{ id: "board", label: "Board" }, { id: "source", label: "Source" }, HISTORY];
+/** Files Windows has a real viewer for open in it from a file card, as they do from the tree. */
+const SYSTEM_VIEWED = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf)$/i;
 /** A file in the large file viewer (NS-6B): its lines, or its bytes. */
 const VIEWER_MODES: { id: Mode; label: string }[] = [{ id: "bigfile", label: "Large file viewer" }, { id: "hex", label: "Hex view" }];
 
@@ -46,6 +51,8 @@ const VIEWER_MODES: { id: Mode; label: string }[] = [{ id: "bigfile", label: "La
 const RichEditor = lazy(() => import("../rich/RichEditor"));
 /** A `.hmdoc` page (NS-3C) loads its editor, the rich page schema and Tiptap only when one first opens. */
 const HmdocEditor = lazy(() => import("../hmdoc/HmdocEditor"));
+/** A canvas (NS-7C) loads its board editor only when one first opens in Board mode. */
+const CanvasEditor = lazy(() => import("../canvas/CanvasEditor"));
 
 /** The pages of the tab's notebook, for `[[link]]` completion and resolution. */
 function usePages(notebook: string) {
@@ -247,6 +254,8 @@ export function FileTab({ tab }: { tab: Tab }) {
   const markdown = isMarkdown(ref.path);
   // A rich page (NS-3C): JSON edited in its own editor, with no modes.
   const richDoc = isRichDoc(ref.path);
+  // A canvas board (NS-7C): a JSON Canvas file with Board, Source and History modes; a file it cannot hold opens as Source.
+  const canvas = isCanvas(ref.path);
   const loose = isLoose(ref);
   const full = useLoosePath(ref);
   // Pictures load from the notebook's root (a page's folder inside it) or a loose file's folder.
@@ -254,9 +263,19 @@ export function FileTab({ tab }: { tab: Tab }) {
   // review of 52051c8, A3, and its re-review: the app's 30-second staleTime would otherwise reuse the old one).
   // A parked page of another store shows no attachments: they would come from the store connected now (R3-P3).
   const own = inOwnStore(key);
-  const pictures = useQuery({ queryKey: ["asset-base", ref.notebook, ref.path], queryFn: () => assetBase(ref.notebook, ref.path), refetchOnMount: "always", gcTime: 0, enabled: (markdown || richDoc) && own });
-  const mode: Mode = tab.mode === "history" ? "history" : markdown ? tab.mode ?? "live" : "source";
+  const pictures = useQuery({ queryKey: ["asset-base", ref.notebook, ref.path], queryFn: () => assetBase(ref.notebook, ref.path), refetchOnMount: "always", gcTime: 0, enabled: (markdown || richDoc || canvas) && own });
+  const mode: Mode = tab.mode === "history" ? "history" : markdown ? tab.mode ?? "live" : canvas ? (tab.mode === "source" ? "source" : "board") : "source";
   const titles = useCallback(() => pages.filter((p) => isMarkdown(p) || isRichDoc(p)).map(pageTitle), [pages]);
+  // A canvas that cannot be held as a board opens as Source with the reason, and nothing is written (NS-7C). The tab stays
+  // in Source until the user picks Board, so typing the fix does not flip the view under the cursor.
+  const canvasText = canvas && mode !== "history" && doc && doc.status !== "loading" && doc.status !== "error" ? doc.text : null;
+  const canvasIssue = useMemo(() => (canvasText === null ? null : canvasProblem(canvasText)), [canvasText]);
+  useEffect(() => { if (canvas && mode === "board" && canvasIssue) updateTab(tab.id, { mode: "source" }); }, [canvas, mode, canvasIssue]); // eslint-disable-line react-hooks/exhaustive-deps
+  const boardPictures = useMemo(() => ({ base: own ? pictures.data : undefined, folder: "", files: pages }), [own, pictures.data, pages]);
+  const openFileCard = useCallback((path: string) => {
+    if (SYSTEM_VIEWED.test(path)) revealFile(ref.notebook, path, true).catch((e) => toast(classify(e).message, "error"));
+    else openPage({ notebook: ref.notebook, path });
+  }, [ref.notebook]);
 
   useEffect(() => { void open(ref); }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { updateTab(tab.id, { title: pageTitle(ref.path) }); }, [ref.path, tab.id, updateTab]);
@@ -440,9 +459,10 @@ export function FileTab({ tab }: { tab: Tab }) {
             }}
           </Menu>
         </div>
-        <Tabs items={markdown ? MODES : richDoc ? RICH_MODES : TEXT_MODES} value={!markdown && mode !== "history" ? (richDoc ? "live" : "source") : mode} label="Page view" onChange={(v) => updateTab(tab.id, { mode: v })} />
+        <Tabs items={markdown ? MODES : richDoc ? RICH_MODES : canvas ? CANVAS_MODES : TEXT_MODES} value={!markdown && !canvas && mode !== "history" ? (richDoc ? "live" : "source") : mode === "board" && canvasIssue ? "source" : mode} label="Page view" onChange={(v) => updateTab(tab.id, { mode: v })} />
       </header>
-      <Banners doc={doc} docKey={key} onMerge={merge} onRecreate={recreate} conflict={richDoc ? { mine: keepMine, both: loose ? undefined : saveBoth } : undefined} />
+      <Banners doc={doc} docKey={key} onMerge={merge} onRecreate={recreate} conflict={richDoc || canvas ? { mine: keepMine, both: loose ? undefined : saveBoth } : undefined} />
+      {canvas && canvasIssue && mode !== "history" && <div className="banner warn note-banner">This canvas cannot be shown as a board: {canvasIssue}. It is open as source, and nothing was written.</div>}
       {markdown && mode !== "history" && <PropertiesPanel docKey={key} readOnly={doc.status === "readOnly" || arriving || !own} onOpenLink={(target) => follow(target, false)} />}
       {markdown && mode === "live" && doc.text.length > RICH_LIMIT && (
         <div className="banner note-banner">This page is over 1 MB, so Live shows plain Markdown styling without tables, pictures or diagrams.</div>
@@ -452,6 +472,15 @@ export function FileTab({ tab }: { tab: Tab }) {
       )}
       {mode === "history"
         ? <FileHistory file={ref} tabId={tab.id} />
+        : canvas && mode === "board" && !canvasIssue
+        ? (
+          <div className="note file-editor">
+            <Suspense fallback={<div className="center muted">Loading the canvas…</div>}>
+              <CanvasEditor key={key} text={doc.text} readOnly={doc.status === "readOnly" || arriving} onChange={(text) => edit(key, text)}
+                ctx={rich} pictures={boardPictures} notebook={ref.notebook} onOpenFile={openFileCard} />
+            </Suspense>
+          </div>
+        )
         : richDoc
         ? (
           <div className="note file-editor">

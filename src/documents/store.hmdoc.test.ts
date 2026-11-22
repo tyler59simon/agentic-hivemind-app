@@ -60,6 +60,26 @@ describe("a draft of a page that changed on disk", () => {
     expect(inspect(state.text).ok).toBe(true);
   });
 
+  it("NS-7C: a canvas is JSON too, so its draft is never merged by line either", async () => {
+    // One card per line, so changes to two different cards are changes to two different lines: a line merge would be clean.
+    const board = (a: number, c: number) => `{
+	"nodes":[
+		{"id":"a","type":"text","text":"","x":${a},"y":0,"width":1,"height":1},
+		{"id":"b","type":"text","text":"","x":0,"y":0,"width":1,"height":1},
+		{"id":"c","type":"text","text":"","x":${c},"y":0,"width":1,"height":1}
+	],
+	"edges":[]
+}`;
+    files.set("Board.canvas", board(0, 9));
+    await keep("Board.canvas", board(0, 0), board(5, 0));
+    await docs.open(ref("Board.canvas"));
+    await until(() => !!docs.useDocuments.getState().docs[docs.keyOf(ref("Board.canvas"))]?.theirs);
+    const state = docs.useDocuments.getState().docs[docs.keyOf(ref("Board.canvas"))];
+    expect(state.text).toBe(board(5, 0));
+    expect(state.theirs!.text).toBe(board(0, 9));
+    expect(state.status).toBe("stale");
+  });
+
   it("a Markdown page still merges a draft into a changed file", async () => {
     const md = (a: string, c: string) => `${a}\n\nmiddle\n\n${c}\n`;
     files.set("Note.md", md("one", "THREE"));

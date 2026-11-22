@@ -72,6 +72,8 @@ export const fileName = (path: string) => path.split("/").pop() ?? path;
 export const folderOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
 /** A rich page (NS-3C): a JSON file of folder notebooks, edited in its own editor with no modes. */
 export const isRichDoc = (path: string) => /\.hmdoc$/i.test(path);
+/** A canvas board (NS-7C): a JSON Canvas file, drawn as a board with its own editor and shown as source on request. */
+export const isCanvas = (path: string) => /\.canvas$/i.test(path);
 /** A page's title: its file name without the Markdown or rich page extension. */
 export const pageTitle = (path: string) => fileName(path).replace(/\.(md|markdown|hmdoc)$/i, "");
 
