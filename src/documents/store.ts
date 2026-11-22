@@ -87,7 +87,7 @@ let lmStore: string | undefined;
 const pageStores = new Map<string, string>();
 // Exact apart from separators: `connect` reports the root as the filesystem names it, so letter case tells two stores in
 // a case-sensitive folder apart (Codex review of dd4c1b0, R3-D8).
-const storeId = (root: string) => root.replace(/\\/g, "/").replace(/\/+$/, "");
+export const storeId = (root: string) => root.replace(/\\/g, "/").replace(/\/+$/, "");
 const sameStore = (a: string | undefined, b: string | undefined) => a !== undefined && b !== undefined && storeId(a) === storeId(b);
 const otherStore = (key: string, ref: FileRef | undefined) => !!ref && isLm(ref) && !sameStore(pageStores.get(key), lmStore);
 /** Pages parked by a store switch, with the session they had: it comes back when their store does (R3-D2, R3-U2). */

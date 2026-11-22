@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { LmError, addAction, archiveNote, isPlan, supersedeNote, taxonomyAdd, undo, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, ruleAllowed, setPin, setRule, writeChange, changesArgs, list, listArgs, logArgs, openArgs, writeProject, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setDetail, setTransport, writeSystem, systemsArgs, noteTypes, typeWrite, timelineArgs, wikiModel, agentWikiModel, type Invoke } from "./lm";
+import { LmError, addAction, archiveNote, isPlan, supersedeNote, taxonomyAdd, undo, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, ruleAllowed, setPin, setRule, writeChange, changesArgs, list, listArgs, logArgs, openArgs, writeProject, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setDetail, setTransport, writeSystem, systemsArgs, update, setBridgeGeneration, noteTypes, typeWrite, timelineArgs, wikiModel, agentWikiModel, type Invoke } from "./lm";
 
 afterEach(() => setTransport(invoke as Invoke));
 
@@ -191,5 +191,18 @@ describe("wiki", () => {
     await expect(agentWikiModel("demo")).resolves.toBeNull();
     fake({ exit_code: 1, result: null, error: { code: "invalid", message: "Unknown domain demo" } });
     await expect(agentWikiModel("demo")).rejects.toThrow("Unknown domain demo");
+  });
+});
+
+describe("a note save and the bridge generation (Codex review of 7320d7f, LM-2)", () => {
+  afterEach(() => setBridgeGeneration(undefined));
+
+  it("is bound to the generation its base was read in, not the current one", async () => {
+    const calls = fake({ exit_code: 0, result: { ok: true }, error: null });
+    setBridgeGeneration(5);
+    await update("demo:abc", { title: "New" }, { at: 3 });
+    await update("demo:abc", { title: "New" });
+    expect(calls[0]).toMatchObject(["lm", { argv: ["update", "demo:abc", "--domain", "demo"], generation: 3 }]);
+    expect((calls[1] as [string, Record<string, unknown>])[1]).not.toHaveProperty("generation");
   });
 });

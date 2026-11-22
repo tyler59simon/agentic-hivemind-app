@@ -14,6 +14,7 @@ import { DirectDialog } from "../plans/DirectDialog";
 import { mergeTags } from "../projects/wizard";
 import { noteQuery } from "../viewer/NoteView";
 import { MarkdownEditor } from "./MarkdownEditor";
+import { currentStore, noteDraftKey } from "./noteSessions";
 import { ProblemBanner } from "./NoteEditor";
 import { TagPicker } from "./PropertiesForm";
 import { fieldsOf, precheck, type Fields } from "./save";
@@ -79,7 +80,7 @@ export function NewNote({ tab }: { tab: Tab }) {
 
   /** The note exists now. `sent` is the exact text the save request carried: anything typed after it (the editor stays
    *  open while the request runs) is kept as an unsaved draft of the new note, which its editor then opens with. */
-  const finish = async (ref: string, title: string, mode: "live" | "reading", sent?: Fields) => {
+  const finish = async (ref: string, title: string, mode: "live" | "reading", sent?: Fields, store?: string) => {
     saved.current = true;
     deleteDraft(draftKey(tab)).catch(() => {});
     let later = false;
@@ -92,8 +93,9 @@ export function NewNote({ tab }: { tab: Tab }) {
         base = fieldsOf(made);
         baseRevision = made.revision;
       } catch { /* the draft is then merged against what was sent when it is saved */ }
-      // Read the buffer once more now: there was typing while the note was fetched.
-      putDraft({ key: ref, ref, baseRevision, base, mine: fRef.current, savedAt: new Date().toISOString() }).catch(() => toast("The text typed while saving could not be kept as a draft.", "warn"));
+      // Read the buffer once more now: there was typing while the note was fetched. The draft belongs to the store the note was saved in.
+      if (store === undefined) toast("The text typed while saving could not be kept as a draft.", "warn");
+      else putDraft({ key: noteDraftKey(store, ref), ref, store, baseRevision, base, mine: fRef.current, savedAt: new Date().toISOString() }).catch(() => toast("The text typed while saving could not be kept as a draft.", "warn"));
     }
     setDirty(tab.id, false);
     updateTab(tab.id, { kind: "note", ref, mode: later ? "live" : mode, title, init: undefined });
@@ -109,6 +111,7 @@ export function NewNote({ tab }: { tab: Tab }) {
     setSaving(true);
     setDialog(null);
     const sent = f;
+    const store = currentStore();
     try {
       const payload: CapturePayload = { title: f.title.trim(), body: f.body, tags: f.tags, type: f.type, ...extra };
       if (f.context.trim()) payload.context = f.context.trim();
@@ -119,8 +122,8 @@ export function NewNote({ tab }: { tab: Tab }) {
       recordOperation(r.operation_id);
       const ref = `${r.domain ?? domain}:${r.id}`;
       r.quality_warnings?.forEach((w) => toast(w, "warn"));
-      if (r.status === "created") { toast("Saved to Living Memory."); await finish(ref, payload.title, "live", sent); }
-      else if (r.status === "promoted") { toast(r.hint ?? "The same note existed in another project, so it moved to the global domain.", "warn"); await finish(ref, payload.title, "reading", sent); }
+      if (r.status === "created") { toast("Saved to Living Memory."); await finish(ref, payload.title, "live", sent, store); }
+      else if (r.status === "promoted") { toast(r.hint ?? "The same note existed in another project, so it moved to the global domain.", "warn"); await finish(ref, payload.title, "reading", sent, store); }
       else { toast("Living Memory already has this note; showing it.", "warn"); finish(ref, payload.title, "reading"); }
     } catch (e) {
       const p = classify(e);

@@ -3,6 +3,8 @@ import { CodeEditor } from "./CodeEditor";
 export interface EditorProps {
   doc: string;
   docVersion: number;               // bump to replace the document (after save, merge or an outside change)
+  /** Take every change of `doc` made elsewhere, not only version bumps: another pane editing the same note. */
+  follow?: boolean;
   live: boolean;
   onChange: (text: string) => void;
   onSave: () => void;

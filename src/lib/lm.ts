@@ -37,10 +37,11 @@ let generation: number | undefined;
 export function setBridgeGeneration(next: number | undefined) { generation = next; }
 export const bridgeGeneration = () => generation;
 /** `at`: the generation an action began in, so work it does after waiting is still refused in another store (Codex
- *  review of dd4c1b0, R3-D1). */
+ *  review of dd4c1b0, R3-D1). Any command given an `at` is bound to it, not only `doc` ones: a note save carries the
+ *  generation its base was read in (Codex review of 7320d7f, LM-2). */
 const bound = (argv: string[], at?: number) => {
   const g = at ?? generation;
-  return argv[0] === "doc" && g !== undefined ? { generation: g } : {};
+  return (argv[0] === "doc" || at !== undefined) && g !== undefined ? { generation: g } : {};
 };
 
 export async function run<T>(argv: string[], stdin?: string, at?: number): Promise<T> {
@@ -212,8 +213,9 @@ export interface UpdatePayload {
   title?: string; body?: string; tags?: string[]; type?: NoteType; context?: string;
   review_by?: string | null; files?: string[]; expected_revision?: string;
 }
-export const update = (ref: string, payload: UpdatePayload, opts: { redact?: boolean } = {}) =>
-  run<WriteResult>(["update", ref, "--domain", domainOf(ref), ...(opts.redact ? ["--redact"] : [])], JSON.stringify(payload));
+/** `at`: the bridge generation the note's base was read in; Rust refuses the write if the bridge has switched stores since. */
+export const update = (ref: string, payload: UpdatePayload, opts: { redact?: boolean; at?: number } = {}) =>
+  run<WriteResult>(["update", ref, "--domain", domainOf(ref), ...(opts.redact ? ["--redact"] : [])], JSON.stringify(payload), opts.at);
 
 export interface CapturePayload {
   title: string; body: string; tags: string[]; type: NoteType; context?: string; review_by?: string;

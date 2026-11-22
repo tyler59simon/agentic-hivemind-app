@@ -40,10 +40,14 @@ vi.mock("./MarkdownEditor", () => ({
 
 const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 const { NewNote } = await import("./NewNote");
+const { setLmStore } = await import("../../documents/store");
+const { noteDraftKey } = await import("./noteSessions");
+const STORE = "C:/stores/a";
 
 let host: HTMLElement;
 let root: Root;
 beforeEach(() => {
+  setLmStore(STORE);
   invoked.length = 0; tabUpdates.length = 0; release = null; sentPayload = null;
   host = document.createElement("div");
   document.body.append(host);
@@ -75,10 +79,11 @@ describe("a new note whose Save is still running", () => {
     await settle();
 
     expect(sentPayload?.body).toBe("A summary sentence.");
-    const draft = invoked.filter((c) => c.cmd === "draft_put").map((c) => c.args.value as { key: string; ref: string; baseRevision: string; mine: { body: string }; base: { body: string } }).find((d) => d.key === "d:1");
+    const draft = invoked.filter((c) => c.cmd === "draft_put").map((c) => c.args.value as { key: string; ref: string; store: string; baseRevision: string; mine: { body: string }; base: { body: string } }).find((d) => d.key === noteDraftKey(STORE, "d:1"));
     expect(draft?.mine.body).toBe("A summary sentence.\n\nTyped while saving.");
     expect(draft?.base.body).toBe("A summary sentence.");
     expect(draft?.baseRevision).toBe("rev-made");
+    expect(draft?.store).toBe(STORE);
     expect(tabUpdates[tabUpdates.length - 1]).toMatchObject({ kind: "note", ref: "d:1", mode: "live" });
   });
 
@@ -93,7 +98,7 @@ describe("a new note whose Save is still running", () => {
     await settle();
     await act(async () => { release!(); });
     await settle();
-    expect(invoked.some((c) => c.cmd === "draft_put" && (c.args.value as { key: string }).key === "d:1")).toBe(false);
+    expect(invoked.some((c) => c.cmd === "draft_put" && (c.args.value as { key: string }).key === noteDraftKey(STORE, "d:1"))).toBe(false);
     expect(tabUpdates[tabUpdates.length - 1]).toMatchObject({ kind: "note", ref: "d:1" });
   });
 });

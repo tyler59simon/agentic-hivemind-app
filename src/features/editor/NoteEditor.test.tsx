@@ -29,11 +29,13 @@ vi.mock("./MarkdownEditor", () => ({
 
 const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 const { NoteEditor } = await import("./NoteEditor");
+const { setLmStore } = await import("../../documents/store");
 
 let host: HTMLElement;
 let head: HTMLElement;
 let root: Root;
 beforeEach(() => {
+  setLmStore("C:/stores/a");
   updates.length = 0;
   host = document.createElement("div");
   head = document.createElement("div");

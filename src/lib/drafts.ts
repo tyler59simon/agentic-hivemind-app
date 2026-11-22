@@ -13,6 +13,9 @@ export interface NoteDraft {
   base?: Fields;              // the note as it was then, for a three-way merge
   mine: Fields;
   savedAt: string;
+  /** The Living Memory store the note was edited in. Drafts written before this was recorded have none (Codex review of
+   *  7320d7f, LM-2). */
+  store?: string;
 }
 
 /** A notebook page's draft. `base` is left out for pages over 2 MB. */
