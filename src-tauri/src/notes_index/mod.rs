@@ -1300,6 +1300,20 @@ mod tests {
         index.read(|c| structured::tasks(c, &filters)).unwrap().into_iter().map(|t| format!("{}:{}:{}:{}{}", t.path, t.line, if t.done { "x" } else { " " }, t.text, t.due.map(|d| format!("|{d}")).unwrap_or_default())).collect()
     }
 
+    #[test]
+    fn a_task_row_carries_its_owner_and_priority() {
+        let dir = scratch();
+        let one = root(&dir, "nb-1");
+        write(&one.path, "A.md", "# A\n- [ ] ship (due: 2026-12-01, owner: Dana Lee, priority: HIGH)\n- [ ] plain ⏬\n- [ ] bare\n");
+        let index = started(&dir);
+        index.sync(vec![one.clone()]);
+        index.flush();
+        let rows = index.read(|c| structured::tasks(c, &structured::TaskFilters::default())).unwrap();
+        let got: Vec<_> = rows.iter().map(|t| (t.line, t.due.as_deref(), t.owner.as_deref(), t.priority.as_deref())).collect();
+        assert_eq!(got, [(2, Some("2026-12-01"), Some("Dana Lee"), Some("high")), (3, None, None, Some("lowest")), (4, None, None, None)]);
+        finish(index, &dir);
+    }
+
     fn asked(index: &Index, query: &str) -> Vec<String> {
         let q: structured::Query = serde_json::from_str(query).unwrap();
         index.read(|c| structured::run(c, &q)).unwrap().into_iter().map(|r| format!("{}:{}", r.notebook, r.path)).collect()

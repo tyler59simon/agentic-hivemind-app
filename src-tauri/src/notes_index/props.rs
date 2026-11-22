@@ -1,7 +1,12 @@
 //! The tasks and the properties of a Markdown page, for the index (NS-7B). They are read the way Living Memory reads
 //! them (`core/docs_index.py`, `tasks` and `properties`), so a saved query or the Tasks list means the same over a folder
 //! notebook and a Living Memory notebook: a task is a `- [ ]` or `- [x]` line outside fenced code and the frontmatter, and
-//! a property is a flat key of the frontmatter (a list gives one value per item; nested maps are skipped).
+//! a property is a flat key of the frontmatter (a list gives one value per item; nested maps are skipped). The fields of a task
+//! (`due`, `owner`, `priority`) follow one rule, shared with Living Memory (`core/note_format.py`, `item_fields`) and with
+//! `src/features/notes/tasks.ts`; `src/features/notes/fixtures/task_lines.json` holds the cases all three are checked against.
+
+use regex::Regex;
+use std::sync::LazyLock;
 
 /// How many tasks and properties one page keeps.
 pub const MAX_TASKS: usize = 500;
@@ -16,8 +21,12 @@ pub struct Task {
     pub done: bool,
     /// What follows the box, at most `TASK_CHARS` characters.
     pub text: String,
-    /// `YYYY-MM-DD` after `📅` or `due::`.
+    /// `YYYY-MM-DD`: the tail's `due:`, else the first `📅` or `due::` date.
     pub due: Option<String>,
+    /// The tail's `owner:` only.
+    pub owner: Option<String>,
+    /// `highest`, `high`, `medium`, `low` or `lowest`: the tail's `priority:`, else the first Tasks priority emoji.
+    pub priority: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,22 +45,77 @@ fn date_at(chars: &[char], mut at: usize) -> Option<String> {
     shape.then(|| part.iter().collect())
 }
 
-/// The due date of a task: the first `📅 date` or `due:: date` (`due: date` too), where `due` starts a word.
-pub fn due_of(text: &str) -> Option<String> {
+/// Whether `value` is a real `YYYY-MM-DD` date (year 1 or later).
+fn valid_date(value: &str) -> bool {
+    let c: Vec<char> = value.chars().collect();
+    let shape = c.len() == 10 && c.iter().enumerate().all(|(i, c)| if i == 4 || i == 7 { *c == '-' } else { c.is_ascii_digit() });
+    shape && {
+        let number = |from: usize, to: usize| value[from..to].parse::<u32>().unwrap_or(0);
+        number(0, 4) >= 1 && chrono::NaiveDate::from_ymd_opt(number(0, 4) as i32, number(5, 7), number(8, 10)).is_some()
+    }
+}
+
+/// The first `📅 date` or `due:: date` of `text` (`due` starts a word); `None` when that date is not a real one.
+fn due_form(text: &str) -> Option<String> {
     let c: Vec<char> = text.chars().collect();
     for i in 0..c.len() {
-        if c[i] == '\u{1F4C5}' {
-            if let Some(date) = date_at(&c, i + 1) {
-                return Some(date);
-            }
-        } else if c[i..].starts_with(&['d', 'u', 'e', ':']) && (i == 0 || !(c[i - 1].is_alphanumeric() || c[i - 1] == '_')) {
-            let after = if c.get(i + 4) == Some(&':') { i + 5 } else { i + 4 };
-            if let Some(date) = date_at(&c, after) {
-                return Some(date);
-            }
+        let after = if c[i] == '\u{1F4C5}' {
+            i + 1
+        } else if c[i..].starts_with(&['d', 'u', 'e', ':', ':']) && (i == 0 || !(c[i - 1].is_alphanumeric() || c[i - 1] == '_')) {
+            i + 5
+        } else {
+            continue;
+        };
+        if let Some(date) = date_at(&c, after) {
+            return valid_date(&date).then_some(date);
         }
     }
     None
+}
+
+const PAIR: &str = r"(?:due|owner|priority)\s*:\s*[^,()]+";
+/// The tail of a task: a parenthesis group at the very end that holds only `due`, `owner` and `priority` pairs.
+static TAIL: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!(r"(?i)\s*\(\s*({PAIR}(?:\s*,\s*{PAIR})*)\s*\)\s*$")).unwrap());
+
+/// The Tasks plugin's priority emojis.
+const PRIORITY_EMOJI: [(char, &str); 5] = [('\u{1F53A}', "highest"), ('\u{23EB}', "high"), ('\u{1F53C}', "medium"), ('\u{1F53D}', "low"), ('\u{23EC}', "lowest")];
+
+/// The fields of a task's text, `(due, owner, priority)`. A tail at the very end, `(due: YYYY-MM-DD, owner: NAME, priority: high)`,
+/// gives them in any order, with the keys in any case; a bad value is ignored and the first of a repeated key wins. A group
+/// holding anything else is plain text. What the tail does not give comes from the text: the due date from the first
+/// `📅 YYYY-MM-DD` or `due:: YYYY-MM-DD`, the priority from the first priority emoji. The owner comes from the tail only.
+pub fn fields_of(text: &str) -> (Option<String>, Option<String>, Option<String>) {
+    let text = text.trim();
+    let (mut due, mut owner, mut priority) = (None, None, None);
+    let mut rest = text;
+    if let Some(tail) = TAIL.captures(text) {
+        rest = text[..tail.get(0).map_or(0, |m| m.start())].trim_end();
+        let mut seen: Vec<String> = Vec::new();
+        for pair in tail[1].split(',') {
+            let (key, value) = pair.split_once(':').unwrap_or((pair, ""));
+            let key = key.trim().to_lowercase();
+            let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.push(key.clone());
+            match key.as_str() {
+                "due" if valid_date(&value) => due = Some(value),
+                "owner" => owner = Some(value),
+                "priority" if PRIORITY_EMOJI.iter().any(|(_, p)| value.to_lowercase() == *p) => priority = Some(value.to_lowercase()),
+                _ => {}
+            }
+        }
+    }
+    let due = due.or_else(|| due_form(rest));
+    let priority = priority.or_else(|| rest.chars().find_map(|c| PRIORITY_EMOJI.iter().find(|(e, _)| *e == c).map(|(_, p)| p.to_string())));
+    (due, owner, priority)
+}
+
+/// The due date of a task's text (see `fields_of`).
+#[cfg(test)]
+pub fn due_of(text: &str) -> Option<String> {
+    fields_of(text).0
 }
 
 /// A task line: its box and its text. A list marker (`-`, `*`, `+`, or a number with `.` or `)`), a box with a space, `x` or
@@ -108,8 +172,8 @@ pub fn tasks(lines: &[&str], skip: usize) -> Vec<Task> {
             continue;
         }
         if let Some((done, text)) = task_line(line) {
-            let due = due_of(&text);
-            out.push(Task { line: (at + 1) as u32, done, text, due });
+            let (due, owner, priority) = fields_of(&text);
+            out.push(Task { line: (at + 1) as u32, done, text, due, owner, priority });
             if out.len() >= MAX_TASKS {
                 break;
             }
@@ -200,12 +264,64 @@ mod tests {
         assert_eq!(due_of("call 📅 2026-12-01 soon"), Some("2026-12-01".into()));
         assert_eq!(due_of("call 📅2026-12-01"), Some("2026-12-01".into()));
         assert_eq!(due_of("call due:: 2026-12-02"), Some("2026-12-02".into()));
-        assert_eq!(due_of("call due: 2026-12-03"), Some("2026-12-03".into()));
+        // A single colon counts only inside the tail (the rule Living Memory uses).
+        assert_eq!(due_of("call due: 2026-12-03"), None);
+        assert_eq!(due_of("call (due: 2026-12-03)"), Some("2026-12-03".into()));
         assert_eq!(due_of("overdue:: 2026-12-03"), None);
         assert_eq!(due_of("call 📅 soon"), None);
         assert_eq!(due_of("📅 2026-1-1"), None);
         // The first one wins, wherever it stands.
         assert_eq!(due_of("due:: 2026-01-02 and 📅 2026-02-03"), Some("2026-01-02".into()));
+    }
+
+    #[test]
+    fn the_tail_wins_over_the_emoji_and_the_dataview_field() {
+        let some = |v: &str| Some(v.to_string());
+        assert_eq!(fields_of("Ship it (due: 2026-12-01, owner: me, priority: high)"), (some("2026-12-01"), some("me"), some("high")));
+        assert_eq!(fields_of("Ship it ⏫ 📅 2026-01-01 (due: 2030-01-01, priority: low)"), (some("2030-01-01"), None, some("low")));
+        assert_eq!(fields_of("Review 🔼 📅 2027-03-04 (owner: Kim)"), (some("2027-03-04"), some("Kim"), some("medium")));
+        assert_eq!(fields_of("Ship it (due: soon) 📅 2026-12-01"), (some("2026-12-01"), None, None));
+        assert_eq!(fields_of("Ship it (due: 2026-02-30)"), (None, None, None));
+    }
+
+    /// The cases `src/features/notes/fixtures/task_lines.json` shares with Living Memory and `tasks.ts`.
+    const CASES: &str = include_str!("../../../src/features/notes/fixtures/task_lines.json");
+
+    #[test]
+    fn every_shared_fixture_case_reads_the_same() {
+        let cases: Vec<serde_json::Value> = serde_json::from_str(CASES).unwrap();
+        assert!(cases.len() >= 30);
+        for case in &cases {
+            let line = case["line"].as_str().unwrap();
+            let want = &case["task"];
+            let Some((done, text)) = task_line(line) else {
+                assert!(want.is_null(), "{line}");
+                assert!(tasks(&[line], 0).is_empty(), "{line}");
+                continue;
+            };
+            assert!(!want.is_null(), "{line}");
+            let (due, owner, priority) = fields_of(&text);
+            assert_eq!(done, want["done"].as_bool().unwrap(), "{line}");
+            assert_eq!(text, want["text"].as_str().unwrap(), "{line}");
+            assert_eq!(due.as_deref(), want["due"].as_str(), "{line}");
+            assert_eq!(owner.as_deref(), want["owner"].as_str(), "{line}");
+            assert_eq!(priority.as_deref(), want["priority"].as_str(), "{line}");
+            let found = tasks(&[line], 0);
+            assert_eq!(found.len(), 1, "{line}");
+            assert_eq!((found[0].due.clone(), found[0].owner.clone(), found[0].priority.clone()), (due, owner, priority), "{line}");
+        }
+    }
+
+    /// Runs only when HIVEMIND_TEST_LM_SCRIPT points at a living_memory.py: the copy of the fixture here must hold the same cases as
+    /// the file Living Memory owns, `tests/fixtures/task_lines.json` next to its `tests` folder. Parsed values are compared, since Git
+    /// may change the line endings of either file.
+    #[test]
+    fn the_fixture_copy_matches_living_memorys_file() {
+        let Ok(script) = std::env::var("HIVEMIND_TEST_LM_SCRIPT") else { return };
+        let owned = std::path::Path::new(&script).parent().unwrap().join("tests").join("fixtures").join("task_lines.json");
+        let theirs: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&owned).unwrap_or_else(|e| panic!("{}: {e}", owned.display()))).unwrap();
+        let ours: serde_json::Value = serde_json::from_str(CASES).unwrap();
+        assert!(ours == theirs, "src/features/notes/fixtures/task_lines.json differs from {}; copy that file over it", owned.display());
     }
 
     #[test]

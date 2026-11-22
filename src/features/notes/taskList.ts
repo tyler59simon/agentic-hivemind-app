@@ -1,5 +1,5 @@
 // The rows of the Tasks view (NS-7B) and how they are filtered, ordered and grouped. Pure, so the view only draws.
-import { dueOf, priorityOf, priorityRank, type Priority } from "./tasks";
+import { fieldsOf, priorityRank, type Priority } from "./tasks";
 
 /** A line of a page, or an open action item of a Living Memory work note. */
 export interface TaskItem {
@@ -16,6 +16,8 @@ export interface TaskItem {
   text: string;
   due: string | null;
   priority: Priority | null;
+  /** The owner a task's tail names, if any. */
+  owner?: string | null;
   /** A folder notebook's page hash when it was indexed (a write checks it). */
   sha256?: string;
   /** An action item's note ref and the index of its item in the note. */
@@ -46,7 +48,10 @@ export function dueBucket(due: string | null, today: string): "overdue" | "today
 }
 
 /** An item from a task line's text and what an index or `doc tasks` row said of it. */
-export const itemOf = (base: Omit<TaskItem, "due" | "priority">, due: string | null): TaskItem => ({ ...base, due: due ?? dueOf(base.text), priority: priorityOf(base.text) });
+export function itemOf(base: Omit<TaskItem, "due" | "priority" | "owner">, due: string | null): TaskItem {
+  const fields = fieldsOf(base.text);
+  return { ...base, due: due ?? fields.due, priority: fields.priority, owner: fields.owner };
+}
 
 export function filterTasks(items: TaskItem[], f: TaskFilters, today: string): TaskItem[] {
   const words = f.text.toLowerCase().split(/\s+/).filter(Boolean);

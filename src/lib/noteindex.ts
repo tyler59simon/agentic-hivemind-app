@@ -52,7 +52,7 @@ export const indexIncoming = (paths: string[]) => invoke<IncomingLink[]>("index_
 export const indexPages = (notebook?: string) => invoke<IndexedPage[]>("index_pages", { notebook: notebook ?? null }).then((r) => r ?? []);
 export const indexTags = (notebook?: string) => invoke<TagCount[]>("index_tags", { notebook: notebook ?? null }).then((r) => r ?? []);
 /** A task line of a folder notebook's page (NS-7B). `sha256` is the page's hash when it was indexed. */
-export interface IndexTask { notebook: string; path: string; title: string; line: number; done: boolean; text: string; due: string | null; sha256: string }
+export interface IndexTask { notebook: string; path: string; title: string; line: number; done: boolean; text: string; due: string | null; owner: string | null; priority: string | null; sha256: string }
 /** The task lines of the folder notebooks' pages, open before done; `done` limits them to one kind. */
 export const indexTasks = (filters: { notebook?: string; done?: boolean; text?: string; limit?: number } = {}) => invoke<IndexTask[]>("index_tasks", { filters }).then((r) => r ?? []);
 export const indexStatus = () => invoke<IndexStatus>("index_status");

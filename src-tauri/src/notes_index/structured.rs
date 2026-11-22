@@ -44,6 +44,8 @@ pub struct TaskRow {
     pub done: bool,
     pub text: String,
     pub due: Option<String>,
+    pub owner: Option<String>,
+    pub priority: Option<String>,
     /// The hash of the page when it was indexed: a write checks it against the file.
     pub sha256: String,
 }
@@ -51,7 +53,7 @@ pub struct TaskRow {
 /// The tasks of the indexed pages, open before done, then by due date (those with none last), notebook, page and line: the
 /// order of Living Memory's `doc tasks`.
 pub fn tasks(conn: &Connection, filters: &TaskFilters) -> rusqlite::Result<Vec<TaskRow>> {
-    let mut sql = String::from("SELECT p.notebook, p.path, p.title, t.line, t.done, t.text, t.due, p.sha256 FROM tasks t JOIN pages p ON p.id = t.page WHERE 1 = 1");
+    let mut sql = String::from("SELECT p.notebook, p.path, p.title, t.line, t.done, t.text, t.due, t.owner, t.priority, p.sha256 FROM tasks t JOIN pages p ON p.id = t.page WHERE 1 = 1");
     let mut args: Vec<Sql> = Vec::new();
     if let Some(v) = &filters.notebook {
         args.push(Sql::Text(v.clone()));
@@ -67,7 +69,7 @@ pub fn tasks(conn: &Connection, filters: &TaskFilters) -> rusqlite::Result<Vec<T
     sql.push_str(&format!(" ORDER BY t.done, t.due IS NULL, t.due, p.notebook, p.path, t.line LIMIT {}", filters.limit.unwrap_or(MAX_TASKS).clamp(1, MAX_TASKS)));
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(args), |r| {
-        Ok(TaskRow { notebook: r.get(0)?, path: r.get(1)?, title: r.get(2)?, line: r.get(3)?, done: r.get(4)?, text: r.get(5)?, due: r.get(6)?, sha256: r.get(7)? })
+        Ok(TaskRow { notebook: r.get(0)?, path: r.get(1)?, title: r.get(2)?, line: r.get(3)?, done: r.get(4)?, text: r.get(5)?, due: r.get(6)?, owner: r.get(7)?, priority: r.get(8)?, sha256: r.get(9)? })
     })?;
     rows.collect()
 }

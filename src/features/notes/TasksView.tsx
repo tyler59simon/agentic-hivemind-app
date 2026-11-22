@@ -133,6 +133,7 @@ export function TasksView() {
                   <input type="checkbox" checked={t.done} disabled={busy === t.id} aria-label={`${t.done ? "Reopen" : "Tick"} ${displayText(t.text)}`} onChange={(e) => void tick(t, e.target.checked)} />
                   <span className="task-text">{displayText(t.text)}</span>
                   {t.priority && <span className="chip small" title="Priority">{t.priority}</span>}
+                  {t.owner && <span className="chip small" title="Owner">{t.owner}</span>}
                   {t.due && <span className={`chip small${overdue ? " overdue" : ""}`} title="Due date">{t.due}</span>}
                   <button className="link task-page" onClick={() => openSource(t)} title={t.kind === "action" ? "Open the note" : `Open ${t.path}`}>{t.title || t.path}</button>
                   <span className="muted small task-notebook">{t.notebookTitle}</span>

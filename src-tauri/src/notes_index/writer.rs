@@ -249,9 +249,9 @@ pub fn index_file(conn: &Connection, sem: &Semantic, reach: &Reach, notebook: &s
     }
     conn.prepare_cached("DELETE FROM tasks WHERE page = ?1").map_err(sql)?.execute([id]).map_err(sql)?;
     {
-        let mut insert = conn.prepare_cached("INSERT INTO tasks (page, line, done, text, due) VALUES (?1, ?2, ?3, ?4, ?5)").map_err(sql)?;
+        let mut insert = conn.prepare_cached("INSERT INTO tasks (page, line, done, text, due, owner, priority) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)").map_err(sql)?;
         for task in &page.tasks {
-            insert.execute(params![id, task.line, task.done, task.text, task.due]).map_err(sql)?;
+            insert.execute(params![id, task.line, task.done, task.text, task.due, task.owner, task.priority]).map_err(sql)?;
         }
     }
     conn.prepare_cached("DELETE FROM props WHERE page = ?1").map_err(sql)?.execute([id]).map_err(sql)?;

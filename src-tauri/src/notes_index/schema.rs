@@ -4,7 +4,7 @@ use rusqlite::Connection;
 use std::path::Path;
 
 /// Bump when a table, a column or what an extractor stores changes: the next start drops the database and indexes again.
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 const TABLES: &str = "
 CREATE TABLE pages (
@@ -39,7 +39,9 @@ CREATE TABLE tasks (
   line INTEGER NOT NULL,
   done INTEGER NOT NULL,
   text TEXT NOT NULL,
-  due TEXT
+  due TEXT,
+  owner TEXT,
+  priority TEXT
 );
 CREATE INDEX tasks_page ON tasks (page);
 CREATE TABLE props (page INTEGER NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL);
