@@ -37,7 +37,7 @@ vitest for every line tool (empty lines, CRLF already normalised, Unicode case),
 
 ## 4. Shipped
 
-Code landed on 2026-11-22: Hivemind `HASH`, with the fixes from Claude's review and UI pass. At the user's request this phase had no Codex review; Claude reviewed the diff.
+Code landed on 2026-11-22: Hivemind `0c4e835`, with the fixes from Claude's review and UI pass. At the user's request this phase had no Codex review; Claude reviewed the diff.
 
 **What is where**
 - **Rust.** `file_reopen(notebook, path, encoding)` in `src-tauri/src/studio.rs`. `file_read` and `file_reopen` both go through `read_for`, which resolves a page with `inside()` and a loose file with `loose()`, so a reopen reaches exactly what a read reaches. `files::encoding` gained `EDITABLE` (the 14 encodings of the round-trip test), `editable(name)` and `decode_as`, which refuses NUL bytes unless the encoding is UTF-16. `files::read_as` and `read_view_as` share `read_inner` with `read`. `Loaded` gained `chooseEol` (`choose_eol` in Rust): read-only only because of mixed line endings.

@@ -8,6 +8,16 @@ These rules come from the Codex review of the design ([reviews/ns0-codex-review.
 
 - `regex` is a direct dependency (W2). Folder replace runs `files::guard` on every file it writes and skips protected ones (S2).
 
+## Changes from the code survey before NS-6B
+
+Claude surveyed main on 2026-11-22 (after NS-6A). Where the sections below say otherwise, these win. At the user's request this phase has no Codex review; Claude reviews the diff.
+
+- **Which files open where.** NS-1B already opens text files up to 64 MB (`files::MAX_READ`) editable, and nobody asked to take that away, so it stays: there is no new read-only band between 8 and 64 MB. Files over 64 MB, and files NS-1B decodes as binary, open in the large file viewer instead of the "too large to edit" error. Any file tab also gets **Open in large file viewer** and **Hex view** in its menu.
+- **Viewer handles** live in Rust state keyed by a handle id, opened through the same containment as `file_read` (`inside()` for notebook files, the open grant for loose files), read with read, write and delete sharing so a log writer and a rotation are never blocked. Closing the tab closes the handle; handles left over from a closed window are closed when the window goes.
+- **Find in files** searches notebooks and folders registered in Hivemind only (not arbitrary paths), skips what `ignore` skips plus `.git`, `.hivemind`, binaries and files over 8 MB, and stops at 10,000 matches with a note.
+- **Replace** writes each file through the same path as `file_save`: containment, `files::guard` (protected files are listed as skipped), the preview's sha256 as the precondition, an NS-5 snapshot with source `replace` before the write, the original encoding and line endings kept, and the NS-4A index told through `touched`. A file with unsaved edits open in a tab is skipped and listed. **Undo all** restores each file's pre-replace snapshot with the post-replace hash as the precondition, so a file changed after the replace is skipped, not overwritten.
+- `regex` and `ignore` become direct dependencies.
+
 ## 1. What the user sees
 
 - Files over about 8 MB open read-only in the editor up to 64 MB; above 64 MB, and binary files, open in the **large file viewer**: line numbers, jump to line, regex search with next and previous, copy lines, word wrap off. It opens instantly and indexes in the background with a progress bar.
