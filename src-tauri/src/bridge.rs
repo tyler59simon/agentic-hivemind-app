@@ -1,13 +1,19 @@
 //! One long-lived `living_memory.py serve --stdio` process. Requests are sent one at a time:
 //! a request line goes out, then exactly one reply line comes back.
+//!
+//! The process is written to and read on threads of its own, and the caller waits for a reply with a time limit. A reply
+//! that does not come in time ends the process (and, on Windows, everything it started), so one stalled server can hold
+//! the request lock for at most that limit, and the next call starts a new one (Codex review of 7320d7f, LM-1).
+use crate::jobs::Job;
 use crate::settings::Launch;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -19,6 +25,44 @@ pub const SERVE_LIMIT: usize = 2 * 1024 * 1024;
 /// How much of the server's stderr is kept to explain why it exited.
 const STDERR_TAIL: usize = 4096;
 
+/// What a request that gets no reply in time fails with. The process was ended, so trying again starts a new one.
+pub const NO_ANSWER: &str = "Living Memory isn't answering, so Hivemind restarted it. Try again.";
+
+/// Commands that read or rewrite a whole store (indexes, plans, backups, imports and exports, the wiki, model work). They
+/// get the slow limit; every other command is quick.
+const SLOW: [&str; 33] = [
+    "rebuild", "doctor", "backup", "export", "import-plan", "ingest-plan", "ingest-scan", "source-sync", "apply", "restore-plan",
+    "migration-plan", "note-type-plan", "baseline-plan", "retag-plan", "merge-plan", "rebaseline", "semantic", "validate",
+    "maintenance", "wiki", "sync", "overlay-build", "overlay-sync-all", "overlay-teardown-plan", "recover", "remap", "promote",
+    "rewrite", "undo", "batch", "ask", "stats", "query",
+];
+
+/// How long a request may wait for its reply.
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    /// An ordinary request (a read, a save, a capture).
+    pub quick: Duration,
+    /// A request that works over the whole store (see `SLOW`).
+    pub slow: Duration,
+    /// A new server's `version` reply. Short, so a server that starts and stalls cannot hold up the workspace.
+    pub start: Duration,
+    /// The longest reply line read, in bytes. A reply is a note, a page or a list, far below the default; a server that
+    /// sends more is stopped instead of filling memory.
+    pub reply: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Limits { quick: Duration::from_secs(30), slow: Duration::from_secs(600), start: Duration::from_secs(10), reply: 64 * 1024 * 1024 }
+    }
+}
+
+impl Limits {
+    fn for_argv(&self, argv: &[String]) -> Duration {
+        if argv.first().is_some_and(|command| SLOW.contains(&command.as_str())) { self.slow } else { self.quick }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Reply {
     pub exit_code: i64,
@@ -26,11 +70,41 @@ pub struct Reply {
     pub error: Value,
 }
 
+/// The server process, reachable from any thread so a stalled one can be ended without the request lock.
+struct Handle {
+    child: Mutex<Child>,
+    /// Ends the whole process tree on Windows (the `py` launcher starts the real Python as a child).
+    job: Option<Job>,
+}
+
+impl Handle {
+    /// End the process and what it started. Never blocks, and can be called at any time.
+    fn kill(&self) {
+        if let Some(job) = &self.job {
+            job.end();
+        }
+        let _ = self.child.lock().unwrap().kill();
+    }
+}
+
+/// What the reader thread heard on the server's stdout.
+enum Heard {
+    Line(Vec<u8>),
+    /// The pipe closed (None) or could not be read.
+    Closed(Option<std::io::Error>),
+    /// A reply line longer than `Limits::reply`. The rest of the stream is not read.
+    TooLong,
+}
+
 struct Proc {
-    child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    handle: Arc<Handle>,
+    /// Request lines for the writer thread, which owns stdin: a full pipe stalls that thread, never the caller.
+    requests: mpsc::Sender<String>,
+    /// Reply lines from the reader thread, which owns stdout.
+    replies: mpsc::Receiver<Heard>,
     next: u64,
+    /// The bridge generation this process was started for. A process from an earlier generation is never used.
+    generation: u64,
     /// The last STDERR_TAIL bytes the server wrote to stderr, read on a thread so a full pipe never blocks it.
     stderr: Arc<Mutex<Vec<u8>>>,
     drain: JoinHandle<()>,
@@ -50,14 +124,15 @@ impl Proc {
         // A server whose stderr is still open has not stopped, so it is asked once and not waited for.
         let reaped = Instant::now() + if self.drain.is_finished() { Duration::from_secs(1) } else { Duration::ZERO };
         loop {
-            match self.child.try_wait() {
+            match self.handle.child.lock().unwrap().try_wait() {
                 Ok(Some(status)) => {
                     text.push_str(&format!(" ({status})"));
                     break;
                 }
-                Ok(None) if Instant::now() < reaped => std::thread::sleep(Duration::from_millis(10)),
+                Ok(None) if Instant::now() < reaped => {}
                 _ => break,
             }
+            std::thread::sleep(Duration::from_millis(10));
         }
         let tail = String::from_utf8_lossy(&self.stderr.lock().unwrap()).trim().to_string();
         if tail.is_empty() {
@@ -71,20 +146,29 @@ impl Proc {
 
 impl Drop for Proc {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.handle.kill();
+        // Reaped, but not waited for without end: the process was told to stop and the caller has other work.
+        let until = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < until && matches!(self.handle.child.lock().unwrap().try_wait(), Ok(None)) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 }
 
 pub struct Bridge {
     launch: Mutex<Launch>,
+    /// Held for one request at a time, and no longer than that request's time limit.
     proc: Mutex<Option<Proc>>,
-    /// Counts reconfigures. It changes only while `proc` is locked, and `call_at` checks it under that lock, so a request
-    /// made for one store never runs in the next (Codex re-review of 75ce884, R2-D1).
+    /// The process in `proc`, kept apart from its lock so `reconfigure` can end a stuck one without waiting for it.
+    running: Mutex<Weak<Handle>>,
+    limits: Limits,
+    /// Counts reconfigures. `call_at` checks it under the `proc` lock, so a request made for one store never runs in the
+    /// next (Codex re-review of 75ce884, R2-D1); a process started for an earlier generation is dropped, not reused.
     generation: AtomicU64,
     /// The store root `connect` verified for this generation. A process started later in the same generation is given it
     /// with `--root`, so a default store that changed meanwhile (Living Memory's setup picked another) is never served
-    /// under the old generation (Codex review of dd4c1b0, R3-D7). Cleared by `reconfigure`.
+    /// under the old generation (Codex review of dd4c1b0, R3-D7). Cleared by `reconfigure`, which holds this lock while it
+    /// changes the launch and the generation, so the three always change together.
     pinned: Mutex<Option<PathBuf>>,
 }
 
@@ -93,32 +177,54 @@ pub const STORE_CHANGED: &str = "Living Memory switched to another store while t
 
 impl Bridge {
     pub fn new(launch: Launch) -> Self {
-        Bridge { launch: Mutex::new(launch), proc: Mutex::new(None), generation: AtomicU64::new(0), pinned: Mutex::new(None) }
+        Self::with_limits(launch, Limits::default())
+    }
+
+    pub fn with_limits(launch: Launch, limits: Limits) -> Self {
+        Bridge {
+            launch: Mutex::new(launch),
+            proc: Mutex::new(None),
+            running: Mutex::new(Weak::new()),
+            limits,
+            generation: AtomicU64::new(0),
+            pinned: Mutex::new(None),
+        }
+    }
+
+    pub fn limits(&self) -> Limits {
+        self.limits
     }
 
     /// Point at a different interpreter/script/store; the next call starts a fresh process. Requests bound to the
-    /// earlier generation are refused from now on.
+    /// earlier generation are refused from now on. It never waits for a request in progress: the old process is ended,
+    /// so a request waiting on it fails at once and Settings can always be saved (LM-1).
     pub fn reconfigure(&self, launch: Launch) {
-        let mut proc = self.proc.lock().unwrap();
-        *self.launch.lock().unwrap() = launch;
-        *self.pinned.lock().unwrap() = None;
-        self.generation.fetch_add(1, Ordering::SeqCst);
-        *proc = None;
+        {
+            let mut pinned = self.pinned.lock().unwrap();
+            *self.launch.lock().unwrap() = launch;
+            *pinned = None;
+            self.generation.fetch_add(1, Ordering::SeqCst);
+        }
+        let old = self.running.lock().unwrap().upgrade();
+        if let Some(old) = old {
+            old.kill();
+        }
     }
 
     /// Keep `root` as the store of `generation` (when that is still the current one and Settings name no root).
     pub fn pin_root(&self, generation: u64, root: PathBuf) {
-        let _proc = self.proc.lock().unwrap();
+        let mut pinned = self.pinned.lock().unwrap();
         if generation == self.generation() && self.launch.lock().unwrap().root.is_none() {
-            *self.pinned.lock().unwrap() = Some(root);
+            *pinned = Some(root);
         }
     }
 
     /// The launch a new process uses: the configured one, with the pinned root when Settings name none.
     fn effective_launch(&self) -> Launch {
-        let mut launch = self.launch();
+        let pinned = self.pinned.lock().unwrap();
+        let mut launch = self.launch.lock().unwrap().clone();
         if launch.root.is_none() {
-            launch.root = self.pinned.lock().unwrap().clone();
+            launch.root = pinned.clone();
         }
         launch
     }
@@ -132,7 +238,7 @@ impl Bridge {
         self.launch.lock().unwrap().clone()
     }
 
-    fn spawn(launch: &Launch) -> Result<Proc, String> {
+    fn spawn(launch: &Launch, generation: u64, reply_limit: usize) -> Result<Proc, String> {
         if !launch.script.is_file() {
             return Err(format!(
                 "Living Memory is not installed at {}. Install it with install.py from the agentic-living-memory repo, or set its script in Settings.",
@@ -165,7 +271,8 @@ impl Bridge {
         let mut child = command
             .spawn()
             .map_err(|e| format!("Could not start {} {}: {e}", launch.program, launch.script.display()))?;
-        let stdin = child.stdin.take().ok_or("no stdin")?;
+        let job = Job::new().filter(|job| job.add(&child));
+        let mut stdin = child.stdin.take().ok_or("no stdin")?;
         let stdout = BufReader::new(child.stdout.take().ok_or("no stdout")?);
         let mut pipe = child.stderr.take().ok_or("no stderr")?;
         let stderr = Arc::new(Mutex::new(Vec::new()));
@@ -179,10 +286,21 @@ impl Bridge {
                 tail.drain(..over);
             }
         });
-        Ok(Proc { child, stdin, stdout, next: 1, stderr, drain })
+        // A failed write ends this thread; the caller then hears the pipe close, or waits out its limit.
+        let (requests, outgoing) = mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            for line in outgoing {
+                if stdin.write_all(line.as_bytes()).and_then(|_| stdin.flush()).is_err() {
+                    break;
+                }
+            }
+        });
+        let (heard, replies) = mpsc::channel();
+        std::thread::spawn(move || read_replies(stdout, heard, reply_limit));
+        Ok(Proc { handle: Arc::new(Handle { child: Mutex::new(child), job }), requests, replies, next: 1, generation, stderr, drain })
     }
 
-    fn exchange(proc: &mut Proc, argv: &[String], stdin: Option<&str>) -> Result<Reply, String> {
+    fn exchange(proc: &mut Proc, argv: &[String], stdin: Option<&str>, limit: Duration) -> Result<Reply, String> {
         let id = proc.next;
         proc.next += 1;
         let mut request = json!({ "id": id, "argv": argv });
@@ -191,18 +309,25 @@ impl Bridge {
         }
         let mut line = serde_json::to_string(&request).map_err(|e| e.to_string())?;
         line.push('\n');
-        if let Err(e) = proc.stdin.write_all(line.as_bytes()).and_then(|_| proc.stdin.flush()) {
-            return Err(proc.stopped(&format!("Living Memory stopped: {e}"), ""));
+        if proc.requests.send(line).is_err() {
+            return Err(proc.stopped("Living Memory stopped", ""));
         }
-        let mut answer = String::new();
-        let read = match proc.stdout.read_line(&mut answer) {
-            Ok(read) => read,
-            Err(e) => return Err(proc.stopped(&format!("Living Memory stopped: {e}"), "")),
+        let answer = match proc.replies.recv_timeout(limit) {
+            Ok(Heard::Line(answer)) => answer,
+            Ok(Heard::Closed(Some(e))) => return Err(proc.stopped(&format!("Living Memory stopped: {e}"), "")),
+            Ok(Heard::Closed(None)) | Err(RecvTimeoutError::Disconnected) => {
+                return Err(proc.stopped("Living Memory exited", ". If it is older than the app bridge, update it (needs `serve --stdio`)"));
+            }
+            Ok(Heard::TooLong) => {
+                proc.handle.kill();
+                return Err("Living Memory sent a reply that is too large to read, so Hivemind restarted it. Try again.".into());
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                proc.handle.kill();
+                return Err(NO_ANSWER.into());
+            }
         };
-        if read == 0 {
-            return Err(proc.stopped("Living Memory exited", ". If it is older than the app bridge, update it (needs `serve --stdio`)"));
-        }
-        let value: Value = serde_json::from_str(&answer).map_err(|e| format!("Unreadable reply from Living Memory: {e}"))?;
+        let value: Value = serde_json::from_slice(&answer).map_err(|e| format!("Unreadable reply from Living Memory: {e}"))?;
         if value.get("id").and_then(Value::as_u64) != Some(id) {
             return Err("Living Memory replied out of order".into());
         }
@@ -210,8 +335,8 @@ impl Bridge {
     }
 
     /// Check a freshly started server speaks a compatible API.
-    fn handshake(proc: &mut Proc) -> Result<Value, String> {
-        let reply = Self::exchange(proc, &["version".into()], None)?;
+    fn handshake(proc: &mut Proc, limit: Duration) -> Result<Value, String> {
+        let reply = Self::exchange(proc, &["version".into()], None, limit)?;
         check_version(&reply)?;
         Ok(reply.result)
     }
@@ -224,6 +349,11 @@ impl Bridge {
 
     /// `call`, refused when `generation` is given and the bridge has been reconfigured since.
     pub fn call_at(&self, generation: Option<u64>, argv: &[String], stdin: Option<&str>) -> Result<Reply, String> {
+        self.call_within(generation, argv, stdin, self.limits.for_argv(argv))
+    }
+
+    /// `call_at` with its own reply limit, for a caller that knows how long its command may take.
+    pub fn call_within(&self, generation: Option<u64>, argv: &[String], stdin: Option<&str>, limit: Duration) -> Result<Reply, String> {
         // Measured before the process is touched, so a request that is too large never costs a restart. Its arguments count
         // as much as its stdin (Codex review of 32fee20, B1); JSON escaping at most sextuples a byte, so a request whose
         // raw size is under an eighth of the limit is never measured.
@@ -235,16 +365,54 @@ impl Bridge {
         if generation.is_some_and(|g| g != self.generation()) {
             return Err(STORE_CHANGED.into());
         }
+        if guard.as_ref().is_some_and(|proc| proc.generation != self.generation()) {
+            *guard = None;
+        }
         if guard.is_none() {
-            let mut proc = Self::spawn(&self.effective_launch())?;
-            Self::handshake(&mut proc)?;
+            let started_in = self.generation();
+            let mut proc = Self::spawn(&self.effective_launch(), started_in, self.limits.reply)?;
+            *self.running.lock().unwrap() = Arc::downgrade(&proc.handle);
+            Self::handshake(&mut proc, self.limits.start)?;
+            // Settings were saved while it started, so it may be for the old store: it is not used.
+            if started_in != self.generation() {
+                return Err(STORE_CHANGED.into());
+            }
             *guard = Some(proc);
         }
-        let outcome = Self::exchange(guard.as_mut().unwrap(), argv, stdin);
+        let outcome = Self::exchange(guard.as_mut().unwrap(), argv, stdin, limit);
         if outcome.is_err() {
             *guard = None;
         }
         outcome
+    }
+}
+
+/// Read reply lines from the server's stdout and hand them on, until it closes or sends a line over `limit` bytes.
+fn read_replies(mut out: BufReader<ChildStdout>, heard: mpsc::Sender<Heard>, limit: usize) {
+    loop {
+        let mut line = Vec::new();
+        let outcome = loop {
+            let chunk = match out.fill_buf() {
+                Ok([]) => break Heard::Closed(None),
+                Ok(chunk) => chunk,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => break Heard::Closed(Some(e)),
+            };
+            let end = chunk.iter().position(|&b| b == b'\n');
+            let take = end.map_or(chunk.len(), |at| at + 1);
+            if line.len() + take > limit {
+                break Heard::TooLong;
+            }
+            line.extend_from_slice(&chunk[..take]);
+            out.consume(take);
+            if end.is_some() {
+                break Heard::Line(std::mem::take(&mut line));
+            }
+        };
+        let done = !matches!(outcome, Heard::Line(_));
+        if heard.send(outcome).is_err() || done {
+            return;
+        }
     }
 }
 
@@ -538,6 +706,190 @@ mod tests {
         assert_eq!(ok(call(&["list", "--all-domains", "--tag", "project/app", "--actor", "viewer"], None))["total"], 3);
         drop(bridge);
         std::fs::remove_dir_all(base).ok();
+    }
+
+    // LM-1: a request that gets no reply in time ends the process and fails; nothing waits for a stalled server.
+
+    /// What a fake server script starts with: a reply helper and the `version` answer Hivemind checks.
+    const FAKE: &str = r#"
+import sys, json, os, time
+here = os.path.dirname(os.path.abspath(__file__))
+def reply(id, result):
+    sys.stdout.write(json.dumps({"id": id, "exit_code": 0, "result": result, "error": None}) + "\n")
+    sys.stdout.flush()
+VERSION = {"api": 1, "commands": ["serve", "list", "domains", "version"]}
+def mark(name):
+    open(os.path.join(here, name), "w").close()
+def marked(name):
+    return os.path.exists(os.path.join(here, name))
+"#;
+
+    /// A folder holding a fake `living_memory.py`: FAKE followed by `body`.
+    fn fake(name: &str, body: &str) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("hivemind-bridge-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("living_memory.py");
+        std::fs::write(&script, format!("{FAKE}{body}")).unwrap();
+        (dir, script)
+    }
+
+    /// The server's own process id, from a reply.
+    fn pid(bridge: &Bridge, command: &str) -> Result<u32, String> {
+        bridge.call(&[command.into()], None).map(|reply| reply.result["pid"].as_u64().unwrap() as u32)
+    }
+
+    fn gone(pid: u32) -> bool {
+        (0..60).any(|_| {
+            let gone = !crate::jobs::alive(pid);
+            if !gone {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            gone
+        })
+    }
+
+    fn limits(quick_ms: u64, start_ms: u64) -> Limits {
+        Limits { quick: Duration::from_millis(quick_ms), slow: Duration::from_millis(quick_ms * 4), start: Duration::from_millis(start_ms), reply: 1000 }
+    }
+
+    const ECHO_OR_STALL: &str = r#"
+first = not marked("stalled")
+for line in sys.stdin:
+    req = json.loads(line)
+    command = req["argv"][0]
+    if command == "version":
+        reply(req["id"], VERSION)
+    elif command == "stall" and first:
+        mark("stalled")
+        time.sleep(600)
+    elif command == "huge":
+        sys.stdout.write("x" * 5000 + "\n")
+        sys.stdout.flush()
+    else:
+        reply(req["id"], {"pid": os.getpid()})
+"#;
+
+    /// A reply that never comes fails after the limit with a plain message, the stalled process is gone, and the next
+    /// call starts a new one that works.
+    #[test]
+    fn a_stalled_reply_times_out_and_the_next_call_starts_a_new_process() {
+        let Some((program, args)) = python() else { return };
+        let (dir, script) = fake("stall", ECHO_OR_STALL);
+        let bridge = Bridge::with_limits(Launch { program, args, script, root: None }, limits(1500, 20_000));
+        let first = pid(&bridge, "echo").unwrap();
+        let began = Instant::now();
+        let error = bridge.call(&["stall".into()], None).unwrap_err();
+        assert_eq!(error, NO_ANSWER);
+        assert!(began.elapsed() >= Duration::from_millis(1500) && began.elapsed() < Duration::from_secs(15), "{:?}", began.elapsed());
+        assert!(gone(first), "the stalled server is still running");
+        let second = pid(&bridge, "echo").unwrap();
+        assert_ne!(first, second);
+        // The stall happened once; a new process answers the same command.
+        assert_eq!(bridge.call(&["stall".into()], None).unwrap().exit_code, 0);
+        drop(bridge);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A slow command gets the slow limit and an ordinary one the quick limit.
+    #[test]
+    fn a_slow_command_waits_longer_than_a_quick_one() {
+        let l = Limits::default();
+        let argv = |c: &str| vec![c.to_string()];
+        assert_eq!(l.for_argv(&argv("read")), l.quick);
+        assert_eq!(l.for_argv(&argv("doc")), l.quick);
+        for slow in ["rebuild", "doctor", "wiki", "export", "import-plan", "semantic", "apply"] {
+            assert_eq!(l.for_argv(&argv(slow)), l.slow, "{slow}");
+        }
+        assert!(l.quick < l.slow && l.start <= l.quick);
+    }
+
+    /// A server that starts and never answers `version` fails within the start limit, every time, without keeping a process.
+    #[test]
+    fn a_stalled_start_times_out() {
+        let Some((program, args)) = python() else { return };
+        let (dir, script) = fake("start", "mark('started')\ntime.sleep(600)\n");
+        let bridge = Bridge::with_limits(Launch { program, args, script, root: None }, limits(30_000, 700));
+        for _ in 0..2 {
+            let began = Instant::now();
+            assert_eq!(bridge.call(&["version".into()], None).unwrap_err(), NO_ANSWER);
+            assert!(began.elapsed() < Duration::from_secs(15), "{:?}", began.elapsed());
+        }
+        drop(bridge);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A server that stops reading while a large request is being written is not waited for either (the write is on its
+    /// own thread, and the process is ended so the write ends).
+    #[test]
+    fn a_stalled_write_times_out() {
+        let Some((program, args)) = python() else { return };
+        let body = r#"
+first = not marked("deaf")
+line = sys.stdin.readline()
+reply(json.loads(line)["id"], VERSION)
+if first:
+    mark("deaf")
+    time.sleep(600)
+for line in sys.stdin:
+    reply(json.loads(line)["id"], {"pid": os.getpid()})
+"#;
+        let (dir, script) = fake("deaf", body);
+        let bridge = Bridge::with_limits(Launch { program, args, script, root: None }, limits(1500, 20_000));
+        let big = "a".repeat(SERVE_LIMIT / 2);
+        let began = Instant::now();
+        assert_eq!(bridge.call(&["doc".into(), "write".into()], Some(&big)).unwrap_err(), NO_ANSWER);
+        assert!(began.elapsed() < Duration::from_secs(15), "{:?}", began.elapsed());
+        assert!(pid(&bridge, "echo").is_ok(), "the next call starts a new process");
+        drop(bridge);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A reply line over the limit stops the server instead of filling memory, and the next call works.
+    #[test]
+    fn a_reply_over_the_size_limit_stops_the_server() {
+        let Some((program, args)) = python() else { return };
+        let (dir, script) = fake("huge", ECHO_OR_STALL);
+        let bridge = Bridge::with_limits(Launch { program, args, script, root: None }, limits(20_000, 20_000));
+        let first = pid(&bridge, "echo").unwrap();
+        let error = bridge.call(&["huge".into()], None).unwrap_err();
+        assert!(error.contains("too large to read"), "{error}");
+        assert!(gone(first));
+        assert!(pid(&bridge, "echo").is_ok());
+        drop(bridge);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Saving Settings must not wait for a request that is stuck: `reconfigure` returns at once, the stuck request
+    /// fails, and the next call runs under the new launch.
+    #[test]
+    fn reconfigure_returns_while_a_request_is_stuck() {
+        let Some((program, args)) = python() else { return };
+        let (dir, script) = fake("reconf", ECHO_OR_STALL);
+        let launch = Launch { program, args, script, root: None };
+        // A long limit: only reconfigure can end the stuck request in time.
+        let bridge = Arc::new(Bridge::with_limits(launch.clone(), limits(120_000, 20_000)));
+        let first = pid(&bridge, "echo").unwrap();
+        let stuck = { let bridge = bridge.clone(); std::thread::spawn(move || bridge.call(&["stall".into()], None)) };
+        while !dir.join("stalled").exists() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let (done, heard) = mpsc::channel();
+        let again = {
+            let bridge = bridge.clone();
+            let launch = Launch { root: Some(dir.clone()), ..launch.clone() };
+            std::thread::spawn(move || { bridge.reconfigure(launch); let _ = done.send(()); })
+        };
+        assert!(heard.recv_timeout(Duration::from_secs(5)).is_ok(), "reconfigure waited for the stuck request");
+        again.join().unwrap();
+        let began = Instant::now();
+        assert!(stuck.join().unwrap().is_err(), "the stuck request ends when its process does");
+        assert!(began.elapsed() < Duration::from_secs(15));
+        assert!(gone(first));
+        assert_eq!(bridge.generation(), 1);
+        assert!(pid(&bridge, "echo").is_ok(), "the next call starts a process under the new launch");
+        drop(bridge);
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

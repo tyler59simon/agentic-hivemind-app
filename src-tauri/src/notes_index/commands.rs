@@ -116,7 +116,7 @@ pub fn index_rebuild(state: State<'_, AppState>, notebook: Option<String>) -> Re
     if let Some(id) = notebook {
         roots.retain(|r| r.id == id);
         if roots.is_empty() {
-            return Err("That notebook is no longer registered".into());
+            return Err("That notebook is no longer registered, or its folder was moved or replaced by a link; add the folder again".into());
         }
     }
     state.index.rebuild(roots);

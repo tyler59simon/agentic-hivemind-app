@@ -16,6 +16,7 @@ mod folders;
 mod git;
 mod history;
 mod instance;
+mod jobs;
 mod learning;
 mod lmdoc;
 mod managed;
@@ -185,6 +186,9 @@ fn store_identity(root: &str) -> String {
     text.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(text)
 }
 
+/// How long `connect` waits for `doctor`, which checks the whole store, before it shows the connection error.
+const CONNECT_DOCTOR_LIMIT: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// Start (or restart) the bridge, report what it connected to, and watch the store for changes.
 #[tauri::command]
 async fn connect(app: AppHandle, state: State<'_, AppState>) -> Result<ConnectInfo, String> {
@@ -197,9 +201,11 @@ async fn connect(app: AppHandle, state: State<'_, AppState>) -> Result<ConnectIn
     // one store's generation with another's root (Codex review of dd4c1b0, R3-D9).
     let generation = state.bridge.generation();
     let bridge = state.bridge.clone();
+    // Short limits: a Living Memory that starts and stalls must show the connection error, not hold the workspace (LM-1).
+    let limits = bridge.limits();
     let (version, doctor) = blocking(move || {
-        let version = bridge.call_at(Some(generation), &["version".into()], None)?;
-        let doctor = bridge.call_at(Some(generation), &["doctor".into(), "--actor".into(), "viewer".into()], None)?;
+        let version = bridge.call_within(Some(generation), &["version".into()], None, limits.start)?;
+        let doctor = bridge.call_within(Some(generation), &["doctor".into(), "--actor".into(), "viewer".into()], None, CONNECT_DOCTOR_LIMIT)?;
         Ok((version, doctor))
     })
     .await?;
@@ -1346,6 +1352,7 @@ fn save_settings(app: AppHandle, state: State<'_, AppState>, value: Settings) ->
     // Only a change of interpreter, script or store needs a new Living Memory process.
     if (&previous.python, &previous.script, &previous.root) != (&value.python, &value.script, &value.root) {
         *state.watcher.lock().unwrap() = None;
+        // Never waits for a request in progress, so a stuck Living Memory cannot block this save (LM-1).
         state.bridge.reconfigure(settings::resolve(&value, |k| std::env::var(k).ok()));
     }
     Ok(())

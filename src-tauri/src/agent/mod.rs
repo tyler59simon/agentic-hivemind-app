@@ -12,6 +12,7 @@ pub mod scope;
 pub mod store;
 
 use crate::bridge::Bridge;
+use crate::jobs::Job;
 use access::Access;
 use crate::settings::Settings;
 use crate::term::launch::Cli;
@@ -23,9 +24,10 @@ use scope::{AgentTask, PolicyMode, Scope, Spec};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, TryLockError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -38,6 +40,8 @@ const END_WAIT: Duration = Duration::from_secs(10); // how long End waits for a 
 const DRAIN_WAIT: Duration = Duration::from_secs(10); // how long a resume waits for the old process to go
 const STOP_ALL_WAIT: Duration = Duration::from_secs(2); // how long closing the app waits for idle processes to leave
 const POLL: Duration = Duration::from_millis(50);
+const EXIT_DRAIN: Duration = Duration::from_secs(2); // how long the pump keeps reading output after the CLI has exited
+const STDERR_WAIT: Duration = Duration::from_secs(1); // how long the closing event waits for the last of stderr
 const NO_PLUGIN: &str = "The Architecture Suite plugin is not loaded in Claude Code; install it or set its folder in Settings.";
 pub const LIMIT: &str = "3 agent sessions are already working; wait for one to finish or stop one";
 const STOPPED: &str = "The agent process has stopped";
@@ -439,8 +443,38 @@ pub enum Stop {
     Ended,
 }
 
+/// A CLI process and, on Windows, the job that holds it and everything it starts (PROC-3).
+struct Process {
+    child: Mutex<Child>,
+    /// Ending it ends every descendant, also one whose parent has already exited, which `taskkill /T` cannot find. It
+    /// closes with the last handle, so quitting Hivemind ends them too.
+    job: Option<Job>,
+}
+
+impl Process {
+    fn id(&self) -> u32 {
+        self.child.lock().unwrap().id()
+    }
+
+    /// `Some(exit code)` once the process has exited, without waiting. An unreadable state counts as exited.
+    fn exited(&self) -> Option<Option<i32>> {
+        match self.child.lock().unwrap().try_wait() {
+            Ok(Some(status)) => Some(status.code()),
+            Ok(None) => None,
+            Err(_) => Some(None),
+        }
+    }
+
+    /// End everything the CLI started that is still running.
+    fn end_job(&self) {
+        if let Some(job) = &self.job {
+            job.end();
+        }
+    }
+}
+
 struct Live {
-    child: Arc<Mutex<Child>>,
+    child: Arc<Process>,
     /// The CLI's stdin; `None` inside once it has been closed (one-prompt run, end, budget, giving up a slot).
     stdin: Arc<Mutex<Option<ChildStdin>>>,
     stop: Option<Stop>,
@@ -593,10 +627,11 @@ fn close(info: &mut SessionInfo, at: u64, event: &RunEvent) {
     }
 }
 
-fn kill(child: &Mutex<Child>) {
-    let mut child = child.lock().unwrap();
-    if cfg!(windows) {
-        // The CLI has child processes of its own (cmd.exe, conhost.exe); /T takes the whole tree.
+fn kill(process: &Process) {
+    process.end_job();
+    let mut child = process.child.lock().unwrap();
+    if cfg!(windows) && process.job.is_none() {
+        // No job (the system refused one): the CLI has child processes of its own (cmd.exe, conhost.exe); /T takes the whole tree.
         let mut command = Command::new("taskkill");
         command.args(["/PID", &child.id().to_string(), "/T", "/F"]);
         let _ = crate::git::run_with_timeout(command, Duration::from_secs(10));
@@ -605,15 +640,58 @@ fn kill(child: &Mutex<Child>) {
 }
 
 /// Wait for the process without holding its lock, so a cancel can still reach it.
-fn exit_code(child: &Mutex<Child>) -> Option<i32> {
+fn exit_code(process: &Process) -> Option<i32> {
     loop {
-        match child.lock().unwrap().try_wait() {
-            Ok(Some(status)) => return status.code(),
-            Ok(None) => {}
-            Err(_) => return None,
+        if let Some(code) = process.exited() {
+            return code;
         }
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// What a CLI printed on stderr so far. A descendant that keeps the pipe open after the CLI has gone must not hold the
+/// session open, so the text is read on a thread into a buffer, and `text` takes what is there when the wait ends.
+struct Drain {
+    bytes: Arc<Mutex<Vec<u8>>>,
+    reader: JoinHandle<()>,
+}
+
+impl Drain {
+    fn new(pipe: Option<ChildStderr>) -> Drain {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let sink = bytes.clone();
+        let reader = std::thread::spawn(move || {
+            let Some(mut pipe) = pipe else { return };
+            let mut chunk = [0u8; 4096];
+            while let Ok(n @ 1..) = pipe.read(&mut chunk) {
+                sink.lock().unwrap().extend_from_slice(&chunk[..n]);
+            }
+        });
+        Drain { bytes, reader }
+    }
+
+    /// The text read so far, once the pipe has closed or `wait` has passed.
+    fn text(self, wait: Duration) -> String {
+        let until = Instant::now() + wait;
+        while !self.reader.is_finished() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        String::from_utf8_lossy(&self.bytes.lock().unwrap()).into_owned()
+    }
+}
+
+/// Read a CLI's stdout lines on a thread, so the pump can stop waiting for more once the CLI has exited, though a
+/// descendant still holds the pipe open.
+fn read_lines(stdout: Option<ChildStdout>) -> mpsc::Receiver<std::io::Result<Vec<u8>>> {
+    let (send, lines) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in stdout.into_iter().flat_map(|out| BufReader::new(out).split(b'\n')) {
+            if send.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    lines
 }
 
 /// The text of a session's first message: the briefing, a rule, and what the user typed. A later message has the same shape.
@@ -1150,7 +1228,7 @@ impl Manager {
     /// The process id of every chat session that has a process now.
     pub fn pids(&self) -> Vec<(String, u32)> {
         let sessions = self.inner.sessions.lock().unwrap();
-        sessions.iter().filter_map(|(id, session)| session.live.as_ref().map(|live| (id.clone(), live.child.lock().unwrap().id()))).collect()
+        sessions.iter().filter_map(|(id, session)| session.live.as_ref().map(|live| (id.clone(), live.child.id()))).collect()
     }
 
     /// Whether a review action holds the session.
@@ -1358,7 +1436,7 @@ impl Inner {
     }
 
     /// Start the CLI for a session. Returns the live handle and the pipes the pump reads.
-    fn spawn(&self, id: &str, info: &SessionInfo, launch: &Launch, resume: bool) -> Result<(Live, Option<ChildStdout>, JoinHandle<String>), String> {
+    fn spawn(&self, id: &str, info: &SessionInfo, launch: &Launch, resume: bool) -> Result<(Live, Option<ChildStdout>, Drain), String> {
         let spec = Spec {
             session_id: id.to_string(),
             cwd: launch.scope.cwd.clone(),
@@ -1385,9 +1463,12 @@ impl Inner {
         }
         let mut child = command.spawn().map_err(|e| format!("Could not start {}: {e}", spec.program))?;
         let (stdin, stdout) = (child.stdin.take(), child.stdout.take());
-        let stderr = crate::git::drain(child.stderr.take());
+        let stderr = Drain::new(child.stderr.take());
+        // Assigned just after the start, so a descendant started in that instant is not in the job. A system that refuses a
+        // job leaves the session with `taskkill /T` as before.
+        let job = Job::new().filter(|job| job.add(&child));
         let live = Live {
-            child: Arc::new(Mutex::new(child)),
+            child: Arc::new(Process { child: Mutex::new(child), job }),
             stdin: Arc::new(Mutex::new(stdin)),
             stop: None,
             pending: HashMap::new(),
@@ -1423,12 +1504,27 @@ impl Inner {
         }
     }
 
-    /// The reader thread of one process: log each stdout line, then report its events; when stdout closes, wait for the
-    /// process and close the session (unattended) or its turn.
-    fn pump(&self, id: &str, stdout: Option<ChildStdout>, stderr: JoinHandle<String>, child: &Mutex<Child>, required_plugin: Option<&str>) {
+    /// The reader thread of one process: log each stdout line, then report its events; when stdout closes, or a moment
+    /// after the process has exited (a descendant may still hold the pipe), end what it started, wait for the process and
+    /// close the session (unattended) or its turn.
+    fn pump(&self, id: &str, stdout: Option<ChildStdout>, stderr: Drain, child: &Process, required_plugin: Option<&str>) {
         let interactive = self.sessions.lock().unwrap().get(id).is_some_and(|session| session.info.mode == Mode::Interactive);
         let (mut denied, mut last) = (0u64, None);
-        for bytes in stdout.into_iter().flat_map(|out| BufReader::new(out).split(b'\n')) {
+        let lines = read_lines(stdout);
+        // The exit code once the process has exited, and when that was seen.
+        let mut exited: Option<(Option<i32>, Instant)> = None;
+        loop {
+            if exited.is_none() && let Some(code) = child.exited() {
+                exited = Some((code, Instant::now()));
+            }
+            if exited.is_some_and(|(_, at)| at.elapsed() >= EXIT_DRAIN) {
+                break;
+            }
+            let bytes = match lines.recv_timeout(POLL) {
+                Ok(bytes) => bytes,
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => break,
+            };
             let Ok(bytes) = bytes else { break };
             let text = String::from_utf8_lossy(&bytes);
             let line = text.trim_end_matches('\r');
@@ -1518,8 +1614,10 @@ impl Inner {
                 }
             }
         }
-        let code = exit_code(child);
-        let stderr = stderr.join().unwrap_or_default();
+        let code = exited.map_or_else(|| exit_code(child), |(code, _)| code);
+        // The CLI is done, so whatever it started and left running goes too, and with it any pipe it held.
+        child.end_job();
+        let stderr = stderr.text(STDERR_WAIT);
         // The process is gone, so the worktree is final for this run: whatever the agent wrote before a cancel, a crash or
         // a failure without a result is reported before any closing event.
         if interactive {
@@ -2042,11 +2140,28 @@ mod tests {
                 let Some(Ok(line)) = input.next() else { return };
                 let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&log).unwrap();
                 writeln!(file, "{line}").unwrap();
+            } else if let Some(seconds) = step.strip_prefix(">sleep ") {
+                std::thread::sleep(Duration::from_secs(seconds.parse().unwrap()));
+            } else if let Some(pidfile) = step.strip_prefix(">child ") {
+                // A descendant that keeps the CLI's stdout open: it is not waited for, and its id goes to `pidfile`.
+                #[allow(clippy::zombie_processes)] // left running on purpose: the test is about a descendant that outlives the CLI
+                let child = fake_descendant(Path::new(pidfile), ">sleep 120");
+                std::fs::write(pidfile, child.id().to_string()).unwrap();
+            } else if let Some(pidfile) = step.strip_prefix(">orphan ") {
+                // The same, but started by a launcher that exits at once, so `taskkill /T` from this process cannot find it.
+                fake_descendant(Path::new(pidfile), &format!(">child {pidfile}")).wait().unwrap();
             } else {
                 println!("{step}");
                 out.flush().unwrap();
             }
         }
+    }
+
+    /// This test binary as `fake_cli`, running `script`, with the CLI's own stdout.
+    fn fake_descendant(pidfile: &Path, script: &str) -> std::process::Child {
+        let file = pidfile.with_extension(format!("{}.txt", script.len()));
+        std::fs::write(&file, script).unwrap();
+        Command::new(std::env::current_exe().unwrap()).args(FAKE_CLI_ARGS).env("HIVEMIND_FAKE_SCRIPT", file).spawn().unwrap()
     }
 
     fn new_id() -> String {
@@ -2690,6 +2805,73 @@ mod tests {
         assert_eq!(status, Status::Failed);
         assert!(reason.contains("exit code 1") && reason.lines().count() > 1, "{reason}");
         assert_eq!(rig.info(&started.id).error.as_deref(), Some(reason));
+    }
+
+    /// The process id a fake CLI's descendant wrote to `pidfile`, waiting for it.
+    fn descendant_pid(pidfile: &Path) -> u32 {
+        let start = Instant::now();
+        loop {
+            if let Some(pid) = std::fs::read_to_string(pidfile).ok().and_then(|text| text.trim().parse().ok()) {
+                return pid;
+            }
+            assert!(start.elapsed() < Duration::from_secs(10), "the descendant never started");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Whether `pid` has gone within a few seconds. Where there are no jobs it is stopped by hand, so no test leaves it running.
+    fn ended_with_the_session(pid: u32) -> bool {
+        let gone = (0..50).any(|_| {
+            let gone = !crate::jobs::alive(pid);
+            if !gone {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            gone
+        });
+        if !gone {
+            let _ = if cfg!(windows) {
+                Command::new("taskkill").args(["/F", "/PID", &pid.to_string()]).output()
+            } else {
+                Command::new("kill").args(["-9", &pid.to_string()]).output()
+            };
+        }
+        gone
+    }
+
+    /// PROC-3: a descendant that keeps the CLI's output open after the CLI has exited does not hold the session open. The
+    /// session finishes within the drain time, and the descendant is ended with it.
+    #[test]
+    fn a_descendant_holding_the_output_does_not_keep_a_finished_session_open() {
+        let name = "holds-output";
+        let pidfile = Rig::folder(name).join("child.pid");
+        let rig = Rig::scripted(name, &[&[INIT, &format!(">child {}", pidfile.display()), RESULT]]);
+        let started = rig.start(None).unwrap();
+        let began = Instant::now();
+        let events = rig.finish(&started.id);
+        assert!(began.elapsed() < EXIT_DRAIN + Duration::from_secs(8), "{:?}", began.elapsed());
+        assert_eq!(status_and_reason(&events.last().unwrap().event).0, Status::Succeeded);
+        assert!(rig.manager.inner.wait_gone(&started.id, Duration::ZERO), "the finished session still holds its process slot");
+        let child = descendant_pid(&pidfile);
+        let ended = ended_with_the_session(child);
+        settle(&rig.manager);
+        assert!(ended || !cfg!(windows), "the descendant outlived its session");
+    }
+
+    /// PROC-3: stopping a session ends what its CLI started, also a descendant whose parent has already exited (which
+    /// `taskkill /T` from the CLI does not find).
+    #[test]
+    fn stopping_a_session_ends_the_processes_it_started() {
+        let name = "stop-descendants";
+        let pidfile = Rig::folder(name).join("child.pid");
+        let rig = Rig::scripted(name, &[&[INIT, &format!(">orphan {}", pidfile.display()), ">sleep 60"]]);
+        let started = rig.start(None).unwrap();
+        let child = descendant_pid(&pidfile);
+        assert!(crate::jobs::alive(child));
+        rig.manager.cancel(&started.id).unwrap();
+        rig.finish(&started.id);
+        let ended = ended_with_the_session(child);
+        settle(&rig.manager);
+        assert!(ended || !cfg!(windows), "the descendant outlived its session");
     }
 
     #[test]

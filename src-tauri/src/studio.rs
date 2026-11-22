@@ -159,9 +159,20 @@ fn store_root(state: &AppState) -> Option<PathBuf> {
     state.bridge.launch().root.or_else(|| dirs::home_dir().map(|h| h.join("LivingMemory")))
 }
 
-/// The registered notebooks as the watcher and the index name them.
+/// The registered notebooks as the watcher and the index name them. A notebook whose folder fails the check the editor
+/// makes (`root_of`: moved, or replaced by a link or junction while Hivemind was closed, or now in a protected place) is
+/// left out, so it is neither watched nor indexed, and the index's `sync` drops the rows it held. Its tree tells the user
+/// to add the folder again (Codex review of 7320d7f, PATH-1).
 pub fn roots(state: &AppState) -> Vec<watch::Root> {
-    state.notebooks.list().into_iter().map(|nb| watch::Root { id: nb.id, path: PathBuf::from(nb.path) }).collect()
+    trusted(state.notebooks.list(), &Protected::new(store_root(state).as_deref()))
+}
+
+fn trusted(notebooks: Vec<Notebook>, protected: &Protected) -> Vec<watch::Root> {
+    notebooks
+        .into_iter()
+        .filter(|nb| unmoved(nb).and_then(|root| protected.check_root(&root)).is_ok())
+        .map(|nb| watch::Root { id: nb.id, path: PathBuf::from(nb.path) })
+        .collect()
 }
 
 /// Tell the search index that `rels` of the notebook `notebook` (at `root`) changed. The watcher drops Hivemind's own
@@ -1056,6 +1067,49 @@ mod tests {
         assert!(unmoved(&notebook).is_ok());
         std::fs::remove_dir_all(&sensitive).unwrap();
         std::fs::remove_dir_all(&ordinary).unwrap();
+    }
+
+    /// PATH-1: a registered folder replaced by a junction while Hivemind was closed is neither indexed nor watched at
+    /// startup, and the rows it had are dropped; a folder that is still the one registered is indexed as before.
+    #[cfg(windows)]
+    #[test]
+    fn a_notebook_folder_replaced_by_a_junction_while_closed_is_not_indexed() {
+        use crate::notes_index::{query, Index};
+        let base = std::fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("hm-studio-{}", uuid::Uuid::new_v4()));
+        let (good, swapped, outside) = (base.join("good"), base.join("swapped"), base.join("outside"));
+        for (folder, page, text) in [(&good, "Good.md", "# Good\nshared words"), (&swapped, "Mine.md", "# Mine\nshared words"), (&outside, "Secret.md", "# Secret\nshared words")] {
+            std::fs::create_dir_all(folder).unwrap();
+            std::fs::write(folder.join(page), text).unwrap();
+        }
+        let register = |id: &str, dir: &Path| Notebook { id: id.into(), path: crate::folders::plain(&std::fs::canonicalize(dir).unwrap()), title: id.into(), ..Default::default() };
+        let notebooks = vec![register("nb-good", &good), register("nb-swapped", &swapped)];
+        let protected = Protected::new(None);
+        let index = Index::start(&base.join("data"), std::sync::Arc::new(|_| {}));
+        let listed = |index: &Index| -> Vec<String> {
+            index.flush();
+            index.read(|c| query::pages(c, None)).unwrap().into_iter().map(|p| format!("{}:{}", p.notebook, p.path)).collect()
+        };
+        // The app ran before: both folders were indexed.
+        index.sync(trusted(notebooks.clone(), &protected));
+        assert_eq!(listed(&index), ["nb-good:Good.md", "nb-swapped:Mine.md"]);
+        // While it was closed, the second folder was moved away and a junction to another folder put in its place.
+        std::fs::rename(&swapped, base.join("swapped-old")).unwrap();
+        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&swapped).arg(&outside).output().unwrap();
+        assert!(made.status.success(), "mklink /J needs no admin rights: {}", String::from_utf8_lossy(&made.stderr));
+        let roots = trusted(notebooks.clone(), &protected);
+        assert_eq!(roots.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["nb-good"]);
+        // The startup sync: the replaced folder's rows go and the junction's target is not read.
+        index.sync(roots);
+        assert_eq!(listed(&index), ["nb-good:Good.md"]);
+        std::fs::remove_dir(&swapped).unwrap();
+        drop(index);
+        for _ in 0..100 {
+            if std::fs::remove_dir_all(&base).is_ok() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("could not remove {}", base.display());
     }
 
     #[test]
