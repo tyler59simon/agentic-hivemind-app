@@ -5,6 +5,7 @@ use super::matrix::to_blob;
 use super::semantic::{Identity, Semantic, Unavailable, MAX_VECTORS};
 use super::units::{self, Unit};
 use crate::files::watch::Root;
+use crate::files::guard::Protected;
 use crate::files::{contain, guard, MAX_READ};
 use crate::notebooks;
 use rusqlite::{params, Connection};
@@ -32,7 +33,29 @@ struct Found {
     kind: &'static str,
     size: u64,
     mtime_ms: i64,
-    full: PathBuf,
+}
+
+/// Where the index may read: one notebook's folder, minus the places no file command may touch. Every page is opened
+/// through `file`, which is the containment the editor uses (`studio::inside`): no hidden part, nothing that leads outside
+/// the folder once links are followed, nothing in the store, a managed vault or Hivemind's own data.
+pub struct Reach<'a> {
+    root: &'a Path,
+    protected: &'a Protected,
+}
+
+impl<'a> Reach<'a> {
+    pub fn new(root: &'a Path, protected: &'a Protected) -> Self {
+        Reach { root, protected }
+    }
+
+    pub fn file(&self, rel: &str) -> Result<PathBuf, String> {
+        crate::studio::inside(self.root, self.protected, rel, false)
+    }
+}
+
+/// The protected places, for the store the meaning search is set to.
+fn protected_for(sem: &Semantic) -> Protected {
+    Protected::new(sem.root().as_deref())
 }
 
 fn mtime_of(meta: &std::fs::Metadata) -> i64 {
@@ -69,7 +92,7 @@ fn walk(dir: &Path, rel: &str, out: &mut Vec<Found>) {
             } else if let Some(page_kind) = kind_of(&name)
                 && let Ok(meta) = entry.metadata()
             {
-                out.push(Found { rel: child, kind: page_kind, size: meta.len(), mtime_ms: mtime_of(&meta), full: entry.path() });
+                out.push(Found { rel: child, kind: page_kind, size: meta.len(), mtime_ms: mtime_of(&meta) });
             }
         }
     }
@@ -134,11 +157,10 @@ fn read_for_index(full: &Path, kind: &str) -> std::io::Result<(Vec<u8>, String)>
 }
 
 /// The words to ask Living Memory for notes related to a page with: its title and the start of its first unit of text.
-/// Empty when the page cannot be read.
-pub fn related_text(root: &Path, rel: &str) -> String {
+/// Empty when the page cannot be read, or is not one the editor would open.
+pub fn related_text(reach: &Reach, rel: &str) -> String {
     const CHARS: usize = 300;
-    let Ok(parts) = contain::check_rel(rel) else { return String::new() };
-    let full = parts.iter().fold(root.to_path_buf(), |path, part| path.join(part));
+    let Ok(full) = reach.file(rel) else { return String::new() };
     let name = rel.rsplit('/').next().unwrap_or(rel);
     let Some(kind) = kind_of(name) else { return String::new() };
     let Ok((bytes, _)) = read_for_index(&full, kind) else { return String::new() };
@@ -172,12 +194,22 @@ pub enum Outcome {
 
 /// Index the file at `rel`; `mode` says what an existing row is trusted for.
 #[allow(clippy::too_many_arguments)]
-pub fn index_file(conn: &Connection, sem: &Semantic, notebook: &str, rel: &str, kind: &str, full: &Path, size: u64, mtime_ms: i64, known: Option<&Known>, mode: Mode) -> Result<Outcome, String> {
+pub fn index_file(conn: &Connection, sem: &Semantic, reach: &Reach, notebook: &str, rel: &str, kind: &str, size: u64, mtime_ms: i64, known: Option<&Known>, mode: Mode) -> Result<Outcome, String> {
     if mode == Mode::Scan && known.is_some_and(|k| k.size == size as i64 && k.mtime_ms == mtime_ms) {
         return Ok(Outcome::Unchanged);
     }
-    let (bytes, hash) = read_for_index(full, kind).map_err(|e| format!("Could not read {}: {e}", full.display()))?;
     let sql = |e: rusqlite::Error| e.to_string();
+    // A page the editor would not open is not read, and what the index held of it goes.
+    let full = match reach.file(rel) {
+        Ok(full) => full,
+        Err(why) => {
+            if let Some(k) = known {
+                remove_page(conn, sem, k.id).map_err(sql)?;
+            }
+            return Err(format!("{rel} was not indexed: {why}"));
+        }
+    };
+    let (bytes, hash) = read_for_index(&full, kind).map_err(|e| format!("Could not read {}: {e}", full.display()))?;
     if mode != Mode::Force && let Some(k) = known {
         let same: Option<String> = conn.query_row("SELECT sha256 FROM pages WHERE id = ?1", [k.id], |r| r.get(0)).ok();
         if same.as_deref() == Some(hash.as_str()) && !hash.is_empty() {
@@ -321,7 +353,7 @@ pub struct Pass {
 /// Bring the rows of `notebook` below `under` (a folder, or "" for the whole notebook) in line with `found`: index what
 /// changed, drop what is gone. `tick` is called after each batch with the number of files handled.
 #[allow(clippy::too_many_arguments)]
-fn reconcile(conn: &mut Connection, sem: &Semantic, notebook: &str, under: &str, found: Vec<Found>, mode: Mode, pass: &mut Pass, tick: &mut dyn FnMut(usize)) -> Result<(), String> {
+fn reconcile(conn: &mut Connection, sem: &Semantic, reach: &Reach, notebook: &str, under: &str, found: Vec<Found>, mode: Mode, pass: &mut Pass, tick: &mut dyn FnMut(usize)) -> Result<(), String> {
     let sql = |e: rusqlite::Error| e.to_string();
     let mut known = known(conn, notebook).map_err(sql)?;
     if !under.is_empty() {
@@ -333,7 +365,7 @@ fn reconcile(conn: &mut Connection, sem: &Semantic, notebook: &str, under: &str,
         let tx = conn.transaction().map_err(sql)?;
         for file in chunk {
             seen.insert(file.rel.clone());
-            if let Err(e) = index_file(&tx, sem, notebook, &file.rel, file.kind, &file.full, file.size, file.mtime_ms, known.get(&file.rel), mode) {
+            if let Err(e) = index_file(&tx, sem, reach, notebook, &file.rel, file.kind, file.size, file.mtime_ms, known.get(&file.rel), mode) {
                 pass.error = Some(e);
             }
         }
@@ -357,6 +389,7 @@ fn reconcile(conn: &mut Connection, sem: &Semantic, notebook: &str, under: &str,
 /// notebook whose folder is missing (an unplugged drive) keeps its rows.
 pub fn scan(conn: &mut Connection, sem: &Semantic, roots: &[Root], mode: Mode, prune: bool, progress: &mut dyn FnMut(u64, u64)) -> Result<Pass, String> {
     let mut pass = Pass::default();
+    let protected = protected_for(sem);
     let mut walked: Vec<(&Root, Vec<Found>)> = Vec::new();
     for root in roots {
         if !root.path.is_dir() {
@@ -371,7 +404,7 @@ pub fn scan(conn: &mut Connection, sem: &Semantic, roots: &[Root], mode: Mode, p
     let mut done = 0usize;
     progress(0, total as u64);
     for (root, found) in walked {
-        reconcile(conn, sem, &root.id, "", found, mode, &mut pass, &mut |n| {
+        reconcile(conn, sem, &Reach::new(&root.path, &protected), &root.id, "", found, mode, &mut pass, &mut |n| {
             done += n;
             progress(done as u64, total as u64);
         })?;
@@ -396,6 +429,8 @@ pub fn scan(conn: &mut Connection, sem: &Semantic, roots: &[Root], mode: Mode, p
 /// how a change the watcher saw and a change one of Hivemind's own commands made reach the index.
 pub fn update(conn: &mut Connection, sem: &Semantic, root: &Root, rels: &[String]) -> Result<Pass, String> {
     let mut pass = Pass::default();
+    let protected = protected_for(sem);
+    let reach = Reach::new(&root.path, &protected);
     let sql = |e: rusqlite::Error| e.to_string();
     for rel in rels {
         let Ok(parts) = contain::check_rel(rel) else { continue };
@@ -422,7 +457,7 @@ pub fn update(conn: &mut Connection, sem: &Semantic, root: &Root, rels: &[String
             Ok(m) if m.is_dir() => {
                 let mut found = Vec::new();
                 walk(&full, &spelled, &mut found);
-                reconcile(conn, sem, &root.id, &spelled, found, Mode::Scan, &mut pass, &mut |_| {})?;
+                reconcile(conn, sem, &reach, &root.id, &spelled, found, Mode::Scan, &mut pass, &mut |_| {})?;
             }
             Ok(m) => {
                 let name = spelled.rsplit('/').next().unwrap_or(&spelled);
@@ -432,7 +467,7 @@ pub fn update(conn: &mut Connection, sem: &Semantic, root: &Root, rels: &[String
                         let known = known_page(&tx, &root.id, &spelled);
                         // A change the watcher or a command reports may keep the size and the time (a quick second
                         // save), so the bytes are always compared.
-                        if let Err(e) = index_file(&tx, sem, &root.id, &spelled, kind, &full, m.len(), mtime_of(&m), known.as_ref(), Mode::Compare) {
+                        if let Err(e) = index_file(&tx, sem, &reach, &root.id, &spelled, kind, m.len(), mtime_of(&m), known.as_ref(), Mode::Compare) {
                             pass.error = Some(e);
                         }
                     }
@@ -491,6 +526,7 @@ pub fn embed_pass(conn: &mut Connection, sem: &Semantic, roots: &[Root], progres
         )
         .and_then(|mut s| s.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect::<Result<_, _>>())
         .map_err(sql)?;
+    let protected = protected_for(sem);
     let total = todo.len() as u64;
     progress(0, total);
     let mut done = 0u64;
@@ -510,7 +546,11 @@ pub fn embed_pass(conn: &mut Connection, sem: &Semantic, roots: &[Root], progres
                 break 'pages;
             }
             let Some(root) = roots.iter().find(|r| r.id == *notebook) else { continue };
-            let full = rel.split('/').fold(root.path.clone(), |path, part| path.join(part));
+            // The same containment as every other read: a page that now leads out of its notebook is dropped, not embedded.
+            let Ok(full) = Reach::new(&root.path, &protected).file(rel) else {
+                remove_page(&tx, sem, *id).map_err(sql)?;
+                continue;
+            };
             let Ok(meta) = std::fs::metadata(&full) else { continue };
             let result = read_for_index(&full, kind).map_err(|e| format!("Could not read {}: {e}", full.display())).and_then(|(bytes, hash)| {
                 if hash == *sha {
@@ -520,7 +560,7 @@ pub fn embed_pass(conn: &mut Connection, sem: &Semantic, roots: &[Root], progres
                 } else {
                     // The file is not what the index read: index it afresh, which embeds it as well.
                     let known = known_page(&tx, notebook, rel);
-                    index_file(&tx, sem, notebook, rel, kind, &full, meta.len(), mtime_of(&meta), known.as_ref(), Mode::Compare).map(|_| ())
+                    index_file(&tx, sem, &Reach::new(&root.path, &protected), notebook, rel, kind, meta.len(), mtime_of(&meta), known.as_ref(), Mode::Compare).map(|_| ())
                 }
             });
             if let Err(e) = result {

@@ -166,10 +166,13 @@ pub fn serve(request: &Request<Vec<u8>>, label: &str, grants: &AssetGrants, prot
         // review of 32fee20, P2).
         Scope::LmAssets => resolved.as_deref().is_some_and(|r| r.split('/').next() == Some("assets") && r.contains('/')),
     };
-    if !allowed || hidden(&rel) || resolved.is_none_or(|r| hidden(&r)) {
+    let Some(resolved) = resolved.filter(|r| !hidden(r)) else { return status(StatusCode::FORBIDDEN) };
+    if !allowed || hidden(&rel) {
         return status(StatusCode::FORBIDDEN);
     }
-    let ext = full.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    // The type is judged on the file the request leads to, not on the name asked for: a link named `x.png` to a text file
+    // serves nothing. The file read below is that same file.
+    let ext = resolved.rsplit('/').next().and_then(|name| Path::new(name).extension()).map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
     let Some(kind) = content_type(&ext) else { return status(StatusCode::FORBIDDEN) };
     let Ok(meta) = std::fs::metadata(&full) else { return status(StatusCode::NOT_FOUND) };
     if !meta.is_file() {
@@ -389,6 +392,25 @@ mod tests {
         let code = |rel: &str| serve(&get(&format!("{}{rel}", base_url(&g)), &[]), "main", &grants, &store).status();
         assert_eq!(code("Assets/pic.png"), StatusCode::FORBIDDEN);
         assert_eq!(code("assets/pic.png"), StatusCode::FORBIDDEN, "found in any case, but named Assets");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_link_named_like_a_picture_to_another_kind_of_file_serves_nothing() {   // PATH-3
+        let dir = scratch();
+        let linked = std::os::windows::fs::symlink_file(dir.join("notes.md"), dir.join("fake.png")).is_ok();
+        if linked {
+            let grants = AssetGrants::default();
+            let g = grants.grant(&dir);
+            let ask = |rel: &str| serve(&get(&format!("{}{rel}", base_url(&g)), &[]), "main", &grants, &Protected::new(None));
+            let fake = ask("fake.png");
+            assert_eq!(fake.status(), StatusCode::FORBIDDEN);
+            assert!(fake.body().is_empty());
+            assert_eq!(ask("img/a%20b.png").status(), StatusCode::OK);
+        } else {
+            eprintln!("skipped: a file symbolic link needs Developer Mode or administrator rights here");
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 

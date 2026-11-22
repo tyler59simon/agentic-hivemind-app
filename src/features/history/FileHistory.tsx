@@ -11,7 +11,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { usePick } from "./pick";
 import { pageText, parseLm } from "../../documents/adapters/lmdoc";
 import type { FileRef } from "../../documents/keys";
-import { keyOf, restore, useDocuments } from "../../documents/store";
+import { keyOf, reload, restore, useDocuments } from "../../documents/store";
 import { classify } from "../../lib/errors";
 import { gitFileCommit, gitFileLog, historyList, historyPin, historyRead, type Version } from "../../lib/history";
 import { docHistory, docVersion } from "../../lib/lm";
@@ -116,7 +116,7 @@ export function CommitDialog({ file, onClose, onDone }: { file: FileRef; onClose
 }
 
 /** One version, selected from the timeline: its text, and what can be done with it. */
-function VersionPane({ file, row, current, state, onChanged }: { file: FileRef; row: Row; current: string; state: string | undefined; onChanged: () => void }) {
+function VersionPane({ file, row, current, state, tooLarge, onChanged }: { file: FileRef; row: Row; current: string; state: string | undefined; tooLarge: boolean; onChanged: () => void }) {
   const client = useQueryClient();
   const docKey = keyOf(file);
   const version = useQuery({ queryKey: ["file-version", file.notebook, file.path, row.id], queryFn: () => readVersion(file, row) });
@@ -134,7 +134,12 @@ function VersionPane({ file, row, current, state, onChanged }: { file: FileRef; 
       setAsking(false);
       if (after?.status === "stale") toast("This page changed on disk, so the version was not restored. Merge your changes first.", "warn");
       else if (after?.status === "clean") { toast(`Restored the version from ${when(row.time)}. The text it replaced stays in the history.`); onChanged(); }
-      else if (after?.error) toast(after.error, "error");
+      else if (after?.error) {
+        // The restore was refused (for one, the page's current text is too large for the history to keep): the page goes
+        // back to what is on disk instead of staying open with the old text as unsaved edits.
+        toast(after.error, "error");
+        void reload(docKey);
+      }
     },
     onError: (e) => toast(classify(e).message, "error"),
   });
@@ -142,7 +147,9 @@ function VersionPane({ file, row, current, state, onChanged }: { file: FileRef; 
   if (version.error || !version.data) return <p className="error">{classify(version.error ?? "This version could not be read").message}</p>;
   const v = version.data;
   // Unsaved edits are not in the history, so a restore over them would lose them; a read-only page takes none.
-  const blocked = state !== "clean" ? (state === "readOnly" ? "This page is read-only" : "Save or discard your edits first") : v.binary ? "This version is not a text file" : v.readOnly;
+  const blocked = state !== "clean" ? (state === "readOnly" ? "This page is read-only" : "Save or discard your edits first")
+    : tooLarge ? "This page is over 16 MB, so its current text cannot be kept in the history"
+    : v.binary ? "This version is not a text file" : v.readOnly;
   const same = !v.binary && v.text === current;
   return (
     <div className="history-pane">
@@ -219,7 +226,7 @@ export function FileHistory({ file, tabId }: { file: FileRef; tabId: string }) {
           </ol>
         </div>
         {row
-          ? <VersionPane file={file} row={row} current={doc?.text ?? ""} state={doc?.status} onChanged={() => setSelected(null)} />
+          ? <VersionPane file={file} row={row} current={doc?.text ?? ""} state={doc?.status} tooLarge={tooLarge} onChanged={() => setSelected(null)} />
           : <p className="muted history-hint">{rows.length ? "Choose a version to read it, compare it with the page or restore it." : ""}</p>}
         {committing && (
           <CommitDialog file={file} onClose={() => setCommitting(false)}

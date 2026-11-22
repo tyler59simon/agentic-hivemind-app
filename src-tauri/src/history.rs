@@ -1,6 +1,7 @@
 //! Versions of the user's files (NS-5). Every save of a page or opened file leaves a snapshot in Hivemind's app data, so
 //! an earlier version can be read, compared and restored. A file's history is keyed by its absolute path (normalised as
-//! `folders::normal` does, so it is the same history whether the file is opened as a page or from disk):
+//! `folders::normal` does, so it is the same history whether the file is opened as a page or from disk; in a case-sensitive
+//! folder the file's own name keeps its case, so `A.md` and `a.md` there have a history each):
 //! `history/<first 16 hex of sha256(path)>/index.json` lists the versions, and `objects/<sha256>.gz` holds each distinct
 //! content once. The index can be rebuilt from the objects, and the whole folder can be deleted without losing a file.
 use crate::files::{self, atomic};
@@ -56,9 +57,42 @@ pub fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
-/// The folder name of a file's history.
+/// Whether `dir` is a case-sensitive folder (a Windows folder set with `fsutil file setCaseSensitiveInfo`, where `A.md` and
+/// `a.md` are two files). False for a folder that cannot be asked.
+#[cfg(windows)]
+fn case_sensitive(dir: &Path) -> bool {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{FileCaseSensitiveInfo, GetFileInformationByHandleEx, FILE_CASE_SENSITIVE_INFO, FILE_FLAG_BACKUP_SEMANTICS};
+    /// `FILE_CS_FLAG_CASE_SENSITIVE_DIR`.
+    const SENSITIVE: u32 = 1;
+    let Ok(handle) = std::fs::OpenOptions::new().read(true).custom_flags(FILE_FLAG_BACKUP_SEMANTICS).open(dir) else { return false };
+    let mut info = FILE_CASE_SENSITIVE_INFO::default();
+    // SAFETY: the handle is open for the call, and the buffer is a FILE_CASE_SENSITIVE_INFO of the size given.
+    let asked = unsafe { GetFileInformationByHandleEx(handle.as_raw_handle(), FileCaseSensitiveInfo, (&raw mut info).cast(), size_of::<FILE_CASE_SENSITIVE_INFO>() as u32) };
+    asked != 0 && info.Flags & SENSITIVE != 0
+}
+
+/// Paths are compared exactly on other systems already.
+#[cfg(not(windows))]
+fn case_sensitive(_dir: &Path) -> bool {
+    false
+}
+
+/// The folder name of a file's history. A file whose folder is case-sensitive keeps the case of its own name, so `A.md` and
+/// `a.md` there have a history each (the rest of the path is folded as before, so it is still one history however the folder
+/// is spelled). `sensitive` says whether the folder is: a path that no longer exists cannot be asked.
+fn key_in(path: &Path, sensitive: bool) -> String {
+    let plain = crate::folders::plain(path);
+    let text = match path.file_name().filter(|_| sensitive).zip(path.parent()) {
+        Some((name, dir)) => format!("{}/{}", crate::folders::normal(&crate::folders::plain(dir)), name.to_string_lossy()),
+        None => crate::folders::normal(&plain),
+    };
+    files::sha256(text.as_bytes())[..16].to_string()
+}
+
 fn key(path: &Path) -> String {
-    files::sha256(crate::folders::normal(&crate::folders::plain(path)).as_bytes())[..16].to_string()
+    key_in(path, path.parent().is_some_and(case_sensitive))
 }
 
 fn folder(root: &Path, path: &Path) -> PathBuf {
@@ -254,8 +288,10 @@ pub fn too_large(path: &Path) -> bool {
 /// The history of `from` becomes part of the history of `to`: the old versions come first, so the page's history is
 /// continuous across a rename or move. Nothing happens when the two keys are the same (a change of letter case only, on
 /// Windows) or `from` has no history.
-fn carry(root: &Path, from: &Path, to: &Path) -> Result<(), String> {
-    let (old, new) = (folder(root, from), folder(root, to));
+///
+/// `old_sensitive`: whether the folder `from` was in is case-sensitive, which it can no longer be asked once it has moved.
+fn carry(root: &Path, from: &Path, to: &Path, old_sensitive: bool) -> Result<(), String> {
+    let (old, new) = (root.join(key_in(from, old_sensitive)), folder(root, to));
     if old == new || !old.is_dir() {
         return Ok(());
     }
@@ -289,7 +325,7 @@ const MAX_WALK: usize = 200_000;
 pub fn moved(root: &Path, from: &Path, to: &Path, was_dir: bool) -> Result<(), String> {
     let _held = lock();
     if !was_dir {
-        return carry(root, from, to);
+        return carry(root, from, to, from.parent().is_some_and(case_sensitive));
     }
     let mut failed = Vec::new();
     let mut stack = vec![to.to_path_buf()];
@@ -307,7 +343,7 @@ pub fn moved(root: &Path, from: &Path, to: &Path, was_dir: bool) -> Result<(), S
             if kind.is_dir() {
                 stack.push(entry.path());
             } else if let Ok(rel) = entry.path().strip_prefix(to)
-                && let Err(e) = carry(root, &from.join(rel), &entry.path())
+                && let Err(e) = carry(root, &from.join(rel), &entry.path(), entry.path().parent().is_some_and(case_sensitive))
             {
                 failed.push(e);
             }
@@ -533,6 +569,39 @@ mod tests {
         assert_eq!(snapshot_file(&root, &base.join("missing.md"), None, "disk", 3).unwrap(), None);
         std::fs::remove_dir_all(&root).unwrap();
         std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn two_files_differing_only_in_case_in_a_case_sensitive_folder_have_a_history_each() {   // NOTES-3
+        let (root, base) = (scratch(), scratch());
+        let made = std::process::Command::new("fsutil").args(["file", "setCaseSensitiveInfo"]).arg(&base).arg("enable").output().unwrap();
+        assert!(made.status.success(), "fsutil could not make a case-sensitive folder: {}", String::from_utf8_lossy(&made.stdout));
+        assert!(case_sensitive(&base));
+        let (upper, lower) = (base.join("Draft.md"), base.join("draft.md"));
+        std::fs::write(&upper, "upper").unwrap();
+        std::fs::write(&lower, "lower").unwrap();
+        snapshot_file(&root, &upper, None, "you", 1).unwrap().unwrap();
+        snapshot_file(&root, &lower, None, "you", 2).unwrap().unwrap();
+        assert_eq!(list(&root, &upper).len(), 1);
+        assert_eq!(read(&root, &upper, 1).unwrap(), b"upper");
+        assert_eq!(list(&root, &lower).len(), 1);
+        assert_eq!(read(&root, &lower, 1).unwrap(), b"lower");
+        // A rename that changes only the case is a rename of one of the two: its history follows it.
+        std::fs::remove_file(&lower).unwrap();
+        std::fs::rename(&upper, base.join("DRAFT.md")).unwrap();
+        moved(&root, &upper, &base.join("DRAFT.md"), false).unwrap();
+        assert_eq!(read(&root, &base.join("DRAFT.md"), 1).unwrap(), b"upper");
+        assert!(list(&root, &upper).is_empty());
+        // The folder is not special for a folder that is not case-sensitive: one history however the name is spelled.
+        let plain_dir = scratch();
+        assert!(!case_sensitive(&plain_dir));
+        std::fs::write(plain_dir.join("Page.md"), "x").unwrap();
+        snapshot_file(&root, &plain_dir.join("Page.md"), None, "you", 3).unwrap().unwrap();
+        assert_eq!(list(&root, &plain_dir.join("PAGE.md")).len(), 1);
+        for dir in [root, base, plain_dir] {
+            std::fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     #[test]

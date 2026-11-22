@@ -50,11 +50,12 @@ pub struct Related {
 #[tauri::command]
 pub async fn index_related(state: State<'_, AppState>, notebook: String, path: String, limit: Option<usize>) -> Result<Related, String> {
     let index = state.index.clone();
-    let roots = crate::studio::roots(&state);
+    // The registered folder, checked as the editor checks it; a page is read only through the editor's containment.
+    let reach = crate::studio::root_of(&state, &notebook).ok();
     blocking(move || {
         let meaning = index.semantic_status().state;
         let pages = index.read(|c| query::related(c, index.semantic(), &notebook, &path, limit.unwrap_or(5)))?;
-        let query = roots.iter().find(|r| r.id == notebook).map(|r| super::writer::related_text(&r.path, &path)).unwrap_or_default();
+        let query = reach.map(|(root, protected)| super::writer::related_text(&super::writer::Reach::new(&root, &protected), &path)).unwrap_or_default();
         Ok(Related { pages, query, meaning })
     })
     .await

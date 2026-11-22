@@ -615,8 +615,8 @@ impl automations::Doer for AppDoer {
                 if let Some(why) = automations::Doer::paused(self, a) {
                     return Err(why);
                 }
-                let mut command = std::process::Command::new("git");
-                command.args(["--no-optional-locks", "-C", &repo, "log", "--stat", "-p", "--no-color", "--no-ext-diff", "--no-textconv"]);
+                let mut command = worktree::git_command();
+                command.args(["-C", &repo, "log", "--stat", "-p", "--no-color", "--no-ext-diff", "--no-textconv"]);
                 // The exact commits of this batch (automations::COMMIT_BATCH at most, parents first, in that order), or the last
                 // few commits the first time.
                 match (&vars.batch, a.last_seen.as_deref()) {
@@ -655,8 +655,8 @@ impl automations::Doer for AppDoer {
         git::next_batch(std::path::Path::new(repo), &tips, limit).ok().map(|(batch, tips)| (batch, tips.join(" ")))
     }
     fn log(&self, repo: &str, since: Option<&str>) -> Result<String, String> {
-        let mut command = std::process::Command::new("git");
-        command.args(["--no-optional-locks", "-C", repo, "log", "--oneline", "--no-color"]);
+        let mut command = worktree::git_command();
+        command.args(["-C", repo, "log", "--oneline", "--no-color"]);
         match since {
             // `since` holds the reviewed tips, space-separated; only live commit ids reach git.
             Some(s) => {

@@ -453,6 +453,9 @@ pub struct Status {
 
 #[derive(Default)]
 struct Inner {
+    /// The store `loaded` and `failed` belong to. Another store starts both afresh, so a damaged model in one store does
+    /// not follow the user to a good copy in another that has the same identity.
+    root: Option<PathBuf>,
     loaded: Option<Loaded>,
     /// A model that could not be loaded, by identity: not tried again until the model changes.
     failed: Option<(Identity, String)>,
@@ -488,9 +491,14 @@ impl Semantic {
     /// The Living Memory store whose `.models` folder holds the model.
     pub fn set_root(&self, root: Option<PathBuf>) {
         *self.root.lock().unwrap_or_else(|e| e.into_inner()) = root;
+        // The model of the old store is let go now; `embed` and `failure` also compare stores, for a call already running.
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if inner.root != self.root() {
+            *inner = Inner::default();
+        }
     }
 
-    fn root(&self) -> Option<PathBuf> {
+    pub(super) fn root(&self) -> Option<PathBuf> {
         self.root.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
@@ -502,7 +510,7 @@ impl Semantic {
     /// Whether the model could be read the last time it was tried, for a model that is installed.
     pub fn failure(&self, identity: &Identity) -> Option<String> {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner.failed.as_ref().filter(|(id, _)| id == identity).map(|(_, why)| why.clone())
+        inner.failed.as_ref().filter(|(id, _)| id == identity && inner.root == self.root()).map(|(_, why)| why.clone())
     }
 
     /// Embed `texts` with the model installed now. The marker is read first: without it nothing is used and the file is
@@ -510,6 +518,9 @@ impl Semantic {
     pub fn embed(&self, texts: &[&str]) -> Result<Embedded, Unavailable> {
         let Some(root) = self.root() else { return Err(Unavailable::Absent) };
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if inner.root.as_ref() != Some(&root) {
+            *inner = Inner { root: Some(root.clone()), ..Inner::default() };
+        }
         let Some(identity) = installed(&root) else {
             inner.loaded = None;
             inner.failed = None;
@@ -864,6 +875,29 @@ mod tests {
         install(&root, &rows()[..3], "h4");
         assert!(matches!(semantic.embed(&["alpha"]), Err(Unavailable::Broken(why)) if why.contains("vocabulary")));
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_model_failure_does_not_follow_the_user_to_another_store() {   // NOTES-8
+        let (bad, good) = (scratch(), scratch());
+        install(&bad, &rows(), "h1");
+        install(&good, &rows(), "h1");
+        let mut bytes = std::fs::read(model_dir(&bad).join("model.safetensors")).unwrap();
+        bytes.truncate(bytes.len() - 8);
+        std::fs::write(model_dir(&bad).join("model.safetensors"), bytes).unwrap();
+        let semantic = Semantic::new(IDLE);
+        semantic.set_root(Some(bad.clone()));
+        assert!(matches!(semantic.embed(&["alpha"]), Err(Unavailable::Broken(_))));
+        assert!(semantic.failure(&semantic.identity().unwrap()).is_some());
+        // The same model identity in a store whose copy is sound.
+        semantic.set_root(Some(good.clone()));
+        assert!(semantic.failure(&semantic.identity().unwrap()).is_none());
+        assert!(semantic.embed(&["alpha"]).is_ok());
+        // Back to the damaged store: it is tried afresh and fails again, and the good copy is not kept as loaded.
+        semantic.set_root(Some(bad.clone()));
+        assert!(matches!(semantic.embed(&["alpha"]), Err(Unavailable::Broken(_))));
+        std::fs::remove_dir_all(&bad).unwrap();
+        std::fs::remove_dir_all(&good).unwrap();
     }
 
     #[test]

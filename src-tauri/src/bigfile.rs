@@ -309,17 +309,26 @@ pub struct Progress {
     pub done: bool,
     /// The file was truncated or replaced and indexed again.
     pub reset: bool,
+    /// How the file is read now: after a replacement the encoding can be another one.
+    pub encoding: String,
+    pub bom: bool,
+    pub binary: bool,
 }
 
 pub type Emit = Arc<dyn Fn(&'static str, Progress) + Send + Sync>;
 /// The file this viewer is on, resolved again each time it is needed, through the same containment as when it opened.
 pub type Resolve = Arc<dyn Fn() -> Result<PathBuf, String> + Send + Sync>;
 
+/// The file being viewed and how its bytes are read, replaced together when the file at the path is replaced.
+struct Source {
+    file: Arc<File>,
+    fmt: Format,
+}
+
 pub struct Viewer {
     pub handle: String,
     owner: String,
-    file: Mutex<Arc<File>>,
-    fmt: Format,
+    source: Mutex<Source>,
     index: Mutex<Index>,
     /// The first bytes of the file, to tell a replaced file from the same one.
     head: Mutex<Vec<u8>>,
@@ -346,8 +355,7 @@ impl Viewer {
         let viewer = Arc::new(Viewer {
             handle,
             owner,
-            file: Mutex::new(Arc::new(file)),
-            fmt,
+            source: Mutex::new(Source { file: Arc::new(file), fmt }),
             index: Mutex::new(Index::new(fmt.base, size)),
             head: Mutex::new(sniffed[..sniffed.len().min(FINGERPRINT)].to_vec()),
             created: Mutex::new(meta.created().ok()),
@@ -362,7 +370,17 @@ impl Viewer {
     }
 
     fn file(&self) -> Arc<File> {
-        self.file.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.source.lock().unwrap_or_else(|e| e.into_inner()).file.clone()
+    }
+
+    fn fmt(&self) -> Format {
+        self.source.lock().unwrap_or_else(|e| e.into_inner()).fmt
+    }
+
+    /// The file and its format as one pair, so a read never decodes one file with the format of another.
+    fn source(&self) -> (Arc<File>, Format) {
+        let source = self.source.lock().unwrap_or_else(|e| e.into_inner());
+        (source.file.clone(), source.fmt)
     }
 
     pub fn is_closed(&self) -> bool {
@@ -379,8 +397,12 @@ impl Viewer {
     }
 
     fn send(&self, name: &'static str, reset: bool) {
+        let fmt = self.fmt();
         let idx = self.lock();
-        (self.emit)(name, Progress { handle: self.handle.clone(), scanned: idx.scanned, size: idx.size, lines: idx.lines(), done: idx.done, reset });
+        (self.emit)(
+            name,
+            Progress { handle: self.handle.clone(), scanned: idx.scanned, size: idx.size, lines: idx.lines(), done: idx.done, reset, encoding: encoding::shown(fmt.encoding.name()), bom: fmt.bom, binary: fmt.binary },
+        );
     }
 
     /// Index the file, then follow it until the viewer closes.
@@ -400,8 +422,8 @@ impl Viewer {
 
     /// Index from where the index stopped to the end of the file.
     fn scan(&self) {
-        let file = self.file();
-        let utf16 = self.fmt.utf16();
+        let (file, fmt) = self.source();
+        let utf16 = fmt.utf16();
         let mut chunk = vec![0u8; SCAN_CHUNK];
         let mut told = Instant::now();
         loop {
@@ -449,7 +471,7 @@ impl Viewer {
                 // The break that makes the next mark: find it, and go on after it.
                 let mut at = from;
                 for _ in 0..need {
-                    at = find_nl(chunk, at, utf16).unwrap_or(chunk.len().saturating_sub(1)) + self.fmt.unit();
+                    at = find_nl(chunk, at, utf16).unwrap_or(chunk.len().saturating_sub(1)) + fmt.unit();
                 }
                 idx.newlines = threshold;
                 idx.last_start = pos + at as u64;
@@ -478,18 +500,24 @@ impl Viewer {
         let same_start = head.len() >= stored.len() && head[..stored.len()] == stored[..];
         let same_file = created == *self.created.lock().unwrap_or_else(|e| e.into_inner());
         if !same_file || !same_start || len < scanned {
-            // Truncated or replaced (rotated): index the file at the path again from its start.
-            *self.file.lock().unwrap_or_else(|e| e.into_inner()) = Arc::new(probe);
+            // Truncated or replaced (rotated): the file at the path is another file, so how it is read is found out again
+            // (a UTF-8 log can be replaced by a UTF-16 one), and the file, its format and the index change together.
+            let sniffed = read_range(&probe, 0, SNIFF).unwrap_or_default();
+            let fmt = detect(&sniffed, len);
             *self.head.lock().unwrap_or_else(|e| e.into_inner()) = head;
             *self.created.lock().unwrap_or_else(|e| e.into_inner()) = created;
-            *self.lock() = Index::new(self.fmt.base, len);
+            {
+                let mut index = self.lock();
+                *self.source.lock().unwrap_or_else(|e| e.into_inner()) = Source { file: Arc::new(probe), fmt };
+                *index = Index::new(fmt.base, len);
+            }
             self.scan();
             self.send("bigfile-grew", true);
         } else if len > scanned {
             if stored.len() < FINGERPRINT {
                 *self.head.lock().unwrap_or_else(|e| e.into_inner()) = head;
             }
-            *self.file.lock().unwrap_or_else(|e| e.into_inner()) = Arc::new(probe);
+            self.source.lock().unwrap_or_else(|e| e.into_inner()).file = Arc::new(probe);
             self.lock().done = false;
             self.scan();
             self.send("bigfile-grew", false);
@@ -497,15 +525,15 @@ impl Viewer {
     }
 
     pub fn encoding_name(&self) -> String {
-        encoding::shown(self.fmt.encoding.name())
+        encoding::shown(self.fmt().encoding.name())
     }
 
     pub fn bom(&self) -> bool {
-        self.fmt.bom
+        self.fmt().bom
     }
 
     pub fn binary(&self) -> bool {
-        self.fmt.binary
+        self.fmt().binary
     }
 
     pub fn size(&self) -> u64 {
@@ -524,11 +552,11 @@ impl Viewer {
         Some((mark, first - block as u64 * MARK_EVERY, idx.size.max(idx.scanned)))
     }
 
-    /// The raw lines `first` to `first + count`, as many as the file has.
-    fn read_raw(&self, first: u64, count: u64, max_line: usize) -> Vec<(u64, RawLine)> {
-        let Some((from, skip, end)) = self.position(first) else { return Vec::new() };
-        let file = self.file();
-        let mut reader = LineReader::new(&file, self.fmt, from, end, max_line);
+    /// The raw lines `first` to `first + count`, as many as the file has, and the format they are read with.
+    fn read_raw(&self, first: u64, count: u64, max_line: usize) -> (Vec<(u64, RawLine)>, Format) {
+        let (file, fmt) = self.source();
+        let Some((from, skip, end)) = self.position(first) else { return (Vec::new(), fmt) };
+        let mut reader = LineReader::new(&file, fmt, from, end, max_line);
         let mut out = Vec::new();
         let mut number = first - skip;
         while let Some(line) = reader.next() {
@@ -540,15 +568,13 @@ impl Viewer {
             }
             number += 1;
         }
-        out
+        (out, fmt)
     }
 
     /// Lines `first` to `first + count` for the webview. A request past what is indexed gives no lines.
     pub fn lines(&self, first: u64, count: u64) -> Lines {
-        let lines = self.read_raw(first, count.min(MAX_LINES), DISPLAY_LINE)
-            .into_iter()
-            .map(|(number, raw)| Line { number, text: text_of(&raw.bytes, self.fmt), cut: raw.cut })
-            .collect::<Vec<_>>();
+        let (raw, fmt) = self.read_raw(first, count.min(MAX_LINES), DISPLAY_LINE);
+        let lines = raw.into_iter().map(|(number, raw)| Line { number, text: text_of(&raw.bytes, fmt), cut: raw.cut }).collect::<Vec<_>>();
         let idx = self.lock();
         // What was read counts even before the index reaches it (the first window of a file still being indexed).
         let total = idx.lines().max(lines.last().map_or(0, |l| l.number + 1));
@@ -593,9 +619,9 @@ impl Viewer {
     /// Lines `from_line` to `last` (inclusive), the first match at or after `col` on `from_line` and any on the others.
     /// `Err(true)` when a newer search took over.
     fn forward_until(&self, re: &regex::Regex, from_line: u64, col: u64, last: u64, mine: u64) -> Result<Option<Hit>, bool> {
+        let (file, fmt) = self.source();
         let Some((from, skip, end)) = self.position(from_line) else { return Ok(None) };
-        let file = self.file();
-        let mut reader = LineReader::new(&file, self.fmt, from, end, SEARCH_LINE);
+        let mut reader = LineReader::new(&file, fmt, from, end, SEARCH_LINE);
         let mut number = from_line - skip;
         while let Some(raw) = reader.next() {
             if number >= from_line {
@@ -605,7 +631,7 @@ impl Viewer {
                 if number.is_multiple_of(256) && self.stale(mine) {
                     return Err(true);
                 }
-                let text = text_of(&raw.bytes, self.fmt);
+                let text = text_of(&raw.bytes, fmt);
                 if let Some((start, end)) = first_match(re, &text, if number == from_line { col } else { 0 }) {
                     return Ok(Some(Hit { line: number, start, end }));
                 }
@@ -624,12 +650,12 @@ impl Viewer {
                 return Err(true);
             }
             let block_start = hi / MARK_EVERY * MARK_EVERY;
-            let lines = self.read_raw(block_start, hi - block_start + 1, SEARCH_LINE);
+            let (lines, fmt) = self.read_raw(block_start, hi - block_start + 1, SEARCH_LINE);
             for (number, raw) in lines.iter().rev() {
                 if *number < to_line {
                     return Ok(None);
                 }
-                let text = text_of(&raw.bytes, self.fmt);
+                let text = text_of(&raw.bytes, fmt);
                 let before = if *number == from_line { col } else { None };
                 if let Some((start, end)) = last_match(re, &text, before) {
                     return Ok(Some(Hit { line: *number, start, end }));
@@ -660,10 +686,19 @@ impl Viewer {
     }
 }
 
-/// The first match in `text` starting at or after `col` (UTF-16 units), as UTF-16 start and end.
+/// The first match in `text` starting at or after `col` (UTF-16 units), as UTF-16 start and end. The search starts at `col`
+/// in the whole line, not in the rest of it, so `^` and `\b` see the text to their left.
 fn first_match(re: &regex::Regex, text: &str, col: u64) -> Option<(u64, u64)> {
-    let from = byte_of(text, col);
-    re.find_iter(&text[from..]).find(|m| m.start() != m.end()).map(|m| utf16_span(text, from + m.start(), from + m.end()))
+    let mut at = byte_of(text, col);
+    while at <= text.len() {
+        let found = re.find_at(text, at)?;
+        if found.start() != found.end() {
+            return Some(utf16_span(text, found.start(), found.end()));
+        }
+        // A match with no characters is noise: go on after the character it sits before.
+        at = found.end() + text[found.end()..].chars().next().map_or(1, char::len_utf8);
+    }
+    None
 }
 
 /// The last match in `text` that starts before `col` (UTF-16 units; any with `None`).
@@ -1022,6 +1057,25 @@ mod tests {
     }
 
     #[test]
+    fn next_keeps_the_text_to_the_left_of_where_it_starts_for_anchors_and_word_boundaries() {   // NOTES-6
+        // `^foo` is at the start of "foofoo" only: from column 3 the second `foo` is not a match.
+        assert_eq!(first_match(&re("^foo"), "foofoo", 0), Some((0, 3)));
+        assert_eq!(first_match(&re("^foo"), "foofoo", 3), None);
+        // `\bfoo` is not a word start inside "xfoo".
+        assert_eq!(first_match(&re(r"\bfoo"), "xfoo", 1), None);
+        assert_eq!(first_match(&re(r"\bfoo"), "x foo", 1), Some((2, 5)));
+        // A match with no characters is skipped, and columns count UTF-16 units.
+        assert_eq!(first_match(&re("x*"), "\u{1F600}xx", 0), Some((2, 4)));
+        let dir = scratch();
+        let path = dir.join("anchors.log");
+        std::fs::write(&path, "foofoo\nbar\n").unwrap();
+        let (v, _) = open(&path);
+        let found = v.search(&re("^foo"), 0, 3, true);
+        // Nothing after column 3 matches, so the search wraps to the line's start.
+        assert_eq!((found.hit, found.wrapped), (Some(Hit { line: 0, start: 0, end: 3 }), true));
+    }
+
+    #[test]
     fn a_regex_search_goes_both_ways_across_marks_and_wraps() {
         let dir = scratch();
         let path = dir.join("search.log");
@@ -1177,6 +1231,27 @@ mod tests {
         // A rewrite in place with other content and the same length is seen as a replacement too.
         std::fs::write(&path, numbered(900, "\n").replace("line", "xxx")).unwrap();
         wait_for("the rewrite", || texts(&v, 0, 1) == ["xxx 0"]);
+    }
+
+    #[test]
+    fn a_file_replaced_by_one_in_another_encoding_is_read_in_that_encoding_and_the_reset_says_so() {   // NOTES-7
+        let dir = scratch();
+        let path = dir.join("app.log");
+        std::fs::write(&path, numbered(100, "\n")).unwrap();
+        let (v, seen) = open(&path);
+        assert_eq!((v.encoding_name().as_str(), v.bom()), ("UTF-8", false));
+        // The log is rotated away and the new one is UTF-16 with a byte order mark.
+        std::fs::rename(&path, dir.join("app.log.1")).unwrap();
+        std::fs::write(&path, utf16(&numbered(300, "\r\n").replace("line", "wide"), false, true)).unwrap();
+        wait_for("the new file", || v.line_count() == 300);
+        assert_eq!(texts(&v, 0, 2), ["wide 0", "wide 1"]);
+        assert_eq!((v.encoding_name().as_str(), v.bom()), ("UTF-16 LE", true));
+        let events = seen.lock().unwrap();
+        let reset = events.iter().find(|(name, p)| *name == "bigfile-grew" && p.reset).expect("a reset event").1.clone();
+        assert_eq!((reset.encoding.as_str(), reset.bom, reset.binary), ("UTF-16 LE", true, false));
+        // A search reads the new file's text too.
+        drop(events);
+        assert_eq!(find_hit(&v, "wide 299", 0, 0, true).map(|h| h.line), Some(299));
     }
 
     #[test]

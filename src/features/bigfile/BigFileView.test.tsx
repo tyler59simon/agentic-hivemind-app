@@ -210,6 +210,13 @@ describe("the large file viewer", () => {
     expect(el.textContent).toContain("40 lines");
   });
 
+  it("shows the encoding the reset reports when the file was replaced by one in another encoding", async () => {
+    await mount(<BigFileView file={ref} />);
+    expect(el.textContent).toContain("UTF-8");
+    await emit("bigfile-grew", { lines: 40, size: 900, reset: true, encoding: "UTF-16 LE", bom: true, binary: false });
+    expect(el.textContent).toContain("UTF-16 LE with BOM");
+  });
+
   it("shows indexing progress until the index is done", async () => {
     await mount(<BigFileView file={ref} />);
     expect(el.querySelector("[role=progressbar]")).toBeNull();

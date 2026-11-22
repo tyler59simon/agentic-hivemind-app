@@ -18,6 +18,7 @@ let commits: { sha: string; author: string; date: string; subject: string; path:
 let git: { repo: string | null; changed: boolean } = { repo: null, changed: false };
 let tooLarge = false;
 let commitFails: string | null = null;
+let saveFails: string | null = null;
 /** A Living Memory page's revision is the sha256 of its bytes, and the adapter checks it. */
 const revisionOf = async (text: string) =>
   Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -36,6 +37,7 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "notebook_tree": return { entries: [], truncated: false };
       case "file_read": return { text: disk.text, sha256: sha(disk.sha), size: disk.text.length, mtimeMs: 1, format: { encoding: "UTF-8", bom: false, eol: "lf" }, readOnly: null, binary: false };
       case "file_save": {
+        if (saveFails) throw new Error(saveFails);
         if ((a.pre as { sha256: string }).sha256 !== sha(disk.sha)) return { status: "stale", sha256: sha(disk.sha) };
         Object.assign(disk, { text: a.text as string, sha: disk.sha + 1 });
         kept.push({ id: kept.length + 1, time: Date.now(), sha256: sha(disk.sha), size: disk.text.length, source: (a.source as string) ?? "you", pinned: false, text: disk.text });
@@ -86,6 +88,7 @@ const docs = await import("../../documents/store");
 const { startDocumentSync } = await import("../../documents/sync");
 const { timeline } = await import("./timeline");
 const { usePick } = await import("./pick");
+const { useToasts } = await import("../../ui/toast");
 // jsdom lays nothing out, so the layout is checked in the stylesheet's text. Vitest hands `?raw` imports of CSS back empty,
 // so the file is read from the project folder (tests run from it).
 const nodeFs = (await import(/* @vite-ignore */ "node:" + "fs")) as { readFileSync: (path: string, encoding: string) => string };
@@ -130,7 +133,7 @@ beforeEach(() => {
   ];
   commits = [{ sha: "a".repeat(40), author: "Ada", date: "2026-11-20T12:00:00+00:00", subject: "Tidy the plan", path: "Plan.md", text: "tidy\n" }];
   git = { repo: null, changed: false };
-  tooLarge = false; commitFails = null;
+  tooLarge = false; commitFails = null; saveFails = null;
   lmPage = { text: "# Plan\n", revision: PLAN };
   useWorkspace.setState({ panes: [{ id: "p0", tabs: [], active: null }], focused: "p0", dirty: {}, reveal: null });
   useApp.setState({ route: { page: "notes" }, back: [] });
@@ -211,6 +214,28 @@ describe("reading, comparing and restoring a version", () => {
     // The restore is a version of its own, and the list has the new one on top.
     expect(rows()[0]).toBe("Restored");
     expect(rows()).toHaveLength(4);
+  });
+
+  it("Restore is off for a page over 16 MB, whose current text the history could not keep (DATA-4)", async () => {
+    tooLarge = true;
+    await historyTab();
+    await click(byText(".history-list button", /Found on disk/));
+    const restore = byText(".history-pane button", "Restore") as HTMLButtonElement;
+    expect(restore.disabled).toBe(true);
+    expect(restore.title).toMatch(/over 16 MB/);
+  });
+
+  it("a restore Rust refuses shows why and puts the page back as it is on disk (DATA-4)", async () => {
+    await historyTab();
+    await click(byText(".history-list button", /Found on disk/));
+    await click(byText(".history-pane button", "Restore"));
+    saveFails = "This file is over 16 MB, so its current text cannot be kept in the history, and nothing was written";
+    await click(byText(".history-pane button.primary", "Restore"));
+    expect(useToasts.getState().items.map((t) => t.text).join(" ")).toContain("nothing was written");
+    expect(disk.text).toBe("now\n");
+    // The page is not left open with the old text as unsaved edits.
+    expect(docs.useDocuments.getState().docs[docs.keyOf(file)]?.status).toBe("clean");
+    expect(docs.useDocuments.getState().docs[docs.keyOf(file)]?.text).toBe("now\n");
   });
 
   it("Restore is off while the page has edits that are not saved, and for a page that is already this version", async () => {

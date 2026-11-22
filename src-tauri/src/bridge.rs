@@ -37,16 +37,27 @@ struct Proc {
 }
 
 impl Proc {
-    /// `error`, plus the exit code and the server's last stderr output once its stderr has closed (waiting up to a second).
-    /// The output is what it wrote last, which is not always why it stopped. `hint` is added only when there was no output.
+    /// `error`, plus the exit code and the server's last stderr output once its stderr has closed (waiting up to a second),
+    /// and then the exit code once the process has been reaped (up to another second: the pipes close a moment before the
+    /// system reports the exit). The output is what it wrote last, which is not always why it stopped. `hint` is added
+    /// only when there was no output.
     fn stopped(&mut self, error: &str, hint: &str) -> String {
         let deadline = Instant::now() + Duration::from_secs(1);
         while !self.drain.is_finished() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
         }
         let mut text = error.to_string();
-        if let Ok(Some(status)) = self.child.try_wait() {
-            text.push_str(&format!(" ({status})"));
+        // A server whose stderr is still open has not stopped, so it is asked once and not waited for.
+        let reaped = Instant::now() + if self.drain.is_finished() { Duration::from_secs(1) } else { Duration::ZERO };
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(status)) => {
+                    text.push_str(&format!(" ({status})"));
+                    break;
+                }
+                Ok(None) if Instant::now() < reaped => std::thread::sleep(Duration::from_millis(10)),
+                _ => break,
+            }
         }
         let tail = String::from_utf8_lossy(&self.stderr.lock().unwrap()).trim().to_string();
         if tail.is_empty() {

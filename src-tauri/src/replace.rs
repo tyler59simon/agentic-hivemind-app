@@ -87,24 +87,54 @@ impl Finder {
         Ok(Finder { re, replacement: replacement.to_string(), literal: !query.regex })
     }
 
-    /// Every match in `text`, in order. A match with no characters is left out: it is noise in a list and replacing it would
+    /// The matches of `text`, in order. A match with no characters is left out: it is noise in a list and replacing it would
     /// insert text everywhere.
-    fn matches(&self, text: &str) -> Vec<Match> {
-        let mut out = Vec::new();
-        for caps in self.re.captures_iter(text) {
+    fn spans<'a>(&'a self, text: &'a str) -> impl Iterator<Item = regex::Captures<'a>> + 'a {
+        self.re.captures_iter(text).filter(|caps| caps.get(0).is_some_and(|whole| whole.start() != whole.end()))
+    }
+
+    /// The text to put in place of a match.
+    fn expand(&self, caps: &regex::Captures) -> String {
+        if self.literal {
+            return self.replacement.clone();
+        }
+        let mut with = String::new();
+        caps.expand(&self.replacement, &mut with);
+        with
+    }
+
+    /// The first `limit` matches of `text`, for a preview: a search stops there, and a match keeps only as much of its
+    /// replacement as a hunk shows, so a long replacement does not multiply by the number of matches.
+    fn matches(&self, text: &str, limit: usize) -> Vec<Match> {
+        self.spans(text)
+            .take(limit)
+            .map(|caps| {
+                let whole = caps.get(0).expect("group 0 always matches");
+                let with = if self.literal { shown(&self.replacement).to_string() } else { shown(&self.expand(&caps)).to_string() };
+                Match { start: whole.start(), end: whole.end(), with }
+            })
+            .collect()
+    }
+
+    /// The matches of `text` up to the last one of `chosen` (indexes among all matches), with the whole text to put in
+    /// each chosen match and none in the others. Err when the file with these replacements would be over `budget` bytes,
+    /// found out as the matches are read, before the result is built.
+    fn chosen(&self, text: &str, chosen: &HashSet<usize>, budget: usize) -> Result<Vec<Match>, String> {
+        let upto = chosen.iter().max().map_or(0, |last| last + 1);
+        let (mut size, mut out) = (text.len(), Vec::new());
+        for (i, caps) in self.spans(text).enumerate().take(upto) {
             let whole = caps.get(0).expect("group 0 always matches");
-            if whole.start() == whole.end() {
-                continue;
-            }
             let mut with = String::new();
-            if self.literal {
-                with.push_str(&self.replacement);
-            } else {
-                caps.expand(&self.replacement, &mut with);
+            if chosen.contains(&i) {
+                with = self.expand(&caps);
+                size = size.saturating_sub(whole.end() - whole.start()).saturating_add(with.len());
+                if size > budget {
+                    return Err(format!("the result would be over {} MB, which Undo could not put back", budget / (1024 * 1024)));
+                }
             }
             out.push(Match { start: whole.start(), end: whole.end(), with });
         }
-        out
+        Ok(out)
     }
 }
 
@@ -130,6 +160,11 @@ pub struct Hunk {
     pub line: usize,
     pub before: String,
     pub after: String,
+}
+
+/// The part of a replacement a hunk can show: one character more than `clip` keeps, so `clip` still sees it is cut.
+fn shown(text: &str) -> &str {
+    text.char_indices().nth(AFTER + 1).map_or(text, |(at, _)| &text[..at])
 }
 
 /// The first `AFTER` characters of `text`, with an ellipsis when it is longer.
@@ -296,7 +331,9 @@ pub fn preview(target: &Target, sub: Option<&str>, query: &Query, replacement: O
             continue;
         }
         out.searched += 1;
-        let mut found = finder.matches(&text);
+        // The search stops at the room left in the budget: a file with millions of matches is not read to its end.
+        let room = MAX_MATCHES - out.matches;
+        let found = finder.matches(&text, room);
         if found.is_empty() {
             continue;
         }
@@ -304,9 +341,7 @@ pub fn preview(target: &Target, sub: Option<&str>, query: &Query, replacement: O
             out.skipped.push(Skipped { path: rel, why });
             continue;
         }
-        let room = MAX_MATCHES - out.matches;
         if found.len() >= room {
-            found.truncate(room);
             out.capped = true;
         }
         out.matches += found.len();
@@ -406,13 +441,26 @@ pub fn apply(target: &Target, history: &Path, query: &Query, replacement: &str, 
             skip(&mut applied, &file.path, read_only.unwrap_or_else(|| "it is not a text file".into()));
             continue;
         }
-        let found = finder.matches(&text);
-        let chosen_hunks: HashSet<usize> = file.hunks.iter().copied().filter(|i| *i < found.len()).collect();
+        // A preview offers at most MAX_MATCHES matches, so no index past that is a match it showed.
+        let wanted: HashSet<usize> = file.hunks.iter().copied().filter(|i| *i < MAX_MATCHES).collect();
+        let found = match finder.chosen(&text, &wanted, MAX_FILE as usize) {
+            Ok(found) => found,
+            Err(why) => {
+                skip(&mut applied, &file.path, why);
+                continue;
+            }
+        };
+        let chosen_hunks: HashSet<usize> = wanted.into_iter().filter(|i| *i < found.len()).collect();
         if chosen_hunks.is_empty() {
             skip(&mut applied, &file.path, "its matches are not there any more");
             continue;
         }
         let new_text = rewrite(&text, &found, &chosen_hunks);
+        // The file as it is written (UTF-16 doubles, line endings add): the same limit, so Undo can keep it and put it back.
+        if files::encode(&new_text, &format).is_ok_and(|out| out.len() as u64 > MAX_FILE) {
+            skip(&mut applied, &file.path, format!("the result would be over {} MB, which Undo could not put back", MAX_FILE / (1024 * 1024)));
+            continue;
+        }
         let pre = Stamp { sha256: file.sha256.clone(), size: bytes.len() as u64, mtime_ms: 0 };
         match studio::save_kept(history, &full, &Change { text: &new_text, pre: &pre, format: &format, convert: false, source: "replace" }) {
             Ok(SaveOutcome::Saved(stamp)) => {
@@ -501,6 +549,20 @@ impl Undos {
     }
 }
 
+/// A folder the user picked, canonical, and still the one that was picked: it was saved in its canonical spelling, so a
+/// link on that path now (a junction put where the folder was moved from) is refused as it is for a notebook. Undo takes
+/// the same road, so it cannot write into a folder the search would not have read.
+fn other_folder(known: &str) -> Result<PathBuf, String> {
+    if !contain::unmoved(Path::new(known)) {
+        return Err(format!("The folder {known} now leads somewhere else; it was moved or replaced by a link. Forget it and add the folder again"));
+    }
+    let root = std::fs::canonicalize(known).map_err(|e| format!("The folder {known} cannot be opened: {e}"))?;
+    if !root.is_dir() {
+        return Err(format!("{known} is not a folder"));
+    }
+    Ok(root)
+}
+
 /// The folder a scope names, checked as a command checks any file: a registered notebook (still the folder that was
 /// registered, outside the store and every vault) or one of the folders the user picked.
 fn target(state: &AppState, scope: &Scope) -> Result<Target, String> {
@@ -512,10 +574,7 @@ fn target(state: &AppState, scope: &Scope) -> Result<Target, String> {
         (None, Some(folder)) => {
             let saved = crate::settings::load(&state.settings_path);
             let known = crate::folders::find(&saved, folder).ok_or("Find in files searches the notebooks and folders you added to Hivemind")?;
-            let root = std::fs::canonicalize(known).map_err(|e| format!("The folder {known} cannot be opened: {e}"))?;
-            if !root.is_dir() {
-                return Err(format!("{known} is not a folder"));
-            }
+            let root = other_folder(known)?;
             let protected = studio::protected(state);
             protected.check_root(&root)?;
             Ok(Target { root: PathBuf::from(crate::folders::plain(&root)), protected })
@@ -761,6 +820,79 @@ mod tests {
         // Nothing chosen: nothing written.
         let none = apply(&t, &h, &q, "y", &[Chosen { path: "a.txt".into(), sha256: files::sha256(b"x1 y2 x3\ny4\n"), hunks: vec![] }], &[]).unwrap().0;
         assert!(none.done.is_empty() && none.skipped.is_empty());
+    }
+
+    #[test]
+    fn a_search_stops_at_the_budget_and_keeps_only_what_a_hunk_shows() {   // NOTES-1
+        let finder = Finder::new(&query("a"), &"b".repeat(10_000)).unwrap();
+        let text = "a".repeat(50_000);
+        let found = finder.matches(&text, 7);
+        assert_eq!(found.len(), 7);
+        assert!(found.iter().all(|m| m.with.chars().count() == AFTER + 1), "a match keeps what a hunk shows, not the replacement");
+        // The screen shows the same as before: the first characters and an ellipsis.
+        let (t, _) = setup();
+        put(&t.root, "a.txt", text.as_bytes());
+        let p = preview(&t, None, &query("a"), Some(&"b".repeat(10_000))).unwrap();
+        assert_eq!((p.matches, p.capped), (MAX_MATCHES, true));
+        assert_eq!(p.files[0].hunks[0].after.chars().filter(|c| *c == 'b').count(), AFTER);
+        assert!(p.files[0].hunks[0].after.ends_with(char::from_u32(0x2026).unwrap()));
+    }
+
+    #[test]
+    fn apply_expands_only_the_chosen_matches() {   // NOTES-1
+        let finder = Finder::new(&query("a"), "XYZ").unwrap();
+        let text = "a".repeat(1000);
+        let found = finder.chosen(&text, &HashSet::from([1usize, 3]), 1 << 20).unwrap();
+        assert_eq!(found.len(), 4, "the search ends at the last chosen match");
+        assert_eq!(found.iter().map(|m| m.with.as_str()).collect::<Vec<_>>(), ["", "XYZ", "", "XYZ"]);
+        assert!(finder.chosen(&text, &HashSet::new(), 1 << 20).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_replace_whose_result_is_over_the_size_budget_is_refused_so_undo_can_always_put_it_back() {   // NOTES-2
+        let (t, h) = setup();
+        // 10,000 matches of 8 KB each would make about 78 MB from a file of 10 KB.
+        put(&t.root, "zbig.txt", "a".repeat(10_000).as_bytes());
+        // 1,000 matches of 7 KB make about 7 MB: within the budget.
+        put(&t.root, "ok.txt", "a".repeat(1_000).as_bytes());
+        let (q, with) = (query("a"), "b".repeat(8 * 1024));
+        let p = preview(&t, None, &q, Some(&with)).unwrap();
+        let (a, w) = apply(&t, &h, &q, &with, &all(&p), &[]).unwrap();
+        assert_eq!(a.done.len(), 1, "{:?}", a.skipped);
+        assert_eq!(a.done[0].path, "ok.txt");
+        assert_eq!(a.skipped.len(), 1);
+        assert!(a.skipped[0].why.contains("over 8 MB"), "{}", a.skipped[0].why);
+        assert_eq!(read(&t.root, "zbig.txt"), "a".repeat(10_000).as_bytes(), "the file was not written");
+        // What was accepted can be undone.
+        let (undone, _) = undo(&t, &h, &w.undo, &[]);
+        assert_eq!(undone.done.len(), 1, "{:?}", undone.skipped);
+        assert_eq!(read(&t.root, "ok.txt"), "a".repeat(1_000).as_bytes());
+        // A file that grows to exactly the budget is allowed; one byte more is not.
+        let one = Finder::new(&query("a"), &"b".repeat(MAX_FILE as usize + 1)).unwrap();
+        assert!(one.chosen("a", &HashSet::from([0usize]), MAX_FILE as usize).is_err());
+        let fits = Finder::new(&query("a"), &"b".repeat(MAX_FILE as usize)).unwrap();
+        assert!(fits.chosen("a", &HashSet::from([0usize]), MAX_FILE as usize).is_ok());
+    }
+
+    #[test]
+    fn a_folder_replaced_by_a_junction_is_no_longer_the_folder_that_was_picked() {   // PATH-2
+        let dir = scratch();
+        let (picked, elsewhere) = (dir.join("picked"), dir.join("elsewhere"));
+        std::fs::create_dir_all(&picked).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("secret.txt"), "needle").unwrap();
+        let spelled = crate::folders::plain(&std::fs::canonicalize(&picked).unwrap());
+        assert!(other_folder(&spelled).is_ok());
+        // The folder is moved aside and a junction to another folder takes its place.
+        std::fs::rename(&picked, dir.join("moved-aside")).unwrap();
+        let made = std::process::Command::new("cmd").args(["/d", "/c", "mklink", "/J"]).arg(&picked).arg(&elsewhere).output().map(|o| o.status.success()).unwrap_or(false);
+        if made {
+            assert!(other_folder(&spelled).unwrap_err().contains("leads somewhere else"));
+            let _ = std::fs::remove_dir(&picked);
+        } else {
+            eprintln!("skipped: mklink /J is not available here");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

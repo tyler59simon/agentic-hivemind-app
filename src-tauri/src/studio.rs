@@ -351,6 +351,12 @@ pub(crate) fn save_kept(history: &Path, full: &Path, change: &Change) -> Result<
     if !history::SOURCES.contains(&change.source) {
         return Err(format!("\"{}\" is not a way Hivemind saves a page", change.source));
     }
+    // `snapshot_file` keeps nothing for a file over the limit and says so with Ok(None), the same as for a file whose newest
+    // version already holds these bytes, so the size is asked here: a change that is not the user's own typing must not
+    // replace text that the history could not give back.
+    if change.source != "you" && history::too_large(full) {
+        return Err("This file is over 16 MB, so its current text cannot be kept in the history, and nothing was written".into());
+    }
     if (!history::has_history(history, full) || change.source != "you")
         && let Err(e) = history::snapshot_file(history, full, Some(&change.pre.sha256), "disk", history::now_ms())
     {
@@ -1177,6 +1183,27 @@ mod tests {
         assert!(matches!(save_page(&root, &hist, &big, "you"), SaveOutcome::Saved(_)));
         assert_eq!(versions(&hist, &root), [("disk".to_string(), "small\n".to_string())], "only the version from before; the big one is not kept");
         assert!(history::too_large(&root.join("Page.md")));
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_change_that_is_not_typing_is_refused_before_it_writes_when_the_current_text_cannot_be_kept() {   // DATA-4
+        let (base, root, hist) = kept_rig("small\n");
+        let first = history::snapshot_file(&hist, &root.join("Page.md"), None, "you", 1).unwrap();
+        assert!(first.is_some());
+        // An external editor grows the page past what the history keeps.
+        let big = format!("{}\n", "a".repeat(history::MAX_SNAPSHOT as usize));
+        std::fs::write(root.join("Page.md"), &big).unwrap();
+        for source in ["restore", "links", "replace", "ai", "agent"] {
+            let loaded = files::read(&root.join("Page.md")).unwrap();
+            let refused = save_in(&root, &Protected::new(None), &hist, "Page.md", &Change { text: "small\n", pre: &loaded.stamp, format: &loaded.format, convert: false, source });
+            assert!(refused.unwrap_err().contains("over 16 MB"), "{source}");
+            assert_eq!(std::fs::read_to_string(root.join("Page.md")).unwrap(), big, "{source}: nothing was written");
+        }
+        // The user's own save still goes through, as before.
+        assert!(matches!(save_page(&root, &hist, "typed\n", "you"), SaveOutcome::Saved(_)));
+        // A page whose newest version already holds its bytes is not a refusal: there is nothing new to keep.
+        assert!(matches!(save_page(&root, &hist, "restored\n", "restore"), SaveOutcome::Saved(_)));
         std::fs::remove_dir_all(&base).unwrap();
     }
 

@@ -89,9 +89,18 @@ enum Untracked {
     Unread,
 }
 
-pub(crate) fn git(dir: &Path) -> Command {
+/// `git` for a command Hivemind runs on its own. A repository's configuration can name programs that git runs even
+/// for a read: `core.fsmonitor` is run by `git status`. A checkout copied from elsewhere can carry that setting, so
+/// it is turned off here, ahead of the repository's own configuration.
+pub(crate) fn git_command() -> Command {
     let mut command = Command::new("git");
-    command.args(["--no-optional-locks", "-c", "core.longpaths=true", "-c", "core.quotepath=false", "-C"]).arg(dir);
+    command.args(["--no-optional-locks", "-c", "core.fsmonitor=false"]);
+    command
+}
+
+pub(crate) fn git(dir: &Path) -> Command {
+    let mut command = git_command();
+    command.args(["-c", "core.longpaths=true", "-c", "core.quotepath=false", "-C"]).arg(dir);
     command
 }
 
@@ -236,8 +245,8 @@ pub(crate) fn parse_changes(numstat: &str, names: &str) -> Vec<FileChange> {
 
 pub fn changes(tree: &Worktree) -> Result<Vec<FileChange>, String> {
     let dir = Path::new(&tree.path);
-    let numstat = run(dir, &["diff", "--numstat", "-z", "--no-renames", tree.review_base()])?;
-    let names = run(dir, &["diff", "--name-status", "-z", "--no-renames", tree.review_base()])?;
+    let numstat = run(dir, &["diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", tree.review_base()])?;
+    let names = run(dir, &["diff", "--name-status", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", tree.review_base()])?;
     let others = run(dir, &["ls-files", "--others", "--exclude-standard", "-z"])?;
     let mut files = parse_changes(&numstat, &names);
     for path in others.split('\0').filter(|p| !p.is_empty()) {

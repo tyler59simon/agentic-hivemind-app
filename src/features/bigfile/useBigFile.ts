@@ -38,6 +38,7 @@ export function useBigFile(file: FileRef): BigFile {
     const apply = (event: "progress" | "grew", p: BigProgress) =>
       setState((s) => ({
         ...s, size: p.size, lines: p.lines, scanned: p.scanned, indexed: p.done,
+        ...(p.encoding === undefined ? {} : { encoding: p.encoding, bom: p.bom, binary: p.binary }),
         grew: s.grew + (event === "grew" ? 1 : 0), resets: s.resets + (p.reset ? 1 : 0),
       }));
     onBigfile((event, p) => {

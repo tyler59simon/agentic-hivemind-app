@@ -243,7 +243,12 @@ fn run(mut conn: Connection, jobs: Receiver<Job>, shared: Arc<Shared>, emit: Emi
                 report(0, 0);
                 writer::scan(&mut conn, &shared.semantic, roots, mode, prune, &mut report)
             }
-            Job::Paths(root, rels) => writer::update(&mut conn, &shared.semantic, root, rels),
+            // A change reported for a notebook that was removed (or whose folder changed) after the job was queued is
+            // dropped: the registry as the last `sync` named it decides, so a late save cannot bring pruned pages back.
+            Job::Paths(root, rels) => {
+                let current = shared.roots.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|r| r.id == root.id && r.path == root.path);
+                if current { writer::update(&mut conn, &shared.semantic, root, rels) } else { Ok(writer::Pass::default()) }
+            }
             Job::Embed => {
                 shared.embed_queued.store(false, Ordering::SeqCst);
                 let roots = shared.roots.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -515,6 +520,31 @@ mod tests {
         index.flush();
         assert_eq!(all(&index, "shared"), ["nb-1:A.md"]);
         assert_eq!(index.status().unwrap().notebooks, [NotebookCount { id: "nb-1".into(), pages: 1 }]);
+        finish(index, &dir);
+    }
+
+    #[test]
+    fn a_late_change_for_a_removed_notebook_does_not_bring_its_pages_back() {   // CON-1
+        let dir = scratch();
+        let (one, two) = (root(&dir, "nb-1"), root(&dir, "nb-2"));
+        write(&one.path, "A.md", "# A\nshared");
+        write(&two.path, "B.md", "# B\nshared");
+        let index = started(&dir);
+        index.sync(vec![one.clone(), two.clone()]);
+        index.flush();
+        index.sync(vec![one.clone()]);
+        // A save that began before the removal reports its page after the prune, with the root it captured.
+        write(&two.path, "Late.md", "# Late\nshared");
+        index.touch(two.clone(), vec!["Late.md".into(), "B.md".into()]);
+        index.flush();
+        assert_eq!(all(&index, "shared"), ["nb-1:A.md"]);
+        // The notebook added again under the same id but another folder: the old root's change is dropped too.
+        let moved = Root { id: "nb-1".into(), path: dir.join("elsewhere") };
+        write(&moved.path, "M.md", "# M\nshared");
+        index.sync(vec![moved.clone()]);
+        index.touch(one.clone(), vec!["A.md".into()]);
+        index.flush();
+        assert_eq!(all(&index, "shared"), ["nb-1:M.md"]);
         finish(index, &dir);
     }
 
@@ -801,6 +831,74 @@ mod tests {
         // Without the model there is nothing to say.
         fixture::remove(&store_of(&dir));
         assert!(related("P1.md").is_empty());
+        finish(index, &dir);
+    }
+
+    /// A junction at `link` to `target`; false when this machine cannot make one (the test then does nothing).
+    fn junction(link: &Path, target: &Path) -> bool {
+        std::process::Command::new("cmd").args(["/d", "/c", "mklink", "/J"]).arg(link).arg(target).output().map(|o| o.status.success()).unwrap_or(false)
+    }
+
+    #[test]
+    fn the_index_does_not_read_a_page_the_editor_would_refuse() {   // PATH-1
+        use crate::files::guard::Protected;
+        let dir = scratch();
+        let nb = root(&dir, "nb-1");
+        write(&nb.path, "Open.md", "# Open\nvisible");
+        write(&nb.path, "Inside/Doc.md", "# Doc\nvisible");
+        let index = started(&dir);
+        // The store now lies inside the notebook (it was moved there after the notebook was registered): its files are
+        // not read, and what was read before goes.
+        index.set_store(Some(dir.join("store")));
+        index.sync(vec![nb.clone()]);
+        index.flush();
+        let mut both = all(&index, "visible");
+        both.sort();
+        assert_eq!(both, ["nb-1:Inside/Doc.md", "nb-1:Open.md"]);
+        index.set_store(Some(nb.path.join("Inside")));
+        write(&nb.path, "Inside/Doc.md", "# Doc\nvisible, changed");
+        index.touch(nb.clone(), vec!["Inside/Doc.md".into()]);
+        index.flush();
+        assert_eq!(all(&index, "visible"), ["nb-1:Open.md"]);
+        assert!(index.status().unwrap().progress.error.is_some_and(|e| e.contains("not indexed")));
+        // Related reads the page through the same rule.
+        let protected = Protected::new(Some(&nb.path.join("Inside")));
+        let reach = writer::Reach::new(&nb.path, &protected);
+        assert!(writer::related_text(&reach, "Open.md").contains("Open"));
+        assert_eq!(writer::related_text(&reach, "Inside/Doc.md"), "");
+        assert_eq!(writer::related_text(&reach, "../x.md"), "");
+        finish(index, &dir);
+    }
+
+    #[test]
+    fn related_and_the_meaning_pass_do_not_read_through_a_link_out_of_the_notebook() {   // PATH-1
+        use crate::files::guard::Protected;
+        let dir = scratch();
+        let nb = root(&dir, "nb-1");
+        let outside = dir.join("outside");
+        write(&nb.path, "Dir/P.md", "# P\nalpha alpha");
+        write(&outside, "P.md", "# Secret\nzebra zebra");
+        let index = started(&dir);
+        index.set_store(Some(store_of(&dir)));
+        index.sync(vec![nb.clone()]);
+        index.flush();
+        assert_eq!(all(&index, "alpha"), ["nb-1:Dir/P.md"]);
+        // The folder is replaced by a junction to a folder outside the notebook, while the index holds the page.
+        std::fs::remove_dir_all(nb.path.join("Dir")).unwrap();
+        if !junction(&nb.path.join("Dir"), &outside) {
+            eprintln!("skipped: mklink /J is not available here");
+            finish(index, &dir);
+            return;
+        }
+        let protected = Protected::new(None);
+        assert_eq!(writer::related_text(&writer::Reach::new(&nb.path, &protected), "Dir/P.md"), "");
+        // The model appears: the pass that gives pages their vectors would read the file through the junction.
+        fixture::install(&store_of(&dir), &fixture::rows(), "h1");
+        assert_eq!(index.semantic_status().state, "building");
+        index.flush();
+        assert!(all(&index, "zebra").is_empty(), "text from outside the notebook was indexed");
+        assert!(pages(&index).is_empty(), "a page that leads out of its notebook is dropped");
+        let _ = std::fs::remove_dir(nb.path.join("Dir"));
         finish(index, &dir);
     }
 

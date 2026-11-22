@@ -218,8 +218,8 @@ fn fresh_tree(id: &str, dir: &Path) -> Result<String, String> {
 
 /// The files that differ between two trees (or a commit and a tree) of the repository `dir` is in.
 fn direct_changes(dir: &Path, from: &str, now: &str) -> Result<Vec<FileChange>, String> {
-    let numstat = run(dir, &["diff", "--numstat", "-z", "--no-renames", from, now], READ)?;
-    let names = run(dir, &["diff", "--name-status", "-z", "--no-renames", from, now], READ)?;
+    let numstat = run(dir, &["diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", from, now], READ)?;
+    let names = run(dir, &["diff", "--name-status", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", from, now], READ)?;
     let mut files = worktree::parse_changes(&numstat, &names);
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(files)

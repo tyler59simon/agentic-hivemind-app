@@ -217,8 +217,8 @@ pub fn is_sha(text: &str) -> bool {
 
 /// The commit a repository's HEAD points at.
 pub fn head_sha(repo: &Path) -> Result<String, String> {
-    let mut command = Command::new("git");
-    command.args(["--no-optional-locks", "-C"]).arg(repo).args(["rev-parse", "HEAD"]);
+    let mut command = crate::worktree::git_command();
+    command.arg("-C").arg(repo).args(["rev-parse", "HEAD"]);
     let text = run_with_timeout(command, TIMEOUT)?;
     Some(text.trim()).filter(|sha| is_sha(sha)).map(String::from).ok_or_else(|| "git did not print a commit id".to_string())
 }
@@ -235,15 +235,15 @@ pub fn next_batch(repo: &Path, reviewed: &[&str], limit: usize) -> Result<(Vec<S
         return Ok((vec![], vec![head_sha(repo)?]));
     }
     let reviewed: Vec<&str> = reviewed.iter().map(String::as_str).collect();
-    let mut command = Command::new("git");
-    command.args(["--no-optional-locks", "-C"]).arg(repo).args(["rev-list", "--reverse", "--topo-order", "HEAD", "--not"]).args(&reviewed);
+    let mut command = crate::worktree::git_command();
+    command.arg("-C").arg(repo).args(["rev-list", "--reverse", "--topo-order", "HEAD", "--not"]).args(&reviewed);
     let text = run_with_timeout(command, TIMEOUT)?;
     let batch: Vec<String> = text.lines().map(str::trim).filter(|sha| is_sha(sha)).take(limit).map(String::from).collect();
     if batch.is_empty() {
         return Ok((batch, reviewed.iter().map(|sha| sha.to_string()).collect()));
     }
-    let mut command = Command::new("git");
-    command.args(["--no-optional-locks", "-C"]).arg(repo).args(["merge-base", "--independent"]).args(&reviewed).args(&batch);
+    let mut command = crate::worktree::git_command();
+    command.arg("-C").arg(repo).args(["merge-base", "--independent"]).args(&reviewed).args(&batch);
     let tips = run_with_timeout(command, TIMEOUT)?.lines().map(str::trim).filter(|sha| is_sha(sha)).map(String::from).collect();
     Ok((batch, tips))
 }
@@ -256,8 +256,8 @@ pub fn live_tips(repo: &Path, tips: &[&str]) -> Result<Vec<String>, String> {
     if ids.is_empty() {
         return Ok(vec![]);
     }
-    let mut command = Command::new("git");
-    command.args(["--no-optional-locks", "-C"]).arg(repo).args(["cat-file", "--batch-check"]);
+    let mut command = crate::worktree::git_command();
+    command.arg("-C").arg(repo).args(["cat-file", "--batch-check"]);
     let ran = run_with_input(command, Some(&format!("{}\n", ids.join("\n"))), TIMEOUT)?;
     if !ran.status.success() {
         return Err(format!("git cat-file failed: {}", ran.stderr.trim()));
@@ -272,15 +272,15 @@ pub fn live_tips(repo: &Path, tips: &[&str]) -> Result<Vec<String>, String> {
 
 /// `git rev-list --count <selector...>` in `repo`, e.g. `["abc..HEAD"]` or `["--since=@1794322874", "HEAD"]`.
 pub fn rev_count(repo: &Path, selector: &[&str]) -> Result<u64, String> {
-    let mut command = Command::new("git");
-    command.args(["--no-optional-locks", "-C"]).arg(repo).args(["rev-list", "--count"]).args(selector);
+    let mut command = crate::worktree::git_command();
+    command.arg("-C").arg(repo).args(["rev-list", "--count"]).args(selector);
     run_with_timeout(command, TIMEOUT)?.trim().parse().map_err(|_| "git did not print a number".to_string())
 }
 
 fn commits_for(repo: &Path) -> Result<Vec<Commit>, String> {
-    let mut command = Command::new("git");
+    let mut command = crate::worktree::git_command();
     command
-        .args(["--no-optional-locks", "-C"])
+        .arg("-C")
         .arg(repo)
         .args(["log", "--since=30.days", "--max-count=50", "--no-color", "--pretty=format:%H%x1f%an%x1f%aI%x1f%s%x1e"]);
     run_with_timeout(command, TIMEOUT).map(|text| parse_log(&text))
@@ -337,8 +337,8 @@ pub struct Branches {
 /// The local branches of a repository and the one checked out (None on a detached HEAD).
 pub fn branches(repo: &Path) -> Result<Branches, String> {
     let run = |args: &[&str]| {
-        let mut command = Command::new("git");
-        command.args(["--no-optional-locks", "-C"]).arg(repo).args(args);
+        let mut command = crate::worktree::git_command();
+        command.arg("-C").arg(repo).args(args);
         run_with_timeout(command, TIMEOUT)
     };
     if run(&["rev-parse", "--is-inside-work-tree"]).map(|s| s.trim() == "true") != Ok(true) {
@@ -927,6 +927,34 @@ mod tests {
         std::fs::write(sub.join("b.md"), "three\n").unwrap();
         assert!(file_log(&sub, "b.md").unwrap().changed);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn reading_a_files_history_does_not_run_the_repositorys_filesystem_monitor() {   // PROC-1
+        if !git_available() {
+            return;
+        }
+        let dir = file_repo("fsmonitor");
+        write_and_commit(&dir, "a.md", "one\n", "first");
+        let scripts = std::env::temp_dir().join(format!("hivemind-fsmonitor-{}", std::process::id()));
+        std::fs::remove_dir_all(&scripts).ok();
+        std::fs::create_dir_all(&scripts).unwrap();
+        let marker = scripts.join("ran");
+        let script = scripts.join("monitor.sh");
+        let slashed = |path: &Path| path.display().to_string().replace('\\', "/");
+        std::fs::write(&script, format!("#!/bin/sh\necho ran > \"{}\"\n", slashed(&marker))).unwrap();
+        git(&dir, &["config", "core.fsmonitor", &format!("sh {}", slashed(&script))]);
+        std::fs::write(dir.join("a.md"), "two\n").unwrap();
+        // Control: git itself runs the monitor, so the check below can tell.
+        out(&dir, &["status", "--porcelain"]);
+        assert!(marker.exists(), "this git does not run the monitor, so the test proves nothing");
+        std::fs::remove_file(&marker).unwrap();
+        assert!(file_log(&dir, "a.md").unwrap().changed);
+        assert!(file_commit(&dir, "a.md", "second").is_ok());
+        let ran = marker.exists();
+        std::fs::remove_dir_all(&scripts).ok();
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(!ran, "the repository's fsmonitor program ran");
     }
 
     #[test]

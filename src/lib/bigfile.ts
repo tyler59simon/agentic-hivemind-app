@@ -12,7 +12,11 @@ export interface BigOpened { handle: string; size: number; encoding: string; bom
 export interface BigHit { line: number; start: number; end: number }
 export interface BigFound { hit: BigHit | null; /** The search went on from the other end of the file. */ wrapped: boolean; /** A newer search took its place. */ cancelled: boolean }
 /** What `bigfile-progress` (indexing) and `bigfile-grew` (the file grew, or `reset`: it was truncated or replaced) tell. */
-export interface BigProgress { handle: string; scanned: number; size: number; lines: number; done: boolean; reset: boolean }
+export interface BigProgress {
+  handle: string; scanned: number; size: number; lines: number; done: boolean; reset: boolean;
+  /** How the file is read now: after a replacement it can be another encoding. */
+  encoding: string; bom: boolean; binary: boolean;
+}
 
 export const bigfileOpen = (notebook: string, path: string) => invoke<BigOpened>("bigfile_open", { notebook, path });
 export const bigfileLines = (handle: string, first: number, count: number) => invoke<BigLines>("bigfile_lines", { handle, first, count });
