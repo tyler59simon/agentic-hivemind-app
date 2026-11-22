@@ -9,6 +9,21 @@ These rules come from the Codex review of the design ([reviews/ns0-codex-review.
 - Living Memory tasks and properties come from `doc tasks` and `doc query` (NS-2B), not from Hivemind's index; ticking a task or editing a property of a Living Memory page writes it with `doc write --expected-revision` (U7).
 - Exit criteria split by capability: Living Memory task and property write-back is checked only when `docs.search` is present; folder notebooks are checked always. `doc query` filters by notebook, folder (path prefix) and tag (`tags` frontmatter) as well as by properties, so saved queries mean the same over both kinds (C1, U7).
 
+## Changes from the code survey before NS-7B
+
+Claude surveyed main at `a7e267d` on 2026-11-22. Where the text below says otherwise, these win.
+
+- **The index has no `tasks` or `props` tables.** NS-4A built `pages`, `fts`, `links`, `tags`, `units`, `vectors` and `meta` (`src-tauri/src/notes_index/schema.rs`, `VERSION = 2`). This phase adds `tasks` and `props`, extracted in the same pass as links and tags (`notes_index/links.rs` already finds the frontmatter block), and raises `VERSION` so existing indexes rebuild.
+- **The `yaml` package is not a dependency.** Add `yaml` (eemeli/yaml, ISC, no dependencies) at an exact version for the frontmatter document API. The Rust side keeps its own small frontmatter subset parser.
+- **Living Memory commands that exist** (installed build, `core/cli.py`):
+  - `doc tasks [--all-domains] [--notebook NB] [--open]`: task lines of notebook pages.
+  - `doc query --payload-file FILE [--all-domains]`: the payload is `{"where": [{"key", "op", "value"}], "sort": [{"key", "order"}], "limit": N, "notebook": NB}`, with pseudo keys `title`, `path` and `notebook` (`core/docs_index.py` around line 450). Hivemind's query JSON uses `prop` and `dir`, so it is translated. Check `_matches` for the operators it supports. The folder filter maps to a `path` condition if an operator fits, otherwise it is applied in TypeScript after the query. Tags are the `tags` property.
+  - `doc set` and `doc unset` manage folder notebooks, not page properties. Property edits and task ticks on a Living Memory page go through `doc read` and `doc write --expected-revision`, refusing a page read `truncated`, like NS-7A's append.
+  - `--payload-file` goes through `lm_body` with a new allowed flag, as `--settings-file` did in NS-7A.
+- **Living Memory action items** use the existing `open` and `check` wrappers in `src/lib/lm.ts` (`openArgs`, `check ... --index`).
+- **Writes to open pages** go through the document session (`src/documents/store.ts`), as NS-7A's append does for pages in the main window. Closed pages save with the indexed hash and refuse on a mismatch.
+- **Rich editors and frontmatter:** `src/features/rich/markdown.ts` and `fromMarkdown.ts` already carry a frontmatter block through. The properties panel edits the page text, and the open editor follows the document, so Rich, Live and Source stay in step.
+
 ## 1. What the user sees
 
 - A **Tasks** view (Notes page sub-view, palette entry): every `- [ ]` and `- [x]` from folder notebooks and Living Memory pages, plus open action items from Living Memory work notes (`alm open`). Columns: task, page or note, notebook or domain, due, priority. Filters: notebook, due (overdue, today, this week, none), done, text. Grouping by page, due date or notebook.
