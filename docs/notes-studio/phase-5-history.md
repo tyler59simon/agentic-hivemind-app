@@ -10,6 +10,18 @@ These rules come from the Codex review of the design ([reviews/ns0-codex-review.
 - Commit stages and commits exactly one file: `git commit --only -m MESSAGE -- ":(literal)<repo-relative path>"`, which leaves any other staged change staged. Tests: another file already staged, and a file name with pathspec characters (`*`, `?`, `[`, `:`) (S12).
 - Restoring a version runs `files::guard` on the target (S2).
 
+## Changes from the code survey before NS-5
+
+Claude surveyed main at `f88e919` on 2026-11-22. Where the sections below say otherwise, these win. At the user's request this phase has no Codex review; Claude reviews the diff.
+
+- **Key.** Every file save, loose files included, goes through `studio.rs file_save` with a notebook id and a relative path, and the webview's `docKey` uses that id (`file:<notebook>:<path>`), which a re-registered notebook or a loose file's grant would change. So Rust keys history by the file's absolute path, normalised as `folders.rs normal()` does (case-folded on Windows): the folder is `app_data/history/<sha256(normalised path)[:16]>/`. The same file has one history whether it is opened as a page or from disk.
+- **When snapshots are taken.** In Rust, not the webview: after every successful `file_save`, `file_create` and Save as (`opens.rs file_save_as`); and, the first time a file with no history is saved, its content on disk before the save, so the version from before Hivemind can be restored. `file_save` takes an optional `source` (`you` by default; `links`, `restore`, and later `replace`, `ai`, `agent`): for any source but `you` the content on disk is snapshotted before the write too. The NS-4A link rewrite (`src/features/links/rewrite.ts applyPlan`) passes `links`. Identical contents are stored once, so the extra snapshots cost nothing when nothing changed.
+- **Renames.** `file_rename` (`rename_in`) moves the history of the file, or of every file under a folder, to the new key by appending the old key's entries; a case-only rename keeps the key.
+- **Size.** Files over 16 MB are not snapshotted (the timeline says so); retention is per file as in section 2.
+- **Living Memory pages** take no Hivemind snapshots: their timeline is `docHistory` in `src/lib/lm.ts` (`alm doc history`) and Restore writes through the existing page save with its revision precondition.
+- **Git.** The timeline and Commit apply to any file inside a git work tree (found with `git rev-parse --show-toplevel` from the file's folder through `git.rs run_captured` with a timeout). Commit asks for a message in a dialog, never pushes, and shows `review.rs NO_IDENTITY` when git has no identity.
+- **Where it shows.** File tabs gain a History mode beside Reading, Live, Rich and Source (today `FileTab.tsx` maps `history` to Reading); plain text files get it too. The page rail gains a History section with the last five versions. The new components go in `src/features/history/` beside Memory's existing `HistoryViews.tsx`, `LogView.tsx` and `activity.ts`, without changing them.
+
 ## 1. What the user sees
 
 - A **History** mode on file and page tabs (as notes have) and a **History** section in the page rail with the last few versions.
