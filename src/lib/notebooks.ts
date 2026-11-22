@@ -13,7 +13,7 @@ export type Eol = "lf" | "crlf" | "cr" | "mixed" | "none";
 /** `encoding` is an encoding_rs name ("UTF-8", "UTF-16LE", "windows-1252", ...); `confidence` says how it was found. */
 export interface FileFormat { encoding: string; bom: boolean; eol: Eol; confidence?: "bom" | "valid" | "guess" }
 export interface Stamp { sha256: string; size: number; mtimeMs: number }
-export interface Loaded extends Stamp { text: string; format: FileFormat; readOnly: string | null; binary: boolean; convertible?: boolean }
+export interface Loaded extends Stamp { text: string; format: FileFormat; readOnly: string | null; binary: boolean; convertible?: boolean; chooseEol?: boolean }
 export type SaveOutcome = ({ status: "saved" } & Stamp) | { status: "stale"; sha256: string } | { status: "gone" };
 
 /** Settings kept in the notebook's `.hivemind/notebook.json` (README 5.4). Unknown keys are kept by Rust. */
@@ -42,6 +42,8 @@ export const notebookMeta = (id: string) => invoke<NotebookMeta>("notebook_meta_
 export const setNotebookMeta = (id: string, patch: NotebookMeta) => invoke<NotebookMeta>("notebook_meta_set", { id, patch });
 
 export const readFile = (notebook: string, path: string) => invoke<Loaded>("file_read", { notebook, path });
+/** Read the file again, decoded as `encoding` (an encoding_rs name from the editable list) instead of the detected one. */
+export const reopenFile = (notebook: string, path: string, encoding: string) => invoke<Loaded>("file_reopen", { notebook, path, encoding });
 /** `convert`: the user chose Convert to UTF-8, so text that does not decode may be replaced. `source` says what asks for
  *  the save, for the page's history (`links`, `restore`, `replace`, `ai`, `agent`); it is the user's own save when left out. */
 export const saveFile = (notebook: string, path: string, text: string, pre: Stamp, format: FileFormat, convert = false, source?: string) =>

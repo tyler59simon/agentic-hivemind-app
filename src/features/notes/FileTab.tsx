@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ellipsis, Save } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { convertToUtf8, discardKept, edit, inOwnStore, isArriving, isDeleting, keyOf, open, reload, resolveMerge, save, useDocuments } from "../../documents/store";
+import { convertToUtf8, discardKept, edit, inOwnStore, isArriving, isDeleting, keyOf, open, reformat, reload, resolveMerge, save, useDocuments } from "../../documents/store";
 import { isUnsaved, mergeable, type DocState } from "../../documents/session";
 import { classify } from "../../lib/errors";
 import { assetLink, attachFile, openAttachment, parseLm } from "../../documents/adapters/lmdoc";
@@ -27,6 +27,8 @@ import { RICH_LIMIT } from "../editor/rich/context";
 import { isPicture } from "../editor/rich/parse";
 import { oversizeReason } from "../hmdoc/envelope";
 import { runExport } from "./richActions";
+import { useComparePicker } from "../power/ComparePicker";
+import { encodingLabel, StatusLine } from "../power/StatusLine";
 
 const HISTORY = { id: "history" as Mode, label: "History" };
 const MODES: { id: Mode; label: string }[] = [{ id: "reading", label: "Reading" }, { id: "live", label: "Live" }, { id: "rich", label: "Rich" }, { id: "source", label: "Source" }, HISTORY];
@@ -79,6 +81,9 @@ function Banners({ doc, docKey, onMerge, onRecreate, conflict }: { doc: DocState
       <div key="ro" className="banner note-banner">{doc.base.binary ? "This is not a text file, so it opens read-only." : `Read-only: ${doc.base.readOnly}.`}
         <div className="actions">
           {doc.base.convertible && <button onClick={() => void convertToUtf8(docKey).catch((e) => toast(classify(e).message, "error"))}>Convert to UTF-8 and edit</button>}
+          {/* A file that mixes line endings becomes editable once one is chosen (NS-6A). */}
+          {doc.base.chooseEol && <button onClick={() => reformat(docKey, { eol: "lf" })}>Use LF and edit</button>}
+          {doc.base.chooseEol && <button onClick={() => reformat(docKey, { eol: "crlf" })}>Use CRLF and edit</button>}
           {/* Binary files open in their own program until NS-6B's viewer; text Hivemind may not write can be saved elsewhere. */}
           {doc.base.binary && ref && <button onClick={() => void openOutside(ref)}>Open with default app</button>}
           {!doc.base.binary && !doc.base.convertible && ref && <button onClick={() => void copyAs(doc.text, fileName(ref.path))}>Save a copy as…</button>}
@@ -102,6 +107,14 @@ function Banners({ doc, docKey, onMerge, onRecreate, conflict }: { doc: DocState
   if (doc.convert && isUnsaved(doc)) {
     const lossy = doc.base?.convertible ? " Bytes that did not decode are saved as �." : "";
     out.push(<div key="convert" className="banner note-banner">Saving writes this file as UTF-8.{lossy}</div>);
+  }
+  if (doc.reformat && !doc.convert && isUnsaved(doc) && doc.base) {
+    const was = doc.reformat.from, now = doc.base.format;
+    const parts = [
+      was.encoding !== now.encoding || was.bom !== now.bom ? `as ${encodingLabel(now)}` : "",
+      was.eol !== now.eol ? `with ${now.eol === "crlf" ? "CRLF" : "LF"} line endings` : "",
+    ].filter(Boolean);
+    out.push(<div key="reformat" className="banner note-banner">Saving writes this file {parts.join(" ")}. Choose the old setting in the status line to keep it as it is.</div>);
   }
   if ((doc.status === "stale" || doc.banner?.kind === "changed") && !mergeable(doc.theirs, !!doc.convert)) {
     // Nothing to merge into: the file is no longer text Hivemind can edit (Codex review of 32fd236, D3).
@@ -362,6 +375,7 @@ export function FileTab({ tab }: { tab: Tab }) {
                     const copied = loose ? full ?? ref.path : notebook ? `${notebook.path}\\${ref.path.replace(/\//g, "\\")}` : ref.path;
                     navigator.clipboard.writeText(copied).then(() => toast("Path copied"), () => toast(copied));
                   })}
+                  {!richDoc && item("Compare with another file…", () => useComparePicker.getState().show(ref))}
                   {!loose && markdown && item("Convert to rich page", () => convertToRich(client, ref, doc.text).catch((e) => toast(classify(e).message, "error")))}
                   {!loose && richDoc && item("Export to Markdown…", () => runExport(client, ref, setDialog, doc.text))}
                   {paper}
@@ -412,27 +426,13 @@ export function FileTab({ tab }: { tab: Tab }) {
             <CodeEditor key={key} doc={doc.text} docVersion={doc.version} follow language={markdown ? "markdown" : "text"} live={mode === "live"}
               readOnly={doc.status === "readOnly" || arriving} lineNumbers={!markdown} onChange={(text) => edit(key, text)} onSave={doSave}
               titles={titles} onOpenLink={follow} reveal={reveal} placeholder={markdown ? "Start writing…" : undefined}
-              rich={markdown ? rich : undefined} richStamp={richStamp} />
+              rich={markdown ? rich : undefined} richStamp={richStamp}
+              power={{ id: tab.id, fileName: fileName(ref.path), language: tab.language, on: mode === "source" }} />
           </div>
         )}
-      <StatusLine doc={doc} />
+      <StatusLine doc={doc} docKey={key} tabId={tab.id} fileName={fileName(ref.path)} markdown={markdown} language={tab.language} living={!!lm}
+        onLanguage={(language) => updateTab(tab.id, { language })} />
       {dialog}
     </div>
   );
-}
-
-const SIZE_UNITS = ["bytes", "KB", "MB"];
-function size(n: number) {
-  let i = 0;
-  while (n >= 1024 && i < SIZE_UNITS.length - 1) { n /= 1024; i++; }
-  return i ? `${n.toFixed(1)} ${SIZE_UNITS[i]}` : `${n} bytes`;
-}
-const EOL_NAMES = { lf: "LF", crlf: "CRLF", cr: "CR", mixed: "Mixed line endings", none: "" } as const;
-
-/** Encoding, line endings and size, below the editor (NS-1B). */
-function StatusLine({ doc }: { doc: DocState }) {
-  if (!doc.base || doc.base.binary) return null;
-  const f = doc.base.format;
-  const encoding = `${f.encoding}${f.bom ? " with BOM" : ""}${f.confidence === "guess" ? " (guessed)" : ""}${doc.convert ? " (converted, not saved yet)" : ""}`;
-  return <div className="file-status muted">{[encoding, EOL_NAMES[f.eol], size(doc.base.stamp.size)].filter(Boolean).join(" · ")}</div>;
 }

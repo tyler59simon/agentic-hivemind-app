@@ -27,6 +27,8 @@ export interface FileDraft {
   savedAt: string;
   /** The user chose Convert to UTF-8 for this page. */
   convert?: boolean;
+  /** The line ending or encoding the user chose for the next save (NS-6A). */
+  reformat?: FileFormat;
   /** A Living Memory page: the store it was read from, so the draft never comes back in another store's page of the
    *  same name (Codex review of 32fee20, D1). */
   store?: string;

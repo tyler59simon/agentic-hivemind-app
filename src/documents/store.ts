@@ -5,9 +5,9 @@ import { deleteDraft, getFileDraft, putDraft } from "../lib/drafts";
 import { isRichDoc, type Loaded as RawLoaded } from "../lib/notebooks";
 import { mergeBody } from "../features/editor/merge";
 import { isLm } from "./adapters/lmdoc";
-import { readDoc, saveDoc } from "./io";
+import { readDoc, reopenDoc, saveDoc } from "./io";
 import { docKey, draftKeyOf, movedPath, type FileRef } from "./keys";
-import { initial, isUnsaved, reduce, type DocEvent, type DocState, type Loaded } from "./session";
+import { initial, isUnsaved, reduce, type DocEvent, type DocState, type FormatChange, type Loaded } from "./session";
 
 /** A move or delete in progress over a page or folder (`hold`); `into` is the destination of a move. */
 export interface Held { notebook: string; from: string; kind: "move" | "delete" | "into" }
@@ -36,6 +36,7 @@ const toLoaded = (raw: RawLoaded): Loaded => ({
   readOnly: raw.readOnly,
   binary: raw.binary,
   convertible: raw.convertible,
+  chooseEol: raw.chooseEol,
 });
 
 export const keyOf = (ref: FileRef) => docKey({ kind: "file", file: ref });
@@ -249,12 +250,14 @@ async function load(key: string, ref: FileRef, attempt: number, convertNow = fal
     // A draft written after Convert to UTF-8 comes back converted, whether the file is unchanged, still undecodable
     // or changed since; the file's own encoding no longer decides (Codex review of 52051c8, D3).
     const convert = (convertNow || !!draft?.convert) && !loaded.binary && (!loaded.readOnly || !!loaded.convertible);
-    if (!draft || loaded.binary || (loaded.readOnly && !convert)) {
+    // A page that mixes line endings opens for editing again when its draft says which one the user chose (NS-6A).
+    const choseEol = !!loaded.chooseEol && !!draft?.reformat;
+    if (!draft || loaded.binary || (loaded.readOnly && !convert && !choseEol)) {
       dispatch(key, { type: "loaded", loaded, draft: draft ? { text: draft.mine, at: draft.savedAt } : undefined });
       return;
     }
     if (draft.precondition.sha256 === loaded.stamp.sha256) {
-      dispatch(key, { type: "loaded", loaded, draft: { text: draft.mine, at: draft.savedAt }, convert });
+      dispatch(key, { type: "loaded", loaded, draft: { text: draft.mine, at: draft.savedAt }, convert, reformat: draft.reformat });
       autosaveRestored(key, ref);
       return;
     }
@@ -267,11 +270,11 @@ async function load(key: string, ref: FileRef, attempt: number, convertNow = fal
     // The draft opens as the unsaved text and the file as the version to keep or leave, as for any conflict.
     const merged = base !== undefined && !isRichDoc(ref.path) ? mergeBody(base, draft.mine, loaded.text) : null;
     if (merged && merged.conflicts === 0) {
-      dispatch(key, { type: "loaded", loaded, draft: { text: merged.text, at: draft.savedAt }, convert });
+      dispatch(key, { type: "loaded", loaded, draft: { text: merged.text, at: draft.savedAt }, convert, reformat: draft.reformat });
       autosaveRestored(key, ref);
     } else {
       const original: Loaded = { ...loaded, text: base ?? "", stamp: draft.precondition };
-      dispatch(key, { type: "loaded", loaded: original, draft: { text: draft.mine, at: draft.savedAt }, convert });
+      dispatch(key, { type: "loaded", loaded: original, draft: { text: draft.mine, at: draft.savedAt }, convert, reformat: draft.reformat });
       dispatch(key, { type: "stale", theirs: loaded });
     }
   } catch (e) {
@@ -357,6 +360,7 @@ async function keepDraft(key: string, s: DocState | undefined, ref: FileRef | un
       key: draftKey, kind: "file", target: ref, precondition: s.base.stamp, format: s.base.format,
       base: utf8Bytes(s.base.text) <= BASE_LIMIT ? s.base.text : undefined, mine: s.text, savedAt: new Date().toISOString(),
       convert: s.convert || undefined,
+      reformat: s.reformat ? s.base.format : undefined,
       ...(isLm(ref) ? { store } : {}),
     });
     kept.set(key, s.text);
@@ -416,6 +420,30 @@ export async function convertToUtf8(key: string) {
   scheduleDraft(key);
 }
 
+/** A new line ending or encoding for the page's next save (NS-6A). The text stays as it is; the page becomes unsaved,
+ *  and a mixed-endings page that was read-only becomes editable. */
+export function reformat(key: string, change: FormatChange) {
+  const before = get(key);
+  dispatch(key, { type: "reformat", change });
+  if (get(key) !== before) scheduleDraft(key);
+}
+
+/** Read the page again decoded as `encoding` (NS-6A). Refused while the page has unsaved edits or a line ending or
+ *  encoding waiting to be saved: they are not in the file, so reading it again would drop them. Returns whether the page
+ *  now shows the file in the new encoding; edits typed while it was read cancel it. */
+export async function reopenAs(key: string, encoding: string): Promise<boolean> {
+  const ref = useDocuments.getState().refs[key];
+  const before = get(key), generation = generations.get(key);
+  if (!ref || !before || isLm(ref)) return false;
+  if (before.status !== "clean" && before.status !== "readOnly") throw new Error("Save or discard your edits before reopening the file with another encoding");
+  if (before.kept) throw new Error("This page has a draft kept beside it. Discard the draft before reopening the file with another encoding");
+  const theirs = toLoaded(await reopenDoc(ref, encoding));
+  const now = get(key);
+  if (!current(key, generation) || !now || now.text !== before.text || now.status !== before.status) return false;
+  dispatch(key, { type: "reloaded", theirs });
+  return true;
+}
+
 /** The editor's text changed; `outside` for a change not typed in the editor, which the editor then shows. */
 export function edit(key: string, text: string, outside = false) {
   const ref = useDocuments.getState().refs[key];
@@ -460,7 +488,9 @@ export async function save(key: string, source?: string) {
   const generation = generations.get(key);
   const run = (async () => {
     try {
-      const out = source ? await saveDoc(ref, text, s.base!.stamp, s.base!.format, !!s.convert, source) : await saveDoc(ref, text, s.base!.stamp, s.base!.format, !!s.convert);
+      // A line ending chosen for a mixed file replaces text the file's own check would refuse, as Convert to UTF-8 does.
+      const lenient = !!s.convert || !!s.reformat;
+      const out = source ? await saveDoc(ref, text, s.base!.stamp, s.base!.format, lenient, source) : await saveDoc(ref, text, s.base!.stamp, s.base!.format, lenient);
       if (!current(key, generation)) return;
       if (out.status === "saved") {
         dispatch(key, { type: "saved", stamp: { sha256: out.sha256, size: out.size, mtimeMs: out.mtimeMs } });

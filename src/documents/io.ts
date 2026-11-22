@@ -13,6 +13,12 @@ export const readDoc = (ref: FileRef) => {
   return lm ? lmdoc.readPage(lm, ref.path) : files.readFile(ref.notebook, ref.path);
 };
 
+/** The file again, decoded as `encoding`. Living Memory pages are always UTF-8, so only files have this. */
+export const reopenDoc = (ref: FileRef, encoding: string) => {
+  if (lmdoc.isLm(ref)) return Promise.reject(new Error("A Living Memory page is always UTF-8"));
+  return files.reopenFile(ref.notebook, ref.path, encoding);
+};
+
 /** `source`: what asks for the save, for a file's history; a Living Memory page keeps its own journal. */
 export const saveDoc = (ref: FileRef, text: string, pre: Stamp, format: FileFormat, convert = false, source?: string) => {
   const lm = lmdoc.parseLm(ref.notebook);

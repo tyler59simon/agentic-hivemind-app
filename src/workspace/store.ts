@@ -9,16 +9,18 @@ import { prefs } from "../lib/prefs";
 import { safeStorage, useApp } from "../store";
 
 export type Mode = "reading" | "live" | "rich" | "source" | "history";
-export type TabKind = "note" | "new-note" | "file" | "new-file";
-const KINDS: readonly string[] = ["note", "new-note", "file", "new-file"];
+export type TabKind = "note" | "new-note" | "file" | "new-file" | "compare";
+const KINDS: readonly string[] = ["note", "new-note", "file", "new-file", "compare"];
 export type { FileRef };
 export interface Tab {
   id: string;
   kind: TabKind;
   ref?: string;           // note tabs: domain:id
   file?: FileRef;         // file tabs: a page of a folder notebook, or a loose file (notebook "@<grant>")
+  compare?: { left: FileRef; right: FileRef }; // compare tabs (NS-6A): two files side by side; not kept over a restart
   mode?: Mode;            // note and file tabs
   title?: string;         // last known title, for the tab strip
+  language?: string;      // file tabs: a language chosen in the status line instead of the one the file name gives
   paper?: boolean;        // true: white paper, false: the theme's colours; undefined follows the setting (documents only)
   init?: { title?: string; type?: NoteType; domain?: string; tags?: string[] }; // new-note tabs
 }
@@ -65,7 +67,7 @@ export const sameTab = (a: Omit<Tab, "id">, b: Tab) => sameDoc(a, b);
 export function showTab(tab: Pick<Tab, "kind">) {
   const { route, go } = useApp.getState();
   if (route.page === "notes" || (route.page === "memory" && route.view === "notes")) return;
-  go(tab.kind === "file" || tab.kind === "new-file" ? { page: "notes" } : { page: "memory", view: "notes" });
+  go(tab.kind === "file" || tab.kind === "new-file" || tab.kind === "compare" ? { page: "notes" } : { page: "memory", view: "notes" });
 }
 
 /** The mode a second view of a tab opens in. */
@@ -163,6 +165,12 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
         panes: s.panes.map((p) => ({
           ...p,
           tabs: p.tabs.map((t) => {
+            // A comparison follows a renamed file on either side (NS-6A).
+            if (t.kind === "compare" && t.compare) {
+              const move = (f: FileRef): FileRef => { const path = f.notebook === notebook ? movedPath(f.path, from, to) : null; return path === null ? f : { notebook, path }; };
+              const left = move(t.compare.left), right = move(t.compare.right);
+              return left === t.compare.left && right === t.compare.right ? t : { ...t, compare: { left, right }, title: undefined };
+            }
             if (t.kind !== "file" || t.file?.notebook !== notebook) return t;
             const path = movedPath(t.file.path, from, to);
             return path === null ? t : { ...t, file: { notebook, path }, title: undefined };
@@ -181,8 +189,9 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
   // Tabs of a kind this build does not know (written by a newer one) are dropped.
   merge: (stored, current) => ({ ...current, ...knownKinds(stored as Partial<WorkspaceState>) }),
   partialize: (s) => ({
-    // New-note tabs hold unsaved text in drafts, not here, and a new text file has none; keep only reopenable tabs.
-    panes: s.panes.map((p) => ({ ...p, tabs: p.tabs.filter((t) => t.kind !== "new-note" && t.kind !== "new-file") })),
+    // New-note tabs hold unsaved text in drafts, not here, and a new text file has none; a comparison is not reopened
+    // (NS-6A). Keep only reopenable tabs.
+    panes: s.panes.map((p) => ({ ...p, tabs: p.tabs.filter((t) => t.kind !== "new-note" && t.kind !== "new-file" && t.kind !== "compare") })),
     focused: s.focused,
     rail: s.rail,
     railSplit: s.railSplit,

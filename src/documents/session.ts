@@ -3,7 +3,7 @@
 import type { FileFormat, Stamp } from "../lib/notebooks";
 
 /** A file as read from disk. */
-export interface Loaded { text: string; stamp: Stamp; format: FileFormat; readOnly: string | null; binary: boolean; convertible?: boolean }
+export interface Loaded { text: string; stamp: Stamp; format: FileFormat; readOnly: string | null; binary: boolean; convertible?: boolean; chooseEol?: boolean }
 
 export type Status = "loading" | "clean" | "dirty" | "saving" | "stale" | "readOnly" | "error";
 export type Banner =
@@ -32,11 +32,18 @@ export interface DocState {
   convert?: boolean;
   /** A draft the file cannot take now (it opened read-only, is not text or is gone): kept, and offered as a copy. */
   kept?: { text: string; at: string };
+  /** The user changed the encoding or line endings (NS-6A): `from` is the format the file has on disk, and `base.format`
+   *  is the one the next save writes. */
+  reformat?: { from: FileFormat };
 }
+
+/** The three parts of a format the user can change. */
+export type FormatChange = Partial<Pick<FileFormat, "encoding" | "bom" | "eol">>;
 
 export type DocEvent =
   // foreign: the draft is another Living Memory store's, shown even when its text equals the page (R3-U1).
-  | { type: "loaded"; loaded: Loaded; draft?: { text: string; at: string }; convert?: boolean; foreign?: boolean }
+  // reformat: the format the draft's page was to be saved in (a line ending or encoding the user chose).
+  | { type: "loaded"; loaded: Loaded; draft?: { text: string; at: string }; convert?: boolean; foreign?: boolean; reformat?: FileFormat }
   // Hivemind switched to another store while this page's latest edits were not in a draft: they stay, read-only,
   // until their store is back (Codex review of dd4c1b0, R3-D2).
   | { type: "parked"; reason: string }
@@ -52,6 +59,9 @@ export type DocEvent =
   | { type: "keptDropped" }
   | { type: "draft"; error: string | null }
   | { type: "convert" }
+  // A new line ending or encoding for the next save; from a clean or unsaved page, or a mixed-endings page that is
+  // read-only until one is chosen.
+  | { type: "reformat"; change: FormatChange }
   | { type: "dismiss" };
 
 export const initial: DocState = { status: "loading", base: null, text: "", version: 0 };
@@ -62,21 +72,28 @@ export const converted = (l: Loaded): Loaded => ({ ...l, format: { ...l.format, 
 /** Whether converting `l` to UTF-8 makes it editable: text whose only problem is its encoding, or editable text. */
 const canConvert = (l: Loaded) => !l.binary && (!l.readOnly || !!l.convertible);
 
-const dirtyOr = (s: DocState, text: string): Status => (s.base && text === s.base.text && !s.convert ? "clean" : "dirty");
+const dirtyOr = (s: DocState, text: string): Status => (s.base && text === s.base.text && !s.convert && !s.reformat ? "clean" : "dirty");
+
+const sameFormat = (a: FileFormat, b: FileFormat) => a.encoding === b.encoding && a.bom === b.bom && a.eol === b.eol;
 
 export function reduce(s: DocState, e: DocEvent): DocState {
   switch (e.type) {
     case "loaded": {
       // A draft written after Convert to UTF-8 comes back converted (Codex review of 52051c8, D3).
       const convert = !!e.convert && !!e.draft && canConvert(e.loaded);
-      const loaded = convert ? converted(e.loaded) : e.loaded;
+      // A format the user chose comes back with the draft, for a page that can take it (NS-6A).
+      const again = !convert && !!e.draft && !!e.reformat && !e.loaded.binary && (!e.loaded.readOnly || !!e.loaded.chooseEol) && !sameFormat(e.reformat, e.loaded.format);
+      const loaded = convert ? converted(e.loaded) : again ? { ...e.loaded, format: e.reformat!, readOnly: null, chooseEol: false } : e.loaded;
       if (loaded.readOnly || loaded.binary) {
         // Its draft stays where it is and is shown, so it can be saved elsewhere (Codex re-review of fa08348, D3).
         const kept = e.draft && (e.draft.text !== loaded.text || e.foreign) ? e.draft : undefined;
         return { status: "readOnly", base: loaded, text: loaded.text, version: s.version + 1, kept };
       }
-      if (e.draft && (e.draft.text !== loaded.text || convert)) {
-        return { status: "dirty", base: loaded, text: e.draft.text, version: s.version + 1, banner: { kind: "restored", at: e.draft.at }, convert: convert || undefined };
+      if (e.draft && (e.draft.text !== loaded.text || convert || again)) {
+        return {
+          status: "dirty", base: loaded, text: e.draft.text, version: s.version + 1, banner: { kind: "restored", at: e.draft.at }, convert: convert || undefined,
+          reformat: again ? { from: e.loaded.format } : undefined,
+        };
       }
       return { status: "clean", base: loaded, text: loaded.text, version: s.version + 1 };
     }
@@ -91,7 +108,7 @@ export function reduce(s: DocState, e: DocEvent): DocState {
     case "saved": {
       if (!s.base || s.saving === undefined) return s;
       const base = { ...s.base, text: s.saving, stamp: e.stamp };
-      return { ...s, base, saving: undefined, status: s.text === s.saving ? "clean" : "dirty", banner: undefined, theirs: undefined, convert: undefined };
+      return { ...s, base, saving: undefined, status: s.text === s.saving ? "clean" : "dirty", banner: undefined, theirs: undefined, convert: undefined, reformat: undefined };
     }
     case "stale":
       return { ...s, status: "stale", saving: undefined, theirs: e.theirs };
@@ -115,8 +132,11 @@ export function reduce(s: DocState, e: DocEvent): DocState {
     case "merged": {
       // The merged text is unsaved until the user saves it, now against the newer version. A converted page stays
       // UTF-8 (Codex review of 52051c8, R3).
-      const base = s.convert ? converted(e.theirs) : e.theirs;
-      return { ...s, status: e.text === e.theirs.text && !s.convert ? "clean" : "dirty", base, text: e.text, version: s.version + 1, banner: undefined, theirs: undefined };
+      // A line ending or encoding the user chose is kept too.
+      const merged = s.convert ? converted(e.theirs) : e.theirs;
+      const base = s.reformat && s.base ? { ...merged, format: { ...merged.format, encoding: s.base.format.encoding, bom: s.base.format.bom, eol: s.base.format.eol } } : merged;
+      const reformat = s.reformat && !sameFormat(base.format, e.theirs.format) ? { from: e.theirs.format } : undefined;
+      return { ...s, status: e.text === e.theirs.text && !s.convert && !reformat ? "clean" : "dirty", base, text: e.text, version: s.version + 1, banner: undefined, theirs: undefined, reformat };
     }
     case "reloaded":
       return reduce({ ...s, banner: undefined, theirs: undefined, saving: undefined }, { type: "loaded", loaded: e.theirs });
@@ -134,6 +154,17 @@ export function reduce(s: DocState, e: DocEvent): DocState {
       const from = s.status === "readOnly" ? !!s.base?.convertible : s.status === "dirty";
       if (!s.base || s.base.binary || !from) return s;
       return { ...s, status: "dirty", base: converted(s.base), convert: true, error: undefined };
+    }
+    case "reformat": {
+      const b = s.base;
+      const choosing = s.status === "readOnly" && !!b?.chooseEol && !s.kept;
+      if (!b || b.binary || !(s.status === "clean" || s.status === "dirty" || choosing)) return s;
+      const from = s.reformat?.from ?? b.format;
+      const next: FileFormat = { ...b.format, ...e.change, confidence: e.change.encoding && e.change.encoding !== b.format.encoding ? "valid" : b.format.confidence };
+      if (sameFormat(next, b.format)) return s;
+      // Back to what the file has: nothing is pending any more.
+      if (sameFormat(next, from)) return { ...s, base: { ...b, format: from }, reformat: undefined, status: s.text === b.text && !s.convert ? "clean" : "dirty" };
+      return { ...s, status: "dirty", base: { ...b, format: next, readOnly: choosing ? null : b.readOnly, chooseEol: false }, reformat: { from }, error: undefined };
     }
     case "dismiss":
       return { ...s, banner: undefined, error: undefined };

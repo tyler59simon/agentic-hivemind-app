@@ -1,7 +1,7 @@
 import { autocompletion, type Completion, type CompletionContext } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { bracketMatching, foldGutter, foldKeymap, HighlightStyle, syntaxHighlighting, type LanguageSupport } from "@codemirror/language";
 import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { Annotation, Compartment, EditorState, Transaction, type Extension, type TransactionSpec } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, keymap, lineNumbers, placeholder } from "@codemirror/view";
@@ -13,6 +13,11 @@ import { documentIsDark, onDocumentLook } from "../../lib/paper";
 import { dropPictures, RICH_LIMIT, richDark, richEditing, richLanguage, richLook, richPreview, richRefresh, slashSource, type RichContext } from "./rich";
 import { richContext as richContextFacet } from "./rich/context";
 import { Toolbar } from "./toolbar";
+import { powerExtensions } from "../power/extensions";
+import { isReplaying, replayDone } from "../power/macros";
+import { describe, support } from "../power/language";
+import { PowerBar } from "../power/PowerBar";
+import { setEditor } from "../power/registry";
 
 export const editorHighlight = HighlightStyle.define([
   { tag: t.heading1, fontSize: "1.55em", fontWeight: "700" },
@@ -86,10 +91,17 @@ export interface CodeEditorProps {
   rich?: RichContext;
   /** Changes when what the rich view shows from outside changed (the picture grant, the page list): it redraws. */
   richStamp?: unknown;
+  /** A file tab's power editing (NS-6A): several cursors, rectangular selection, macros, line tools, and for a text file
+   *  the language of its file name. Memory notes pass none and keep the editor they have always had. */
+  power?: PowerProps;
 }
 
-/** The pieces a caller can switch after the editor exists. */
-export interface Switches { preview: Compartment; readOnly: Compartment; gutter: Compartment; rich: Compartment }
+/** `id`: the tab, for the palette to find its editor. `on`: false in modes that draw the page instead of its source.
+ *  `language`: a name chosen in the status line to use instead of the one the file name gives. */
+export interface PowerProps { id: string; fileName: string; language?: string; on: boolean }
+
+/** The pieces a caller can switch after the editor exists. `power` and `language` exist only for a file tab. */
+export interface Switches { preview: Compartment; readOnly: Compartment; gutter: Compartment; rich: Compartment; power?: Compartment; language?: Compartment }
 
 /** Marks a change that came from the document store (another pane), so it is not reported back as an edit. */
 const fromStore = Annotation.define<boolean>();
@@ -129,6 +141,10 @@ function latestRich(latest: MutableRefObject<CodeEditorProps>): RichContext {
   };
 }
 const gutterExt = (on: boolean): Extension => (on ? [lineNumbers(), highlightActiveLine()] : []);
+let powerExt: Extension | null = null;
+const powerOn = (on: boolean): Extension => (on ? (powerExt ??= powerExtensions()) : []);
+/** A text file's language: its colours, bracket matching and folding. */
+const languageExt = (lang: LanguageSupport | null): Extension => (lang ? [lang, syntaxHighlighting(editorHighlight), bracketMatching(), foldGutter(), keymap.of(foldKeymap)] : []);
 
 /** Everything the editor is made of. For a note (markdown, not read-only, no line numbers) this is the same list, in
  * the same order, as the note editor has always had. */
@@ -154,11 +170,17 @@ export function editorExtensions(props: CodeEditorProps, latest: MutableRefObjec
     sw.preview.of(props.live && props.language === "markdown" ? livePreview : []),
     ...(rich && dark ? [richDark.of(dark)] : []),
     ...(rich ? [...richEditing(rich), sw.rich.of(richOn(props) ? richPreview : [])] : []),
+    ...(props.power ? [(sw.power ??= new Compartment()).of(powerOn(props.power.on))] : []),
+    ...(props.power && props.language === "text" ? [(sw.language ??= new Compartment()).of([])] : []),
     ...(props.placeholder ? [placeholder(props.placeholder)] : []),
     theme,
     sw.readOnly.of(readOnlyExt(props.readOnly)),
     sw.gutter.of(gutterExt(props.lineNumbers)),
-    EditorView.updateListener.of((u) => { if (u.transactions.some(isOwnEdit)) latest.current.onChange(u.state.doc.toString()); }),
+    EditorView.updateListener.of((u) => {
+      // A macro replay reports once, when it ends (NS-6A); every other edit is reported as it is made.
+      if (u.transactions.some((tr) => tr.annotation(replayDone))) latest.current.onChange(u.state.doc.toString());
+      else if (u.transactions.some(isOwnEdit) && !isReplaying(u.view)) latest.current.onChange(u.state.doc.toString());
+    }),
     EditorView.domEventHandlers({
       mousedown: (e) => {
         const el = (e.target as HTMLElement).closest<HTMLElement>("[data-wikilink]");
@@ -208,6 +230,28 @@ export function CodeEditor(props: CodeEditorProps) {
     view.current?.dispatch({ effects: sw.current.readOnly.reconfigure(readOnlyExt(props.readOnly)) });
   }, [props.readOnly]);
 
+  // Power editing follows the mode: on for source, off where the page is drawn (NS-6A).
+  const powered = !!props.power?.on;
+  useEffect(() => {
+    const v = view.current, id = props.power?.id;
+    if (!v || !id) return;
+    v.dispatch({ effects: sw.current.power?.reconfigure(powerOn(powered)) });
+    setEditor(id, powered ? v : null);
+    return () => setEditor(id, null);
+  }, [powered, props.power?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A text file's language comes in once its grammar has loaded; a stale answer is dropped.
+  const languageName = props.power?.language, fileName = props.power?.fileName;
+  useEffect(() => {
+    if (!fileName || props.language !== "text") return;
+    let stale = false;
+    void describe(fileName, languageName)
+      .then((d) => (d ? support(d) : null))
+      .catch(() => null)
+      .then((lang) => { if (!stale) view.current?.dispatch({ effects: sw.current.language?.reconfigure(languageExt(lang)) }); });
+    return () => { stale = true; };
+  }, [fileName, languageName, props.language]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // The rich view is set up only for a page that has it from the start; past the size limit Live falls back to the
   // plain preview, and comes back when the page is short enough again.
   const rendered = richOn(props);
@@ -248,10 +292,12 @@ export function CodeEditor(props: CodeEditorProps) {
 
   const toolbarRich = useMemo(() => latestRich(latest), []);
   const editor = <div className={props.language === "markdown" ? "md-editor" : "md-editor text-editor"} ref={host} />;
-  if (!props.rich || props.language !== "markdown") return editor;
+  const bar = powered ? <PowerBar view={() => view.current} readOnly={props.readOnly} /> : null;
+  if (!props.rich || props.language !== "markdown") return bar ? <>{bar}{editor}</> : editor;
   return (
     <>
       <Toolbar view={() => view.current} rich={toolbarRich} readOnly={props.readOnly} />
+      {bar}
       {editor}
     </>
   );

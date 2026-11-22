@@ -173,6 +173,7 @@ Names are fixed here; signatures are set by the phase that adds them.
 | NS-2C | (Living Memory `doc` commands go through `lm`) | `docs-changed { domain, notebook }` |
 | NS-4A | `index_search`, `index_links`, `index_status`, `index_rebuild`, and added by the phase `index_incoming`, `index_pages`, `index_tags` | `index-progress` |
 | NS-5 | `history_list`, `history_read`, `history_pin`, `git_file_log`, `git_file_commit` | |
+| NS-6A | `file_reopen` | |
 | NS-6B | `bigfile_open`, `bigfile_lines`, `bigfile_search`, `bigfile_bytes`, `bigfile_close`, `replace_preview`, `replace_apply` | `bigfile-progress`, `bigfile-grew` |
 | NS-8A | `notes_ai_run`, `notes_ai_cancel`, `notes_ai_status` | `notes-ai-changed` |
 

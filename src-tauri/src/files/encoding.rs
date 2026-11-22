@@ -65,6 +65,29 @@ pub fn decode(bytes: &[u8]) -> Decoded {
     decode_with(bytes, detector.guess(None, chardetng::Utf8Detection::Allow), false, Confidence::Guess)
 }
 
+/// The encodings a file may be reopened with (NS-6A): the ones Hivemind can also write back exactly, which are the ones
+/// the round-trip test covers. The webview offers the same list.
+pub const EDITABLE: &[&str] = &[
+    "UTF-8", "UTF-16LE", "UTF-16BE", "windows-1252", "ISO-8859-2", "windows-1250", "windows-1251", "KOI8-R", "windows-1253", "Shift_JIS", "EUC-JP", "GBK", "Big5", "EUC-KR",
+];
+
+/// The encoding named `name` when it is one of `EDITABLE`.
+pub fn editable(name: &str) -> Option<&'static Encoding> {
+    EDITABLE.iter().find(|n| n.eq_ignore_ascii_case(name)).and_then(|n| Encoding::for_label(n.as_bytes()))
+}
+
+/// Decode `bytes` as the encoding the user chose instead of the detected one. A byte order mark of that encoding is read
+/// as one. NUL bytes are refused unless the encoding is UTF-16: the file is not text in the encoding chosen.
+pub fn decode_as(bytes: &[u8], encoding: &'static Encoding) -> Result<Decoded, String> {
+    if encoding != UTF_16LE && encoding != UTF_16BE && bytes.iter().take(SNIFF).any(|b| *b == 0) {
+        return Err(format!("This file contains NUL bytes, so it is not {} text; try UTF-16", shown(encoding.name())));
+    }
+    match Encoding::for_bom(bytes) {
+        Some((found, len)) if found == encoding => Ok(decode_with(&bytes[len..], encoding, true, Confidence::Valid)),
+        _ => Ok(decode_with(bytes, encoding, false, Confidence::Valid)),
+    }
+}
+
 /// UTF-16 without a byte order mark: in the first 4 KB at least 40% of the odd bytes (little endian ASCII) or of the
 /// even bytes (big endian) are NUL, and the whole file decodes cleanly.
 fn utf16_without_bom(bytes: &[u8]) -> Option<&'static Encoding> {
@@ -221,6 +244,27 @@ mod tests {
             assert_eq!(decoded.text, *text, "{name}");
             assert_eq!(encode(&decoded.text, decoded.encoding, false).unwrap(), bytes, "{name}");
         }
+    }
+
+    #[test]
+    fn a_chosen_encoding_decodes_every_editable_encoding_and_refuses_the_rest() {   // NS-6A
+        for (name, text) in SAMPLES {
+            let bytes = encode(text, name, false).unwrap();
+            let d = decode_as(&bytes, editable(name).unwrap()).unwrap();
+            assert_eq!((d.text.as_str(), d.read_only.clone(), d.confidence), (*text, None, Confidence::Valid), "{name}");
+        }
+        for name in EDITABLE {
+            assert!(editable(name).is_some(), "{name}");
+        }
+        assert!(editable("ISO-2022-JP").is_none() && editable("x-user-defined").is_none());
+        // The same bytes read as another encoding give other text, and a byte order mark of the chosen encoding is kept.
+        let latin = encode("caf\u{e9}\n", "windows-1252", false).unwrap();
+        assert_eq!(decode_as(&latin, editable("windows-1251").unwrap()).unwrap().text, "caf\u{439}\n");
+        let with_bom = encode("x\n", "UTF-16LE", true).unwrap();
+        let d = decode_as(&with_bom, editable("UTF-16LE").unwrap()).unwrap();
+        assert_eq!((d.text.as_str(), d.bom), ("x\n", true));
+        // UTF-16 bytes are not text in a single-byte encoding.
+        assert!(decode_as(&with_bom, editable("windows-1252").unwrap()).unwrap_err().contains("NUL"));
     }
 
     #[test]

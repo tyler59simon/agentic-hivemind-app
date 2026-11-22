@@ -3,10 +3,12 @@
 // the dialogs and the watcher give paths in the case on disk, and a rename in Hivemind moves the document to its new key.
 export interface FileRef { notebook: string; path: string }
 
-interface Keyed { kind: string; ref?: string; file?: FileRef }
+interface Keyed { kind: string; ref?: string; file?: FileRef; compare?: { left: FileRef; right: FileRef } }
 
 export function docKey(tab: Keyed): string {
   if (tab.kind === "file" && tab.file) return `file:${tab.file.notebook}:${tab.file.path}`;
+  // A comparison of two files (NS-6A) is one tab per pair, in the order the user picked.
+  if (tab.kind === "compare" && tab.compare) return `compare:${tab.compare.left.notebook}:${tab.compare.left.path}|${tab.compare.right.notebook}:${tab.compare.right.path}`;
   return `${tab.kind}:${tab.ref ?? ""}`;
 }
 

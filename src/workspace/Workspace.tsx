@@ -5,6 +5,7 @@ import { NewNote } from "../features/editor/NewNote";
 import { NoteTab } from "../features/editor/NoteTab";
 import { FileTab, saveFileTab } from "../features/notes/FileTab";
 import { NewFileTab } from "../features/notes/NewFileTab";
+import { CompareTab } from "../features/power/Compare";
 import { keyOf } from "../documents/store";
 import { newPageHere } from "../features/notes/actions";
 import { fileName, isMarkdown, isRichDoc, pageTitle } from "../lib/notebooks";
@@ -19,11 +20,12 @@ export const TAB_VIEWS: Record<Tab["kind"], (tab: Tab) => ReactNode> = {
   "new-note": (tab) => <NewNote key={tab.id} tab={tab} />,
   file: (tab) => <FileTab key={tab.id} tab={tab} />,
   "new-file": (tab) => <NewFileTab key={tab.id} tab={tab} />,
+  compare: (tab) => <CompareTab key={tab.id} tab={tab} />,
 };
 
 const label = (tab: Tab) => (tab.kind === "note" ? tab.title || tab.ref?.split(":")[1]?.slice(0, 8) || "Note"
   : tab.kind === "file" ? tab.title || pageTitle(tab.file?.path ?? "") || "Page"
-  : tab.kind === "new-file" ? tab.title || "Untitled" : tab.title || "New note");
+  : tab.kind === "new-file" ? tab.title || "Untitled" : tab.kind === "compare" ? tab.title || "Compare" : tab.title || "New note");
 
 /** Close a tab, asking first when it holds unsaved edits. */
 export function useCloseTab() {
@@ -32,7 +34,7 @@ export function useCloseTab() {
   const request = (paneId: string, tabId: string) => {
     const ws = useWorkspace.getState();
     const tab = ws.panes.find((p) => p.id === paneId)?.tabs.find((t) => t.id === tabId);
-    if (ws.dirty[tabId]) setAsking({ paneId, tabId, file: tab?.kind === "file" ? fileName(tab.file?.path ?? "") : undefined, untitled: tab?.kind === "new-file" });
+    if (ws.dirty[tabId]) setAsking({ paneId, tabId, file: tab?.kind === "file" ? fileName(tab.file?.path ?? "") : tab?.kind === "compare" ? "the compared files" : undefined, untitled: tab?.kind === "new-file" });
     else closeTab(paneId, tabId);
   };
   const dialog = asking && (
@@ -159,6 +161,7 @@ export function Workspace() {
         // The editor saves on its own; this covers a page in Reading mode, which has no editor (Codex review of 32fd236, U1).
         const tab = pane?.tabs.find((t) => t.id === pane.active);
         if (tab?.kind === "file" && tab.file) { e.preventDefault(); void saveFileTab(keyOf(tab.file)); }
+        else if (tab?.kind === "compare" && tab.compare) { e.preventDefault(); void saveFileTab(keyOf(tab.compare.left)); void saveFileTab(keyOf(tab.compare.right)); }
       }
       else if (e.key === "Tab") { e.preventDefault(); ws.cycle(e.shiftKey ? -1 : 1); }
       else if (e.key === "\\") { e.preventDefault(); ws.split(); }

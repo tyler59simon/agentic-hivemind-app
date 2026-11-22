@@ -28,6 +28,7 @@ import { onIndexProgress } from "./features/search/indexState";
 import type { IndexProgress } from "./lib/noteindex";
 import { draftsPending, flushAllDrafts, onDraftLost, setLmStore } from "./documents/store";
 import { useOpenRequests } from "./features/notes/opening";
+import { ComparePicker } from "./features/power/ComparePicker";
 import { newPageHere } from "./features/notes/actions";
 import type { FilesChanged } from "./lib/notebooks";
 
@@ -251,6 +252,7 @@ export default function App() {
     <>
       <Shell info={link.data!} onSettings={() => setSettings(true)} onReconnect={reconnect} />
       <Palette onSettings={() => setSettings(true)} onReconnect={reconnect} />
+      <ComparePicker />
       <Toasts />
       {dialogs}
     </>

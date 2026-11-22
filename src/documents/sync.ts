@@ -16,6 +16,14 @@ function apply() {
   const shown = new Set<string>();
   for (const pane of ws.panes) {
     for (const tab of pane.tabs) {
+      // A comparison holds both of its files, and is unsaved when either is (NS-6A).
+      if (tab.kind === "compare" && tab.compare) {
+        const keys = [keyOf(tab.compare.left), keyOf(tab.compare.right)];
+        keys.forEach((k) => shown.add(k));
+        const dirty = keys.some((k) => isUnsaved(docs[k]));
+        if (!!ws.dirty[tab.id] !== dirty) ws.setDirty(tab.id, dirty);
+        continue;
+      }
       if (tab.kind !== "file" || !tab.file) continue;
       const key = keyOf(tab.file);
       shown.add(key);

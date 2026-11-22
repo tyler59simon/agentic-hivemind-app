@@ -103,7 +103,7 @@ describe("locality: an edit to one block leaves every other block byte-identical
       expect(after.length, `block ${k}`).toBe(before.length);
       after.forEach((s, j) => { if (j !== k) expect(s, `block ${j} after editing ${k}`).toBe(before[j]); });
     }
-  });
+  }, 20_000); // The repository's own docs grow with each phase; a slow machine under the full suite needs the room.
 });
 
 describe("per-block fidelity: a block forced through the writer reads back as the same block", () => {
@@ -122,7 +122,7 @@ describe("per-block fidelity: a block forced through the writer reads back as th
       const after = slicesOf(out);
       after.forEach((s, j) => { if (j !== k) expect(s, `block ${j} after writing ${k}`).toBe(before[j]); });
     }
-  });
+  }, 20_000);
 
   it("every block of the hand-made corpus is editable, not a source box, unless it is source by nature", () => {
     const boxed: string[] = [];

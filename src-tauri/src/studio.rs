@@ -286,24 +286,52 @@ pub async fn notebook_meta_set(state: State<'_, AppState>, id: String, patch: Va
     blocking(move || sidecar::write(&root, &fallback, &patch).map(|(merged, _)| merged)).await
 }
 
+/// Read a page or loose file, as detected or (NS-6A) as `encoding`, one of `files::encoding::EDITABLE`. `file_read` and
+/// `file_reopen` both come here, so a reopen reaches exactly the files a read does.
+async fn read_for(state: &AppState, notebook: String, path: String, encoding: Option<String>) -> Result<Loaded, String> {
+    if let Some(id) = loose_id(&notebook) {
+        let (full, locked) = loose(state, id, &path)?;
+        return blocking(move || read_loose(&full, locked, encoding.as_deref())).await;
+    }
+    let (root, protected) = root_of(state, &notebook)?;
+    blocking(move || read_page(&root, &protected, &path, encoding.as_deref())).await
+}
+
+/// A loose file as `file_read` gives it: one in a protected place is shown, never recovered or converted.
+fn read_loose(full: &Path, locked: Option<String>, encoding: Option<&str>) -> Result<Loaded, String> {
+    let mut loaded = match (locked.is_some(), encoding) {
+        (true, None) => files::read_view(full)?,
+        (true, Some(e)) => files::read_view_as(full, e)?,
+        (false, None) => files::read(full)?,
+        (false, Some(e)) => files::read_as(full, e)?,
+    };
+    if locked.is_some() {
+        loaded.convertible = false;
+        loaded.choose_eol = false;
+        if loaded.read_only.is_none() {
+            loaded.read_only = locked;
+        }
+    }
+    Ok(loaded)
+}
+
+fn read_page(root: &Path, protected: &Protected, path: &str, encoding: Option<&str>) -> Result<Loaded, String> {
+    let full = inside(root, protected, path, false)?;
+    match encoding {
+        Some(e) => files::read_as(&full, e),
+        None => files::read(&full),
+    }
+}
+
 #[tauri::command]
 pub async fn file_read(state: State<'_, AppState>, notebook: String, path: String) -> Result<Loaded, String> {
-    if let Some(id) = loose_id(&notebook) {
-        let (full, locked) = loose(&state, id, &path)?;
-        return blocking(move || {
-            let mut loaded = if locked.is_some() { files::read_view(&full)? } else { files::read(&full)? };
-            if locked.is_some() {
-                loaded.convertible = false;
-                if loaded.read_only.is_none() {
-                    loaded.read_only = locked;
-                }
-            }
-            Ok(loaded)
-        })
-        .await;
-    }
-    let (root, protected) = root_of(&state, &notebook)?;
-    blocking(move || files::read(&inside(&root, &protected, &path, false)?)).await
+    read_for(&state, notebook, path, None).await
+}
+
+/// Read the file again with the encoding the user chose (NS-6A). The webview refuses it while the page has unsaved edits.
+#[tauri::command]
+pub async fn file_reopen(state: State<'_, AppState>, notebook: String, path: String, encoding: String) -> Result<Loaded, String> {
+    read_for(&state, notebook, path, Some(encoding)).await
 }
 
 /// A save, and who asked for it: `source` is `you` for the user's own save, or what changed the page for the history
@@ -779,6 +807,92 @@ mod tests {
         let grant = grants.add(&base.join(".git").join("config"), "t").unwrap();
         let (_, locked) = loose_in(&grants, &Protected::new(None), &grant.id, "config").unwrap();
         assert!(locked.unwrap().contains(".git folder"));
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_page_reopens_in_every_editable_encoding_and_keeps_its_stamp() {   // NS-6A
+        let base = temp_dir();
+        std::fs::create_dir_all(base.join("nb")).unwrap();
+        let (root, open) = (base.join("nb"), Protected::new(None));
+        let samples = [
+            ("UTF-8", "Caf\u{e9} cr\u{e8}me\r\nl\u{e0}\r\n"),
+            ("UTF-16LE", "Caf\u{e9}\r\nl\u{e0}\r\n"),
+            ("UTF-16BE", "Caf\u{e9}\r\nl\u{e0}\r\n"),
+            ("windows-1252", "Caf\u{e9} \u{20ac}\r\nl\u{e0}\r\n"),
+            ("ISO-8859-2", "Za\u{17c}\u{f3}\u{142}\u{107}\r\nx\r\n"),
+            ("windows-1250", "P\u{159}\u{ed}li\u{161} \u{17e}lu\u{165}ou\u{10d}k\u{fd}\r\nx\r\n"),
+            ("windows-1251", "\u{421}\u{44a}\u{435}\u{448}\u{44c}\r\nx\r\n"),
+            ("KOI8-R", "\u{421}\u{44a}\u{435}\u{448}\u{44c}\r\nx\r\n"),
+            ("windows-1253", "\u{3be}\u{3b5}\u{3c3}\r\nx\r\n"),
+            ("Shift_JIS", "\u{3044}\u{308d}\u{306f}\r\nx\r\n"),
+            ("EUC-JP", "\u{3044}\u{308d}\u{306f}\r\nx\r\n"),
+            ("GBK", "\u{6211}\u{80fd}\u{541e}\r\nx\r\n"),
+            ("Big5", "\u{6211}\u{80fd}\u{541e}\r\nx\r\n"),
+            ("EUC-KR", "\u{b2e4}\u{b78c}\u{c950}\r\nx\r\n"),
+        ];
+        assert_eq!(samples.len(), files::encoding::EDITABLE.len(), "every editable encoding has a case here");
+        for (name, text) in samples {
+            let bytes = files::encoding::encode(text, name, false).unwrap();
+            std::fs::write(root.join("a.txt"), &bytes).unwrap();
+            let detected = read_page(&root, &open, "a.txt", None).unwrap();
+            let again = read_page(&root, &open, "a.txt", Some(name)).unwrap();
+            assert_eq!(again.read_only, None, "{name}");
+            assert_eq!(again.text, text.replace("\r\n", "\n"), "{name}");
+            assert_eq!((again.format.encoding.as_str(), again.format.eol, again.format.bom), (files::encoding::editable(name).unwrap().name(), files::Eol::Crlf, false), "{name}");
+            // The bytes are the same, so a page opened with the detected encoding keeps its save precondition.
+            assert_eq!(again.stamp.sha256, detected.stamp.sha256, "{name}");
+            // And saving it with no edits writes the same bytes.
+            assert_eq!(files::encode(&again.text, &again.format).unwrap(), bytes, "{name}");
+        }
+        // Another encoding gives other text, and an unlisted one is refused.
+        std::fs::write(root.join("a.txt"), files::encoding::encode("caf\u{e9}\n", "windows-1252", false).unwrap()).unwrap();
+        assert_eq!(read_page(&root, &open, "a.txt", Some("windows-1251")).unwrap().text, "caf\u{439}\n");
+        assert!(read_page(&root, &open, "a.txt", Some("ISO-2022-JP")).unwrap_err().contains("cannot reopen"));
+        // A byte order mark of the chosen encoding is kept in the format.
+        std::fs::write(root.join("b.txt"), files::encoding::encode("x\n", "UTF-16LE", true).unwrap()).unwrap();
+        let bom = read_page(&root, &open, "b.txt", Some("UTF-16LE")).unwrap();
+        assert!(bom.format.bom && bom.text == "x\n");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_reopen_reaches_only_the_files_a_read_reaches() {   // NS-6A
+        let base = temp_dir();
+        std::fs::create_dir_all(base.join("nb/.hivemind")).unwrap();
+        std::fs::create_dir_all(base.join("outside")).unwrap();
+        std::fs::write(base.join("nb/ok.txt"), "caf\u{e9}").unwrap();
+        std::fs::write(base.join("nb/.hivemind/notebook.json"), "{}").unwrap();
+        std::fs::write(base.join("outside/secret.txt"), "secret").unwrap();
+        let (root, open) = (base.join("nb"), Protected::new(None));
+        assert!(read_page(&root, &open, "ok.txt", Some("windows-1252")).is_ok());
+        for refused in ["../outside/secret.txt", ".hivemind/notebook.json", "C:/Windows/win.ini", "ok.txt/../../outside/secret.txt", "con.txt", "a\\b.txt"] {
+            assert!(read_page(&root, &open, refused, Some("windows-1252")).is_err(), "{refused} must be refused");
+            assert!(read_page(&root, &open, refused, None).is_err(), "{refused} is refused by a plain read too");
+        }
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_loose_file_reopens_through_its_grant_and_a_protected_one_stays_read_only() {   // NS-6A
+        let base = temp_dir();
+        std::fs::create_dir_all(base.join(".git")).unwrap();
+        std::fs::write(base.join("note.txt"), files::encoding::encode("caf\u{e9}\n", "windows-1252", false).unwrap()).unwrap();
+        std::fs::write(base.join(".git/config"), "[core]\n").unwrap();
+        let grants = crate::opens::Grants::new(base.join("open-files.json"));
+        let open = Protected::new(None);
+        let grant = grants.add(&base.join("note.txt"), "t").unwrap();
+        let (full, locked) = loose_in(&grants, &open, &grant.id, "note.txt").unwrap();
+        let loaded = read_loose(&full, locked, Some("windows-1252")).unwrap();
+        assert_eq!((loaded.text.as_str(), loaded.read_only.clone()), ("caf\u{e9}\n", None));
+        // A grant names exactly its file: another name is refused before anything is read.
+        assert!(loose_in(&grants, &open, &grant.id, "other.txt").is_err());
+        assert!(loose_in(&grants, &open, "0000000000000000", "note.txt").is_err());
+        // A loose file in a reserved folder reopens, but only to look at it.
+        let locked_grant = grants.add(&base.join(".git").join("config"), "t").unwrap();
+        let (full, locked) = loose_in(&grants, &open, &locked_grant.id, "config").unwrap();
+        let shown = read_loose(&full, locked, Some("UTF-8")).unwrap();
+        assert!(shown.read_only.unwrap().contains(".git folder") && !shown.convertible && !shown.choose_eol);
         std::fs::remove_dir_all(&base).unwrap();
     }
 

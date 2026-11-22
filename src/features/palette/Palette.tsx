@@ -12,7 +12,12 @@ import { refreshStore } from "../../lib/refresh";
 import { fuzzy } from "../../lib/text";
 import { useHidden } from "../../shell/hidden";
 import { openProject, openSystem, useApp, type Page, type Route } from "../../store";
-import { railShown, useWorkspace } from "../../workspace/store";
+import { activeTab, railShown, useWorkspace } from "../../workspace/store";
+import { useComparePicker } from "../power/ComparePicker";
+import { LINE_TOOLS } from "../power/lineTools";
+import { playMacro, toggleRecording, useRecorder, type Target } from "../power/macros";
+import { toolRunner } from "../power/PowerBar";
+import { editorOf } from "../power/registry";
 import { useChangeIntent } from "../changes/intent";
 import { useProjectIntent } from "../projects/intent";
 import { projectsQuery } from "../projects/useProject";
@@ -73,11 +78,24 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
     }
     const close = () => app.setPalette(null);
     const page = (route: Route) => () => { close(); app.go(route); };
+    // Line tools and macros act on the editor of the focused file tab, when it shows source (NS-6A).
+    const tab = activeTab(ws);
+    const editor = tab?.kind === "file" ? editorOf(tab.id) : undefined;
+    const runTool = toolRunner(() => editor ?? null);
+    const macro = useRecorder.getState();
+    const power: Entry[] = editor ? [
+      ...LINE_TOOLS.map((t) => ({ key: `line:${t.id}`, label: `Lines: ${t.label}`, run: () => { close(); runTool(t); } })),
+      { key: "macro-record", label: macro.recording ? "Macro: stop recording" : "Macro: record", detail: "Ctrl+Shift+R", run: () => { close(); toggleRecording(); editor.focus(); } },
+      { key: "macro-play", label: "Macro: play the last one", detail: "Ctrl+Shift+P", run: () => { close(); void playMacro(editor as unknown as Target, macro.steps, 1); editor.focus(); } },
+      { key: "macro-end", label: "Macro: play to the end of the file", run: () => { close(); void playMacro(editor as unknown as Target, macro.steps, "end"); editor.focus(); } },
+    ] : [];
     const all: Entry[] = [
       { key: "go", label: "Go to note…", detail: "Ctrl+O", run: () => app.setPalette("notes") },
       { key: "new", label: "New note", detail: "Ctrl+N", run: () => { close(); ws.openTab({ kind: "new-note" }); } },
       { key: "open-file", label: "Open file…", run: () => { close(); void openFromDisk(); } },
       { key: "new-file", label: "New text file", run: () => { close(); ws.openTab({ kind: "new-file" }); } },
+      { key: "compare", label: "Compare files…", run: () => { close(); useComparePicker.getState().show(tab?.kind === "file" ? tab.file : undefined); } },
+      ...power,
       { key: "overview", label: "Overview", run: page({ page: "overview" }) },
       { key: "memory", label: "Memory library", section: "memory" as Page, run: page({ page: "memory" }) },
       { key: "notes", label: "Notes", section: "notes" as Page, run: page({ page: "notes" }) },

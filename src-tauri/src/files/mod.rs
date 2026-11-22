@@ -56,6 +56,9 @@ pub struct Loaded {
     /// Read-only only because of its encoding, so Convert to UTF-8 makes it editable (NS-1B).
     #[serde(default)]
     pub convertible: bool,
+    /// Read-only only because it mixes line endings, so choosing one makes it editable (NS-6A).
+    #[serde(default)]
+    pub choose_eol: bool,
 }
 
 /// The identity of a file's bytes, used as a save precondition.
@@ -123,7 +126,11 @@ pub fn detect_eol(text: &str) -> Eol {
 /// Decode a file's bytes for the editor (NS-1B: any encoding `files::encoding` detects). The text has LF line breaks;
 /// the encoding, byte order mark and line-ending style go into the format and are written back on save.
 pub fn decode(bytes: &[u8]) -> (String, FileFormat, Option<String>, bool) {
-    let d = encoding::decode(bytes);
+    shape(encoding::decode(bytes))
+}
+
+/// The editor's view of a decoded file: LF text, the format to write it back in, and why it may not be edited.
+fn shape(d: encoding::Decoded) -> (String, FileFormat, Option<String>, bool) {
     let mut format = FileFormat { encoding: d.encoding.to_string(), bom: d.bom, eol: Eol::None, confidence: d.confidence };
     if d.binary {
         return (String::new(), format, d.read_only, true);
@@ -179,15 +186,27 @@ pub fn recover(path: &Path) -> bool {
 
 /// Read a file for the editor, putting back a version an interrupted save left aside.
 pub fn read(path: &Path) -> Result<Loaded, String> {
-    read_inner(path, true)
+    read_inner(path, true, None)
+}
+
+/// `read`, decoding the bytes as `encoding` (one of `encoding::EDITABLE`) instead of the detected one (NS-6A).
+pub fn read_as(path: &Path, encoding: &str) -> Result<Loaded, String> {
+    let chosen = encoding::editable(encoding).ok_or_else(|| format!("Hivemind cannot reopen a file as {encoding}"))?;
+    read_inner(path, true, Some(chosen))
 }
 
 /// Read a file Hivemind may not write (it lies in a protected place): nothing is put back (Codex review of 52051c8, P1).
 pub fn read_view(path: &Path) -> Result<Loaded, String> {
-    read_inner(path, false)
+    read_inner(path, false, None)
 }
 
-fn read_inner(path: &Path, may_recover: bool) -> Result<Loaded, String> {
+/// `read_view`, decoding the bytes as `encoding`.
+pub fn read_view_as(path: &Path, encoding: &str) -> Result<Loaded, String> {
+    let chosen = encoding::editable(encoding).ok_or_else(|| format!("Hivemind cannot reopen a file as {encoding}"))?;
+    read_inner(path, false, Some(chosen))
+}
+
+fn read_inner(path: &Path, may_recover: bool, chosen: Option<&'static encoding_rs::Encoding>) -> Result<Loaded, String> {
     let meta = match std::fs::metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && may_recover && recover(path) => std::fs::metadata(path),
         other => other,
@@ -203,15 +222,22 @@ fn read_inner(path: &Path, may_recover: bool) -> Result<Loaded, String> {
         .and_then(|mut file| read_capped(&mut file))
         .map_err(|e| format!("Could not read {}: {e}", path.display()))?
         .ok_or_else(|| format!("{} is larger than 64 MB, too large to edit", path.display()))?;
-    let (text, format, mut read_only, binary) = decode(&bytes);
+    let decoded = match chosen {
+        Some(encoding) => encoding::decode_as(&bytes, encoding)?,
+        None => encoding::decode(&bytes),
+    };
+    let encoding_fine = decoded.read_only.is_none();
+    let (text, format, mut read_only, binary) = shape(decoded);
     let attribute = meta.permissions().readonly();
     // Converting helps only when the encoding is the reason: not for a binary file, mixed line endings or a file
     // marked read-only.
     let convertible = read_only.is_some() && !binary && format.eol != Eol::Mixed && !attribute;
+    // Mixed line endings alone: choosing a line ending makes the file editable (NS-6A).
+    let choose_eol = encoding_fine && !binary && format.eol == Eol::Mixed && !attribute;
     if read_only.is_none() && attribute {
         read_only = Some("This file is read-only on disk".into());
     }
-    Ok(Loaded { text, stamp: Stamp { sha256: sha256(&bytes), size: bytes.len() as u64, mtime_ms: mtime_ms(&meta) }, format, read_only, binary, convertible })
+    Ok(Loaded { text, stamp: Stamp { sha256: sha256(&bytes), size: bytes.len() as u64, mtime_ms: mtime_ms(&meta) }, format, read_only, binary, convertible, choose_eol })
 }
 
 /// Read at most 64 MB: None when there is more, however large the file looked a moment before (Codex final review of
@@ -489,6 +515,28 @@ mod tests {
         let (_, format, read_only, _) = decode(b"a\r\nb\n");
         assert!(read_only.unwrap().contains("line-ending"));
         assert!(encode("a\nb", &format).is_err());
+    }
+
+    #[test]
+    fn a_mixed_file_can_be_saved_once_a_line_ending_is_chosen() {   // NS-6A
+        let dir = scratch();
+        let page = dir.join("mixed.txt");
+        std::fs::write(&page, b"one\r\ntwo\nthree\r\n").unwrap();
+        let loaded = read(&page).unwrap();
+        assert_eq!((loaded.text.as_str(), loaded.format.eol, loaded.choose_eol, loaded.convertible), ("one\ntwo\nthree\n", Eol::Mixed, true, false));
+        assert!(loaded.read_only.clone().unwrap().contains("line-ending"));
+        // Mixed endings and bytes that do not decode: choosing a line ending alone would not make it editable.
+        std::fs::write(dir.join("bad.txt"), b"caf\xc3\xa9 na\xc3\xafve\r\ntwo\n\xff").unwrap();
+        let bad = read(&dir.join("bad.txt")).unwrap();
+        assert!(!bad.choose_eol && !bad.convertible);
+        // The webview saves it with the chosen line ending, as a conversion: the file on disk is read-only for Hivemind
+        // only because of the mix, and the hash check still guards it.
+        let crlf = FileFormat { eol: Eol::Crlf, ..loaded.format.clone() };
+        assert!(save(&page, &loaded.text, &loaded.stamp, &crlf, false).is_err());
+        assert!(matches!(save(&page, &loaded.text, &loaded.stamp, &crlf, true).unwrap(), SaveOutcome::Saved(_)));
+        assert_eq!(std::fs::read(&page).unwrap(), b"one\r\ntwo\r\nthree\r\n");
+        assert!(matches!(save(&page, "x", &loaded.stamp, &crlf, true).unwrap(), SaveOutcome::Stale { .. }));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
