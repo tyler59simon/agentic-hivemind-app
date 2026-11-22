@@ -140,16 +140,16 @@ describe("the Related section (NS-4B)", () => {
 
   it("is beside a folder notebook page, after its links", async () => {
     await rail("nb-1");
-    expect(titles()).toEqual(["On this page", "Backlinks", "Outgoing links", "Related", "File"]);
+    expect(titles()).toEqual(["On this page", "Backlinks", "Outgoing links", "Related", "History", "File"]);
   });
 
   it("is not beside a Living Memory page, which the index does not hold", async () => {
     await rail("lm:demo:plans");
-    expect(titles()).toEqual(["On this page", "File"]);
+    expect(titles()).toEqual(["On this page", "History", "File"]);
   });
 
   it("is not beside a loose file", async () => {
     await rail("@abc123");
-    expect(titles()).toEqual(["On this page", "File"]);
+    expect(titles()).toEqual(["On this page", "History", "File"]);
   });
 });

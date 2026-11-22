@@ -13,9 +13,10 @@ export const readDoc = (ref: FileRef) => {
   return lm ? lmdoc.readPage(lm, ref.path) : files.readFile(ref.notebook, ref.path);
 };
 
-export const saveDoc = (ref: FileRef, text: string, pre: Stamp, format: FileFormat, convert = false) => {
+/** `source`: what asks for the save, for a file's history; a Living Memory page keeps its own journal. */
+export const saveDoc = (ref: FileRef, text: string, pre: Stamp, format: FileFormat, convert = false, source?: string) => {
   const lm = lmdoc.parseLm(ref.notebook);
-  return lm ? lmdoc.savePage(lm, ref.path, text, pre, format) : files.saveFile(ref.notebook, ref.path, text, pre, format, convert);
+  return lm ? lmdoc.savePage(lm, ref.path, text, pre, format) : files.saveFile(ref.notebook, ref.path, text, pre, format, convert, source);
 };
 
 /** `format` keeps a Living Memory page's line endings and byte order mark; Rust's `file_create` writes UTF-8 as given. */

@@ -425,6 +425,17 @@ export function edit(key: string, text: string, outside = false) {
   if (ref && isLm(ref)) scheduleSave(key);
 }
 
+/** Restore a version (NS-5): the page takes `text` and saves it at once, so the version is a new one and nothing before it
+ *  is lost. Only a saved page restores: unsaved edits are not in the history, so they would be lost. Returns the state
+ *  after the save. */
+export async function restore(key: string, text: string) {
+  const s = get(key);
+  if (!s || s.status !== "clean") throw new Error("Save or discard your edits before restoring a version");
+  dispatch(key, { type: "edited", text, outside: true });
+  scheduleDraft(key);
+  return save(key, "restore");
+}
+
 /** Discard the draft shown beside a page that cannot take it (its file is gone, or read-only). A Living Memory page that
  *  was read-only because the draft came from another store then loads again and takes edits (Codex re-review of
  *  75ce884, R2-U1). */
@@ -440,8 +451,8 @@ export async function discardKept(key: string) {
   else await startLoad(key, ref);
 }
 
-/** Save the document. Returns the state after the attempt. */
-export async function save(key: string) {
+/** Save the document. Returns the state after the attempt. `source` says what asks for it, for the file's history. */
+export async function save(key: string, source?: string) {
   const s = get(key), ref = useDocuments.getState().refs[key];
   if (!s?.base || !ref || s.status !== "dirty" || isHeld(key) || otherStore(key, ref)) return get(key);
   dispatch(key, { type: "saveStarted" });
@@ -449,7 +460,7 @@ export async function save(key: string) {
   const generation = generations.get(key);
   const run = (async () => {
     try {
-      const out = await saveDoc(ref, text, s.base!.stamp, s.base!.format, !!s.convert);
+      const out = source ? await saveDoc(ref, text, s.base!.stamp, s.base!.format, !!s.convert, source) : await saveDoc(ref, text, s.base!.stamp, s.base!.format, !!s.convert);
       if (!current(key, generation)) return;
       if (out.status === "saved") {
         dispatch(key, { type: "saved", stamp: { sha256: out.sha256, size: out.size, mtimeMs: out.mtimeMs } });

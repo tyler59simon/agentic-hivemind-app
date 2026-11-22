@@ -5,6 +5,7 @@
 //! It reaches exactly the file the user chose: read, save, reveal and `asset_base` take it, every other command refuses.
 use crate::files::guard::Protected;
 use crate::files::{self, contain, watch, FileFormat, Loaded, SaveOutcome, Stamp};
+use crate::history;
 use crate::notebooks::{self, sidecar, Notebook, Tree};
 use crate::{blocking, AppState};
 use serde::Serialize;
@@ -57,6 +58,16 @@ fn loose_in(grants: &crate::opens::Grants, protected: &Protected, id: &str, name
         files::recover(&full);
     }
     Ok((full, locked))
+}
+
+/// The file a notebook page or loose file names, for commands that read or write it as history does. The second value says
+/// why a loose file may not be written (it lies in a protected place), as `loose` does.
+pub(crate) fn resolve_file(state: &AppState, notebook: &str, path: &str, for_write: bool) -> Result<(PathBuf, Option<String>), String> {
+    if let Some(id) = loose_id(notebook) {
+        return loose(state, id, path);
+    }
+    let (root, protected) = root_of(state, notebook)?;
+    Ok((inside(&root, &protected, path, for_write)?, None))
 }
 
 /// How the webview names a file the user chose outside the notebook tree (the open dialog, Explorer, a drop, Save as):
@@ -295,7 +306,49 @@ pub async fn file_read(state: State<'_, AppState>, notebook: String, path: Strin
     blocking(move || files::read(&inside(&root, &protected, &path, false)?)).await
 }
 
+/// A save, and who asked for it: `source` is `you` for the user's own save, or what changed the page for the history
+/// (`links`, `restore`, `replace`, `ai`, `agent`; see `history::SOURCES`).
+struct Change<'a> {
+    text: &'a str,
+    pre: &'a Stamp,
+    format: &'a FileFormat,
+    convert: bool,
+    source: &'a str,
+}
+
+/// Save a file and keep its versions (NS-5). The file as it is now is kept first when this is its first save here, so the
+/// version from before Hivemind can be restored, and when the change is not the user's own typing, so it can be undone;
+/// when that cannot be kept, such a change is not written. The new version is kept after the write.
+fn save_kept(history: &Path, full: &Path, change: &Change) -> Result<SaveOutcome, String> {
+    if !history::SOURCES.contains(&change.source) {
+        return Err(format!("\"{}\" is not a way Hivemind saves a page", change.source));
+    }
+    if (!history::has_history(history, full) || change.source != "you")
+        && let Err(e) = history::snapshot_file(history, full, Some(&change.pre.sha256), "disk", history::now_ms())
+    {
+        if change.source != "you" {
+            return Err(format!("The version before this change could not be kept, so nothing was written: {e}"));
+        }
+        eprintln!("Hivemind: could not keep the first version of {}: {e}", full.display());
+    }
+    let outcome = files::save(full, change.text, change.pre, change.format, change.convert)?;
+    if let SaveOutcome::Saved(stamp) = &outcome
+        && let Ok(bytes) = files::encode(change.text, change.format)
+        && files::sha256(&bytes) == stamp.sha256
+        && let Err(e) = history::snapshot(history, full, &bytes, change.source, history::now_ms())
+    {
+        eprintln!("Hivemind: could not keep a version of {}: {e}", full.display());
+    }
+    Ok(outcome)
+}
+
+/// `save_kept` for the page `rel` of a notebook: inside it, outside every protected place, and not through a link.
+fn save_in(root: &Path, protected: &Protected, history: &Path, rel: &str, change: &Change) -> Result<SaveOutcome, String> {
+    save_kept(history, &inside(root, protected, rel, true)?, change)
+}
+
 /// `convert`: the user chose Convert to UTF-8 for a page that opened read-only, so its undecodable text may be replaced.
+/// `source`: what asks for the save, `you` when left out (NS-5).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn file_save(
@@ -306,19 +359,22 @@ pub async fn file_save(
     pre: Stamp,
     format: FileFormat,
     convert: Option<bool>,
+    source: Option<String>,
 ) -> Result<SaveOutcome, String> {
     let convert = convert.unwrap_or(false);
+    let source = source.unwrap_or_else(|| "you".into());
+    let history = state.history_dir.clone();
     if let Some(id) = loose_id(&notebook) {
         let (full, locked) = loose(&state, id, &path)?;
         if let Some(why) = locked {
             return Err(why);
         }
-        return blocking(move || files::save(&full, &text, &pre, &format, convert)).await;
+        return blocking(move || save_kept(&history, &full, &Change { text: &text, pre: &pre, format: &format, convert, source: &source })).await;
     }
     let (root, protected) = root_of(&state, &notebook)?;
     let index = state.index.clone();
     blocking(move || {
-        let outcome = files::save(&inside(&root, &protected, &path, true)?, &text, &pre, &format, convert)?;
+        let outcome = save_in(&root, &protected, &history, &path, &Change { text: &text, pre: &pre, format: &format, convert, source: &source })?;
         if matches!(outcome, SaveOutcome::Saved(_)) {
             touched(&index, &notebook, &root, vec![path]);
         }
@@ -327,12 +383,22 @@ pub async fn file_save(
     .await
 }
 
+/// Create a file and keep its first version (NS-5).
+fn create_kept(history: &Path, full: &Path, text: &str) -> Result<Stamp, String> {
+    let stamp = files::create(full, text)?;
+    if let Err(e) = history::snapshot(history, full, text.as_bytes(), "you", history::now_ms()) {
+        eprintln!("Hivemind: could not keep a version of {}: {e}", full.display());
+    }
+    Ok(stamp)
+}
+
 #[tauri::command]
 pub async fn file_create(state: State<'_, AppState>, notebook: String, path: String, text: String) -> Result<Stamp, String> {
     let (root, protected) = root_of(&state, &notebook)?;
     let index = state.index.clone();
+    let history = state.history_dir.clone();
     blocking(move || {
-        let stamp = files::create(&inside(&root, &protected, &path, true)?, &text)?;
+        let stamp = create_kept(&history, &inside(&root, &protected, &path, true)?, &text)?;
         touched(&index, &notebook, &root, vec![path]);
         Ok(stamp)
     })
@@ -357,12 +423,23 @@ pub async fn file_rename(state: State<'_, AppState>, notebook: String, from: Str
     let (root, protected) = root_of(&state, &notebook)?;
     let drafts_dir = state.drafts_dir.clone();
     let index = state.index.clone();
+    let history = state.history_dir.clone();
     blocking(move || {
-        rename_in(&root, &protected, &drafts_dir, &notebook, &from, &to)?;
+        rename_kept(&root, &protected, &drafts_dir, &history, &notebook, &from, &to)?;
         touched(&index, &notebook, &root, vec![from, to]);
         Ok(())
     })
     .await
+}
+
+/// Move a page or folder with its drafts, and its history (NS-5): the versions of the page, or of every page in a folder,
+/// follow it. The move stands if they cannot.
+fn rename_kept(root: &Path, protected: &Protected, drafts_dir: &Path, history: &Path, notebook: &str, from: &str, to: &str) -> Result<(), String> {
+    let (source, dest, was_dir) = rename_in(root, protected, drafts_dir, notebook, from, to)?;
+    if let Err(e) = history::moved(history, &source, &dest, was_dir) {
+        eprintln!("Hivemind: the history of {from} did not follow it to {to}: {e}");
+    }
+    Ok(())
 }
 
 /// Whether `dest` lies inside the folder `folder`, judged on the folders as they are on disk: in a case-insensitive
@@ -373,15 +450,17 @@ fn lands_inside(folder: &Path, dest: &Path) -> bool {
     dest.ancestors().skip(1).find_map(|p| std::fs::canonicalize(p).ok()).is_some_and(|real| real.starts_with(&folder))
 }
 
-/// Move a page or folder of a notebook, and the drafts of its pages with it.
-fn rename_in(root: &Path, protected: &Protected, drafts_dir: &Path, notebook: &str, from: &str, to: &str) -> Result<(), String> {
+/// Move a page or folder of a notebook, and the drafts of its pages with it. Returns where it moved from and to, and
+/// whether it is a folder, for the history to follow.
+fn rename_in(root: &Path, protected: &Protected, drafts_dir: &Path, notebook: &str, from: &str, to: &str) -> Result<(PathBuf, PathBuf, bool), String> {
     if to.starts_with(&format!("{from}/")) {
         return Err("A folder cannot move into itself".into());
     }
     // Resolved as a write, so neither end goes through a link (Codex review of 32fd236, P2).
     let source = inside(root, protected, from, true)?;
     let dest = inside(root, protected, to, true)?;
-    if source.is_dir() {
+    let was_dir = source.is_dir();
+    if was_dir {
         if lands_inside(&source, &dest) {
             return Err("A folder cannot move into itself".into());
         }
@@ -401,7 +480,7 @@ fn rename_in(root: &Path, protected: &Protected, drafts_dir: &Path, notebook: &s
         return Err(e);
     }
     crate::drafts::finish_moved(drafts_dir, &moves);
-    Ok(())
+    Ok((source, dest, was_dir))
 }
 
 /// Move a page or folder to the notebook's trash. With `pre`, a page is only trashed while it still holds those bytes.
@@ -891,5 +970,136 @@ mod tests {
         for name in ["report.pdf", "photo.png", "sheet.xlsx", "notes.docx", "README"] {
             assert!(refuse_to_run(Path::new(name)).is_none(), "{name}");
         }
+    }
+
+    /// A notebook folder with `Page.md` holding `text`, and a history folder beside it.
+    fn kept_rig(text: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let base = temp_dir();
+        let (root, hist) = (base.join("nb"), base.join("history"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("Page.md"), text).unwrap();
+        (base, root, hist)
+    }
+
+    /// Save `text` over `Page.md` as it is on disk now.
+    fn save_page(root: &Path, hist: &Path, text: &str, source: &str) -> SaveOutcome {
+        let loaded = files::read(&root.join("Page.md")).unwrap();
+        save_in(root, &Protected::new(None), hist, "Page.md", &Change { text, pre: &loaded.stamp, format: &loaded.format, convert: false, source }).unwrap()
+    }
+
+    fn versions(hist: &Path, root: &Path) -> Vec<(String, String)> {
+        let full = root.join("Page.md");
+        history::list(hist, &full).into_iter().map(|e| (e.source, String::from_utf8(history::read(hist, &full, e.id).unwrap()).unwrap())).collect()
+    }
+
+    #[test]
+    fn a_save_keeps_a_version_and_the_first_save_also_keeps_the_file_as_it_was() {
+        let (base, root, hist) = kept_rig("original\n");
+        assert!(matches!(save_page(&root, &hist, "edited\n", "you"), SaveOutcome::Saved(_)));
+        assert_eq!(versions(&hist, &root), [("you".into(), "edited\n".into()), ("disk".into(), "original\n".into())]);
+        save_page(&root, &hist, "edited again\n", "you");
+        assert_eq!(versions(&hist, &root).len(), 3, "the disk version is kept once, at the first save");
+        // A save that changes nothing adds no version.
+        save_page(&root, &hist, "edited again\n", "you");
+        assert_eq!(versions(&hist, &root).len(), 3);
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_change_that_is_not_typing_keeps_the_file_as_it_is_before_it_writes() {
+        let (base, root, hist) = kept_rig("original\n");
+        save_page(&root, &hist, "mine\n", "you");
+        // Another program edits the file; the link rewrite then changes it from that version.
+        std::fs::write(root.join("Page.md"), "outside\n").unwrap();
+        assert!(matches!(save_page(&root, &hist, "outside, links fixed\n", "links"), SaveOutcome::Saved(_)));
+        let found = versions(&hist, &root);
+        assert_eq!(found.iter().map(|(s, t)| (s.as_str(), t.as_str())).collect::<Vec<_>>(),
+            [("links", "outside, links fixed\n"), ("disk", "outside\n"), ("you", "mine\n"), ("disk", "original\n")]);
+        // A change made from a version that is no longer on disk goes stale and keeps nothing.
+        let old = files::read(&root.join("Page.md")).unwrap();
+        std::fs::write(root.join("Page.md"), "changed again\n").unwrap();
+        let outcome = save_in(&root, &Protected::new(None), &hist, "Page.md", &Change { text: "x", pre: &old.stamp, format: &old.format, convert: false, source: "ai" }).unwrap();
+        assert!(matches!(outcome, SaveOutcome::Stale { .. }));
+        assert_eq!(versions(&hist, &root).len(), 4);
+        // A way of saving Hivemind does not know is refused before anything is written.
+        let now = files::read(&root.join("Page.md")).unwrap();
+        let refused = save_in(&root, &Protected::new(None), &hist, "Page.md", &Change { text: "x", pre: &now.stamp, format: &now.format, convert: false, source: "magic" });
+        assert!(refused.unwrap_err().contains("magic"));
+        assert_eq!(std::fs::read_to_string(root.join("Page.md")).unwrap(), "changed again\n");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_restore_is_a_new_version_written_through_the_guard_and_history_keeps_every_old_version() {
+        let (base, root, hist) = kept_rig("one\n");
+        save_page(&root, &hist, "two\n", "you");
+        save_page(&root, &hist, "three\n", "you");
+        let full = root.join("Page.md");
+        let oldest = history::list(&hist, &full).last().unwrap().clone();
+        let (text, _, read_only, binary) = files::decode(&history::read(&hist, &full, oldest.id).unwrap());
+        assert!((text.as_str(), read_only, binary) == ("one\n", None, false));
+        save_page(&root, &hist, &text, "restore");
+        assert_eq!(std::fs::read_to_string(&full).unwrap(), "one\n");
+        let found = versions(&hist, &root);
+        assert_eq!(found[0], ("restore".to_string(), "one\n".to_string()), "a new version, newest first");
+        assert_eq!(found.len(), 4, "nothing was rewritten or removed: disk, you, you, restore");
+        // The same write into a protected place is refused, and keeps nothing.
+        let store = base.join("store");
+        std::fs::create_dir_all(&store).unwrap();
+        std::fs::write(store.join("Page.md"), "store\n").unwrap();
+        let loaded = files::read(&store.join("Page.md")).unwrap();
+        let guarded = Protected::new(Some(&store));
+        let change = Change { text: "one\n", pre: &loaded.stamp, format: &loaded.format, convert: false, source: "restore" };
+        assert!(save_in(&store, &guarded, &hist, "Page.md", &change).is_err());
+        assert_eq!(std::fs::read_to_string(store.join("Page.md")).unwrap(), "store\n");
+        assert!(history::list(&hist, &store.join("Page.md")).is_empty());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_file_over_sixteen_megabytes_saves_but_keeps_no_version() {
+        let (base, root, hist) = kept_rig("small\n");
+        let big = format!("{}\n", "a".repeat(history::MAX_SNAPSHOT as usize));
+        assert!(matches!(save_page(&root, &hist, &big, "you"), SaveOutcome::Saved(_)));
+        assert_eq!(versions(&hist, &root), [("disk".to_string(), "small\n".to_string())], "only the version from before; the big one is not kept");
+        assert!(history::too_large(&root.join("Page.md")));
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_rename_of_a_page_or_a_folder_carries_its_history() {
+        let (base, root, hist) = kept_rig("one\n");
+        let (drafts, open) = (base.join("drafts"), Protected::new(None));
+        std::fs::create_dir_all(root.join("Area")).unwrap();
+        std::fs::write(root.join("Area/Inner.md"), "inner\n").unwrap();
+        save_page(&root, &hist, "two\n", "you");
+        let inner = files::read(&root.join("Area/Inner.md")).unwrap();
+        save_in(&root, &open, &hist, "Area/Inner.md", &Change { text: "inner 2\n", pre: &inner.stamp, format: &inner.format, convert: false, source: "you" }).unwrap();
+        // A page.
+        rename_kept(&root, &open, &drafts, &hist, "nb-1", "Page.md", "Moved/Renamed.md").unwrap();
+        assert_eq!(history::list(&hist, &root.join("Moved/Renamed.md")).len(), 2, "disk and you came along");
+        assert!(history::list(&hist, &root.join("Page.md")).is_empty());
+        // A folder: the history of each page in it.
+        rename_kept(&root, &open, &drafts, &hist, "nb-1", "Area", "Archive/Area").unwrap();
+        assert_eq!(history::list(&hist, &root.join("Archive/Area/Inner.md")).len(), 2);
+        assert!(history::list(&hist, &root.join("Area/Inner.md")).is_empty());
+        // A change of letter case only keeps the history where it is (the key ignores case on Windows).
+        rename_kept(&root, &open, &drafts, &hist, "nb-1", "Moved/Renamed.md", "Moved/renamed.md").unwrap();
+        if cfg!(windows) {
+            assert_eq!(history::list(&hist, &root.join("Moved/renamed.md")).len(), 2);
+        }
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_new_file_is_kept_as_its_first_version() {
+        let (base, root, hist) = kept_rig("x");
+        let full = root.join("Fresh.md");
+        create_kept(&hist, &full, "fresh\n").unwrap();
+        assert_eq!(history::list(&hist, &full).len(), 1);
+        assert_eq!(history::read(&hist, &full, 1).unwrap(), b"fresh\n");
+        assert!(create_kept(&hist, &full, "again").is_err(), "an existing file is not replaced, and keeps no new version");
+        assert_eq!(history::list(&hist, &full).len(), 1);
+        std::fs::remove_dir_all(&base).unwrap();
     }
 }

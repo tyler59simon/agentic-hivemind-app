@@ -112,12 +112,13 @@ describe("rich pages in their tab", () => {
     stop();
   });
 
-  it("a rich page opens in the page editor with no mode tabs, and opening writes nothing", async () => {
+  it("a rich page opens in the page editor with only Page and History tabs, and opening writes nothing", async () => {
     files.set("Plan.hmdoc", hmdoc(para("Hello")));
     const saves = vi.spyOn(docs, "save");
     const el = await open("Plan.hmdoc");
     expect(typed(el).state.doc.textContent).toBe("Hello");
-    expect(el.querySelector('[aria-label="Page view"]')).toBeNull();
+    // No Reading, Live or Source modes: only the page itself and its history (NS-5).
+    expect([...el.querySelectorAll('[aria-label="Page view"] button')].map((b) => b.textContent)).toEqual(["Page", "History"]);
     expect(el.querySelector("h1")!.textContent).toBe("Plan");
     expect(docs.useDocuments.getState().docs[docs.keyOf(ref("Plan.hmdoc"))].status).toBe("clean");
     expect(files.get("Plan.hmdoc")).toBe(hmdoc(para("Hello")));

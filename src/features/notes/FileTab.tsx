@@ -15,6 +15,7 @@ import { Tabs } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useWorkspace, type Mode, type Tab } from "../../workspace/store";
 import { CodeEditor } from "../editor/CodeEditor";
+import { FileHistory } from "../history/FileHistory";
 import { PageMergeDialog } from "../editor/MergeDialog";
 import { useFollowLink } from "../links/follow";
 import { convertToRich, movePath, openPage, renamed, saveBothVersions, saveCopy, trashPath } from "./actions";
@@ -27,7 +28,11 @@ import { isPicture } from "../editor/rich/parse";
 import { oversizeReason } from "../hmdoc/envelope";
 import { runExport } from "./richActions";
 
-const MODES: { id: Mode; label: string }[] = [{ id: "reading", label: "Reading" }, { id: "live", label: "Live" }, { id: "rich", label: "Rich" }, { id: "source", label: "Source" }];
+const HISTORY = { id: "history" as Mode, label: "History" };
+const MODES: { id: Mode; label: string }[] = [{ id: "reading", label: "Reading" }, { id: "live", label: "Live" }, { id: "rich", label: "Rich" }, { id: "source", label: "Source" }, HISTORY];
+/** A text file has its source and its history; a rich page has no modes of its own (NS-3C), only the page and its history. */
+const TEXT_MODES: { id: Mode; label: string }[] = [{ id: "source", label: "Source" }, HISTORY];
+const RICH_MODES: { id: Mode; label: string }[] = [{ id: "live", label: "Page" }, HISTORY];
 
 /** Rich mode (NS-3B) loads its editor, Tiptap and the Markdown parser only when a page first opens in it. */
 const RichEditor = lazy(() => import("../rich/RichEditor"));
@@ -224,7 +229,7 @@ export function FileTab({ tab }: { tab: Tab }) {
   // A parked page of another store shows no attachments: they would come from the store connected now (R3-P3).
   const own = inOwnStore(key);
   const pictures = useQuery({ queryKey: ["asset-base", ref.notebook, ref.path], queryFn: () => assetBase(ref.notebook, ref.path), refetchOnMount: "always", gcTime: 0, enabled: (markdown || richDoc) && own });
-  const mode: Mode = markdown ? (tab.mode === "history" ? "reading" : tab.mode ?? "live") : "source";
+  const mode: Mode = tab.mode === "history" ? "history" : markdown ? tab.mode ?? "live" : "source";
   const titles = useCallback(() => pages.filter((p) => isMarkdown(p) || isRichDoc(p)).map(pageTitle), [pages]);
 
   useEffect(() => { void open(ref); }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -366,7 +371,7 @@ export function FileTab({ tab }: { tab: Tab }) {
             }}
           </Menu>
         </div>
-        {markdown && <Tabs items={MODES} value={mode} label="Page view" onChange={(v) => updateTab(tab.id, { mode: v })} />}
+        <Tabs items={markdown ? MODES : richDoc ? RICH_MODES : TEXT_MODES} value={!markdown && mode !== "history" ? (richDoc ? "live" : "source") : mode} label="Page view" onChange={(v) => updateTab(tab.id, { mode: v })} />
       </header>
       <Banners doc={doc} docKey={key} onMerge={merge} onRecreate={recreate} conflict={richDoc ? { mine: keepMine, both: loose ? undefined : saveBoth } : undefined} />
       {markdown && mode === "live" && doc.text.length > RICH_LIMIT && (
@@ -375,7 +380,9 @@ export function FileTab({ tab }: { tab: Tab }) {
       {markdown && mode === "rich" && doc.text.length > RICH_LIMIT && (
         <div className="banner note-banner">This page is over 1 MB, so it opens as Markdown source instead of in Rich mode.</div>
       )}
-      {richDoc
+      {mode === "history"
+        ? <FileHistory file={ref} tabId={tab.id} />
+        : richDoc
         ? (
           <div className="note file-editor">
             {oversize

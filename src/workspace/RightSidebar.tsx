@@ -6,6 +6,8 @@ import { useNotebookTitle } from "../features/notes/notebookTitle";
 import { isRichDoc } from "../lib/notebooks";
 import { outline } from "../lib/note";
 import { richOutline } from "../features/hmdoc/outline";
+import { HistoryRail } from "../features/history/FileHistory";
+import { usePick } from "../features/history/pick";
 import { SourceHistory } from "../features/history/HistoryViews";
 import { Backlinks, OutgoingLinks } from "../features/links/BacklinksPanel";
 import { LinksPanel, LocalGraphPanel } from "../features/links/LinksPanel";
@@ -92,6 +94,7 @@ export function PageOutline({ tab }: { tab: Tab }) {
 /** The rail beside a notebook page: its outline, what links to and from it, and where the file is. */
 export function PageRail() {
   const tab = useWorkspace(activeTab);
+  const updateTab = useWorkspace((s) => s.updateTab);
   const base = useDocuments((s) => (tab?.file ? s.docs[keyOf(tab.file)]?.base : undefined));
   const recent = useQuery({ ...recentQuery(), enabled: !!tab?.file && isLoose(tab.file) });
   const title = useNotebookTitle(tab?.file?.notebook, !!tab?.file && !isLoose(tab.file));
@@ -115,6 +118,9 @@ export function PageRail() {
           <Section title="Related"><RelatedPages file={tab.file} /></Section>
         </>
       )}
+      <Section title="History" actions={<ArrowLink onClick={() => updateTab(tab.id, { mode: "history" })}>All</ArrowLink>}>
+        <HistoryRail file={tab.file} onPick={(id) => { usePick.getState().pick(tab.id, id); updateTab(tab.id, { mode: "history" }); }} />
+      </Section>
       <Section title="File">
         <dl className="properties">
           {rows.map(([k, v]) => (<div key={k}><dt>{k}</dt><dd>{v}</dd></div>))}

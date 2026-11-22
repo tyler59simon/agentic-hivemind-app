@@ -92,6 +92,16 @@ describe("renaming a page", () => {
     expect(useRewritePlan.getState().plan).toBeNull();
   });
 
+  it("saves each page as a link update, so its history keeps the page as it was before (NS-5)", async () => {
+    await act(async () => { await movePath(client, "nb-1", "Plan.md", "Strategy.md"); });
+    await settle();
+    await act(async () => { button("Update links")!.click(); });
+    await settle();
+    const writes = sent.filter((c) => c.cmd === "file_save");
+    expect(writes.length).toBeGreaterThan(0);
+    expect(writes.every((c) => c.args.source === "links")).toBe(true);
+  });
+
   it("a page with unsaved edits in a tab is left alone", async () => {
     // Busy.md is open in a tab with edits that are not saved.
     const busy = { notebook: "nb-1", path: "Busy.md" };

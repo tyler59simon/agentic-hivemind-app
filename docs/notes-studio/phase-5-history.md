@@ -44,4 +44,37 @@ Claude surveyed main at `f88e919` on 2026-11-22. Where the sections below say ot
 
 ## 4. Shipped
 
-(Filled in when the phase lands.)
+Commits: (to be filled in by Claude).
+
+**Rust**
+- `src-tauri/src/history.rs`: the store. `history/<first 16 hex of sha256(normalised absolute path)>/index.json` plus `objects/<sha256>.gz` (`flate2`, now a direct dependency). Entries are `{ id, time, sha256, size, source, pinned }`. Retention runs on every write and drops a version only when it is unpinned, not among the newest 100 and older than 90 days. A damaged or missing `index.json` is rebuilt from the objects (times from file mtimes, source `recovered`, pins lost) and written back. Files over 16 MB add nothing, and `history_list` says `tooLarge`. `moved` carries the old key's entries into the new key (old entries first, ids renumbered, objects copied, old folder removed), for a file or for every file under a renamed folder; a case-only rename is the same key on Windows. Commands: `history_list`, `history_read`, `history_pin`, `git_file_log`, `git_file_commit`.
+- `studio.rs`: `file_save` takes an optional `source` (`you` by default; `links`, `restore`, `replace`, `ai`, `agent`; anything else is refused). `save_kept` snapshots the file as it is on disk before the write when it has no history yet, or when the source is not `you` (only when the disk still holds the bytes the save's precondition names; labelled `disk`; a non-`you` save is not written if that snapshot fails), and the saved bytes after the write. `file_create` snapshots the new file; `rename_kept` (behind `file_rename`) calls `history::moved`; `resolve_file` gives the history commands the same resolution and guard as any file command. `opens.rs file_save_as` snapshots the file it replaces (first time) and the saved file.
+- `git.rs`: `beside`, `work_tree` (`git rev-parse --show-toplevel` through `run_captured`), `file_log` (`git log --follow --name-only`, newest 100, plus whether the file changed), `file_version` (`git show <sha>:<path at that commit>`, 16 MB cap), `file_commit` (`git commit --only -m MESSAGE -- ":(literal)<name>"`; `review.rs NO_IDENTITY` when git has no identity; never pushes). `folders::normal` and `review::NO_IDENTITY` became `pub(crate)`.
+
+**Webview**
+- `src/lib/history.ts` (wrappers), `src/features/history/timeline.ts` (merge and order of snapshots, commits and Living Memory operations; labels), `src/features/history/FileHistory.tsx` (`FileHistory` mode, `HistoryRail`, `CommitDialog`, compare with `@codemirror/merge`, restore, pin). Memory's `HistoryViews.tsx`, `LogView.tsx` and `activity.ts` are unchanged.
+- `FileTab.tsx`: a History tab for every file tab (markdown: Reading, Live, Rich, Source, History; other text files: Source, History; rich pages: Page, History). `RightSidebar.tsx PageRail`: a History section with the five newest versions and an All link.
+- `documents/store.ts`: `save(key, source?)` and `restore(key, text)`; `saveFile` and `saveDoc` pass `source` only when given. The link rewrite (`RewriteDialog.tsx`) saves with source `links`.
+- Living Memory pages: the timeline is `docHistory`, a version is `docVersion`, and Restore goes through the normal page save, so it writes with `doc write --expected-revision`.
+
+**UI pass (2026-11-22).** Claude ran the dev app with two scratch notebooks, one a git work tree with a commit and another file already staged, and a scratch Living Memory store:
+- The first save of a page added "Saved by you" and "Found on disk"; Restore of the disk version put the old text back in the file and added a "Restored" row; Compare opened the merge view.
+- Commit in the git notebook made one commit for that page; the other staged file stayed staged; the timeline showed the commit and "Matches the last commit".
+- A `.txt` file has Source and History; a Living Memory page shows its Living Memory history.
+- Renaming the page in the tree kept its history (the old folder was removed, the new one held every version).
+- Not checked in the app: the missing git identity message (it would mean changing the machine's git identity; the cargo test covers it).
+
+The review and the pass found two problems, fixed before the commit: the History mode left the preview and Compare about 110 px in a narrow pane (UI-1), and the rail's History rows did not open their version (UI-2). Claude also left-aligned the rail rows once they became buttons.
+
+**Fixes after the check in the dev app (webview only)**
+- UI-1: the History mode is a grid of a fixed 15 rem list and the version taking the rest (`.history-view` inside `.history-wrap`, `App.css`). The wrap is a container (`container-type: inline-size`), and `@container history (max-width: 640px)` puts the version below the list at the pane's full width, so the layout follows the pane, not the window (a `@media` rule would not). Compare gets that full width in a narrow pane. `FileHistory.test.tsx` checks the structure and the stylesheet rules, since jsdom lays nothing out.
+- UI-2: each row of the rail's History section is a button. It asks for that version through `src/features/history/pick.ts` (a small store keyed by tab) and switches the tab to History; `FileHistory` takes the request once it has the timeline, selects the version and scrolls it into view. It also works when the History mode is already showing. Tested for both cases.
+
+**Where this differs from the text above**
+- The commands take `notebook` and `path` (as every file command does), not one `ref`.
+- Git commands run in the file's folder with the file name as a literal pathspec (`:(literal)<name>`, relative to that folder) rather than a repo-relative path. A commit lists the file's path at that commit (`--name-only`) so `git show` finds it after a rename.
+- Restore is not a Rust command: the History view puts the version's text into the open page and saves it through the document store with source `restore`, so the page's own precondition, merge and conflict handling apply, and `file_save` runs `files::guard`. It needs a clean page (unsaved edits are not in the history), and is off for a read-only page, a binary or undecodable version, and a version equal to the page.
+- A file git does not know yet is marked with `git add -N` before the commit, and unmarked again if the commit fails. Git's output reaches Hivemind as text, so a commit version with bytes that are not UTF-8 cannot be restored (it can still be read).
+- Windows cannot name a file with `*`, `?` or `:`. The literal-pathspec test creates such files only on Unix; on Windows it checks the pathspec text and runs the real git test with `[` in the name.
+- `RightSidebar.test.tsx` and `FileTab.hmdoc.test.tsx` were edited for the new History section and tab; `RewriteDialog.test.tsx` gained the `links` source test. `store.test.ts` is unedited.
+- Not covered by a test: the dialog and the two snapshots inside `opens.rs file_save_as`, and the Tauri command wrappers themselves (their logic is in `save_kept`, `create_kept`, `rename_kept` and the `history` and `git` functions, which are).

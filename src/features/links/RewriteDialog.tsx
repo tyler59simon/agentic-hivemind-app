@@ -43,7 +43,8 @@ function Ask({ plan, onClose, onDone }: { plan: Plan; onClose: () => void; onDon
     setBusy(true);
     try {
       const result = await applyPlan(plan, {
-        read: readFile, save: saveFile,
+        // The history keeps the page as it was before the links changed (NS-5).
+        read: readFile, save: (notebook, path, text, pre, format) => saveFile(notebook, path, text, pre, format, false, "links"),
         unsaved: (notebook, path) => unsavedUnder(notebook, path).length > 0,
         written: (notebook, path) => { void refresh(notebook, [path]); },
       });

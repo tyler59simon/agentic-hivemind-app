@@ -13,6 +13,7 @@ mod files;
 mod opens;
 mod folders;
 mod git;
+mod history;
 mod instance;
 mod learning;
 mod lmdoc;
@@ -46,6 +47,8 @@ struct AppState {
     bridge: Arc<Bridge>,
     settings_path: PathBuf,
     drafts_dir: PathBuf,
+    /// Versions of the user's files, kept at every save (`history.rs`).
+    history_dir: PathBuf,
     worktrees_dir: PathBuf,
     terminals_dir: PathBuf,
     snapshots_dir: PathBuf,
@@ -1868,6 +1871,7 @@ pub fn run() {
                 bridge: Arc::new(Bridge::new(launch)),
                 settings_path,
                 drafts_dir,
+                history_dir: app.path().app_data_dir()?.join("history"),
                 worktrees_dir,
                 terminals_dir,
                 snapshots_dir,
@@ -1962,7 +1966,7 @@ pub fn run() {
             studio::notebooks_list, studio::notebook_add, studio::notebook_remove, studio::notebook_rename, studio::notebook_tree, studio::notebook_meta_get,
             studio::notebook_meta_set, studio::file_read, studio::file_save, studio::file_create, studio::file_mkdir, studio::file_rename, studio::file_delete,
             studio::file_reveal, studio::asset_base, studio::lmdoc_assets, studio::notebook_add_dropped, studio::file_attach_bytes, studio::file_attach_dropped, opens::open_dropped, opens::claim_drop, opens::unclaimed_drops, studio::notebook_reach_record, lm_body, lmdoc_move, lmdoc_attach, studio::lmdoc_open_asset, opens::open_dialog, opens::open_pending, opens::open_recent,
-            opens::open_forget, opens::file_save_as,
+            opens::open_forget, opens::file_save_as, history::history_list, history::history_read, history::history_pin, history::git_file_log, history::git_file_commit,
             notes_index::commands::index_search, notes_index::commands::index_links, notes_index::commands::index_incoming, notes_index::commands::index_pages,
             notes_index::commands::index_tags, notes_index::commands::index_status, notes_index::commands::index_rebuild, notes_index::commands::index_related
         ])

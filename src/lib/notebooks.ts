@@ -42,9 +42,10 @@ export const notebookMeta = (id: string) => invoke<NotebookMeta>("notebook_meta_
 export const setNotebookMeta = (id: string, patch: NotebookMeta) => invoke<NotebookMeta>("notebook_meta_set", { id, patch });
 
 export const readFile = (notebook: string, path: string) => invoke<Loaded>("file_read", { notebook, path });
-/** `convert`: the user chose Convert to UTF-8, so text that does not decode may be replaced. */
-export const saveFile = (notebook: string, path: string, text: string, pre: Stamp, format: FileFormat, convert = false) =>
-  invoke<SaveOutcome>("file_save", { notebook, path, text, pre, format, convert });
+/** `convert`: the user chose Convert to UTF-8, so text that does not decode may be replaced. `source` says what asks for
+ *  the save, for the page's history (`links`, `restore`, `replace`, `ai`, `agent`); it is the user's own save when left out. */
+export const saveFile = (notebook: string, path: string, text: string, pre: Stamp, format: FileFormat, convert = false, source?: string) =>
+  invoke<SaveOutcome>("file_save", { notebook, path, text, pre, format, convert, ...(source ? { source } : {}) });
 export const createFile = (notebook: string, path: string, text: string) => invoke<Stamp>("file_create", { notebook, path, text });
 export const makeFolder = (notebook: string, path: string) => invoke<void>("file_mkdir", { notebook, path });
 export const renameFile = (notebook: string, from: string, to: string) => invoke<void>("file_rename", { notebook, from, to });

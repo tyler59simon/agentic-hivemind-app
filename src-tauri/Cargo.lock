@@ -17,6 +17,7 @@ dependencies = [
  "chrono",
  "dirs",
  "encoding_rs",
+ "flate2",
  "notify-debouncer-mini",
  "portable-pty",
  "rusqlite",

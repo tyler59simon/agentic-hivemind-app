@@ -266,7 +266,13 @@ pub async fn file_save_as(app: AppHandle, text: String, suggested: String) -> Re
         let path = picked.into_path().map_err(|e| e.to_string())?;
         let state = handle.state::<AppState>();
         may_save_as(&protected(&state), &path)?;
+        // A file that is replaced is kept first when it has no history yet (NS-5), and the new version after.
+        let history = &state.history_dir;
+        if !crate::history::has_history(history, &path) {
+            let _ = crate::history::snapshot_file(history, &path, None, "disk", crate::history::now_ms());
+        }
         files::save_as(&path, &text)?;
+        let _ = crate::history::snapshot_file(history, &path, None, "you", crate::history::now_ms());
         let opened = ref_for(&state, &path, &now())?;
         // A file saved into a notebook is a page of it now.
         crate::studio::indexed(&state, &opened);
