@@ -2,7 +2,7 @@
 // never compared: each group keeps the order its own source gave, and a group is as long as its source made it.
 import type { FileRef } from "../../documents/keys";
 import type { DocNotebook, DocSearchHit, SearchHit } from "../../lib/lm";
-import type { IndexHit } from "../../lib/noteindex";
+import { markWords, type IndexHit } from "../../lib/noteindex";
 
 export type GroupId = "here" | "other" | "lm" | "memory";
 
@@ -34,6 +34,8 @@ export interface GroupInput {
   /** The Living Memory notebooks Hivemind lists, the only ones a tab can open. */
   lmNotebooks: Pick<DocNotebook, "domain" | "notebook">[];
   memory: SearchHit[];
+  /** What was typed: Living Memory's page snippets carry no marks, so its words are marked here. */
+  query?: string;
 }
 
 const folderOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
@@ -59,7 +61,7 @@ export function buildGroups(input: GroupInput): Group[] {
       if (!known.has(`${hit.domain}\n${hit.notebook}`)) continue;
       rows.push({
         key: `lm:${hit.domain}:${hit.notebook}:${hit.path}:${hit.line_start}`, group: "lm", title: hit.title, detail: [hit.notebook_title, hit.heading].filter(Boolean).join(" · "),
-        snippet: hit.snippet, open: { lm: { domain: hit.domain, notebook: hit.notebook, path: hit.path } },
+        snippet: input.query ? markWords(hit.snippet, input.query) : hit.snippet, open: { lm: { domain: hit.domain, notebook: hit.notebook, path: hit.path } },
       });
     }
     add("lm", "Living Memory pages", rows);

@@ -1664,6 +1664,8 @@ button.icon { border: none; padding: .25rem; }
 .search-title { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search-snippet { max-width: 100%; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .search-panel mark, .back-context mark { background: var(--accent-soft); color: inherit; border-radius: .15rem; }
+/* The selected row is drawn in --accent-soft too, so its matches lose that background and take the accent colour. */
+.search-group li button.on mark { background: none; color: var(--accent); font-weight: 700; text-decoration: underline; }
 .back-row { display: flex; flex-direction: column; align-items: flex-start; gap: .1rem; width: 100%; text-align: left; border: none; padding: .3rem .4rem; border-radius: .3rem; }
 .back-title { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .back-context { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

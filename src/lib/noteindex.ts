@@ -63,3 +63,40 @@ export function marked(text: string): { text: string; on: boolean }[] {
   }
   return out;
 }
+
+/** The words of a search, read as the index reads them (`fts_query` in `notes_index/query.rs`): words and quoted phrases;
+ *  the last bare word, or one ending in `*`, matches as a prefix. Terms with no letter or digit are left out. */
+export function queryTerms(input: string): { text: string; phrase: boolean; prefix: boolean }[] {
+  const terms: { text: string; phrase: boolean }[] = [];
+  let word = "", quoted = false;
+  const flush = (phrase: boolean) => { if (/[\p{L}\p{N}]/u.test(word)) terms.push({ text: word, phrase }); word = ""; };
+  for (const ch of input) {
+    if (ch === '"') { flush(quoted); quoted = !quoted; }
+    else if (/\s/.test(ch) && !quoted) flush(false);
+    else word += ch;
+  }
+  flush(quoted);
+  return terms.map((t, i) => ({ phrase: t.phrase, text: t.text.replace(/\*+$/, ""), prefix: !t.phrase && (i === terms.length - 1 || t.text.endsWith("*")) }));
+}
+
+/** `text` with the words of `query` marked as the index marks its matches, for results that come unmarked (Living Memory
+ *  pages). Case does not matter; a word matches whole, the last one as a prefix, a phrase with any spacing. */
+export function markWords(text: string, query: string): string {
+  const plain = text.split(MARK_OPEN).join("").split(MARK_CLOSE).join("");
+  const ranges: [number, number][] = [];
+  for (const term of queryTerms(query)) {
+    const body = term.text.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "").trim().split(/\s+/).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+");
+    if (!body) continue;
+    const re = new RegExp(`(?<![\\p{L}\\p{N}])${body}${term.prefix ? "" : "(?![\\p{L}\\p{N}])"}`, "giu");
+    for (const m of plain.matchAll(re)) if (m[0]) ranges.push([m.index!, m.index! + m[0].length]);
+  }
+  ranges.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+  let out = "", at = 0;
+  const merged: [number, number][] = [];
+  for (const r of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && r[0] <= last[1]) last[1] = Math.max(last[1], r[1]); else merged.push([...r]);
+  }
+  for (const [from, to] of merged) { out += plain.slice(at, from) + MARK_OPEN + plain.slice(from, to) + MARK_CLOSE; at = to; }
+  return out + plain.slice(at);
+}

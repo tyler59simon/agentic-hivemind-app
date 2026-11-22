@@ -139,8 +139,8 @@ export function NotesSearchBox({ inputRef }: { inputRef: RefObject<HTMLInputElem
     here: chosenHere ? here.data?.hits ?? [] : [],
     other: chosen && !chosenHere ? here.data?.hits ?? [] : other.data?.hits ?? [],
     lmSearch, lm: lm.data ?? [], lmNotebooks: lmNotebooks.data?.notebooks ?? [],
-    memory: memory.data?.results ?? [],
-  }), [current, titles, chosen, chosenHere, here.data, other.data, lmSearch, lm.data, lmNotebooks.data, memory.data]);
+    memory: memory.data?.results ?? [], query: settled,
+  }), [current, titles, chosen, chosenHere, here.data, other.data, lmSearch, lm.data, lmNotebooks.data, memory.data, settled]);
   const rows = useMemo(() => flatRows(groups), [groups]);
   useEffect(() => setActive(rows.length ? 0 : -1), [rows]);
 
