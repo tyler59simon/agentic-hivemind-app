@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bookmark, Check, Circle, CircleCheck, CircleEllipsis, CircleQuestionMark, Ellipsis, FileText, LoaderCircle, Play, Sparkle } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { useChangesEnabled, useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import {
-  addAction, check, LmError, read, setDetail, STAGES, update, writeChange,
+  addAction, bridgeGeneration, check, LmError, read, setDetail, STAGES, update, writeChange,
   type Change, type ChangeStage, type Note,
 } from "../../lib/lm";
 import { actionItems, addEvidence, evidenceItems, sections, setEvidence, stepParts, wikilinks } from "../../lib/note";
@@ -127,12 +127,15 @@ function PlanSteps({ view, note, writable, links }: { view: ChangeView; note: No
   );
 }
 
-function Evidence({ change, note, writable }: { change: Change; note: Note; writable: boolean }) {
+export function Evidence({ change, note, writable }: { change: Change; note: Note; writable: boolean }) {
   const client = useQueryClient();
+  // The write carries the bridge generation the brief was read in, as the editor's save does, so it is refused after Hivemind
+  // switched to another store.
+  const readIn = useMemo(() => bridgeGeneration(), [note]); // eslint-disable-line react-hooks/exhaustive-deps
   const write = useMutation({
     mutationFn: async (body: string) => {
       if (note.truncated) throw new Error(TOO_LONG);
-      return update(change.brief, { body, expected_revision: note.revision });
+      return update(change.brief, { body, expected_revision: note.revision }, { at: readIn });
     },
     onSuccess: (r) => { recordOperation(r.operation_id); client.invalidateQueries({ queryKey: ["note", change.brief] }); },
     onError: (e) => {

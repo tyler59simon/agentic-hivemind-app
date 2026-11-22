@@ -83,12 +83,12 @@ export function NoteEditor({ tab, live, head }: { tab: Tab; live: boolean; head:
   const edit = (change: Partial<Fields>) => key && editSession(key, change);
 
   /** After a rename, offer to point [[Old Title]] links in other notes at the new title. */
-  const offerLinkRewrite = (oldTitle: string, newTitle: string) => {
+  const offerLinkRewrite = (oldTitle: string, newTitle: string, at?: number) => {
     const sources = (linksRef.current?.incoming ?? []).filter((e) => e.kind === "link").map((e) => e.node);
     if (!sources.length) return;
     const run = async () => {
       setDialog(null);
-      const { done, failed, skipped } = await rewriteIncoming(sources, oldTitle, newTitle);
+      const { done, failed, skipped } = await rewriteIncoming(sources, oldTitle, newTitle, at);
       refreshStore(client);
       toast(`Updated links in ${done} note${done === 1 ? "" : "s"}.`);
       if (skipped.length) toast(`Not changed, too long to rewrite here (over ${LM_READ_LIMIT.toLocaleString("en-US")} characters): ${skipped.join(", ")}.`, "warn");
@@ -128,7 +128,7 @@ export function NoteEditor({ tab, live, head }: { tab: Tab; live: boolean; head:
       savedNote(sess.store, ref, s, fresh);
       ["list", "links", "preview", "history", "activity"].forEach((k) => client.invalidateQueries({ queryKey: [k] }));
       toast('Saved.');
-      if (payload.title) offerLinkRewrite(s.base.title, payload.title);
+      if (payload.title) offerLinkRewrite(s.base.title, payload.title, sess.generation);
     } catch (e) {
       const problem = classify(e);
       if (problem.kind === "stale") {

@@ -28,6 +28,7 @@ import { useRichPage } from "./richPage";
 import { RICH_LIMIT } from "../editor/rich/context";
 import { isPicture } from "../editor/rich/parse";
 import { oversizeReason } from "../hmdoc/envelope";
+import { DayNav } from "./DailyViews";
 import { runExport } from "./richActions";
 import { useComparePicker } from "../power/ComparePicker";
 import { encodingLabel, StatusLine } from "../power/StatusLine";
@@ -407,6 +408,7 @@ export function FileTab({ tab }: { tab: Tab }) {
         <div className="note-top">
           <PageName tab={tab} notebook={notebook} />
           <span className="fill" />
+          <DayNav file={ref} />
           {doc.status !== "readOnly" && (
             <button className="primary" disabled={!unsaved || doc.status === "stale"} onClick={doSave} title="Save (Ctrl+S)">
               <Save size="1.1em" aria-hidden />{doc.status === "saving" ? "Saving…" : "Save"}

@@ -4,6 +4,7 @@ import { discard, keyOf } from "../../documents/store";
 import { useFolderPolicyEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { docNotebookUpdate, domains, type DocNotebook, type Visibility } from "../../lib/lm";
+import { dailyPatch, type StoredDaily } from "./daily";
 import { metaQuery, removeNotebook, renameNotebook, setNotebookMeta, type Notebook, type NotebookMeta } from "../../lib/notebooks";
 import { indexRebuild, statusQuery } from "../../lib/noteindex";
 import { useApp } from "../../store";
@@ -54,6 +55,29 @@ function IndexFields({ notebook }: { notebook: Notebook }) {
   );
 }
 
+/** Daily notes and templates (NS-7A): where daily pages live, how they are named and what they start from. A folder
+ *  notebook's templates folder and inbox page are its own fields above, so `all` is for a Living Memory notebook, which has
+ *  no others. A blank field falls back to the vault's Obsidian setting, then to the default. */
+export function DailyFields({ value, onChange, all }: { value: StoredDaily; onChange: (v: StoredDaily) => void; all?: boolean }) {
+  const field = (key: keyof StoredDaily, label: string, hint: string) => (
+    <label className="field">
+      <span>{label}</span>
+      <input value={(value[key] as string | null | undefined) ?? ""} placeholder={hint} onChange={(e) => onChange({ ...value, [key]: e.target.value })} />
+    </label>
+  );
+  return (
+    <fieldset className="field daily-fields">
+      <legend>Daily notes</legend>
+      {field("folder", "Daily notes folder", "Daily")}
+      {field("format", "Date format", "YYYY-MM-DD")}
+      {field("template", "Daily template page", "Templates/Daily")}
+      {all && field("templates", "Templates folder", "Templates")}
+      {all && field("inbox", "Inbox page", "Inbox.md")}
+      <p className="muted small">Formats use YYYY, MM, DD, ddd, ww and [text] as Obsidian does; a / makes folders. A folder notebook that is an Obsidian vault uses the vault's daily note settings until these are set.</p>
+    </fieldset>
+  );
+}
+
 /** Close every tab of a notebook, dropping their documents and drafts. */
 function closeNotebookTabs(id: string) {
   const ws = useWorkspace.getState();
@@ -75,6 +99,7 @@ export function NotebookSettings({ notebook, onClose }: { notebook: Notebook; on
   const fallback = useApp((s) => s.domain);
   const [title, setTitle] = useState(notebook.title);
   const [form, setForm] = useState<NotebookMeta | null>(null);
+  const [dailyForm, setDailyForm] = useState<StoredDaily | null>(null);
   const [edits, setEdits] = useState<Partial<Reach>>({});
   const [domain, setDomain] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -85,6 +110,7 @@ export function NotebookSettings({ notebook, onClose }: { notebook: Notebook; on
   const shown = { ...current, ...edits };
   const memoryDomains = known.data?.domains ?? [];
   const chosenDomain = domain ?? notebook.domain ?? domainForFolder(notebook.path, memoryDomains, fallback) ?? "";
+  const storedDaily = (meta.data?.daily && typeof meta.data.daily === "object" ? meta.data.daily : {}) as StoredDaily;
   const field = (key: "attachments" | "templates" | "inbox", label: string, hint: string) => (
     <label className="field">
       <span>{label}</span>
@@ -105,6 +131,11 @@ export function NotebookSettings({ notebook, onClose }: { notebook: Notebook; on
         }
         if (Object.keys(patch).length) await setNotebookMeta(notebook.id, patch);
       }
+      // The daily settings are one object; the fields the dialog does not show are kept as they are.
+      if (dailyForm) {
+        const next = dailyPatch(meta.data?.daily, dailyForm);
+        await setNotebookMeta(notebook.id, { daily: Object.keys(next).length ? next : null });
+      }
       // Only what the user changed goes to Living Memory, so a privacy decision made elsewhere while this dialog was open
       // stays (Codex review of 32fee20, P3). A folder never registered keeps what Living Memory holds for it, or becomes
       // searchable.
@@ -117,6 +148,7 @@ export function NotebookSettings({ notebook, onClose }: { notebook: Notebook; on
       }
       client.invalidateQueries({ queryKey: ["notebooks"] });
       client.invalidateQueries({ queryKey: ["notebook-meta", notebook.id] });
+      client.invalidateQueries({ queryKey: ["daily-settings", notebook.id] });
       onClose();
     } catch (e) {
       toast(classify(e).message, "error");
@@ -151,6 +183,7 @@ export function NotebookSettings({ notebook, onClose }: { notebook: Notebook; on
         {field("attachments", "Attachments folder", "attachments")}
         {field("templates", "Templates folder", "Templates")}
         {field("inbox", "Inbox page", "Inbox.md")}
+        <DailyFields value={dailyForm ?? storedDaily} onChange={setDailyForm} />
         <p className="muted small">These are kept in <code>.hivemind/notebook.json</code> inside the notebook, so they travel with the folder.</p>
         <IndexFields notebook={notebook} />
         {docs ? (
@@ -190,15 +223,21 @@ export function LmNotebookSettings({ nb, onClose }: { nb: DocNotebook; onClose: 
   const [title, setTitle] = useState(nb.title);
   const [edits, setEdits] = useState<Partial<Reach>>({});
   const [busy, setBusy] = useState(false);
+  // Daily settings are offered only when this Living Memory reports notebook settings (NS-7A).
+  const offersDaily = nb.settings !== undefined;
+  const storedDaily = (nb.settings?.daily && typeof nb.settings.daily === "object" ? nb.settings.daily : {}) as StoredDaily;
+  const [dailyForm, setDailyForm] = useState<StoredDaily | null>(null);
   const save = async () => {
-    const patch: { title?: string; visibility?: Visibility; private?: boolean } = {};
+    const patch: { title?: string; visibility?: Visibility; private?: boolean; settings?: Record<string, unknown> } = {};
     if (title.trim() && title.trim() !== nb.title) patch.title = title.trim();
     Object.assign(patch, edits);
+    if (offersDaily && dailyForm) patch.settings = { daily: dailyPatch(nb.settings?.daily, dailyForm) };
     if (!Object.keys(patch).length) { onClose(); return; }
     setBusy(true);
     try {
       await docNotebookUpdate(nb.domain, nb.notebook, patch);
       client.invalidateQueries({ queryKey: ["lm-notebooks"] });
+      client.invalidateQueries({ queryKey: ["daily-settings"] });
       onClose();
     } catch (e) {
       toast(classify(e).message, "error");
@@ -211,6 +250,7 @@ export function LmNotebookSettings({ nb, onClose }: { nb: DocNotebook; onClose: 
         <label className="field"><span>Name</span><input value={title} onChange={(e) => setTitle(e.target.value)} /></label>
         <p className="muted small">Living Memory notebook <code>{nb.notebook}</code> in <code>{nb.domain}</code>: {nb.pages} pages, {nb.assets} attachments.</p>
         <ReachFields value={{ visibility: nb.visibility, private: nb.private, ...edits }} onChange={(e) => setEdits((was) => ({ ...was, ...e }))} />
+        {offersDaily && <DailyFields all value={dailyForm ?? storedDaily} onChange={setDailyForm} />}
       </div>
       <div className="actions">
         <span className="fill" />

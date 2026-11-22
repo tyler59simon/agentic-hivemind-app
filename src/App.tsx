@@ -23,7 +23,7 @@ import { Shell } from "./shell/Shell";
 import { openReview, openSession, useApp } from "./store";
 import { toast, Toasts } from "./ui/toast";
 import { unsavedUntitled, useWorkspace } from "./workspace/store";
-import { onDocsChanged, onFilesChanged, startDocumentSync, type DocsChanged } from "./documents/sync";
+import { onDocsChanged, onFilesChanged, onPageAppended, startDocumentSync, type DocsChanged } from "./documents/sync";
 import { onIndexProgress } from "./features/search/indexState";
 import type { IndexProgress } from "./lib/noteindex";
 import { draftsPending, flushAllDrafts, onDraftLost, setLmStore } from "./documents/store";
@@ -184,6 +184,7 @@ function useLiveRefresh(enabled: boolean) {
       listen("automations-changed", () => client.invalidateQueries({ queryKey: ["automations"] })),
       listen<string>("executive-changed", (e) => client.invalidateQueries({ queryKey: ["executive", e.payload] })),
       listen<{ ref: string }>("open-note", (e) => useWorkspace.getState().openNote(e.payload.ref)),
+      listen<{ notebook: string; path: string }>("page-appended", (e) => onPageAppended(client, e.payload)),
       listen<FilesChanged>("files-changed", (e) => onFilesChanged(client, e.payload)),
       listen<DocsChanged>("docs-changed", (e) => onDocsChanged(client, e.payload)),
       listen<IndexProgress>("index-progress", (e) => onIndexProgress(client, e.payload)),

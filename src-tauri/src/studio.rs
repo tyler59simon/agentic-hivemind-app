@@ -297,6 +297,62 @@ pub async fn notebook_meta_set(state: State<'_, AppState>, id: String, patch: Va
     blocking(move || sidecar::write(&root, &fallback, &patch).map(|(merged, _)| merged)).await
 }
 
+/// The two files of an Obsidian vault's `.obsidian` folder that NS-7A reads for the daily notes and templates settings.
+/// Hivemind reads nothing else there (`inside` and `visible` keep every other hidden part out of reach).
+const OBSIDIAN_FILES: &[&str] = &["daily-notes.json", "templates.json"];
+const OBSIDIAN_MAX: u64 = 64 * 1024;
+
+/// `.obsidian/<name>` at the notebook's root as JSON, or None when there is no such file. Only the two files named in
+/// `OBSIDIAN_FILES` are read, each at most 64 KB, and nothing that goes through a link: the path is resolved as for a
+/// write, which refuses a link or junction on any part of it.
+fn read_obsidian_setting(root: &Path, name: &str) -> Result<Option<Value>, String> {
+    if !OBSIDIAN_FILES.contains(&name) {
+        return Err(format!("Hivemind reads only .obsidian/daily-notes.json and .obsidian/templates.json, not \"{name}\""));
+    }
+    let rel = format!(".obsidian/{name}");
+    let full = contain::resolve_inside(root, &rel, true)?;
+    let meta = match std::fs::symlink_metadata(&full) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("Could not read {rel}: {e}")),
+    };
+    if !meta.is_file() {
+        return Err(format!("{rel} is not a file"));
+    }
+    if meta.len() > OBSIDIAN_MAX {
+        return Err(format!("{rel} is larger than 64 KB"));
+    }
+    let bytes = std::fs::read(&full).map_err(|e| format!("Could not read {rel}: {e}"))?;
+    serde_json::from_slice(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes)).map(Some).map_err(|_| format!("{rel} is not valid JSON"))
+}
+
+/// One of the Obsidian settings files of a folder notebook (NS-7A, read-only): `daily-notes.json` or `templates.json`.
+#[tauri::command]
+pub async fn obsidian_setting(state: State<'_, AppState>, notebook: String, name: String) -> Result<Option<Value>, String> {
+    let (root, _) = root_of(&state, &notebook)?;
+    blocking(move || read_obsidian_setting(&root, &name)).await
+}
+
+/// The most text one append takes.
+const APPEND_MAX: usize = 256 * 1024;
+
+/// Add `text` (a line, or a few) to the page `path` of a folder notebook, under `heading` or at the end of the page,
+/// making the page when it is missing (NS-7A; Quick capture's Today and Inbox targets).
+#[tauri::command]
+pub async fn notebook_append(state: State<'_, AppState>, notebook: String, path: String, heading: Option<String>, text: String) -> Result<crate::append::Appended, String> {
+    if text.len() > APPEND_MAX {
+        return Err("That is too much text to add to a page at once".into());
+    }
+    let (root, protected) = root_of(&state, &notebook)?;
+    let (index, history) = (state.index.clone(), state.history_dir.clone());
+    blocking(move || {
+        let done = crate::append::append_page(&root, &protected, &history, &path, heading.as_deref(), &text, &mut |_| {})?;
+        touched(&index, &notebook, &root, vec![path]);
+        Ok(done)
+    })
+    .await
+}
+
 /// Read a page or loose file, as detected or (NS-6A) as `encoding`, one of `files::encoding::EDITABLE`. `file_read` and
 /// `file_reopen` both come here, so a reopen reaches exactly the files a read does.
 async fn read_for(state: &AppState, notebook: String, path: String, encoding: Option<String>) -> Result<Loaded, String> {
@@ -429,7 +485,7 @@ pub async fn file_save(
 }
 
 /// Create a file and keep its first version (NS-5).
-fn create_kept(history: &Path, full: &Path, text: &str) -> Result<Stamp, String> {
+pub(crate) fn create_kept(history: &Path, full: &Path, text: &str) -> Result<Stamp, String> {
     let stamp = files::create(full, text)?;
     if let Err(e) = history::snapshot(history, full, text.as_bytes(), "you", history::now_ms()) {
         eprintln!("Hivemind: could not keep a version of {}: {e}", full.display());
@@ -1118,6 +1174,58 @@ mod tests {
         for bad in [".obsidian/app.json", ".git/config", ".hivemind/notebook.json", "a/.hidden/b.md", "../x.md", ""] {
             assert!(visible(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_obsidian_settings_read_reaches_only_the_two_files() {   // NS-7A
+        let base = temp_dir();
+        let root = base.join("vault");
+        std::fs::create_dir_all(root.join(".obsidian")).unwrap();
+        std::fs::write(root.join(".obsidian/daily-notes.json"), "\u{feff}{\"folder\":\"Daily\",\"format\":\"YYYY/MM/DD\",\"template\":\"Templates/Day\"}").unwrap();
+        std::fs::write(root.join(".obsidian/templates.json"), "{\"folder\":\"Templates\"}").unwrap();
+        std::fs::write(root.join(".obsidian/app.json"), "{\"secret\":true}").unwrap();
+        std::fs::write(root.join(".obsidian/workspace.json"), "{}").unwrap();
+        assert_eq!(read_obsidian_setting(&root, "daily-notes.json").unwrap().unwrap()["format"], "YYYY/MM/DD");
+        assert_eq!(read_obsidian_setting(&root, "templates.json").unwrap().unwrap()["folder"], "Templates");
+        // Anything else under .obsidian, or elsewhere, is refused whatever it is called.
+        for refused in ["app.json", "workspace.json", "../daily-notes.json", "x/../daily-notes.json", "daily-notes.json.bak", "Daily-Notes.json", "daily-notes.json ", "", ".obsidian/templates.json", "plugins/x/data.json"] {
+            let why = read_obsidian_setting(&root, refused).unwrap_err();
+            assert!(why.contains("reads only"), "{refused}: {why}");
+        }
+        // A missing file is no setting, a damaged or oversize one is an error.
+        std::fs::remove_file(root.join(".obsidian/templates.json")).unwrap();
+        assert_eq!(read_obsidian_setting(&root, "templates.json").unwrap(), None);
+        std::fs::write(root.join(".obsidian/templates.json"), "{not json").unwrap();
+        assert!(read_obsidian_setting(&root, "templates.json").unwrap_err().contains("not valid JSON"));
+        std::fs::write(root.join(".obsidian/templates.json"), format!("{{\"folder\":\"{}\"}}", "a".repeat(OBSIDIAN_MAX as usize))).unwrap();
+        assert!(read_obsidian_setting(&root, "templates.json").unwrap_err().contains("larger than"));
+        // No .obsidian folder at all.
+        std::fs::create_dir_all(base.join("plain")).unwrap();
+        assert_eq!(read_obsidian_setting(&base.join("plain"), "daily-notes.json").unwrap(), None);
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// NS-7A: a `.obsidian` folder that is a junction to another folder, or a file that is a link, is never followed.
+    #[cfg(windows)]
+    #[test]
+    fn the_obsidian_settings_read_never_follows_a_link_out() {
+        let base = temp_dir();
+        let (root, outside) = (base.join("vault"), base.join("outside"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("daily-notes.json"), "{\"folder\":\"Elsewhere\"}").unwrap();
+        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(root.join(".obsidian")).arg(&outside).output().unwrap();
+        assert!(made.status.success(), "mklink /J needs no admin rights: {}", String::from_utf8_lossy(&made.stderr));
+        let why = read_obsidian_setting(&root, "daily-notes.json").unwrap_err();
+        assert!(why.contains("link or junction"), "{why}");
+        std::fs::remove_dir(root.join(".obsidian")).unwrap();
+        // A real .obsidian folder whose file is a link to a file outside (a symbolic link needs a privilege, so it is skipped
+        // where the user may not make one).
+        std::fs::create_dir_all(root.join(".obsidian")).unwrap();
+        if std::os::windows::fs::symlink_file(outside.join("daily-notes.json"), root.join(".obsidian/daily-notes.json")).is_ok() {
+            assert!(read_obsidian_setting(&root, "daily-notes.json").is_err());
+        }
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[cfg(windows)]

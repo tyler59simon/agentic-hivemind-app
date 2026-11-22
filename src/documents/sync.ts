@@ -70,6 +70,7 @@ export function onDocsChanged(client: QueryClient, { domain, notebook, paths }: 
   const container = lmContainer(domain, notebook);
   client.invalidateQueries({ queryKey: ["notebook-tree", container] });
   if (paths.some((p) => p === "notebook.json" || p.startsWith(".proposals/"))) client.invalidateQueries({ queryKey: ["lm-notebooks"] });
+  if (paths.some((p) => p === "notebook.json")) client.invalidateQueries({ queryKey: ["daily-settings", container] });
   if (paths.some((p) => p.startsWith(".proposals/"))) client.invalidateQueries({ queryKey: ["lm-proposals", domain, notebook] });
   // `![[picture.png]]` looks among the notebook's attachments (Codex re-review of 87a0a1f).
   if (paths.some((p) => /^assets\//i.test(p))) client.invalidateQueries({ queryKey: ["lm-assets", container] });
@@ -83,6 +84,17 @@ export function onDocsChanged(client: QueryClient, { domain, notebook, paths }: 
 /** Another program (or Hivemind's own tree actions) changed files in a notebook. */
 export function onFilesChanged(client: QueryClient, { notebook, paths }: FilesChanged) {
   client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
-  if (paths.some((p) => p.toLowerCase() === ".hivemind/notebook.json")) client.invalidateQueries({ queryKey: ["notebook-meta", notebook] });
+  if (paths.some((p) => p.toLowerCase() === ".hivemind/notebook.json")) {
+    client.invalidateQueries({ queryKey: ["notebook-meta", notebook] });
+    client.invalidateQueries({ queryKey: ["daily-settings", notebook] });
+  }
   void refresh(notebook, paths);
+}
+
+/** The Quick capture window added a line to a page (NS-7A). Rust's own writes are not reported by the watcher, so the window
+ *  says so: the tree follows, and an open copy of the page follows the file or, when it has unsaved edits, keeps them and
+ *  warns (it merges the new line in when it is saved). */
+export function onPageAppended(client: QueryClient, { notebook, path }: { notebook: string; path: string }) {
+  client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
+  void refresh(notebook, [path]);
 }

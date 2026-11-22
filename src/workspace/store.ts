@@ -33,7 +33,7 @@ interface WorkspaceState {
   rail: boolean;
   railSplit: boolean;
   dirty: Record<string, boolean>;          // tab id -> unsaved edits (not persisted)
-  reveal: { tabId: string; line: number; at: number } | null; // outline -> scroll request
+  reveal: { tabId: string; line: number; col?: number; at: number } | null; // outline -> scroll request (col: where the cursor lands on the line)
   openNote: (ref: string, opts?: { split?: boolean; mode?: Mode; title?: string }) => void;
   openTab: (tab: Omit<Tab, "id">, opts?: { split?: boolean }) => void;
   activate: (paneId: string, tabId: string) => void;
@@ -44,7 +44,7 @@ interface WorkspaceState {
   updateTab: (tabId: string, patch: Partial<Tab>) => void;
   setDirty: (tabId: string, dirty: boolean) => void;
   setRail: (rail: boolean) => void;
-  revealLine: (tabId: string, line: number) => void;
+  revealLine: (tabId: string, line: number, col?: number) => void;
   replaceRef: (from: string, to: string) => void;
   /** A page or folder of a notebook was renamed or moved: its tabs follow. */
   retargetFile: (notebook: string, from: string, to: string) => void;
@@ -156,7 +156,7 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
       set((s) => ({ panes: s.panes.map((p) => ({ ...p, tabs: p.tabs.map((t) => (t.id === tabId ? { ...t, ...patch } : t)) })) })),
     setDirty: (tabId, dirty) => set((s) => (Boolean(s.dirty[tabId]) === dirty ? s : { dirty: { ...s.dirty, [tabId]: dirty } })),
     setRail: (shown) => set((s) => (s.panes.length > 1 ? { railSplit: shown } : { rail: shown })),
-    revealLine: (tabId, line) => set({ reveal: { tabId, line, at: Date.now() } }),
+    revealLine: (tabId, line, col) => set({ reveal: { tabId, line, ...(col ? { col } : {}), at: Date.now() } }),
     // After a new note is captured, its tab becomes a note tab.
     replaceRef: (from, to) =>
       set((s) => ({ panes: s.panes.map((p) => ({ ...p, tabs: p.tabs.map((t) => (t.ref === from ? { ...t, ref: to } : t)) })) })),

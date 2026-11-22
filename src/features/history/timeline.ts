@@ -33,7 +33,7 @@ const LM_VERBS: Record<string, string> = {
 
 const SOURCES: Record<string, string> = {
   you: "Saved by you", links: "Link update", restore: "Restored", replace: "Replace in files", ai: "AI action", agent: "Agent apply",
-  disk: "Found on disk", recovered: "Recovered",
+  capture: "Quick capture", disk: "Found on disk", recovered: "Recovered",
 };
 
 /** What a snapshot's `source` says, in words. */

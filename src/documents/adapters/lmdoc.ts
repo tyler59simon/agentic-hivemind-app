@@ -65,14 +65,14 @@ export function pageBody(text: string, format: FileFormat): string {
 }
 
 const encoder = new TextEncoder();
-async function sha256(text: string): Promise<string> {
+export async function sha256(text: string): Promise<string> {
   const bytes = await crypto.subtle.digest("SHA-256", encoder.encode(text));
   return Array.from(new Uint8Array(bytes), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /** Living Memory's "not found" (a page, or a notebook that is gone), said the way the document store recognises a
  *  missing file (`isMissing`). */
-const notFound = (e: unknown) => e instanceof LmError && /^not_found:/.test(e.message);
+export const notFound = (e: unknown) => e instanceof LmError && /^not_found:/.test(e.message);
 function missing(e: unknown): unknown {
   return notFound(e) ? new Error(`${(e as Error).message.replace(/^not_found:\s*/, "")}: it does not exist (it was deleted or moved)`) : e;
 }

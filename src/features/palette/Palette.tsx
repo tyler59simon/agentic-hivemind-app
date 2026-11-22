@@ -6,11 +6,15 @@ import { folderOf, notebooksQuery, pageTitle, treeQuery } from "../../lib/notebo
 import { pagesQuery } from "../../lib/noteindex";
 import { recentQuery, recentRef } from "../../lib/opens";
 import { openFromDisk } from "../notes/opening";
-import { newPageHere, openPage } from "../notes/actions";
+import { currentNotebook, firstNotebook, newPageHere, openPage } from "../notes/actions";
+import { openToday } from "../notes/dailyActions";
+import { useTemplateIntent } from "../notes/DailyViews";
 import { useAddNotebook } from "../notes/NotesPage";
 import { refreshStore } from "../../lib/refresh";
 import { fuzzy } from "../../lib/text";
+import { classify } from "../../lib/errors";
 import { useHidden } from "../../shell/hidden";
+import { toast } from "../../ui/toast";
 import { openProject, openSystem, useApp, type Page, type Route } from "../../store";
 import { activeTab, railShown, useWorkspace } from "../../workspace/store";
 import { useComparePicker } from "../power/ComparePicker";
@@ -53,6 +57,12 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
   const recent = useQuery({ ...recentQuery(), enabled: app.palette === "notes" });
   const addNotebook = useAddNotebook();
   useEffect(() => { setQuery(""); setIndex(0); }, [app.palette]);
+  /** Run `act` for the notebook of the focused page, else the first notebook; says so when there is none. */
+  const onNotebook = async (act: (notebook: string, folder: string) => unknown) => {
+    const { notebook, folder } = currentNotebook(await firstNotebook(client));
+    if (!notebook) { toast("Add a notebook first: the Notes page lists them.", "warn"); return; }
+    try { await act(notebook, folder); } catch (e) { toast(classify(e).message, "error"); }
+  };
 
   const entries = useMemo<Entry[]>(() => {
     if (app.palette === "notes") {
@@ -102,6 +112,8 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "memory", label: "Memory library", section: "memory" as Page, run: page({ page: "memory" }) },
       { key: "notes", label: "Notes", section: "notes" as Page, run: page({ page: "notes" }) },
       { key: "new-page", label: "New page", detail: "Ctrl+N on Notes", section: "notes" as Page, run: () => { close(); void newPageHere(client); } },
+      { key: "today", label: "Today", detail: "open today's daily page", section: "notes" as Page, run: () => { close(); void onNotebook((notebook) => openToday(client, notebook)); } },
+      { key: "new-from-template", label: "New page from template…", section: "notes" as Page, run: () => { close(); void onNotebook((notebook, folder) => { useTemplateIntent.getState().open(notebook, folder); app.go({ page: "notes" }); }); } },
       { key: "add-notebook", label: "Add a notebook…", section: "notes" as Page, run: () => { close(); void addNotebook(); } },
       { key: "graph", label: "Open the graph", detail: "Ctrl+G", run: page({ page: "memory", view: "graph" }) },
       { key: "activity", label: "Recent activity (who changed what)", detail: "Ctrl+Shift+A", run: page({ page: "memory", view: "activity" }) },

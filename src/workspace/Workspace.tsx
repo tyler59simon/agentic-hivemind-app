@@ -34,6 +34,16 @@ const label = (tab: Tab) => (tab.kind === "note" ? tab.title || tab.ref?.split("
 const shownAgain = (key: string, tabId: string) =>
   useWorkspace.getState().panes.some((p) => p.tabs.some((t) => t.id !== tabId && t.kind === "file" && t.file && keyOf(t.file) === key));
 
+/** Whether another tab shows the same page or Memory note. A page's tabs share one document and a note's tabs share one
+ *  editing session and draft, so closing one of them loses nothing and asks nothing; closing the last one does ask. */
+function twinKeepsEdits(tab: Tab | undefined): boolean {
+  if (!tab) return false;
+  const others = useWorkspace.getState().panes.flatMap((p) => p.tabs).filter((t) => t.id !== tab.id);
+  if (tab.kind === "file" && tab.file) return others.some((t) => t.kind === "file" && t.file && keyOf(t.file) === keyOf(tab.file!));
+  if (tab.kind === "note" && tab.ref) return others.some((t) => t.kind === "note" && t.ref === tab.ref);
+  return false;
+}
+
 /** Close a tab, asking first when it holds unsaved edits. */
 export function useCloseTab() {
   // `lost`: the page's edits cannot be kept as a draft (why), so closing it really drops them (Codex review of 7320d7f, DATA-5).
@@ -45,7 +55,7 @@ export function useCloseTab() {
     const key = tab?.kind === "file" && tab.file ? keyOf(tab.file) : undefined;
     const doc = key ? useDocuments.getState().docs[key] : undefined;
     const lost = key && doc?.draftError && isUnsaved(doc) ? { key, why: doc.draftError } : undefined;
-    if (ws.dirty[tabId]) setAsking({ paneId, tabId, file: tab?.kind === "file" ? fileName(tab.file?.path ?? "") : tab?.kind === "compare" ? "the compared files" : undefined, untitled: tab?.kind === "new-file", lost });
+    if (ws.dirty[tabId] && !twinKeepsEdits(tab)) setAsking({ paneId, tabId, file: tab?.kind === "file" ? fileName(tab.file?.path ?? "") : tab?.kind === "compare" ? "the compared files" : undefined, untitled: tab?.kind === "new-file", lost });
     else closeTab(paneId, tabId);
   };
   const dialog = asking && (

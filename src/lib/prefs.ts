@@ -6,11 +6,22 @@ import type { PaperDefault } from "./paper";
 const get = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };
 const set = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* not kept */ } };
 
+export interface CaptureTarget { kind: "memory" | "today" | "inbox"; notebook: string }
+
 export const prefs = {
   defaultMode: (): Mode => (get("hivemind.defaultMode") as Mode | null) ?? "reading",
   setDefaultMode: (mode: Mode) => set("hivemind.defaultMode", mode),
   captureDomain: () => get("hivemind.captureDomain"),
   setCaptureDomain: (domain: string) => set("hivemind.captureDomain", domain),
+  /** Where Quick capture adds a note: a Memory note, or a notebook's Today page or Inbox (NS-7A). */
+  captureTarget: (): CaptureTarget => {
+    try {
+      const saved = JSON.parse(get("hivemind.captureTarget") ?? "null") as Partial<CaptureTarget> | null;
+      const kind = saved?.kind === "today" || saved?.kind === "inbox" ? saved.kind : "memory";
+      return { kind, notebook: typeof saved?.notebook === "string" ? saved.notebook : "" };
+    } catch { return { kind: "memory", notebook: "" }; }
+  },
+  setCaptureTarget: (target: CaptureTarget) => set("hivemind.captureTarget", JSON.stringify(target)),
   trayNoticeShown: () => get("hivemind.trayNotice") === "1",
   setTrayNoticeShown: () => set("hivemind.trayNotice", "1"),
   captureProject: () => get("hivemind.captureProject"),

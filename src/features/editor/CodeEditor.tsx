@@ -84,7 +84,7 @@ export interface CodeEditorProps {
   onSave: () => void;
   titles: () => string[];
   onOpenLink: (target: string, split: boolean) => void;
-  reveal?: { line: number; at: number } | null;
+  reveal?: { line: number; col?: number; at: number } | null;
   placeholder?: string;
   /** A notebook page's rich editing (NS-3A): toolbar, slash menu, pasted and dropped pictures, and in Live the
    *  rendered blocks. Read through `latest`, so the page may pass a new object on every render. Memory notes pass none. */
@@ -286,7 +286,8 @@ export function CodeEditor(props: CodeEditorProps) {
     const v = view.current;
     if (!v || !props.reveal) return;
     const line = v.state.doc.line(Math.min(props.reveal.line + 1, v.state.doc.lines));
-    v.dispatch({ selection: { anchor: line.from }, effects: EditorView.scrollIntoView(line.from, { y: "start", yMargin: 24 }) });
+    const at = Math.min(line.from + (props.reveal.col ?? 0), line.to);
+    v.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: "start", yMargin: 24 }) });
     v.focus();
   }, [props.reveal]);
 

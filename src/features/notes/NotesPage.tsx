@@ -16,6 +16,7 @@ import { progressLine, useIndexState } from "../search/indexState";
 import { Workspace } from "../../workspace/Workspace";
 import { newPageHere, openPage } from "./actions";
 import { NewNotebook } from "./NewNotebook";
+import { NewFromTemplate } from "./DailyViews";
 import { LmNotebookSettings, NotebookSettings } from "./NotebookSettings";
 import { NotebookTree } from "./NotebookTree";
 import { ProposalInbox } from "./ProposalInbox";
@@ -106,6 +107,7 @@ export function NotesPage() {
       {inbox && <ProposalInbox nb={inbox} onClose={() => setInbox(null)} />}
       {creating && <NewNotebook onClose={() => setCreating(false)} onFolder={add} />}
       <RewriteDialog />
+      <NewFromTemplate />
     </>
   );
   const newNotebook = docs ? () => setCreating(true) : undefined;

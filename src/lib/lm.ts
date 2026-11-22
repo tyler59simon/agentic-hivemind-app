@@ -636,6 +636,9 @@ export type Visibility = "hidden" | "searchable" | "injectable";
 export interface DocNotebook {
   domain: string; notebook: string; title: string; visibility: Visibility; private: boolean; revision: string;
   pages: number; assets: number; asset_bytes: number; proposals: number; updated: string;
+  /** The `settings` object of its `notebook.json` (daily notes, templates; NS-7A), `{}` when it has none. A Living Memory
+   *  from before NS-7A sends no `settings`, and the notebook then has no settings of this kind to offer. */
+  settings?: Record<string, unknown>;
 }
 export interface DocEntry { path: string; kind: "folder" | "page"; size?: number; revision?: string; updated?: string }
 export interface DocPage { domain: string; notebook: string; path: string; text: string; revision: string; size: number; updated: string; truncated?: boolean }
@@ -650,8 +653,8 @@ export interface DocHistoryRow { operation_id: string; kind: string; state: stri
 
 const PRIVATE = "--include-private";
 /** A command that carries a page body: Rust sends it as stdin, or through a staging file when it is large (NS-2C). */
-async function runBody<T>(argv: string[], body: string): Promise<T> {
-  const reply = (await call("lm_body", { argv, body, ...bound(argv) })) as Reply<T>;
+async function runBody<T>(argv: string[], body: string, flag?: "--settings-file"): Promise<T> {
+  const reply = (await call("lm_body", { argv, body, ...(flag ? { flag } : {}), ...bound(argv) })) as Reply<T>;
   if (reply.exit_code !== 0) {
     const error = reply.error ?? { code: "invalid", message: `Exit code ${reply.exit_code}` };
     throw new LmError(error.code, error.message, reply.exit_code);
@@ -698,12 +701,16 @@ export const lmNotebooksQuery = () => ({ queryKey: ["lm-notebooks"], queryFn: do
 export const proposalsQuery = (domain: string, notebook: string) => ({ queryKey: ["lm-proposals", domain, notebook], queryFn: () => docProposals(domain, notebook) });
 export const docNotebookCreate = (domain: string, notebook: string, title: string) =>
   run<DocReceipt>(doc(["notebook", "create"], [domain, notebook], [`--title=${title}`], { priv: false }));
-export const docNotebookUpdate = (domain: string, notebook: string, patch: { title?: string; visibility?: Visibility; private?: boolean }) =>
-  run<DocReceipt>(doc(["notebook", "update"], [domain, notebook], [
+/** `settings` is merged into the notebook's `settings` object one key at a time (a key given replaces that key). It goes as
+ *  a staged `--settings-file`, so the call carries a body (NS-7A). */
+export const docNotebookUpdate = (domain: string, notebook: string, patch: { title?: string; visibility?: Visibility; private?: boolean; settings?: Record<string, unknown> }) => {
+  const argv = doc(["notebook", "update"], [domain, notebook], [
     ...(patch.title !== undefined ? [`--title=${patch.title}`] : []),
     ...(patch.visibility ? ["--visibility", patch.visibility] : []),
     ...(patch.private === undefined ? [] : [patch.private ? "--private" : "--no-private"]),
-  ]));
+  ]);
+  return patch.settings ? runBody<DocReceipt>(argv, JSON.stringify(patch.settings), "--settings-file") : run<DocReceipt>(argv);
+};
 export const docList = (domain: string, notebook: string) =>
   run<{ title: string; entries: DocEntry[] }>(doc(["list"], [domain, notebook], [], { viewer: true }));
 export const docRead = (domain: string, notebook: string, path: string, at?: number) => run<DocPage>(doc(["read"], [domain, notebook, path], [], { viewer: true }), undefined, at);

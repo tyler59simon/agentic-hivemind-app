@@ -37,7 +37,7 @@ export function currentNotebook(fallback?: string): { notebook?: string; folder:
 
 /** Try `Name.md`, `Name 2.md`, ... until one does not exist yet. `text` may depend on the name that was free (a rich
  *  page keeps its name as its title). */
-async function createUnique(notebook: string, folder: string, base: string, text: string | ((name: string) => string), ext = "md"): Promise<string> {
+export async function createUnique(notebook: string, folder: string, base: string, text: string | ((name: string) => string), ext = "md"): Promise<string> {
   for (let n = 1; n < 100; n++) {
     const name = n === 1 ? base : `${base} ${n}`;
     const path = join(folder, `${name}.${ext}`);
@@ -246,9 +246,8 @@ export async function trashPath(client: QueryClient, notebook: string, path: str
   client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
 }
 
-/** Ctrl+N on the Notes page: a new page in the focused page's notebook and folder, else the first notebook shown: a
- *  folder notebook, else a Living Memory one (Codex review of 32fee20, U3). */
-export async function newPageHere(client: QueryClient) {
+/** The first notebook shown on the Notes page: a folder notebook, else a Living Memory one. */
+export async function firstNotebook(client: QueryClient): Promise<string | undefined> {
   const notebooks = await client.ensureQueryData(notebooksQuery());
   let first = notebooks[0]?.id;
   if (!first && docsEnabled()) {
@@ -256,7 +255,13 @@ export async function newPageHere(client: QueryClient) {
     const top = [...lm].sort((a, b) => a.domain.localeCompare(b.domain) || a.title.localeCompare(b.title))[0];
     first = top && lmContainer(top.domain, top.notebook);
   }
-  const { notebook, folder } = currentNotebook(first);
+  return first;
+}
+
+/** Ctrl+N on the Notes page: a new page in the focused page's notebook and folder, else the first notebook shown: a
+ *  folder notebook, else a Living Memory one (Codex review of 32fee20, U3). */
+export async function newPageHere(client: QueryClient) {
+  const { notebook, folder } = currentNotebook(await firstNotebook(client));
   // With no notebook yet, Ctrl+N starts an untitled text file (NS-1B).
   if (!notebook) { useWorkspace.getState().openTab({ kind: "new-file" }); return; }
   await newPage(client, notebook, folder).catch((e) => toast(classify(e).message, "error"));

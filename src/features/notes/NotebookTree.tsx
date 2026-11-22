@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Ellipsis, File, FileText, Folder, FolderPlus, Inbox, LayoutPanelTop, Plus } from "lucide-react";
+import { CalendarDays, ChevronDown, ChevronRight, Ellipsis, File, FileText, Folder, FolderPlus, Inbox, LayoutPanelTop, Plus } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { classify } from "../../lib/errors";
 import { treeQuery } from "../../documents/io";
@@ -9,6 +9,8 @@ import { Menu } from "../../ui/Menu";
 import { toast } from "../../ui/toast";
 import { activeTab, useWorkspace } from "../../workspace/store";
 import { convertToRich, movePath, newPage, newRichPage, newSection, openPage, renamed, trashPath } from "./actions";
+import { openToday } from "./dailyActions";
+import { useTemplateIntent } from "./DailyViews";
 import { runExport } from "./richActions";
 import { ancestors, buildTree, dropTarget, loadOpen, saveOpen, visibleRows, type Node } from "./tree";
 import { DeleteConfirm } from "./DeleteConfirm";
@@ -177,11 +179,13 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals }: {
           <button className="icon-button proposals-badge" title={`${lm.proposals} proposed ${lm.proposals === 1 ? "edit" : "edits"} from agents`}
             aria-label={`${lm.proposals} agent ${lm.proposals === 1 ? "proposal" : "proposals"}`} onClick={onProposals}><Inbox size="1em" aria-hidden />{lm.proposals}</button>
         )}
+        <button className="icon-button" title="Today's daily page" aria-label="Today" onClick={() => openToday(client, notebook.id).catch(fail)}><CalendarDays size="1.1em" aria-hidden /></button>
         <button className="icon-button" title="New page" aria-label="New page" onClick={() => create(null)}><Plus size="1.1em" aria-hidden /></button>
         <button className="icon-button" title="New section" aria-label="New section" onClick={() => setNaming({ folder: "", value: "" })}><FolderPlus size="1.1em" aria-hidden /></button>
         <Menu label="Notebook actions" align="right" button={<Ellipsis size="1.1em" aria-hidden />} className="icon-menu">
           {(close) => (
             <>
+              <li><button role="menuitem" onClick={() => { close(); useTemplateIntent.getState().open(notebook.id); }}>New page from template…</button></li>
               {!lm && <li><button role="menuitem" onClick={() => { close(); createRich(null); }}>New rich page</button></li>}
               <li><button role="menuitem" onClick={() => { close(); onSettings(); }}>Notebook settings…</button></li>
               {lm
@@ -254,6 +258,7 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals }: {
                 {n.kind !== "dir" && item("Open beside", () => openPage({ notebook: notebook.id, path: n.path }, { split: true }))}
                 {n.kind !== "other" && !sharesFolder(n) && item(n.kind === "dir" ? "New page here" : "New subpage", () => create(n))}
                 {!lm && n.kind !== "other" && !sharesFolder(n) && item(n.kind === "dir" ? "New rich page here" : "New rich subpage", () => createRich(n))}
+                {n.kind === "dir" && item("New page from template…", () => useTemplateIntent.getState().open(notebook.id, folderFor(n)))}
                 {!lm && n.kind === "page" && isMarkdown(n.path) && item("Convert to rich page", () => convertToRich(client, { notebook: notebook.id, path: n.path }).catch(fail))}
                 {!lm && n.kind === "page" && isRichDoc(n.path) && item("Export to Markdown…", () => runExport(client, { notebook: notebook.id, path: n.path }, setDialog))}
                 {n.kind === "dir" && item("New section here", () => { toggle(n.path, true); setNaming({ folder: n.path, value: "" }); })}

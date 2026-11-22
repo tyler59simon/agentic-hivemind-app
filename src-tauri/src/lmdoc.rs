@@ -63,16 +63,35 @@ fn with_options(argv: &[String], extra: &[String]) -> Vec<String> {
 /// Run a `doc` command that carries a page body: as the request's stdin, or through `staging/<uuid>.md` and
 /// `--body-file` when it is large. The staging file is removed after the reply, whatever it says.
 pub fn call_with_body(bridge: &Bridge, generation: Option<u64>, staging: &Path, argv: &[String], body: &str) -> Result<Reply, String> {
+    call_with_file(bridge, generation, staging, argv, body, BODY_FILE)
+}
+
+/// The option a body goes through when it is a staged file: `--body-file` for a page, `--settings-file` for the settings
+/// of a notebook (NS-7A). Living Memory reads the settings from a file only, so they never go as stdin.
+pub const BODY_FILE: &str = "--body-file";
+pub const SETTINGS_FILE: &str = "--settings-file";
+/// Living Memory refuses a settings file over 256 KiB (`--settings-file is larger than 256 KiB`).
+const SETTINGS_MAX: usize = 256 * 1024;
+
+/// `call_with_body` for any of the two file options. The body is the page, or the JSON of the settings.
+pub fn call_with_file(bridge: &Bridge, generation: Option<u64>, staging: &Path, argv: &[String], body: &str, flag: &str) -> Result<Reply, String> {
     if argv.first().map(String::as_str) != Some("doc") {
         return Err("Only doc commands carry a page body".into());
     }
-    if !needs_staging(body) {
+    if flag != BODY_FILE && flag != SETTINGS_FILE {
+        return Err(format!("\"{flag}\" is not a file option Hivemind passes"));
+    }
+    if flag == SETTINGS_FILE && body.len() > SETTINGS_MAX {
+        return Err("Notebook settings are larger than 256 KiB".into());
+    }
+    if flag == BODY_FILE && !needs_staging(body) {
         return bridge.call_at(generation, argv, Some(body));
     }
     std::fs::create_dir_all(staging).map_err(|e| format!("Could not create {}: {e}", staging.display()))?;
-    let file = Staged(staging.join(format!("{}.md", uuid::Uuid::new_v4().simple())));
+    let ext = if flag == SETTINGS_FILE { "json" } else { "md" };
+    let file = Staged(staging.join(format!("{}.{ext}", uuid::Uuid::new_v4().simple())));
     std::fs::write(&file.0, body.as_bytes()).map_err(|e| format!("Could not stage the page for Living Memory: {e}"))?;
-    bridge.call_at(generation, &with_options(argv, &["--body-file".into(), file.0.display().to_string()]), None)
+    bridge.call_at(generation, &with_options(argv, &[flag.into(), file.0.display().to_string()]), None)
 }
 
 /// Remove staging files (page bodies and pictures) an earlier run left behind (it stopped between writing one and the
@@ -80,7 +99,7 @@ pub fn call_with_body(bridge: &Bridge, generation: Option<u64>, staging: &Path, 
 pub fn clear_staging(staging: &Path) {
     let Ok(read) = std::fs::read_dir(staging) else { return };
     for entry in read.flatten() {
-        if entry.path().extension().is_some_and(|e| e == "md" || e == "bin") {
+        if entry.path().extension().is_some_and(|e| e == "md" || e == "bin" || e == "json") {
             std::fs::remove_file(entry.path()).ok();
         }
     }
@@ -501,6 +520,27 @@ mod tests {
         assert!(!OPENABLE.contains(&"svg"));
     }
 
+    /// NS-7A: only the two file options pass, the settings are bounded, and the staged settings file is a `.json` that a
+    /// leftover sweep removes.
+    #[test]
+    fn only_the_two_file_options_pass_and_settings_are_bounded() {
+        let bridge = Bridge::new(crate::settings::Launch { program: "py".into(), args: vec![], script: "no-such.py".into(), root: None });
+        let staging = std::env::temp_dir().join(format!("hm-flag-{}", uuid::Uuid::new_v4().simple()));
+        let argv = doc_argv("update", &[], &["jot", "daily"]);
+        for bad in ["--payload-file", "--order-file", "--body-file=x", "-x", ""] {
+            assert!(call_with_file(&bridge, None, &staging, &argv, "{}", bad).unwrap_err().contains("not a file option"), "{bad}");
+        }
+        let big = format!("{{\"a\":\"{}\"}}", "x".repeat(SETTINGS_MAX));
+        assert!(call_with_file(&bridge, None, &staging, &argv, &big, SETTINGS_FILE).unwrap_err().contains("256 KiB"));
+        assert!(call_with_file(&bridge, None, &staging, &["list".to_string()], "{}", SETTINGS_FILE).is_err(), "only doc commands");
+        assert!(!staging.exists(), "nothing is staged for a refused call");
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(staging.join("x.json"), "{}").unwrap();
+        clear_staging(&staging);
+        assert!(!staging.join("x.json").exists());
+        std::fs::remove_dir_all(&staging).ok();
+    }
+
     #[test]
     fn large_bodies_are_staged() {
         assert!(!needs_staging("short page"));
@@ -614,6 +654,16 @@ mod tests {
         assert_eq!(read("-Other.md")["text"], "saved\n");
         let notebooks = ok(bridge.call(&argv(&["doc", "notebooks", "--all-domains", "--include-hidden", "--include-private", "--actor", "viewer"]), None).unwrap());
         assert!(notebooks["notebooks"].as_array().unwrap().iter().any(|n| n["notebook"] == "daily"), "{notebooks}");
+
+        // NS-7A: a notebook's settings go through a staged `--settings-file` before the `--`, and `doc notebooks` reports them.
+        let list = |bridge: &Bridge| ok(bridge.call(&argv(&["doc", "notebooks", "--all-domains", "--include-hidden", "--include-private", "--actor", "viewer"]), None).unwrap());
+        let row = |l: &Value| l["notebooks"].as_array().unwrap().iter().find(|n| n["notebook"] == "daily").cloned().unwrap();
+        assert_eq!(row(&list(&bridge))["settings"], serde_json::json!({}), "no settings reads as an empty object");
+        let update = doc_argv("notebook", &["update", "--include-private"], &["jot", "daily"]);
+        ok(call_with_file(&bridge, None, &staging, &update, r#"{"daily":{"folder":"Days","format":"YYYY-MM-DD"}}"#, SETTINGS_FILE).unwrap());
+        ok(call_with_file(&bridge, None, &staging, &update, r#"{"inbox":"Inbox.md"}"#, SETTINGS_FILE).unwrap());
+        assert_eq!(row(&list(&bridge))["settings"], serde_json::json!({ "daily": { "folder": "Days", "format": "YYYY-MM-DD" }, "inbox": "Inbox.md" }));
+        assert_eq!(std::fs::read_dir(&staging).unwrap().count(), 0, "the staged settings are removed");
 
         // R2-D1: a request made before the bridge switched stores is refused, one made after runs.
         let before = bridge.generation();

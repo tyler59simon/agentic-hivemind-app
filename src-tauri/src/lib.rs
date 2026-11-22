@@ -1,4 +1,5 @@
 mod agent;
+mod append;
 mod automations;
 mod architecture;
 mod archsuite;
@@ -144,11 +145,17 @@ async fn lm(state: State<'_, AppState>, argv: Vec<String>, stdin: Option<String>
     blocking(move || bridge.call_at(generation, &argv, stdin.as_deref())).await
 }
 
-/// Run a Living Memory `doc` command that carries a page body; a large body goes through a staging file (NS-2C).
+/// Run a Living Memory `doc` command that carries a page body; a large body goes through a staging file (NS-2C). `flag`
+/// names the file option the body goes through when it is staged: `--body-file` (the default), or `--settings-file` for a
+/// notebook's settings, which always go through a file (NS-7A).
 #[tauri::command]
-async fn lm_body(state: State<'_, AppState>, argv: Vec<String>, body: String, generation: Option<u64>) -> Result<Reply, String> {
+async fn lm_body(state: State<'_, AppState>, argv: Vec<String>, body: String, generation: Option<u64>, flag: Option<String>) -> Result<Reply, String> {
     let (bridge, staging) = (state.bridge.clone(), state.lm_staging.clone());
-    blocking(move || lmdoc::call_with_body(&bridge, generation, &staging, &argv, &body)).await
+    blocking(move || match flag {
+        None => lmdoc::call_with_body(&bridge, generation, &staging, &argv, &body),
+        Some(flag) => lmdoc::call_with_file(&bridge, generation, &staging, &argv, &body, &flag),
+    })
+    .await
 }
 
 /// Move a Living Memory page or section with the drafts of its pages (NS-2C).
@@ -1984,7 +1991,7 @@ pub fn run() {
             agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_stop_and_approve, review_request_changes, review_request_terminal_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
             system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export, wiki_agent_build, wiki_agent_cancel,
             studio::notebooks_list, studio::notebook_add, studio::notebook_remove, studio::notebook_rename, studio::notebook_tree, studio::notebook_meta_get,
-            studio::notebook_meta_set, studio::file_read, studio::file_reopen, studio::file_save, studio::file_create, studio::file_mkdir, studio::file_rename, studio::file_delete,
+            studio::notebook_meta_set, studio::notebook_append, studio::obsidian_setting, studio::file_read, studio::file_reopen, studio::file_save, studio::file_create, studio::file_mkdir, studio::file_rename, studio::file_delete,
             studio::file_reveal, studio::asset_base, studio::lmdoc_assets, studio::notebook_add_dropped, studio::file_attach_bytes, studio::file_attach_dropped, opens::open_dropped, opens::claim_drop, opens::unclaimed_drops, studio::notebook_reach_record, lm_body, lmdoc_move, lmdoc_attach, studio::lmdoc_open_asset, opens::open_dialog, opens::open_pending, opens::open_recent,
             opens::open_forget, opens::file_save_as, bigfile::bigfile_open, bigfile::bigfile_lines, bigfile::bigfile_search, bigfile::bigfile_bytes, bigfile::bigfile_find_bytes, bigfile::bigfile_close, replace::replace_preview, replace::replace_apply, replace::replace_undo, history::history_list, history::history_read, history::history_pin, history::git_file_log, history::git_file_commit,
             notes_index::commands::index_search, notes_index::commands::index_links, notes_index::commands::index_incoming, notes_index::commands::index_pages,

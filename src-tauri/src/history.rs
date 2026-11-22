@@ -22,7 +22,7 @@ const DAY_MS: i64 = 86_400_000;
 
 /// What saved a version. `disk` is a version found on disk that Hivemind did not write (the file as it was before its
 /// first save here, or after an outside edit); `recovered` is one rebuilt from the objects folder.
-pub const SOURCES: &[&str] = &["you", "links", "restore", "replace", "ai", "agent"];
+pub const SOURCES: &[&str] = &["you", "links", "restore", "replace", "ai", "agent", "capture"];
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]

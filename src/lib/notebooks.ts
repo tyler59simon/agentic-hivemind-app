@@ -26,6 +26,8 @@ export interface NotebookMeta {
   attachments?: string | null;
   templates?: string | null;
   inbox?: string | null;
+  /** Daily notes and templates (NS-7A): `{ folder, format, template, templates, inbox }`, see features/notes/daily.ts. */
+  daily?: Record<string, unknown> | null;
   [key: string]: unknown;
 }
 
@@ -40,6 +42,10 @@ export const renameNotebook = (id: string, title: string) => invoke<Notebook>("n
 export const notebookTree = (id: string) => invoke<Tree>("notebook_tree", { id });
 export const notebookMeta = (id: string) => invoke<NotebookMeta>("notebook_meta_get", { id });
 export const setNotebookMeta = (id: string, patch: NotebookMeta) => invoke<NotebookMeta>("notebook_meta_set", { id, patch });
+
+/** One of the two Obsidian settings files at a notebook's root, read-only (NS-7A): `daily-notes.json` or `templates.json`.
+ *  Null when the notebook has none; Rust refuses any other name. */
+export const obsidianSetting = (notebook: string, name: "daily-notes.json" | "templates.json") => invoke<unknown | null>("obsidian_setting", { notebook, name });
 
 export const readFile = (notebook: string, path: string) => invoke<Loaded>("file_read", { notebook, path });
 /** Read the file again, decoded as `encoding` (an encoding_rs name from the editable list) instead of the detected one. */

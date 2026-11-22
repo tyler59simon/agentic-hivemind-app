@@ -13,6 +13,7 @@ import { Backlinks, OutgoingLinks } from "../features/links/BacklinksPanel";
 import { LinksPanel, LocalGraphPanel } from "../features/links/LinksPanel";
 import { RelatedPages } from "../features/links/RelatedPanel";
 import { isLm } from "../documents/adapters/lmdoc";
+import { DailyCalendar } from "../features/notes/DailyViews";
 import { Outline } from "../features/outline/Outline";
 import { NoteDetails, noteQuery } from "../features/viewer/NoteView";
 import { ArrowLink, Section } from "../ui/Page";
@@ -98,6 +99,7 @@ export function PageRail() {
   const base = useDocuments((s) => (tab?.file ? s.docs[keyOf(tab.file)]?.base : undefined));
   const recent = useQuery({ ...recentQuery(), enabled: !!tab?.file && isLoose(tab.file) });
   const title = useNotebookTitle(tab?.file?.notebook, !!tab?.file && !isLoose(tab.file));
+  const [calendar, setCalendar] = useState(false);
   if (!tab?.file) return <aside className="note-rail"><p className="muted">Open a page to see its outline.</p></aside>;
   const full = recent.data?.find((r) => recentRef(r).notebook === tab.file!.notebook)?.path;
   const rows: [string, ReactNode][] = isLoose(tab.file)
@@ -121,6 +123,13 @@ export function PageRail() {
       <Section title="History" actions={<ArrowLink onClick={() => updateTab(tab.id, { mode: "history" })}>All</ArrowLink>}>
         <HistoryRail file={tab.file} onPick={(id) => { usePick.getState().pick(tab.id, id); updateTab(tab.id, { mode: "history" }); }} />
       </Section>
+      {/* A month of daily pages for the notebook; opened on demand, so a page that is not a daily one asks for nothing. */}
+      {!isLoose(tab.file) && (
+        <details className="rail-more" open={calendar} onToggle={(e) => setCalendar(e.currentTarget.open)}>
+          <summary>Calendar</summary>
+          {calendar && <DailyCalendar notebook={tab.file.notebook} page={tab.file.path} />}
+        </details>
+      )}
       <Section title="File">
         <dl className="properties">
           {rows.map(([k, v]) => (<div key={k}><dt>{k}</dt><dd>{v}</dd></div>))}
