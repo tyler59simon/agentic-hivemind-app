@@ -42,10 +42,17 @@ vitest: date tokens, template expansion, append placement (existing heading, mis
 
 ## 4. Shipped
 
-Code written on 2026-11-22 on main at `81905bb`; commit hashes, the review and the UI pass are filled in when it lands. At the user's request this phase had no Codex review; Claude reviews the diff.
+Shipped on 2026-11-22: Hivemind `d5fc0b0` (survey `81905bb`), Living Memory `c5dbbbd`. At the user's request this phase had no Codex review; Claude reviewed the diff (append write path, the Obsidian reader, the `lm_body` flag allowlist) and reran every check.
+
+UI pass (Claude, dev app, scratch notebook with daily settings `Journal`, `YYYY/MM/DD ddd`, `Templates/Daily.md` in its sidecar):
+- Today made `Journal/2026/11/22 Sun.md` from the template (`{{date:dddd D MMMM}}` and `{{notebook}}` filled, `{{cursor}}` removed); a second Today opened it without rewriting it. Previous day made `21 Sat`; the Calendar disclosure shows in the rail.
+- New page from template with `Meeting` filled the title, date and time, left `{{project}}` empty with no project picked and kept `{{nope}}` as written.
+- Quick capture, run as the `#capture` form in the main window (the hotkey and tray were not used): Today's page put `- 06:25 Call back: ring the vendor about the renewal` with its detail under `## Captured`; Inbox made `Inbox.md` and a second capture appended to it; a Memory note capture reached the store as before. The live refresh of an open page after a capture from the real capture window is covered by `store.append.test.ts` only.
+- Follow-up: closing one of two tabs on an edited page closed with no dialog; closing the last asked.
+- Not checked in the app: Living Memory notebook daily settings (the installed Living Memory lacks `c5dbbbd`), Obsidian vault settings.
 
 **Living Memory** (a separate repo, `agentic-living-memory`)
-- `core/docs.py`: each row of `doc notebooks` carries `settings`, the `settings` object of `notebook.json`, or `{}` when it is absent or not an object. `tests/test_docs.py` `test_notebook_rows_carry_the_settings_object` fails without it. The whole suite passed (`python -m unittest discover -s tests`: 2380 tests, 9 skipped). Not pushed and not installed.
+- `core/docs.py`: each row of `doc notebooks` carries `settings`, the `settings` object of `notebook.json`, or `{}` when it is absent or not an object. `tests/test_docs.py` `test_notebook_rows_carry_the_settings_object` fails without it. The whole suite passed (`python -m unittest discover -s tests`: 2380 tests, 9 skipped). Pushed to Living Memory's main as `c5dbbbd`; not installed.
 
 **Rust**
 - `src-tauri/src/append.rs` (new): `insert_under` puts a line at the end of a heading's section (before the blank lines that precede the next heading), adds a missing heading at the end of the page, or appends at the end when there is no heading; a heading inside a code fence is not one. `append_page` reads the page, changes it and saves it through `studio::save_kept` against the hash it read; a stale save or a vanished page reads again, up to three times (`ATTEMPTS`), then fails with "kept changing". A missing page is made with `create_kept`. A page that is binary or read-only is refused. Pages keep their encoding, byte order mark and line endings because the text goes through `files::read` and `files::save`.
