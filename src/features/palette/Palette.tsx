@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useChangesEnabled, useProjectsEnabled, useSystemsEnabled, useWikiEnabled } from "../../lib/connection";
 import { domains, list } from "../../lib/lm";
 import { folderOf, notebooksQuery, pageTitle, treeQuery } from "../../lib/notebooks";
+import { pagesQuery } from "../../lib/noteindex";
 import { recentQuery, recentRef } from "../../lib/opens";
 import { openFromDisk } from "../notes/opening";
 import { newPageHere, openPage } from "../notes/actions";
@@ -40,7 +41,9 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
   const hidden = useHidden((s) => s.hidden);
   const systems = useQuery({ ...systemsQuery(), enabled: systemsOn && app.palette === "commands" });
   const notebooks = useQuery({ ...notebooksQuery(), enabled: app.palette === "notes" });
-  const trees = useQueries({ queries: (notebooks.data ?? []).map((nb) => ({ ...treeQuery(nb.id), enabled: app.palette === "notes" })) });
+  // Every indexed page of every notebook (NS-4A). The notebook trees stand in only when the index cannot answer.
+  const indexed = useQuery({ ...pagesQuery(), enabled: app.palette === "notes" });
+  const trees = useQueries({ queries: (notebooks.data ?? []).map((nb) => ({ ...treeQuery(nb.id), enabled: app.palette === "notes" && indexed.isError })) });
   const recent = useQuery({ ...recentQuery(), enabled: app.palette === "notes" });
   const addNotebook = useAddNotebook();
   useEffect(() => { setQuery(""); setIndex(0); }, [app.palette]);
@@ -51,11 +54,15 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
         key: n.ref, label: n.title, detail: `${n.domain} · ${n.type}`,
         run: () => { app.setDomain(n.domain); app.setPalette(null); ws.openNote(n.ref, { title: n.title }); },
       }));
-      // Every page of every notebook too (pages, not other text files).
-      const pages = (notebooks.data ?? []).flatMap((nb, i) => (trees[i]?.data?.entries ?? []).filter((e) => e.kind === "page").map((e) => ({
-        key: `${nb.id}:${e.path}`, label: pageTitle(e.path), detail: [nb.title, folderOf(e.path)].filter(Boolean).join(" · "),
-        run: () => { app.setPalette(null); openPage({ notebook: nb.id, path: e.path }); },
-      })));
+      // Every page of every notebook too, with its notebook and folder as the detail.
+      const names = new Map((notebooks.data ?? []).map((nb) => [nb.id, nb.title]));
+      const entry = (notebook: string, path: string) => ({
+        key: `${notebook}:${path}`, label: pageTitle(path), detail: [names.get(notebook), folderOf(path)].filter(Boolean).join(" · "),
+        run: () => { app.setPalette(null); openPage({ notebook, path }); },
+      });
+      const pages = indexed.data
+        ? indexed.data.filter((p) => names.has(p.notebook)).map((p) => entry(p.notebook, p.path))
+        : (notebooks.data ?? []).flatMap((nb, i) => (trees[i]?.data?.entries ?? []).filter((e) => e.kind === "page").map((e) => entry(nb.id, e.path)));
       // Files opened from outside a notebook, newest first (NS-1B).
       const files = (recent.data ?? []).filter((r) => r.exists).map((r) => ({
         key: `recent:${r.id}`, label: r.name, detail: `${r.path.slice(0, r.path.lastIndexOf("\\"))} · recent file`,
@@ -118,7 +125,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       })),
     ];
     return all.filter((e) => !e.section || !hidden.includes(e.section));
-  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, changesOn, wikiOn, hidden, client, onSettings, onReconnect, notebooks.data, trees, addNotebook, recent.data]);
+  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, changesOn, wikiOn, hidden, client, onSettings, onReconnect, notebooks.data, trees, indexed.data, addNotebook, recent.data]);
 
   const shown = useMemo(() => {
     const best = entries

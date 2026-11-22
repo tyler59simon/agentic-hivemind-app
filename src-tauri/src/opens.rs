@@ -267,7 +267,10 @@ pub async fn file_save_as(app: AppHandle, text: String, suggested: String) -> Re
         let state = handle.state::<AppState>();
         may_save_as(&protected(&state), &path)?;
         files::save_as(&path, &text)?;
-        ref_for(&state, &path, &now()).map(Some)
+        let opened = ref_for(&state, &path, &now())?;
+        // A file saved into a notebook is a page of it now.
+        crate::studio::indexed(&state, &opened);
+        Ok(Some(opened))
     })
     .await
 }

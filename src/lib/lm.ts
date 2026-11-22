@@ -674,6 +674,16 @@ export async function docNotebooks(): Promise<DocNotebooks> {
   }
   return out;
 }
+/** A paragraph of a Living Memory notebook page that matches a search (`doc search`, NS-2B). */
+export interface DocSearchHit {
+  domain: string; notebook: string; notebook_title: string; title: string; path: string; heading: string | null; snippet: string;
+  line_start: number; line_end: number; revision: string | null; score: number; relevance: number;
+}
+/** Search the notebook pages of every domain, private notebooks included (Hivemind's bridge only). Needs `docs.search`.
+ *  A hidden notebook is searched only when named, so it never appears here. */
+export const docSearch = (query: string, limit = 10) =>
+  run<{ pages: (DocSearchHit & { origin?: string })[] }>(doc(["search"], [query], ["--all-domains", "--limit", String(limit)], { viewer: true }))
+    .then((r) => (r.pages ?? []).filter((p) => !p.origin || p.origin === "lm"));
 export const lmNotebooksQuery = () => ({ queryKey: ["lm-notebooks"], queryFn: docNotebooks });
 /** Pending proposals of one notebook. */
 export const proposalsQuery = (domain: string, notebook: string) => ({ queryKey: ["lm-proposals", domain, notebook], queryFn: () => docProposals(domain, notebook) });

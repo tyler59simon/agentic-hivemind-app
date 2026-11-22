@@ -54,4 +54,36 @@ cargo: schema rebuild on version change, incremental update, deleted file remova
 
 ## 5. Shipped
 
-(Filled in when the phase lands.)
+Built on main at `8748c85`; the commit hashes are added when the phase is committed.
+
+**What differs from sections 2 and 3 and the survey above.**
+- The commands live in `src-tauri/src/notes_index/commands.rs`, not in `lib.rs`, and there are three beyond the four in README 5.7: `index_pages` (every indexed page, for Ctrl+O and the resolver), `index_tags` and `index_incoming` (the links whose target is named like any of a list of pages, for the rename plan). `index_links` returns `{ outgoing, incoming, unlinked }`. The event `index-progress` carries `{ state, done, total, error }`.
+- **Links are stored as written, and the webview resolves them.** `links` holds `(page, target_raw, target_kind, target_name, embed, line, context)`: `target_name` is the last part of the target, lowercase, without `#heading` and without a Markdown or rich page extension. The index answers "which links are written with a name like this page's" and `src/features/links/resolve.ts` says which of them reach it, so a link in the page, in Backlinks and in a rename's plan always agree and the rules exist once. There is no `links.rs` resolver in Rust; `notes_index/links.rs` is the Markdown link, tag and text scanner.
+- No `blocks`, `tasks` or `props` tables (the survey). `tags` and `links` are as designed.
+- Opening a page does not re-check its hash against the index (section 2 asked for it). The watcher, the commands that write files and the startup scan keep the index current, and a mismatch would only show as a stale search result until the next change.
+- Search words are combined with AND, the last word also matches as a prefix, and a quoted phrase is a phrase. `OR`, `NOT`, `NEAR`, `-`, `*` and parentheses are plain text, so nothing a user types can be a query error.
+- Unlinked mentions are pages of the same notebook that hold the page's file name as a phrase and have no link written with that name.
+- The rename plan covers the links that reach the moved pages from Markdown and rich pages (the `wikiLink` and `embed` nodes of a rich page). A canvas card or any other page it cannot rewrite is listed as a link Hivemind could not update. The plan counts the links that must change: a bare `[[Name]]` that still resolves after a move is left alone. A link that no spelling of the new path reaches (a page of a folder that has a page of the same name, which the same-folder rule always prefers) is listed too, not guessed at.
+- When any filter is set, only the folder notebooks' pages are searched, since the filters mean nothing to Living Memory. The memory group asks `search` for five notes and links to the full results on the Memory page.
+- Ctrl+O lists indexed pages, so `.txt` files and canvases appear beside Markdown and rich pages. The notebook trees stand in while the index cannot answer.
+- A tie between two memory notes of one title shows the picker, but the explicit form `[[mem:Title]]` cannot tell them apart, so nothing is written for that pick.
+
+**Measured** (10,000 generated Markdown pages with frontmatter tags, about 2 KB each and 3 links each, in 100 folders; `cargo test notes_index::tests::ten_thousand -- --ignored --nocapture`, Windows 11):
+
+| | debug build | opt-level 3 |
+| --- | --- | --- |
+| full index | 12.3 s (read 3.4 s, extract 4.6 s, SQL 2.4 s) | 0.7 s extract, 1.9 s SQL; file reads 49 s on that run, see below |
+| search, two words | 1.5 ms | 0.8 ms |
+| search, one common word | 31 ms | 19 ms |
+| search, a prefix that matches every title ("page num") | 127 ms | 77 ms |
+| backlinks of one page | 0.09 ms | 0.04 ms |
+| unlinked mentions of one page | 0.5 ms | 0.25 ms |
+| all 10,000 pages listed | 23 ms | 9.5 ms |
+| restart scan, nothing changed | 89 ms | 53 ms |
+| one saved page indexed | 8.5 ms | 8.7 ms |
+
+The file reads are the operating system's: the same reads took 3.4 s from one test executable and 49 s from another in a temporary folder, which points at the real-time virus scan, so the first index of a large notebook on a machine that scans every file read can take a minute. Every query is far under the 200 ms target.
+
+**Verified**: `cargo test`, `cargo clippy --all-targets -- -D warnings`, the whole `npx vitest run`, `npx tsc --noEmit` and `npm run build`. The `.hmdoc` extractor's Rust twin gives byte-identical text for all four fixture pairs (`rich_page_text_is_what_the_fixture_beside_it_holds`), and JavaScript's `\s` and `trim()` set is written out in Rust because it differs from `char::is_whitespace` at U+0085 and U+FEFF. The main tests were checked to fail with the code they cover changed: FTS escaping, the version rebuild, deletion on a missing path, the whitespace twin, the Living Memory group's gate, the resolver's step into other notebooks, the rewrite's hash precondition and the panel's arrow keys.
+
+**Known limits.** Planning a rewrite resolves every candidate link against every page of its notebook, which is quick for a page or a small folder and slow for a folder of thousands of pages that are linked everywhere. A notebook whose folder is missing at start keeps its rows and says so in its settings. Not driven in the running app: the panel, the rail, the Tags pane, the rename dialog and Rebuild index.

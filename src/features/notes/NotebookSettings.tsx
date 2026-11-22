@@ -5,10 +5,12 @@ import { useFolderPolicyEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { docNotebookUpdate, domains, type DocNotebook, type Visibility } from "../../lib/lm";
 import { metaQuery, removeNotebook, renameNotebook, setNotebookMeta, type Notebook, type NotebookMeta } from "../../lib/notebooks";
+import { indexRebuild, statusQuery } from "../../lib/noteindex";
 import { useApp } from "../../store";
 import { Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
+import { progressLine, useIndexState } from "../search/indexState";
 import { domainForFolder, forgetFolder, REACH_TEXT, setFolderReach, stricter, type ReachChange } from "./reach";
 
 interface Reach { visibility: Visibility; private: boolean }
@@ -30,6 +32,27 @@ export function ReachFields({ value, onChange }: { value: Reach; onChange: (v: P
 }
 
 const unregistered = (nb: Notebook) => !nb.domain;
+
+/** The search index of a folder notebook: how many pages it holds, how far a scan is, and Rebuild index (NS-4A). */
+function IndexFields({ notebook }: { notebook: Notebook }) {
+  const status = useQuery({ ...statusQuery(), refetchInterval: false });
+  const progress = useIndexState((s) => s.progress) ?? status.data ?? null;
+  const pages = status.data?.notebooks.find((n) => n.id === notebook.id)?.pages ?? 0;
+  const running = progress?.state === "scanning";
+  const rebuild = () => indexRebuild(notebook.id).catch((e) => toast(classify(e).message, "error"));
+  return (
+    <div className="field">
+      <span>Search index</span>
+      <p className="muted small">
+        {status.isLoading ? "Reading the index…" : `${pages.toLocaleString()} ${pages === 1 ? "page is" : "pages are"} searchable.`}
+        {running && ` ${progressLine(progress)}.`}
+        {progress?.error && !running && <span className="error"> {progress.error}</span>}
+      </p>
+      <div className="actions"><button onClick={rebuild} disabled={running}>Rebuild index</button></div>
+      <p className="muted small">The index is made from the files and can be rebuilt at any time. Deleting it loses nothing.</p>
+    </div>
+  );
+}
 
 /** Close every tab of a notebook, dropping their documents and drafts. */
 function closeNotebookTabs(id: string) {
@@ -129,6 +152,7 @@ export function NotebookSettings({ notebook, onClose }: { notebook: Notebook; on
         {field("templates", "Templates folder", "Templates")}
         {field("inbox", "Inbox page", "Inbox.md")}
         <p className="muted small">These are kept in <code>.hivemind/notebook.json</code> inside the notebook, so they travel with the folder.</p>
+        <IndexFields notebook={notebook} />
         {docs ? (
           <>
             <ReachFields value={shown} onChange={(e) => setEdits((was) => ({ ...was, ...e }))} />

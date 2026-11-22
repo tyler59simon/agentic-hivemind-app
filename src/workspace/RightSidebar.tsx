@@ -7,7 +7,9 @@ import { isRichDoc } from "../lib/notebooks";
 import { outline } from "../lib/note";
 import { richOutline } from "../features/hmdoc/outline";
 import { SourceHistory } from "../features/history/HistoryViews";
+import { Backlinks, OutgoingLinks } from "../features/links/BacklinksPanel";
 import { LinksPanel, LocalGraphPanel } from "../features/links/LinksPanel";
+import { isLm } from "../documents/adapters/lmdoc";
 import { Outline } from "../features/outline/Outline";
 import { NoteDetails, noteQuery } from "../features/viewer/NoteView";
 import { ArrowLink, Section } from "../ui/Page";
@@ -86,7 +88,7 @@ export function PageOutline({ tab }: { tab: Tab }) {
   return list;
 }
 
-/** The rail beside a notebook page: its outline and where the file is. */
+/** The rail beside a notebook page: its outline, what links to and from it, and where the file is. */
 export function PageRail() {
   const tab = useWorkspace(activeTab);
   const base = useDocuments((s) => (tab?.file ? s.docs[keyOf(tab.file)]?.base : undefined));
@@ -104,6 +106,13 @@ export function PageRail() {
   return (
     <aside className="note-rail">
       <Section title="On this page"><PageOutline tab={tab} /></Section>
+      {/* The index covers folder notebooks; a loose file or a Living Memory page has no backlinks to show. */}
+      {!isLoose(tab.file) && !isLm(tab.file) && (
+        <>
+          <Section title="Backlinks"><Backlinks file={tab.file} /></Section>
+          <Section title="Outgoing links"><OutgoingLinks file={tab.file} /></Section>
+        </>
+      )}
       <Section title="File">
         <dl className="properties">
           {rows.map(([k, v]) => (<div key={k}><dt>{k}</dt><dd>{v}</dd></div>))}

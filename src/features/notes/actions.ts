@@ -11,6 +11,7 @@ import { bridgeGeneration, lmNotebooksQuery } from "../../lib/lm";
 import { forgetMoved } from "../../lib/drafts";
 import { createDoc, createSection, deleteDoc, moveDoc, readDoc } from "../../documents/io";
 import { newPageText } from "../hmdoc/envelope";
+import { planFor, useRewritePlan } from "../links/plan";
 import { fileName, folderOf, isMarkdown, isRichDoc, notebooksQuery, pageTitle } from "../../lib/notebooks";
 import { isLoose, saveAs } from "../../lib/opens";
 import { untitledText } from "./untitled";
@@ -120,7 +121,8 @@ export async function newSection(client: QueryClient, notebook: string, folder: 
 }
 
 /** Rename or move a page or section. Drafts, saves and loads of its open pages settle first and wait until the move is
- *  done, so nothing lands under the old name (Codex review of 32fd236, S2 and D7). */
+ *  done, so nothing lands under the old name (Codex review of 32fd236, S2 and D7). Links to what moved are worked out before
+ *  it moves and offered for rewriting once it has (NS-4A). */
 export async function movePath(client: QueryClient, notebook: string, from: string, to: string) {
   if (from === to) return;
   // The store the move was asked in: Hivemind may switch stores while the move waits (Codex review of dd4c1b0, R3-D1).
@@ -129,9 +131,11 @@ export async function movePath(client: QueryClient, notebook: string, from: stri
   // The destination is held too: a page opened there before its draft arrives would load without it (Codex review of
   // 52051c8, F2), and one open there takes no edits the move would replace (final review of a34fafd, F2a).
   const doneTo = await hold(notebook, to, "into");
+  let plan: Awaited<ReturnType<typeof planFor>> = null;
   try {
     // A page at the destination with unsaved edits would be overwritten by the move (Codex re-review of fa08348, F2).
     if (unsavedUnder(notebook, to).length) throw new Error(`${to} has unsaved edits; save or discard them first`);
+    plan = await planFor(client, notebook, from, to);
     await moveDoc(notebook, from, to, at);
     forgetMoved(notebook, from);
     retargetAll(notebook, from, to);
@@ -140,6 +144,7 @@ export async function movePath(client: QueryClient, notebook: string, from: stri
     doneTo();
   }
   client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
+  if (plan) useRewritePlan.setState({ plan });
 }
 
 /** Save text as a new file the user picks (UTF-8, LF). A tab already showing that file takes the new text: it follows

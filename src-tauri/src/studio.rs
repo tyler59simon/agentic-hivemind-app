@@ -148,17 +148,43 @@ fn store_root(state: &AppState) -> Option<PathBuf> {
     state.bridge.launch().root.or_else(|| dirs::home_dir().map(|h| h.join("LivingMemory")))
 }
 
-/// Watch every registered notebook again (after the list changed, and at startup).
+/// The registered notebooks as the watcher and the index name them.
+pub fn roots(state: &AppState) -> Vec<watch::Root> {
+    state.notebooks.list().into_iter().map(|nb| watch::Root { id: nb.id, path: PathBuf::from(nb.path) }).collect()
+}
+
+/// Tell the search index that `rels` of the notebook `notebook` (at `root`) changed. The watcher drops Hivemind's own
+/// writes, so every command that writes a notebook file calls this itself.
+fn touched(index: &crate::notes_index::Index, notebook: &str, root: &Path, rels: Vec<String>) {
+    index.touch(watch::Root { id: notebook.to_string(), path: root.to_path_buf() }, rels);
+}
+
+/// The notebook a file the user saved with Save as landed in, for the index (a loose file is not indexed).
+pub(crate) fn indexed(state: &AppState, opened: &OpenRef) {
+    if loose_id(&opened.notebook).is_none()
+        && let Ok(nb) = state.notebooks.get(&opened.notebook)
+    {
+        touched(&state.index, &nb.id, Path::new(&nb.path), vec![opened.path.clone()]);
+    }
+}
+
+/// Watch every registered notebook again (after the list changed, and at startup), and bring the search index in line
+/// with the list: notebooks added are indexed, notebooks removed are dropped from it.
 pub fn rewatch(app: &AppHandle) {
     let Some(state) = app.try_state::<AppState>() else { return };
-    let roots: Vec<watch::Root> = state.notebooks.list().into_iter().map(|nb| watch::Root { id: nb.id, path: PathBuf::from(nb.path) }).collect();
+    let roots = roots(&state);
+    state.index.sync(roots.clone());
     let mut slot = state.notebook_watcher.lock().unwrap_or_else(|e| e.into_inner());
     *slot = None;
     if roots.is_empty() {
         return;
     }
     let emitter = app.clone();
+    let (index, known) = (state.index.clone(), roots.clone());
     match watch::watch(roots, move |changed| {
+        if let Some(root) = known.iter().find(|r| r.id == changed.notebook) {
+            index.touch(root.clone(), changed.paths.clone());
+        }
         let _ = emitter.emit("files-changed", changed);
     }) {
         Ok((debouncer, failed)) => {
@@ -287,13 +313,27 @@ pub async fn file_save(
         return blocking(move || files::save(&full, &text, &pre, &format, convert)).await;
     }
     let (root, protected) = root_of(&state, &notebook)?;
-    blocking(move || files::save(&inside(&root, &protected, &path, true)?, &text, &pre, &format, convert)).await
+    let index = state.index.clone();
+    blocking(move || {
+        let outcome = files::save(&inside(&root, &protected, &path, true)?, &text, &pre, &format, convert)?;
+        if matches!(outcome, SaveOutcome::Saved(_)) {
+            touched(&index, &notebook, &root, vec![path]);
+        }
+        Ok(outcome)
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn file_create(state: State<'_, AppState>, notebook: String, path: String, text: String) -> Result<Stamp, String> {
     let (root, protected) = root_of(&state, &notebook)?;
-    blocking(move || files::create(&inside(&root, &protected, &path, true)?, &text)).await
+    let index = state.index.clone();
+    blocking(move || {
+        let stamp = files::create(&inside(&root, &protected, &path, true)?, &text)?;
+        touched(&index, &notebook, &root, vec![path]);
+        Ok(stamp)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -313,7 +353,13 @@ pub async fn file_mkdir(state: State<'_, AppState>, notebook: String, path: Stri
 pub async fn file_rename(state: State<'_, AppState>, notebook: String, from: String, to: String) -> Result<(), String> {
     let (root, protected) = root_of(&state, &notebook)?;
     let drafts_dir = state.drafts_dir.clone();
-    blocking(move || rename_in(&root, &protected, &drafts_dir, &notebook, &from, &to)).await
+    let index = state.index.clone();
+    blocking(move || {
+        rename_in(&root, &protected, &drafts_dir, &notebook, &from, &to)?;
+        touched(&index, &notebook, &root, vec![from, to]);
+        Ok(())
+    })
+    .await
 }
 
 /// Whether `dest` lies inside the folder `folder`, judged on the folders as they are on disk: in a case-insensitive
@@ -359,12 +405,14 @@ fn rename_in(root: &Path, protected: &Protected, drafts_dir: &Path, notebook: &s
 #[tauri::command]
 pub async fn file_delete(state: State<'_, AppState>, notebook: String, path: String, pre: Option<Stamp>) -> Result<String, String> {
     let (root, protected) = root_of(&state, &notebook)?;
+    let index = state.index.clone();
     blocking(move || {
         let full = inside(&root, &protected, &path, true)?;
         if full.is_dir() {
             crate::files::guard::check_no_vault_inside(&full)?;
         }
         let moved = files::trash(&root, &path, &chrono::Local::now().format("%Y%m%d-%H%M%S").to_string(), pre.as_ref())?;
+        touched(&index, &notebook, &root, vec![path]);
         Ok(contain::relative(&root, &moved).unwrap_or_default())
     })
     .await
@@ -488,6 +536,7 @@ async fn attach_picture(state: &AppState, notebook: String, page: String, name: 
     let (root, protected) = root_of(state, &notebook)?;
     visible(&page)?;
     let fallback = meta_fallback(state, &notebook);
+    let index = state.index.clone();
     blocking(move || {
         let meta = sidecar::read(&root, &fallback);
         let rel = crate::attach::folder_for(meta.get("attachments").and_then(Value::as_str), &page)?;
@@ -498,7 +547,9 @@ async fn attach_picture(state: &AppState, notebook: String, page: String, name: 
             inside(&root, &protected, &rel, true)?;
         }
         let used = crate::attach::write_unique(&dir, &name, &bytes)?;
-        Ok(if rel.is_empty() { used } else { format!("{rel}/{used}") })
+        let made = if rel.is_empty() { used } else { format!("{rel}/{used}") };
+        touched(&index, &notebook, &root, vec![made.clone()]);
+        Ok(made)
     })
     .await
 }

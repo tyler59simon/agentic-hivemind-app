@@ -11,14 +11,13 @@ import { fileName, folderOf, isMarkdown, isRichDoc, notebooksQuery, pageTitle, r
 import { assetBase, isLoose, recentQuery, recentRef } from "../../lib/opens";
 import { useWhitePaper } from "../../lib/paper";
 import { Menu } from "../../ui/Menu";
-import { Confirm, Modal } from "../../ui/Modal";
 import { Tabs } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useWorkspace, type Mode, type Tab } from "../../workspace/store";
 import { CodeEditor } from "../editor/CodeEditor";
 import { PageMergeDialog } from "../editor/MergeDialog";
-import { resolvePage } from "../links/resolve";
-import { convertToRich, createMissingPage, missingPageProblem, movePath, openPage, renamed, saveBothVersions, saveCopy, trashPath } from "./actions";
+import { useFollowLink } from "../links/follow";
+import { convertToRich, movePath, openPage, renamed, saveBothVersions, saveCopy, trashPath } from "./actions";
 import { DeleteConfirm } from "./DeleteConfirm";
 import { forgetRecent } from "./opening";
 import { PageView } from "./PageView";
@@ -39,41 +38,6 @@ const HmdocEditor = lazy(() => import("../hmdoc/HmdocEditor"));
 function usePages(notebook: string) {
   const tree = useQuery({ ...treeQuery(notebook), enabled: !isLoose({ notebook }) });
   return useMemo(() => (tree.data?.entries ?? []).filter((e) => e.kind !== "dir").map((e) => e.path), [tree.data]);
-}
-
-/** Follow a `[[link]]` from a page: open it, offer to create it, or let the user pick between pages of the same name. */
-function useFollow(tab: Tab, pages: string[], ask: (node: ReactNode) => void) {
-  const client = useQueryClient();
-  const from = tab.file!;
-  // `at` is the page the link is in when that is not this tab's page: an embedded page resolves from its own folder
-  // (Codex review of 398b956, P2).
-  return useCallback((target: string, split: boolean, at?: string) => {
-    const hit = resolvePage(target, at === undefined ? from : { ...from, path: at }, pages);
-    if ("ref" in hit) return openPage(hit.ref, { split });
-    if ("ambiguous" in hit) {
-      return ask(
-        <Modal title="Several pages have this name" onClose={() => ask(null)}>
-          <ul className="plain-list">
-            {hit.ambiguous.map((r) => <li key={r.path}><button className="link" onClick={() => { ask(null); openPage(r, { split }); }}>{r.path}</button></li>)}
-          </ul>
-        </Modal>,
-      );
-    }
-    // A rich page is not made in a Living Memory notebook (R1-16).
-    const problem = missingPageProblem(from.notebook, hit.missing);
-    if (problem) { toast(problem, "warn"); return; }
-    ask(
-      <Confirm title="Create this page?" action="Create page" message={<p>No page called <b>{target}</b> exists yet. Create <code>{hit.missing}</code>?</p>}
-        onAnswer={(yes) => {
-          ask(null);
-          if (!yes) return;
-          createMissingPage(from.notebook, hit.missing).then(() => {
-            client.invalidateQueries({ queryKey: ["notebook-tree", from.notebook] });
-            openPage({ notebook: from.notebook, path: hit.missing }, { split });
-          }, (e) => toast(classify(e).message, "error"));
-        }} />,
-    );
-  }, [from, pages, ask, client]);
 }
 
 /** Save a page and say when it needs a merge first; Ctrl+S in any mode of a page tab comes here. */
@@ -248,7 +212,7 @@ export function FileTab({ tab }: { tab: Tab }) {
   const notebook: Notebook | undefined = lm ? { id: ref.notebook, path: "", title: `${lm.domain} · ${lmTitle}`, added: "" } : notebooks.data?.find((n) => n.id === ref.notebook);
   const pages = usePages(ref.notebook);
   const [dialog, setDialog] = useState<ReactNode>(null);
-  const follow = useFollow(tab, pages, setDialog);
+  const follow = useFollowLink(tab.file!, pages, setDialog);
   const markdown = isMarkdown(ref.path);
   // A rich page (NS-3C): JSON edited in its own editor, with no modes.
   const richDoc = isRichDoc(ref.path);

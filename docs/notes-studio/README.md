@@ -171,7 +171,7 @@ Names are fixed here; signatures are set by the phase that adds them.
 | NS-1A | `notebooks_list`, `notebook_add`, `notebook_remove`, `notebook_rename`, `notebook_tree`, `notebook_meta_get`, `notebook_meta_set`, `file_read`, `file_save`, `file_create`, `file_mkdir`, `file_rename`, `file_delete`, `file_reveal` | `files-changed { notebook, paths }` |
 | NS-1B | `open_dialog`, `open_pending`, `open_recent`, `open_forget` | `open-requested` |
 | NS-2C | (Living Memory `doc` commands go through `lm`) | `docs-changed { domain, notebook }` |
-| NS-4A | `index_search`, `index_links`, `index_status`, `index_rebuild` | `index-progress` |
+| NS-4A | `index_search`, `index_links`, `index_status`, `index_rebuild`, and added by the phase `index_incoming`, `index_pages`, `index_tags` | `index-progress` |
 | NS-5 | `history_list`, `history_read`, `history_pin`, `git_file_log`, `git_file_commit` | |
 | NS-6B | `bigfile_open`, `bigfile_lines`, `bigfile_search`, `bigfile_bytes`, `bigfile_close`, `replace_preview`, `replace_apply` | `bigfile-progress`, `bigfile-grew` |
 | NS-8A | `notes_ai_run`, `notes_ai_cancel`, `notes_ai_status` | `notes-ai-changed` |

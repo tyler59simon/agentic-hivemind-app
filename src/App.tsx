@@ -24,6 +24,8 @@ import { openReview, openSession, useApp } from "./store";
 import { toast, Toasts } from "./ui/toast";
 import { unsavedUntitled, useWorkspace } from "./workspace/store";
 import { onDocsChanged, onFilesChanged, startDocumentSync, type DocsChanged } from "./documents/sync";
+import { onIndexProgress } from "./features/search/indexState";
+import type { IndexProgress } from "./lib/noteindex";
 import { draftsPending, flushAllDrafts, onDraftLost, setLmStore } from "./documents/store";
 import { useOpenRequests } from "./features/notes/opening";
 import { newPageHere } from "./features/notes/actions";
@@ -183,6 +185,7 @@ function useLiveRefresh(enabled: boolean) {
       listen<{ ref: string }>("open-note", (e) => useWorkspace.getState().openNote(e.payload.ref)),
       listen<FilesChanged>("files-changed", (e) => onFilesChanged(client, e.payload)),
       listen<DocsChanged>("docs-changed", (e) => onDocsChanged(client, e.payload)),
+      listen<IndexProgress>("index-progress", (e) => onIndexProgress(client, e.payload)),
     ];
     return () => { stops.forEach((stop) => stop.then((unlisten) => unlisten())); };
   }, [enabled, client]);

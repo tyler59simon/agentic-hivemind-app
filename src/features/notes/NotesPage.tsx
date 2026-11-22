@@ -10,6 +10,9 @@ import { useApp } from "../../store";
 import { toast } from "../../ui/toast";
 import { ContextRail } from "../../workspace/RightSidebar";
 import { hasTabs, railShown, useWorkspace } from "../../workspace/store";
+import { statusQuery } from "../../lib/noteindex";
+import { RewriteDialog } from "../links/RewriteDialog";
+import { progressLine, useIndexState } from "../search/indexState";
 import { Workspace } from "../../workspace/Workspace";
 import { newPageHere, openPage } from "./actions";
 import { NewNotebook } from "./NewNotebook";
@@ -17,6 +20,7 @@ import { LmNotebookSettings, NotebookSettings } from "./NotebookSettings";
 import { NotebookTree } from "./NotebookTree";
 import { ProposalInbox } from "./ProposalInbox";
 import { announceAdded } from "./reach";
+import { TagsPane } from "./TagsPane";
 
 /** Add a folder notebook through the native folder dialog; Living Memory registers it for agent search (NS-2C). */
 export function useAddNotebook() {
@@ -39,6 +43,14 @@ export function byDomain(list: DocNotebook[]): [string, DocNotebook[]][] {
   const groups = new Map<string, DocNotebook[]>();
   for (const nb of list) groups.set(nb.domain, [...(groups.get(nb.domain) ?? []), nb]);
   return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([d, nbs]) => [d, nbs.sort((x, y) => x.title.localeCompare(y.title))]);
+}
+
+/** Says so while the search index is being filled, so a search that misses pages is understood. */
+function IndexLine() {
+  // The last event, or what the index reports now when the page opens in the middle of a scan.
+  const status = useQuery(statusQuery());
+  const line = progressLine(useIndexState((s) => s.progress) ?? status.data ?? null);
+  return line ? <p className="muted small pad index-line" role="status">{line}</p> : null;
 }
 
 function Empty({ onAdd, onNew }: { onAdd: () => void; onNew?: () => void }) {
@@ -93,6 +105,7 @@ export function NotesPage() {
       {lmSettings && <LmNotebookSettings nb={lmSettings} onClose={() => setLmSettings(null)} />}
       {inbox && <ProposalInbox nb={inbox} onClose={() => setInbox(null)} />}
       {creating && <NewNotebook onClose={() => setCreating(false)} onFolder={add} />}
+      <RewriteDialog />
     </>
   );
   const newNotebook = docs ? () => setCreating(true) : undefined;
@@ -107,6 +120,7 @@ export function NotesPage() {
     <div className="notes-page">
       <nav className="notebooks" aria-label="Notebooks">
         {list.map((nb) => <NotebookTree key={nb.id} notebook={nb} onSettings={() => setSettings(nb)} />)}
+        <TagsPane />
         {(groups.length > 0 || damaged.length > 0) && (
           <div className="notebook-group" aria-label="Living Memory notebooks">
             <h2>Living Memory</h2>
@@ -126,6 +140,7 @@ export function NotesPage() {
         )}
         {lm.error && <p className="error pad">{classify(lm.error).message}</p>}
         {connected && !docs && <p className="muted small pad">Living Memory notebooks need a newer Living Memory (with notebook pages).</p>}
+        <IndexLine />
         <button className="ghost add-notebook" onClick={newNotebook ?? add}><Plus size="1.1em" aria-hidden />{docs ? "New notebook" : "Add a notebook"}</button>
       </nav>
       {open

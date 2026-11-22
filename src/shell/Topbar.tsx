@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Layers, Search } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { displayId } from "../features/changes/changes";
+import { NotesSearchBox } from "../features/search/NotesSearch";
 import { useCurrentProject } from "../features/projects/useProject";
 import { systemsQuery } from "../features/systems/useSystem";
 import { sessionsQuery } from "../lib/agent";
@@ -46,12 +47,14 @@ function useCrumbs(): Crumb[] {
   return leaf ? [root, section, { label: leaf }] : [root, section];
 }
 
-/** Breadcrumb on the left; "Search project" on the right (Ctrl+K), which shows its results in Memory. */
+/** Breadcrumb on the left; "Search project" on the right (Ctrl+K), which shows its results in Memory. On the Notes page the
+ *  box searches pages instead and shows its results in a panel under it (NS-4A). */
 export function Topbar() {
   const crumbs = useCrumbs();
   const go = useApp((s) => s.go);
   const routeQuery = useApp((s) => (s.route.page === "memory" ? s.route.q ?? "" : ""));
   const scoped = useApp((s) => !!realProject(s.project));
+  const notes = useApp((s) => s.route.page === "notes");
   const [query, setQuery] = useState(routeQuery);
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => setQuery(routeQuery), [routeQuery]);
@@ -80,12 +83,12 @@ export function Topbar() {
           );
         })}
       </nav>
-      <form className="top-search" role="search" onSubmit={(e) => { e.preventDefault(); go({ page: "memory", q: query.trim() || undefined }); }}>
+      {notes ? <NotesSearchBox inputRef={input} /> : <form className="top-search" role="search" onSubmit={(e) => { e.preventDefault(); go({ page: "memory", q: query.trim() || undefined }); }}>
         <Search size="1.2em" aria-hidden />
         <input ref={input} value={query} placeholder={scoped ? "Search project" : "Search memory"} aria-label={scoped ? "Search project" : "Search memory"}
           onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape") e.currentTarget.blur(); }} />
         <kbd>Ctrl K</kbd>
-      </form>
+      </form>}
     </header>
   );
 }

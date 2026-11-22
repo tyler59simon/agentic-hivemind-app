@@ -35,6 +35,11 @@ export const useDocsEnabled = () => useConnection(docsOn);
 /** The same check outside React. */
 export const docsEnabled = () => docsOn(useConnection.getState());
 
+/** Searching Living Memory's notebook pages needs `docs.search` (NS-2B); before it, the Living Memory group of the Notes
+ *  search is absent. */
+const docsSearchOn = (s: { commands: string[]; capabilities?: Capabilities }) => docsOn(s) && !!s.capabilities?.docs?.search;
+export const useDocsSearch = () => useConnection(docsSearchOn);
+
 /** Agent reach for folder notebooks needs `doc folder` (`docs.folder_policy`, NS-2B); notebook pages alone (NS-2A) have
  *  no such command (Codex review of 32fee20, C1). */
 // Version 2: `doc folder set` keeps the fields it is not given. Hivemind registers a folder and changes one field at a
