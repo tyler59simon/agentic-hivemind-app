@@ -2,6 +2,7 @@ mod agent;
 mod automations;
 mod architecture;
 mod archsuite;
+mod bigfile;
 mod bridge;
 mod capture;
 mod conductor;
@@ -22,6 +23,7 @@ mod oneshot;
 mod notebooks;
 mod notes_index;
 mod notify;
+mod replace;
 mod resources;
 mod review;
 mod settings;
@@ -86,6 +88,10 @@ struct AppState {
     lm_staging: PathBuf,
     /// The search index of the notebooks' pages (NS-4A).
     index: notes_index::Index,
+    /// Files open in the large file viewer (NS-6B).
+    bigfiles: bigfile::Viewers,
+    /// Replaces in files that Undo all can still take back (NS-6B).
+    replace_undos: replace::Undos,
 }
 
 #[derive(Serialize)]
@@ -1902,6 +1908,8 @@ pub fn run() {
                         let _ = progress.emit("index-progress", p);
                     }))
                 },
+                bigfiles: bigfile::Viewers::default(),
+                replace_undos: replace::Undos::default(),
             });
             lmdoc::clear_staging(&app.state::<AppState>().lm_staging);
             lmdoc::clear_open_copies();
@@ -1937,6 +1945,11 @@ pub fn run() {
             {
                 opens::dropped(window.app_handle(), paths, (position.x, position.y));
             }
+            if matches!(event, tauri::WindowEvent::Destroyed)
+                && let Some(state) = window.app_handle().try_state::<AppState>()
+            {
+                state.bigfiles.close_owned(window.label());
+            }
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
                 window.app_handle().exit(0);
             }
@@ -1966,7 +1979,7 @@ pub fn run() {
             studio::notebooks_list, studio::notebook_add, studio::notebook_remove, studio::notebook_rename, studio::notebook_tree, studio::notebook_meta_get,
             studio::notebook_meta_set, studio::file_read, studio::file_reopen, studio::file_save, studio::file_create, studio::file_mkdir, studio::file_rename, studio::file_delete,
             studio::file_reveal, studio::asset_base, studio::lmdoc_assets, studio::notebook_add_dropped, studio::file_attach_bytes, studio::file_attach_dropped, opens::open_dropped, opens::claim_drop, opens::unclaimed_drops, studio::notebook_reach_record, lm_body, lmdoc_move, lmdoc_attach, studio::lmdoc_open_asset, opens::open_dialog, opens::open_pending, opens::open_recent,
-            opens::open_forget, opens::file_save_as, history::history_list, history::history_read, history::history_pin, history::git_file_log, history::git_file_commit,
+            opens::open_forget, opens::file_save_as, bigfile::bigfile_open, bigfile::bigfile_lines, bigfile::bigfile_search, bigfile::bigfile_bytes, bigfile::bigfile_find_bytes, bigfile::bigfile_close, replace::replace_preview, replace::replace_apply, replace::replace_undo, history::history_list, history::history_read, history::history_pin, history::git_file_log, history::git_file_commit,
             notes_index::commands::index_search, notes_index::commands::index_links, notes_index::commands::index_incoming, notes_index::commands::index_pages,
             notes_index::commands::index_tags, notes_index::commands::index_status, notes_index::commands::index_rebuild, notes_index::commands::index_related
         ])

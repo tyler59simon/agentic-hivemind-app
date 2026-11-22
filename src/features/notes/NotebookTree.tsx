@@ -13,9 +13,12 @@ import { runExport } from "./richActions";
 import { ancestors, buildTree, dropTarget, loadOpen, saveOpen, visibleRows, type Node } from "./tree";
 import { DeleteConfirm } from "./DeleteConfirm";
 import { REACH_TEXT, stricter } from "./reach";
+import { openFindInFiles } from "../search/FindInFiles";
 
 const low = (s: string) => s.toLowerCase();
 const PAGE = /\.(md|markdown|hmdoc)$/i;
+/** Files Windows has a real viewer for: they still open in it. Any other file that is not text opens in a tab (the hex view). */
+const SYSTEM_VIEWED = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf)$/i;
 const label = (node: Node) => (node.kind === "page" ? node.name.replace(PAGE, "") : node.name);
 
 /** Pointer-event dragging (HTML5 drag and drop is unreliable in WebView2 with Tauri's own drop handling). `over` is a
@@ -127,7 +130,7 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals }: {
 
   const pick = (node: Node, e: React.MouseEvent) => {
     if (node.kind === "dir") return toggle(node.path);
-    if (node.kind === "other") return void revealFile(notebook.id, node.path, true).catch(fail);
+    if (node.kind === "other" && (lm || SYSTEM_VIEWED.test(node.path))) return void revealFile(notebook.id, node.path, true).catch(fail);
     openPage({ notebook: notebook.id, path: node.path }, { split: e.ctrlKey || e.metaKey });
   };
   /** The folder new pages go into from a row: a section itself, or a page's subpage folder. */
@@ -184,6 +187,7 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals }: {
               {lm
                 ? <li><button role="menuitem" onClick={() => { close(); onProposals?.(); }}>Agent proposals…</button></li>
                 : <li><button role="menuitem" onClick={() => { close(); revealFile(notebook.id, null).catch(fail); }}>Show in Explorer</button></li>}
+              {!lm && <li><button role="menuitem" onClick={() => { close(); openFindInFiles({ notebook: notebook.id }); }}>Find in files…</button></li>}
               <li><button role="menuitem" onClick={() => { close(); client.invalidateQueries({ queryKey: ["notebook-tree", notebook.id] }); }}>Refresh</button></li>
             </>
           )}
@@ -253,7 +257,9 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals }: {
                 {!lm && n.kind === "page" && isMarkdown(n.path) && item("Convert to rich page", () => convertToRich(client, { notebook: notebook.id, path: n.path }).catch(fail))}
                 {!lm && n.kind === "page" && isRichDoc(n.path) && item("Export to Markdown…", () => runExport(client, { notebook: notebook.id, path: n.path }, setDialog))}
                 {n.kind === "dir" && item("New section here", () => { toggle(n.path, true); setNaming({ folder: n.path, value: "" }); })}
+                {!lm && n.kind === "dir" && item("Find in files…", () => openFindInFiles({ notebook: notebook.id, sub: n.path }))}
                 {item("Rename", () => setRenaming({ path: n.path, value: label(n) }))}
+                {!lm && n.kind === "other" && item("Open with default app", () => revealFile(notebook.id, n.path, true).catch(fail))}
                 {!lm && item("Show in Explorer", () => revealFile(notebook.id, n.path).catch(fail))}
                 {!(lm && n.kind === "dir") && item(n.kind === "dir" ? "Delete section…" : "Delete…", () => remove(n), "danger-text")}
               </>

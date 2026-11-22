@@ -878,6 +878,57 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .compare-host { flex: 1; max-height: none; min-height: 12rem; }
 .compare-side { display: flex; align-items: flex-end; gap: .6rem; }
 .compare-side label { flex: 1; display: flex; flex-direction: column; gap: .2rem; }
+/* The large file viewer and the hex view (NS-6B): fixed-height rows drawn only where they are in view. */
+/* The viewer fills the pane and does not scroll it: the page is as tall as the pane body (not as tall as its rows, which are
+   millions of pixels), and .bigfile is the only thing that scrolls, in what is left below the tools. */
+.viewer-page { height: 100%; min-height: 0; overflow: hidden; }
+.bigfile-page { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.bigfile-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .45rem; padding: .35rem 1.6rem; border-bottom: 1px solid var(--border-soft); }
+.bigfile-bar .icon-button { display: inline-flex; align-items: center; gap: .3rem; padding: .2rem .5rem; font-size: .9rem; }
+.bigfile-jump { width: 8rem; }
+.bigfile-find { width: 16rem; max-width: 100%; }
+.bigfile-progress { height: .25rem; background: var(--border-soft); }
+.bigfile-progress > div { height: 100%; background: var(--accent); }
+.bigfile { flex: 1; min-height: 0; overflow: auto; position: relative; background: var(--bg-code); font-family: var(--font-mono); font-size: .86rem; outline: none; }
+.bigfile:focus-visible { box-shadow: inset 0 0 0 2px var(--accent-soft); }
+.bigfile-space { position: relative; min-width: 100%; }
+.bigfile-rows { position: absolute; top: 0; left: 0; min-width: 100%; }
+.bigfile-row { display: flex; align-items: center; white-space: pre; line-height: 20px; box-sizing: border-box; }
+.bigfile-row.selected { background: var(--accent-soft); }
+.bigfile-no { flex: none; width: 5.2rem; box-sizing: border-box; text-align: right; padding: 0 .7rem 0 0; border: none; border-radius: 0; color: var(--muted); font: inherit; line-height: 20px; cursor: pointer; position: sticky; left: 0; background-color: var(--bg-code); }
+.bigfile-row.selected .bigfile-no { background-color: var(--accent-soft); }
+.bigfile-no:hover { color: var(--fg); background-color: var(--bg-hover); }
+.bigfile-text mark { background: var(--mark); color: inherit; border-radius: .15rem; }
+.bigfile-text mark.now, .hex-byte.now, .hex-text .now { background: var(--accent); color: var(--bg); }
+.hex-row { display: flex; align-items: center; gap: 1.2rem; padding: 0 .8rem; line-height: 20px; white-space: pre; }
+.hex-offset { color: var(--muted); }
+.hex-bytes { display: inline-flex; gap: .45rem; }
+.hex-byte.gap { margin-left: .5rem; }
+.hex-byte.now, .hex-text .now { border-radius: .15rem; }
+.hex-text { color: var(--fg-soft); }
+/* Find in files (NS-6B). */
+.find-page { min-height: 0; }
+.find-form { display: flex; flex-direction: column; gap: .4rem; padding: .6rem 1.6rem; }
+.find-row { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+.find-pattern { flex: 1; min-width: 12rem; }
+.find-glob { flex: 1; min-width: 10rem; }
+.find-results { padding: 0 1.6rem 1.4rem; display: flex; flex-direction: column; gap: .5rem; }
+.find-summary { display: flex; align-items: center; gap: .6rem; }
+.find-skipped { margin: .3rem 0 0; padding-left: 1.1rem; }
+.find-files, .find-hunks { list-style: none; margin: 0; padding: 0; }
+.find-file { border: 1px solid var(--border); border-radius: .45rem; margin-bottom: .45rem; overflow: hidden; }
+.find-file-head { display: flex; align-items: center; gap: .4rem; padding: .3rem .5rem; background: var(--bg-alt); }
+.find-fold { display: inline-flex; border: none; background: none; padding: 0 .1rem; }
+.find-path { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.find-hunk { display: flex; align-items: flex-start; gap: .5rem; padding: .15rem .6rem; border-top: 1px solid var(--border-soft); font-family: var(--font-mono); font-size: .84rem; }
+.find-line { flex: none; width: 3.2rem; text-align: right; color: var(--muted); border: none; background: none; padding: 0; font: inherit; }
+.find-text, .find-diff { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; flex: 1; }
+.find-text mark { background: var(--mark); color: inherit; border-radius: .15rem; }
+.find-diff { display: flex; flex-direction: column; }
+.find-del { background: var(--diff-del); }
+.find-add { background: var(--diff-add); }
+.find-del::before { content: "-  "; }
+.find-add::before { content: "+  "; }
 /* History mode of a page (NS-5): the timeline on the left, the chosen version on the right. */
 /* The wrap is the container the layout asks about, so it follows the pane's width, not the window's (UI-1). */
 .history-wrap { flex: 1; min-height: 0; container-type: inline-size; container-name: history; }

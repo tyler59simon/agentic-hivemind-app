@@ -102,7 +102,7 @@ fn ref_in(notebooks: &notebooks::Registry, grants: &crate::opens::Grants, path: 
 /// The notebook folder for `id`, checked against the current store and vaults (the store may have changed since
 /// the notebook was registered). The folder must still be the one the user picked: a registered folder that was moved
 /// and replaced by a link resolves elsewhere and is refused (Codex review of 32fd236, P4).
-fn root_of(state: &AppState, id: &str) -> Result<(PathBuf, Protected), String> {
+pub(crate) fn root_of(state: &AppState, id: &str) -> Result<(PathBuf, Protected), String> {
     if loose_id(id).is_some() {
         return Err("This file is not in a notebook".into());
     }
@@ -132,7 +132,7 @@ fn unmoved(notebook: &Notebook) -> Result<PathBuf, String> {
 
 /// `rel` inside the notebook, outside every protected place, and not hidden once links inside the notebook are
 /// followed (a link to `.obsidian` is as hidden as `.obsidian`; Codex review of 32fd236, P2).
-fn inside(root: &Path, protected: &Protected, rel: &str, for_write: bool) -> Result<PathBuf, String> {
+pub(crate) fn inside(root: &Path, protected: &Protected, rel: &str, for_write: bool) -> Result<PathBuf, String> {
     visible(rel)?;
     let full = contain::resolve_inside(root, rel, for_write)?;
     protected.check(&full)?;
@@ -166,7 +166,7 @@ pub fn roots(state: &AppState) -> Vec<watch::Root> {
 
 /// Tell the search index that `rels` of the notebook `notebook` (at `root`) changed. The watcher drops Hivemind's own
 /// writes, so every command that writes a notebook file calls this itself.
-fn touched(index: &crate::notes_index::Index, notebook: &str, root: &Path, rels: Vec<String>) {
+pub(crate) fn touched(index: &crate::notes_index::Index, notebook: &str, root: &Path, rels: Vec<String>) {
     index.touch(watch::Root { id: notebook.to_string(), path: root.to_path_buf() }, rels);
 }
 
@@ -336,18 +336,18 @@ pub async fn file_reopen(state: State<'_, AppState>, notebook: String, path: Str
 
 /// A save, and who asked for it: `source` is `you` for the user's own save, or what changed the page for the history
 /// (`links`, `restore`, `replace`, `ai`, `agent`; see `history::SOURCES`).
-struct Change<'a> {
-    text: &'a str,
-    pre: &'a Stamp,
-    format: &'a FileFormat,
-    convert: bool,
-    source: &'a str,
+pub(crate) struct Change<'a> {
+    pub(crate) text: &'a str,
+    pub(crate) pre: &'a Stamp,
+    pub(crate) format: &'a FileFormat,
+    pub(crate) convert: bool,
+    pub(crate) source: &'a str,
 }
 
 /// Save a file and keep its versions (NS-5). The file as it is now is kept first when this is its first save here, so the
 /// version from before Hivemind can be restored, and when the change is not the user's own typing, so it can be undone;
 /// when that cannot be kept, such a change is not written. The new version is kept after the write.
-fn save_kept(history: &Path, full: &Path, change: &Change) -> Result<SaveOutcome, String> {
+pub(crate) fn save_kept(history: &Path, full: &Path, change: &Change) -> Result<SaveOutcome, String> {
     if !history::SOURCES.contains(&change.source) {
         return Err(format!("\"{}\" is not a way Hivemind saves a page", change.source));
     }

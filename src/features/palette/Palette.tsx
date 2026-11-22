@@ -14,6 +14,7 @@ import { useHidden } from "../../shell/hidden";
 import { openProject, openSystem, useApp, type Page, type Route } from "../../store";
 import { activeTab, railShown, useWorkspace } from "../../workspace/store";
 import { useComparePicker } from "../power/ComparePicker";
+import { openFindInFiles } from "../search/FindInFiles";
 import { LINE_TOOLS } from "../power/lineTools";
 import { playMacro, toggleRecording, useRecorder, type Target } from "../power/macros";
 import { toolRunner } from "../power/PowerBar";
@@ -95,6 +96,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "open-file", label: "Open file…", run: () => { close(); void openFromDisk(); } },
       { key: "new-file", label: "New text file", run: () => { close(); ws.openTab({ kind: "new-file" }); } },
       { key: "compare", label: "Compare files…", run: () => { close(); useComparePicker.getState().show(tab?.kind === "file" ? tab.file : undefined); } },
+      { key: "find-in-files", label: "Find in files…", detail: "search and replace across a notebook", run: () => { close(); openFindInFiles(); } },
       ...power,
       { key: "overview", label: "Overview", run: page({ page: "overview" }) },
       { key: "memory", label: "Memory library", section: "memory" as Page, run: page({ page: "memory" }) },

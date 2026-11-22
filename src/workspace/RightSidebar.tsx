@@ -130,7 +130,7 @@ export function PageRail() {
   );
 }
 
-const RAIL_VIEWS: Record<TabKind, () => ReactNode> = { note: () => <NoteRail />, "new-note": () => <NoteRail />, file: () => <PageRail />, "new-file": () => <PageRail />, compare: () => null };
+const RAIL_VIEWS: Record<TabKind, () => ReactNode> = { note: () => <NoteRail />, "new-note": () => <NoteRail />, file: () => <PageRail />, "new-file": () => <PageRail />, compare: () => null, find: () => null };
 
 /** The rail for whatever the focused tab shows. */
 export function ContextRail() {

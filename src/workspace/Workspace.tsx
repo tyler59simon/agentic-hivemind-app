@@ -6,6 +6,7 @@ import { NoteTab } from "../features/editor/NoteTab";
 import { FileTab, saveFileTab } from "../features/notes/FileTab";
 import { NewFileTab } from "../features/notes/NewFileTab";
 import { CompareTab } from "../features/power/Compare";
+import { FindInFilesTab } from "../features/search/FindInFiles";
 import { keyOf } from "../documents/store";
 import { newPageHere } from "../features/notes/actions";
 import { fileName, isMarkdown, isRichDoc, pageTitle } from "../lib/notebooks";
@@ -21,11 +22,12 @@ export const TAB_VIEWS: Record<Tab["kind"], (tab: Tab) => ReactNode> = {
   file: (tab) => <FileTab key={tab.id} tab={tab} />,
   "new-file": (tab) => <NewFileTab key={tab.id} tab={tab} />,
   compare: (tab) => <CompareTab key={tab.id} tab={tab} />,
+  find: (tab) => <FindInFilesTab key={tab.id} />,
 };
 
 const label = (tab: Tab) => (tab.kind === "note" ? tab.title || tab.ref?.split(":")[1]?.slice(0, 8) || "Note"
   : tab.kind === "file" ? tab.title || pageTitle(tab.file?.path ?? "") || "Page"
-  : tab.kind === "new-file" ? tab.title || "Untitled" : tab.kind === "compare" ? tab.title || "Compare" : tab.title || "New note");
+  : tab.kind === "new-file" ? tab.title || "Untitled" : tab.kind === "compare" ? tab.title || "Compare" : tab.kind === "find" ? "Find in files" : tab.title || "New note");
 
 /** Close a tab, asking first when it holds unsaved edits. */
 export function useCloseTab() {

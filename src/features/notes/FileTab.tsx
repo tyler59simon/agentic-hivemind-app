@@ -14,6 +14,8 @@ import { Menu } from "../../ui/Menu";
 import { Tabs } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useWorkspace, type Mode, type Tab } from "../../workspace/store";
+import { BigFileView } from "../bigfile/BigFileView";
+import { HexView } from "../bigfile/HexView";
 import { CodeEditor } from "../editor/CodeEditor";
 import { FileHistory } from "../history/FileHistory";
 import { PageMergeDialog } from "../editor/MergeDialog";
@@ -35,6 +37,8 @@ const MODES: { id: Mode; label: string }[] = [{ id: "reading", label: "Reading" 
 /** A text file has its source and its history; a rich page has no modes of its own (NS-3C), only the page and its history. */
 const TEXT_MODES: { id: Mode; label: string }[] = [{ id: "source", label: "Source" }, HISTORY];
 const RICH_MODES: { id: Mode; label: string }[] = [{ id: "live", label: "Page" }, HISTORY];
+/** A file in the large file viewer (NS-6B): its lines, or its bytes. */
+const VIEWER_MODES: { id: Mode; label: string }[] = [{ id: "bigfile", label: "Large file viewer" }, { id: "hex", label: "Hex view" }];
 
 /** Rich mode (NS-3B) loads its editor, Tiptap and the Markdown parser only when a page first opens in it. */
 const RichEditor = lazy(() => import("../rich/RichEditor"));
@@ -322,6 +326,47 @@ export function FileTab({ tab }: { tab: Tab }) {
   );
 
   if (deleting) return <div className="center muted">Moving {fileName(ref.path)} to the trash…</div>;
+  // A file over 64 MB and a binary file open in the large file viewer instead of the editor; the menu offers it and the hex
+  // view for any file (NS-6B).
+  const unsaved = doc?.status === "dirty" || doc?.status === "stale";
+  const viewing: "bigfile" | "hex" | null = lm ? null
+    : tab.mode === "bigfile" || tab.mode === "hex" ? tab.mode
+    : doc?.status === "error" && /larger than 64 MB/.test(doc.error ?? "") ? "bigfile"
+    : doc?.status === "readOnly" && doc.base?.binary ? "hex"
+    : null;
+  if (viewing) {
+    const editable = !!doc && doc.status !== "error" && doc.status !== "loading" && !doc.base?.binary;
+    return (
+      <div className="note-page file-page viewer-page">
+        <header className="note-header">
+          <div className="note-top">
+            <PageName tab={tab} notebook={notebook} />
+            <span className="fill" />
+            <Menu label="Page actions" align="right" button={<Ellipsis size="1.3em" aria-hidden />} className="icon-menu">
+              {(close) => {
+                const item = (label: string, act: () => void) => <li><button role="menuitem" onClick={() => { close(); act(); }}>{label}</button></li>;
+                return (
+                  <>
+                    {editable && item("Open in the editor", () => updateTab(tab.id, { mode: markdown ? "live" : "source" }))}
+                    {item("Show in Explorer", () => revealFile(ref.notebook, ref.path).catch((e) => toast(classify(e).message, "error")))}
+                    {item("Open with default app", () => revealFile(ref.notebook, ref.path, true).catch((e) => toast(classify(e).message, "error")))}
+                    {item("Copy path", () => {
+                      const copied = loose ? full ?? ref.path : notebook ? `${notebook.path}\\${ref.path.replace(/\//g, "\\")}` : ref.path;
+                      navigator.clipboard.writeText(copied).then(() => toast("Path copied"), () => toast(copied));
+                    })}
+                  </>
+                );
+              }}
+            </Menu>
+          </div>
+          <Tabs items={VIEWER_MODES} value={viewing} label="Viewer" onChange={(v) => updateTab(tab.id, { mode: v })} />
+        </header>
+        {unsaved && <div className="banner note-banner">This shows the file as it is on disk. Your unsaved edits stay in the editor.</div>}
+        {viewing === "hex" ? <HexView key={key} file={ref} /> : <BigFileView key={key} file={ref} />}
+        {dialog}
+      </div>
+    );
+  }
   if (!doc || doc.status === "loading") return <div className="center muted">Opening {fileName(ref.path)}…</div>;
   if (doc.status === "error") {
     return (
@@ -332,8 +377,6 @@ export function FileTab({ tab }: { tab: Tab }) {
           <div className="actions">
             {doc.kept && <button onClick={() => void copyAs(doc.kept!.text, fileName(ref.path))}>Save the edits as a copy…</button>}
             {doc.kept && <button onClick={() => void discardKept(key).catch((e) => toast(classify(e).message, "error"))}>Discard the draft</button>}
-            {/* A file too large to edit opens in its own program until NS-6B's viewer. */}
-            {doc.error?.includes("larger than 64 MB") && <button onClick={() => void openOutside(ref)}>Open with default app</button>}
             <button onClick={() => void open(ref)}>Try again</button>
             {loose && <button onClick={() => void forgetRecent(ref, client)}>Remove from recent files</button>}
           </div>
@@ -341,7 +384,6 @@ export function FileTab({ tab }: { tab: Tab }) {
       </div>
     );
   }
-  const unsaved = doc.status === "dirty" || doc.status === "stale";
   const oversize = richDoc ? oversizeReason(doc.text) : null;
   /** A rich page the editor cannot hold shows as JSON that cannot be edited, with the reason above it. */
   const readOnlyJson = (reason: string) => (
@@ -376,6 +418,8 @@ export function FileTab({ tab }: { tab: Tab }) {
                     navigator.clipboard.writeText(copied).then(() => toast("Path copied"), () => toast(copied));
                   })}
                   {!richDoc && item("Compare with another file…", () => useComparePicker.getState().show(ref))}
+                  {item("Open in large file viewer", () => updateTab(tab.id, { mode: "bigfile" }))}
+                  {item("Hex view", () => updateTab(tab.id, { mode: "hex" }))}
                   {!loose && markdown && item("Convert to rich page", () => convertToRich(client, ref, doc.text).catch((e) => toast(classify(e).message, "error")))}
                   {!loose && richDoc && item("Export to Markdown…", () => runExport(client, ref, setDialog, doc.text))}
                   {paper}
