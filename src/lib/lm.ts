@@ -653,7 +653,7 @@ export interface DocHistoryRow { operation_id: string; kind: string; state: stri
 
 const PRIVATE = "--include-private";
 /** A command that carries a page body: Rust sends it as stdin, or through a staging file when it is large (NS-2C). */
-async function runBody<T>(argv: string[], body: string, flag?: "--settings-file"): Promise<T> {
+async function runBody<T>(argv: string[], body: string, flag?: "--settings-file" | "--payload-file"): Promise<T> {
   const reply = (await call("lm_body", { argv, body, ...(flag ? { flag } : {}), ...bound(argv) })) as Reply<T>;
   if (reply.exit_code !== 0) {
     const error = reply.error ?? { code: "invalid", message: `Exit code ${reply.exit_code}` };
@@ -696,6 +696,18 @@ export interface DocSearchHit {
 export const docSearch = (query: string, limit = 10) =>
   run<{ pages: (DocSearchHit & { origin?: string })[] }>(doc(["search"], [query], ["--all-domains", "--limit", String(limit)], { viewer: true }))
     .then((r) => (r.pages ?? []).filter((p) => !p.origin || p.origin === "lm"));
+/** A task line of a Living Memory notebook page (`doc tasks`, NS-7B): its line number (from 1, as the page reads), its box, its
+ *  text (at most 500 characters) and the due date Living Memory found in it. */
+export interface DocTask { domain: string; notebook: string; path: string; title: string; line: number; done: boolean; text: string; due: string | null }
+/** The task lines of every Living Memory notebook's pages, open ones first. `open` leaves the done ones out. Needs `docs.search`. */
+export const docTasks = (o: { open?: boolean } = {}) =>
+  run<{ tasks: DocTask[] }>(doc(["tasks"], [], ["--all-domains", ...(o.open ? ["--open"] : [])], { viewer: true })).then((r) => r.tasks ?? []);
+/** A page `doc query` found: its flat frontmatter properties (a value, or a list for a key with several) and its revision. */
+export interface DocQueryPage { domain: string; notebook: string; path: string; title: string; revision: string; properties: Record<string, string | string[]> }
+/** Ask which pages of every Living Memory notebook meet a query (`{ where: [{ key, op, value }], sort: [{ key, order }], limit,
+ *  notebook }`, NS-7B). The payload goes through a staged `--payload-file`. */
+export const docQuery = (payload: object) =>
+  runBody<{ pages: DocQueryPage[] }>(doc(["query"], [], ["--all-domains"], { viewer: true }), JSON.stringify(payload), "--payload-file").then((r) => r.pages ?? []);
 export const lmNotebooksQuery = () => ({ queryKey: ["lm-notebooks"], queryFn: docNotebooks });
 /** Pending proposals of one notebook. */
 export const proposalsQuery = (domain: string, notebook: string) => ({ queryKey: ["lm-proposals", domain, notebook], queryFn: () => docProposals(domain, notebook) });

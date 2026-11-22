@@ -24,6 +24,7 @@ import { convertToRich, movePath, openPage, renamed, saveBothVersions, saveCopy,
 import { DeleteConfirm } from "./DeleteConfirm";
 import { forgetRecent } from "./opening";
 import { PageView } from "./PageView";
+import { PropertiesPanel } from "./PropertiesPanel";
 import { useRichPage } from "./richPage";
 import { RICH_LIMIT } from "../editor/rich/context";
 import { isPicture } from "../editor/rich/parse";
@@ -442,6 +443,7 @@ export function FileTab({ tab }: { tab: Tab }) {
         <Tabs items={markdown ? MODES : richDoc ? RICH_MODES : TEXT_MODES} value={!markdown && mode !== "history" ? (richDoc ? "live" : "source") : mode} label="Page view" onChange={(v) => updateTab(tab.id, { mode: v })} />
       </header>
       <Banners doc={doc} docKey={key} onMerge={merge} onRecreate={recreate} conflict={richDoc ? { mine: keepMine, both: loose ? undefined : saveBoth } : undefined} />
+      {markdown && mode !== "history" && <PropertiesPanel docKey={key} readOnly={doc.status === "readOnly" || arriving || !own} onOpenLink={(target) => follow(target, false)} />}
       {markdown && mode === "live" && doc.text.length > RICH_LIMIT && (
         <div className="banner note-banner">This page is over 1 MB, so Live shows plain Markdown styling without tables, pictures or diagrams.</div>
       )}

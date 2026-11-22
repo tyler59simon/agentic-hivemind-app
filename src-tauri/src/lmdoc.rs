@@ -67,28 +67,31 @@ pub fn call_with_body(bridge: &Bridge, generation: Option<u64>, staging: &Path, 
 }
 
 /// The option a body goes through when it is a staged file: `--body-file` for a page, `--settings-file` for the settings
-/// of a notebook (NS-7A). Living Memory reads the settings from a file only, so they never go as stdin.
+/// of a notebook (NS-7A), `--payload-file` for the query of `doc query` (NS-7B). Living Memory reads the settings and the
+/// payload from a file only, so they never go as stdin.
 pub const BODY_FILE: &str = "--body-file";
 pub const SETTINGS_FILE: &str = "--settings-file";
-/// Living Memory refuses a settings file over 256 KiB (`--settings-file is larger than 256 KiB`).
-const SETTINGS_MAX: usize = 256 * 1024;
+pub const PAYLOAD_FILE: &str = "--payload-file";
+/// Living Memory refuses a settings file over 256 KiB (`--settings-file is larger than 256 KiB`); a query payload is held to
+/// the same bound.
+const JSON_MAX: usize = 256 * 1024;
 
-/// `call_with_body` for any of the two file options. The body is the page, or the JSON of the settings.
+/// `call_with_body` for any of the three file options. The body is the page, or the JSON of the settings or the query.
 pub fn call_with_file(bridge: &Bridge, generation: Option<u64>, staging: &Path, argv: &[String], body: &str, flag: &str) -> Result<Reply, String> {
     if argv.first().map(String::as_str) != Some("doc") {
         return Err("Only doc commands carry a page body".into());
     }
-    if flag != BODY_FILE && flag != SETTINGS_FILE {
+    if flag != BODY_FILE && flag != SETTINGS_FILE && flag != PAYLOAD_FILE {
         return Err(format!("\"{flag}\" is not a file option Hivemind passes"));
     }
-    if flag == SETTINGS_FILE && body.len() > SETTINGS_MAX {
-        return Err("Notebook settings are larger than 256 KiB".into());
+    if flag != BODY_FILE && body.len() > JSON_MAX {
+        return Err(if flag == SETTINGS_FILE { "Notebook settings are larger than 256 KiB" } else { "A query is larger than 256 KiB" }.into());
     }
     if flag == BODY_FILE && !needs_staging(body) {
         return bridge.call_at(generation, argv, Some(body));
     }
     std::fs::create_dir_all(staging).map_err(|e| format!("Could not create {}: {e}", staging.display()))?;
-    let ext = if flag == SETTINGS_FILE { "json" } else { "md" };
+    let ext = if flag == BODY_FILE { "md" } else { "json" };
     let file = Staged(staging.join(format!("{}.{ext}", uuid::Uuid::new_v4().simple())));
     std::fs::write(&file.0, body.as_bytes()).map_err(|e| format!("Could not stage the page for Living Memory: {e}"))?;
     bridge.call_at(generation, &with_options(argv, &[flag.into(), file.0.display().to_string()]), None)
@@ -520,20 +523,23 @@ mod tests {
         assert!(!OPENABLE.contains(&"svg"));
     }
 
-    /// NS-7A: only the two file options pass, the settings are bounded, and the staged settings file is a `.json` that a
-    /// leftover sweep removes.
+    /// NS-7A and NS-7B: only the three file options pass, the settings and the query are bounded, and the staged file is a
+    /// `.json` that a leftover sweep removes.
     #[test]
-    fn only_the_two_file_options_pass_and_settings_are_bounded() {
+    fn only_the_three_file_options_pass_and_settings_and_queries_are_bounded() {
         let bridge = Bridge::new(crate::settings::Launch { program: "py".into(), args: vec![], script: "no-such.py".into(), root: None });
         let staging = std::env::temp_dir().join(format!("hm-flag-{}", uuid::Uuid::new_v4().simple()));
         let argv = doc_argv("update", &[], &["jot", "daily"]);
-        for bad in ["--payload-file", "--order-file", "--body-file=x", "-x", ""] {
+        for bad in ["--order-file", "--icons-file", "--body-file=x", "--payload-file=x", "-x", ""] {
             assert!(call_with_file(&bridge, None, &staging, &argv, "{}", bad).unwrap_err().contains("not a file option"), "{bad}");
         }
-        let big = format!("{{\"a\":\"{}\"}}", "x".repeat(SETTINGS_MAX));
+        let big = format!("{{\"a\":\"{}\"}}", "x".repeat(JSON_MAX));
         assert!(call_with_file(&bridge, None, &staging, &argv, &big, SETTINGS_FILE).unwrap_err().contains("256 KiB"));
+        assert!(call_with_file(&bridge, None, &staging, &doc_argv("query", &[], &[]), &big, PAYLOAD_FILE).unwrap_err().contains("256 KiB"));
         assert!(call_with_file(&bridge, None, &staging, &["list".to_string()], "{}", SETTINGS_FILE).is_err(), "only doc commands");
         assert!(!staging.exists(), "nothing is staged for a refused call");
+        // A query goes through its own option, before any `--`, and the argv keeps the operands after it.
+        assert_eq!(with_options(&doc_argv("query", &["--all-domains"], &[]), &["--payload-file".into(), "q.json".into()]), ["doc", "query", "--all-domains", "--payload-file", "q.json", "--"]);
         std::fs::create_dir_all(&staging).unwrap();
         std::fs::write(staging.join("x.json"), "{}").unwrap();
         clear_staging(&staging);
@@ -664,6 +670,33 @@ mod tests {
         ok(call_with_file(&bridge, None, &staging, &update, r#"{"inbox":"Inbox.md"}"#, SETTINGS_FILE).unwrap());
         assert_eq!(row(&list(&bridge))["settings"], serde_json::json!({ "daily": { "folder": "Days", "format": "YYYY-MM-DD" }, "inbox": "Inbox.md" }));
         assert_eq!(std::fs::read_dir(&staging).unwrap().count(), 0, "the staged settings are removed");
+
+        // NS-7B: `doc tasks` lists the task lines of the pages, and `doc query` takes its payload through a staged
+        // `--payload-file` (a command without operands, so the file option goes after the others).
+        let tasked = call_with_body(&bridge, None, &staging, &doc_argv("create", &["--include-private"], &["jot", "daily", "Tasks.md"]), "---
+status: open
+priority: 3
+---
+# Tasks
+- [ ] first 📅 2026-12-01
+- [x] second
+").unwrap();
+        ok(tasked);
+        let listed = ok(bridge.call(&argv(&["doc", "tasks", "--all-domains", "--include-private", "--actor", "viewer"]), None).unwrap());
+        let rows = listed["tasks"].as_array().unwrap();
+        assert_eq!(rows.iter().filter(|t| t["path"] == "Tasks.md").map(|t| (t["line"].as_i64().unwrap(), t["done"].as_bool().unwrap(), t["text"].as_str().unwrap().to_string(), t["due"].as_str().map(str::to_string))).collect::<Vec<_>>(),
+            [(6, false, "first 📅 2026-12-01".to_string(), Some("2026-12-01".to_string())), (7, true, "second".to_string(), None)]);
+        let open = ok(bridge.call(&argv(&["doc", "tasks", "--all-domains", "--open", "--include-private", "--actor", "viewer"]), None).unwrap());
+        assert!(open["tasks"].as_array().unwrap().iter().all(|t| t["done"] == false));
+        let query = |payload: &str| {
+            let reply = call_with_file(&bridge, None, &staging, &argv(&["doc", "query", "--all-domains", "--include-private", "--actor", "viewer"]), payload, PAYLOAD_FILE).unwrap();
+            ok(reply)["pages"].as_array().unwrap().iter().map(|p| p["path"].as_str().unwrap().to_string()).collect::<Vec<_>>()
+        };
+        assert_eq!(query(r#"{"where":[{"key":"status","op":"=","value":"OPEN"},{"key":"priority","op":">","value":2}],"sort":[{"key":"title","order":"asc"}],"notebook":"daily"}"#), ["Tasks.md"]);
+        assert!(query(r#"{"where":[{"key":"status","op":"=","value":"closed"}]}"#).is_empty());
+        let bad = call_with_file(&bridge, None, &staging, &argv(&["doc", "query", "--all-domains", "--include-private", "--actor", "viewer"]), r#"{"where":[{"key":"a","op":"like","value":"b"}]}"#, PAYLOAD_FILE).unwrap();
+        assert_ne!(bad.exit_code, 0, "a condition Living Memory does not know is refused");
+        assert_eq!(std::fs::read_dir(&staging).unwrap().count(), 0, "the staged payloads are removed");
 
         // R2-D1: a request made before the bridge switched stores is refused, one made after runs.
         let before = bridge.generation();

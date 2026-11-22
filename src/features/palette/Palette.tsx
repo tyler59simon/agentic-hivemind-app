@@ -112,6 +112,8 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "memory", label: "Memory library", section: "memory" as Page, run: page({ page: "memory" }) },
       { key: "notes", label: "Notes", section: "notes" as Page, run: page({ page: "notes" }) },
       { key: "new-page", label: "New page", detail: "Ctrl+N on Notes", section: "notes" as Page, run: () => { close(); void newPageHere(client); } },
+      { key: "tasks", label: "Tasks", detail: "every task in your notebooks", section: "notes" as Page, run: page({ page: "notes", view: "tasks" }) },
+      { key: "views", label: "Views", detail: "saved queries over page properties", section: "notes" as Page, run: page({ page: "notes", view: "views" }) },
       { key: "today", label: "Today", detail: "open today's daily page", section: "notes" as Page, run: () => { close(); void onNotebook((notebook) => openToday(client, notebook)); } },
       { key: "new-from-template", label: "New page from template…", section: "notes" as Page, run: () => { close(); void onNotebook((notebook, folder) => { useTemplateIntent.getState().open(notebook, folder); app.go({ page: "notes" }); }); } },
       { key: "add-notebook", label: "Add a notebook…", section: "notes" as Page, run: () => { close(); void addNotebook(); } },

@@ -10,6 +10,7 @@ import { section, splitSize } from "../editor/rich/parse";
 import { MATH_MARK, prepare, remarkCallouts, remarkEmbeds, remarkHighlights, WIKI_PICTURE } from "../editor/rich/reading";
 import { remarkWikilinks, WIKI_PREFIX } from "../viewer/remarkWikilinks";
 import { findFile, pictureUrl, relativeTarget } from "./pictures";
+import { QueryBlock } from "./QueryView";
 import { folderOf } from "../../lib/notebooks";
 
 const PLUGINS = [remarkGfm, remarkEmbeds, remarkWikilinks, remarkHighlights, remarkCallouts];
@@ -112,6 +113,10 @@ export function PageView({ text, tabId, onLink, onFile, pictures, embed, nested 
       pre: ({ node: _node, children, ...rest }) => {
         if (isValidElement<{ className?: string; children?: ReactNode }>(children) && children.props.className?.split(" ").includes("language-math")) {
           return <MathView tex={String(children.props.children ?? "").replace(/\n$/, "")} display />;
+        }
+        // A ```query block is a saved query (NS-7B), drawn as the table or board it asks for.
+        if (isValidElement<{ className?: string; children?: ReactNode }>(children) && children.props.className?.split(" ").includes("language-query")) {
+          return <QueryBlock source={String(children.props.children ?? "").replace(/\n$/, "")} />;
         }
         const diagram = mermaidSource(children);
         return diagram === null ? <pre {...rest}>{children}</pre> : <Mermaid source={diagram} />;

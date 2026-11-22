@@ -15,7 +15,7 @@ export type Route =
   | { page: "architecture"; system?: string }
   | { page: "dashboards"; ref?: string }
   | { page: "memory"; view?: "notes" | "graph" | "activity" | "history" | "tags"; q?: string }
-  | { page: "notes"; notebook?: string; path?: string }
+  | { page: "notes"; notebook?: string; path?: string; view?: "tasks" | "views" }
   | { page: "wiki"; domain?: string; at?: string; edition?: "agent"; project?: string }
   | { page: "recap" }
   | { page: "maintenance" }

@@ -1,5 +1,6 @@
 //! What the index keeps of each kind of page: Markdown, rich pages (`.hmdoc`), canvases and plain text.
 use super::links::{self, Link, Scanned};
+use super::props::{Prop, Task};
 use super::units::Line;
 use serde_json::Value;
 
@@ -28,6 +29,9 @@ pub struct Extracted {
     pub lines: Vec<Line>,
     pub tags: Vec<String>,
     pub links: Vec<Link>,
+    /// NS-7B: what a Markdown page holds of properties and tasks.
+    pub props: Vec<Prop>,
+    pub tasks: Vec<Task>,
 }
 
 /// A file's name without the extension of an indexed kind.
@@ -76,7 +80,7 @@ pub fn extract(kind: &str, name: &str, bytes: &[u8]) -> Extracted {
     let mut tags = scanned.tags;
     tags.sort();
     tags.dedup();
-    Extracted { title: scanned.title.filter(|t| !t.is_empty()).unwrap_or(stem), headings: scanned.headings.join("\n"), body: scanned.body, lines: scanned.lines, tags, links: scanned.links }
+    Extracted { title: scanned.title.filter(|t| !t.is_empty()).unwrap_or(stem), headings: scanned.headings.join("\n"), body: scanned.body, lines: scanned.lines, tags, links: scanned.links, props: scanned.props, tasks: scanned.tasks }
 }
 
 // ---- rich pages ----------------------------------------------------------------------------------------------------

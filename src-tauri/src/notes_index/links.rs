@@ -2,6 +2,7 @@
 //! links, and `#tags` with the `tags` of a frontmatter block. Written by hand, one pass per line, so no regular
 //! expression crate is needed. Code (fenced blocks and spans) holds text but never links, tags or headings.
 
+use super::props::{self, Prop, Task};
 use super::units::Line;
 
 /// How a link was written: `wiki` for `[[Page]]`, `md` for `[text](path)`, `file` for a canvas card.
@@ -32,6 +33,9 @@ pub struct Scanned {
     pub lines: Vec<Line>,
     pub tags: Vec<String>,
     pub links: Vec<Link>,
+    /// Markdown only (NS-7B): the flat properties of the frontmatter and the task lines of the page.
+    pub props: Vec<Prop>,
+    pub tasks: Vec<Task>,
 }
 
 const CONTEXT_CHARS: usize = 200;
@@ -415,10 +419,12 @@ pub fn scan_markdown(text: &str) -> Scanned {
     let first = match frontmatter(&lines) {
         Some((front, taken)) => {
             found.tags.extend(front_tags(&front));
+            found.props = props::properties(&front);
             taken
         }
         None => 0,
     };
+    found.tasks = props::tasks(&lines, first);
     let mut body: Vec<String> = Vec::new();
     let mut fence: Option<(char, usize)> = None;
     for (at, raw) in lines.iter().enumerate().skip(first) {

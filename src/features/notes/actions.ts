@@ -15,6 +15,7 @@ import { planFor, useRewritePlan } from "../links/plan";
 import { fileName, folderOf, isMarkdown, isRichDoc, notebooksQuery, pageTitle } from "../../lib/notebooks";
 import { isLoose, saveAs } from "../../lib/opens";
 import { untitledText } from "./untitled";
+import { useApp } from "../../store";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
 
@@ -23,6 +24,9 @@ const join = (folder: string, name: string) => (folder ? `${folder}/${name}` : n
 /** Open a page in the focused pane (or beside it with `split`). Markdown opens for editing with a live preview. */
 export function openPage(ref: FileRef, opts: { split?: boolean } = {}) {
   useWorkspace.getState().openTab({ kind: "file", file: ref, mode: isMarkdown(ref.path) ? "live" : "source", title: pageTitle(ref.path) }, opts);
+  // A list that fills the Notes page (Tasks, Views) gives way to the page that was opened from it, or from anywhere.
+  const app = useApp.getState();
+  if (app.route.page === "notes" && app.route.view) app.go({ page: "notes" }, { replace: true });
 }
 
 /** The notebook new pages go into: the focused page's, else the first one. A file opened from outside every notebook

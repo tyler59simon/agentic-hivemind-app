@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { NotebookPen, Plus } from "lucide-react";
+import { Kanban, ListChecks, NotebookPen, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { lmContainer } from "../../documents/adapters/lmdoc";
 import { useConnection, useDocsEnabled } from "../../lib/connection";
@@ -22,6 +22,8 @@ import { NotebookTree } from "./NotebookTree";
 import { ProposalInbox } from "./ProposalInbox";
 import { announceAdded } from "./reach";
 import { TagsPane } from "./TagsPane";
+import { TasksView } from "./TasksView";
+import { ViewsPage } from "./ViewsPage";
 
 /** Add a folder notebook through the native folder dialog; Living Memory registers it for agent search (NS-2C). */
 export function useAddNotebook() {
@@ -121,6 +123,10 @@ export function NotesPage() {
   return (
     <div className="notes-page">
       <nav className="notebooks" aria-label="Notebooks">
+        <div className="notes-views" aria-label="Lists of pages">
+          <button type="button" className={`link-row${route.page === "notes" && route.view === "tasks" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "tasks" })}><ListChecks size="1em" aria-hidden /> Tasks</button>
+          <button type="button" className={`link-row${route.page === "notes" && route.view === "views" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "views" })}><Kanban size="1em" aria-hidden /> Views</button>
+        </div>
         {list.map((nb) => <NotebookTree key={nb.id} notebook={nb} onSettings={() => setSettings(nb)} />)}
         <TagsPane />
         {(groups.length > 0 || damaged.length > 0) && (
@@ -145,7 +151,9 @@ export function NotesPage() {
         <IndexLine />
         <button className="ghost add-notebook" onClick={newNotebook ?? add}><Plus size="1.1em" aria-hidden />{docs ? "New notebook" : "Add a notebook"}</button>
       </nav>
-      {open
+      {route.page === "notes" && route.view
+        ? <div className="notes-lists">{route.view === "tasks" ? <TasksView /> : <ViewsPage />}</div>
+        : open
         ? <div className="notes-area"><Workspace />{rail && <ContextRail />}</div>
         : (
           <div className="center muted">

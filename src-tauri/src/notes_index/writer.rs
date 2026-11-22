@@ -116,6 +116,8 @@ pub fn remove_page(conn: &Connection, sem: &Semantic, id: i64) -> rusqlite::Resu
     conn.prepare_cached("DELETE FROM fts WHERE rowid = ?1")?.execute([id])?;
     conn.prepare_cached("DELETE FROM links WHERE page = ?1")?.execute([id])?;
     conn.prepare_cached("DELETE FROM tags WHERE page = ?1")?.execute([id])?;
+    conn.prepare_cached("DELETE FROM tasks WHERE page = ?1")?.execute([id])?;
+    conn.prepare_cached("DELETE FROM props WHERE page = ?1")?.execute([id])?;
     conn.prepare_cached("DELETE FROM pages WHERE id = ?1")?.execute([id])?;
     Ok(())
 }
@@ -243,6 +245,20 @@ pub fn index_file(conn: &Connection, sem: &Semantic, reach: &Reach, notebook: &s
         let mut insert = conn.prepare_cached("INSERT INTO tags (page, tag) VALUES (?1, ?2)").map_err(sql)?;
         for tag in &page.tags {
             insert.execute(params![id, tag]).map_err(sql)?;
+        }
+    }
+    conn.prepare_cached("DELETE FROM tasks WHERE page = ?1").map_err(sql)?.execute([id]).map_err(sql)?;
+    {
+        let mut insert = conn.prepare_cached("INSERT INTO tasks (page, line, done, text, due) VALUES (?1, ?2, ?3, ?4, ?5)").map_err(sql)?;
+        for task in &page.tasks {
+            insert.execute(params![id, task.line, task.done, task.text, task.due]).map_err(sql)?;
+        }
+    }
+    conn.prepare_cached("DELETE FROM props WHERE page = ?1").map_err(sql)?.execute([id]).map_err(sql)?;
+    {
+        let mut insert = conn.prepare_cached("INSERT INTO props (page, key, value) VALUES (?1, ?2, ?3)").map_err(sql)?;
+        for prop in &page.props {
+            insert.execute(params![id, prop.key, prop.value]).map_err(sql)?;
         }
     }
     store_units(conn, sem, id, &units::cut(&page.title, &page.lines))?;

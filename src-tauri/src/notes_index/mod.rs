@@ -13,9 +13,11 @@ pub mod commands;
 pub mod extract;
 pub mod links;
 mod matrix;
+pub mod props;
 pub mod query;
 mod schema;
 pub mod semantic;
+pub mod structured;
 pub mod units;
 mod writer;
 
@@ -1291,5 +1293,125 @@ mod tests {
             }
         }
         finish(index, &dir);
+    }
+    // ---- NS-7B: tasks, properties and queries -----------------------------------------------------------------------
+
+    fn tasks_of(index: &Index, filters: structured::TaskFilters) -> Vec<String> {
+        index.read(|c| structured::tasks(c, &filters)).unwrap().into_iter().map(|t| format!("{}:{}:{}:{}{}", t.path, t.line, if t.done { "x" } else { " " }, t.text, t.due.map(|d| format!("|{d}")).unwrap_or_default())).collect()
+    }
+
+    fn asked(index: &Index, query: &str) -> Vec<String> {
+        let q: structured::Query = serde_json::from_str(query).unwrap();
+        index.read(|c| structured::run(c, &q)).unwrap().into_iter().map(|r| format!("{}:{}", r.notebook, r.path)).collect()
+    }
+
+    #[test]
+    fn tasks_and_properties_are_indexed_with_the_page_and_follow_its_edits() {
+        let dir = scratch();
+        let nb = root(&dir, "nb-1");
+        write(&nb.path, "Plan.md", "---\ntitle: Plan\nstatus: active\ntags: [a, b]\n---\n# Plan\n- [ ] open one\n- [x] done one 📅 2026-12-01\n```\n- [ ] in code\n```\n");
+        write(&nb.path, "Plain.md", "# Plain\nno tasks, no frontmatter");
+        write(&nb.path, "Rich.hmdoc", r#"{"schemaVersion":1,"format":"hivemind-rich","meta":{},"content":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"- [ ] not a task here"}]}]}}"#);
+        let index = started(&dir);
+        index.sync(vec![nb.clone()]);
+        index.flush();
+        assert_eq!(tasks_of(&index, Default::default()), ["Plan.md:7: :open one", "Plan.md:8:x:done one 📅 2026-12-01|2026-12-01"]);
+        let rows = index.read(|c| c.prepare("SELECT key, value FROM props ORDER BY rowid")?.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<Result<Vec<_>, _>>()).unwrap();
+        assert_eq!(rows, [("title", "Plan"), ("status", "active"), ("tags", "a"), ("tags", "b")].map(|(k, v)| (k.to_string(), v.to_string())));
+        // An edit replaces the rows of that page only.
+        write(&nb.path, "Plan.md", "---\nstatus: done\n---\n- [x] open one\n");
+        index.touch(nb.clone(), vec!["Plan.md".into()]);
+        index.flush();
+        assert_eq!(tasks_of(&index, Default::default()), ["Plan.md:4:x:open one"]);
+        assert_eq!(asked(&index, r#"{"where":[{"prop":"status","op":"eq","value":"done"}]}"#), ["nb-1:Plan.md"]);
+        assert!(asked(&index, r#"{"where":[{"prop":"status","op":"eq","value":"active"}]}"#).is_empty());
+        // A removed page takes its rows with it.
+        std::fs::remove_file(nb.path.join("Plan.md")).unwrap();
+        index.touch(nb.clone(), vec!["Plan.md".into()]);
+        index.flush();
+        assert!(tasks_of(&index, Default::default()).is_empty());
+        assert_eq!(index.read(|c| c.query_row("SELECT (SELECT count(*) FROM props), (SELECT count(*) FROM tasks)", [], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))).unwrap(), (0, 0));
+        finish(index, &dir);
+    }
+
+    #[test]
+    fn the_task_list_filters_by_notebook_done_and_text_and_orders_by_due_date() {
+        let dir = scratch();
+        let (one, two) = (root(&dir, "nb-1"), root(&dir, "nb-2"));
+        write(&one.path, "A.md", "# A\n- [ ] later 📅 2027-01-01\n- [ ] no date\n- [x] finished 📅 2026-01-01\n- [ ] sooner 📅 2026-12-01\n- [ ] 100% sure_thing\n");
+        write(&two.path, "B.md", "# B\n- [ ] other notebook due:: 2026-06-01\n");
+        let index = started(&dir);
+        index.sync(vec![one.clone(), two.clone()]);
+        index.flush();
+        let f = |v: serde_json::Value| tasks_of(&index, serde_json::from_value(v).unwrap());
+        assert_eq!(f(serde_json::json!({ "done": false })), [
+            "B.md:2: :other notebook due:: 2026-06-01|2026-06-01", "A.md:5: :sooner 📅 2026-12-01|2026-12-01", "A.md:2: :later 📅 2027-01-01|2027-01-01", "A.md:3: :no date", "A.md:6: :100% sure_thing",
+        ]);
+        assert_eq!(f(serde_json::json!({ "notebook": "nb-1", "done": true })), ["A.md:4:x:finished 📅 2026-01-01|2026-01-01"]);
+        assert_eq!(f(serde_json::json!({ "text": "SURE_" })), ["A.md:6: :100% sure_thing"]);
+        assert_eq!(f(serde_json::json!({ "text": "%" })).len(), 1, "a percent sign is text, not a pattern");
+        assert_eq!(f(serde_json::json!({ "limit": 2 })).len(), 2);
+        // Open tasks come before done ones.
+        assert_eq!(f(serde_json::json!({})).last().unwrap(), "A.md:4:x:finished 📅 2026-01-01|2026-01-01");
+        finish(index, &dir);
+    }
+
+    #[test]
+    fn queries_filter_by_notebook_folder_tag_and_properties_and_sort_like_living_memory() {
+        let dir = scratch();
+        let (one, two) = (root(&dir, "nb-1"), root(&dir, "nb-2"));
+        write(&one.path, "Projects/Alpha.md", "---\nstatus: active\npriority: 10\ndue: 2026-12-01\ntags: [work, big]\n---\n# Alpha\n");
+        write(&one.path, "Projects/Beta.md", "---\nstatus: Active\npriority: 9\n---\n# Beta\n#work\n");
+        write(&one.path, "Projects/Gamma.md", "---\nstatus: done\npriority: 2\ndue: 2026-01-01\n---\n# Gamma\n");
+        write(&one.path, "Loose.md", "# Loose\nno properties");
+        write(&two.path, "Other.md", "---\nstatus: active\npriority: 100\n---\n# Other\n");
+        write(&two.path, "Projects/Deep/Epsilon.md", "---\nstatus: active\n---\n# Epsilon\n");
+        let index = started(&dir);
+        index.sync(vec![one.clone(), two.clone()]);
+        index.flush();
+        // Text comparison ignores case, and the other notebook is in the answer unless the query names one.
+        assert_eq!(asked(&index, r#"{"where":[{"prop":"status","op":"eq","value":"active"}]}"#), ["nb-1:Projects/Alpha.md", "nb-1:Projects/Beta.md", "nb-2:Other.md", "nb-2:Projects/Deep/Epsilon.md"]);
+        assert_eq!(asked(&index, r#"{"from":{"notebooks":["nb-2"]},"where":[{"prop":"status","op":"eq","value":"active"}]}"#), ["nb-2:Other.md", "nb-2:Projects/Deep/Epsilon.md"]);
+        // A folder is its pages and those of its subfolders; its name's wildcard characters are text.
+        assert_eq!(asked(&index, r#"{"from":{"folder":"Projects"}}"#), ["nb-1:Projects/Alpha.md", "nb-1:Projects/Beta.md", "nb-1:Projects/Gamma.md", "nb-2:Projects/Deep/Epsilon.md"]);
+        assert!(asked(&index, r#"{"from":{"folder":"Proj%"}}"#).is_empty());
+        // A tag is a frontmatter tag or a #tag of the page.
+        assert_eq!(asked(&index, r##"{"from":{"tag":"#Work"}}"##), ["nb-1:Projects/Alpha.md", "nb-1:Projects/Beta.md"]);
+        // Numbers compare as numbers: 10 is more than 9, though "10" < "9" as text.
+        assert_eq!(asked(&index, r#"{"where":[{"prop":"priority","op":"gt","value":9}]}"#), ["nb-1:Projects/Alpha.md", "nb-2:Other.md"]);
+        // Sorting: numbers by value, a page without the key last, then the next key breaks ties; descending reverses the order.
+        assert_eq!(asked(&index, r#"{"sort":[{"prop":"priority","dir":"asc"}]}"#), ["nb-1:Projects/Gamma.md", "nb-1:Projects/Beta.md", "nb-1:Projects/Alpha.md", "nb-2:Other.md", "nb-1:Loose.md", "nb-2:Projects/Deep/Epsilon.md"]);
+        assert_eq!(asked(&index, r#"{"sort":[{"prop":"priority","dir":"desc"}]}"#)[..4], ["nb-2:Other.md", "nb-1:Projects/Alpha.md", "nb-1:Projects/Beta.md", "nb-1:Projects/Gamma.md"]);
+        assert_eq!(asked(&index, r#"{"where":[{"prop":"status","op":"exists"}],"sort":[{"prop":"status","dir":"asc"},{"prop":"priority","dir":"desc"}]}"#)[..4], ["nb-2:Other.md", "nb-1:Projects/Alpha.md", "nb-1:Projects/Beta.md", "nb-2:Projects/Deep/Epsilon.md"]);
+        // Pseudo keys, missing, contains and the limit.
+        assert_eq!(asked(&index, r#"{"where":[{"prop":"title","op":"contains","value":"ALP"}]}"#), ["nb-1:Projects/Alpha.md"]);
+        assert_eq!(asked(&index, r#"{"where":[{"prop":"path","op":"eq","value":"other.md"}]}"#), ["nb-2:Other.md"]);
+        assert_eq!(asked(&index, r#"{"where":[{"prop":"due","op":"missing"}],"from":{"notebooks":["nb-1"]}}"#), ["nb-1:Loose.md", "nb-1:Projects/Beta.md"]);
+        assert_eq!(asked(&index, r#"{"limit":2}"#).len(), 2);
+        // A page row carries its own properties: one value as text, several as a list.
+        let q: structured::Query = serde_json::from_str(r#"{"from":{"folder":"Projects","notebooks":["nb-1"]},"where":[{"prop":"title","op":"eq","value":"alpha"}]}"#).unwrap();
+        let rows = index.read(|c| structured::run(c, &q)).unwrap();
+        assert_eq!(serde_json::Value::Object(rows[0].props.clone()), serde_json::json!({ "status": "active", "priority": "10", "due": "2026-12-01", "tags": ["work", "big"] }));
+        assert!(!rows[0].sha256.is_empty());
+        finish(index, &dir);
+    }
+
+    #[test]
+    fn an_index_made_before_tasks_and_properties_is_made_again() {
+        let dir = scratch();
+        let db = dir.join("index.sqlite3");
+        // The tables of version 2: no `tasks` and no `props`.
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch("CREATE TABLE pages (id INTEGER PRIMARY KEY, notebook TEXT, path TEXT, kind TEXT, title TEXT, sha256 TEXT, size INTEGER, mtime_ms INTEGER, indexed_at INTEGER);").unwrap();
+            conn.pragma_update(None, "user_version", 2).unwrap();
+        }
+        let (conn, fresh) = schema::open(&db).unwrap();
+        assert!(fresh, "the old index is dropped, so every notebook is read again");
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0)).unwrap(), schema::VERSION);
+        assert_eq!(conn.query_row("SELECT count(*) FROM tasks", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        assert_eq!(conn.query_row("SELECT count(*) FROM props", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        drop(conn);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
