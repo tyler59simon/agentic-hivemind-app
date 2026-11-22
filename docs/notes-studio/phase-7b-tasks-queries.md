@@ -44,7 +44,14 @@ vitest: Tasks emoji parsing and formatting, frontmatter edit keeping untouched b
 
 ## 4. Shipped
 
-Built on 2026-11-22 against main at `41f6926`. Commit hashes and the UI pass are filled in by Claude after the dev-app check.
+Shipped on 2026-11-22 in `c6ddc72` (survey `41f6926`). At the user's request this phase had no Codex review; Claude reviewed the diff (the shared write path in `pageWrite.ts`, saved view files in `queries.rs`) and reran every check.
+
+UI pass (Claude, dev app, scratch folder notebook plus the scratch Living Memory store):
+- Tasks listed the folder tasks and a Living Memory page task, with priority and an overdue date in red; Overdue left only the overdue task. Ticking "call Ana" changed only that line on disk.
+- Properties panel on a CRLF page with a comment line, a trailing comment, extra spaces, mixed quotes, a list and a nested map: changing `status` and the `done` checkbox changed only those two values; every other byte stayed the same. The nested key showed read-only.
+- A `query` block drew a table in Reading, sorted by `due`. As a board grouped by `status`, dragging a card to another column rewrote that page's `status`, and dragging one to "No status" removed the key. The drags were fired as DOM drag events, since CDP mouse input does not start an HTML5 drag.
+- Save view wrote `.hivemind/queries/Active work.json`.
+- Not checked in the app: a stale tick or drop (covered by `writes.test.ts` and `QueryView.test.tsx`), and a tick on an open page with unsaved edits (covered by `writes.test.ts`).
 
 **Rust**
 - `notes_index/props.rs` (new): the tasks and properties of a Markdown page, read as Living Memory reads them (`core/docs_index.py`, `tasks` and `properties`), so both kinds of notebook mean the same. A task is a `- [ ]`, `* [x]` or `1) [X]` line with text, outside fenced code (a fence closes only on the three characters that opened it) and outside the frontmatter, at most 500 per page and 500 characters of text. Its due date is the first `📅 YYYY-MM-DD` or `due:: YYYY-MM-DD`. A property is a flat frontmatter key: a scalar, an inline `[a, b]` list or a block list gives one value each, nested maps are skipped, at most 50 per page. The test strings were run through Living Memory's own functions and agree.
