@@ -1,27 +1,27 @@
 import { useEffect, useRef, useState } from "react";
 import Sigma from "sigma";
-import type { LinkGraph } from "../../lib/lm";
 import { useTheme } from "../../lib/theme";
-import { PreviewCard } from "../preview/HoverPreview";
-import { toGraphology } from "./graphData";
+import { PagePreviewCard, PreviewCard } from "../preview/HoverPreview";
+import { toGraphology, type UnifiedGraph, type UnifiedNode } from "./graphData";
 
 const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#888";
 
-/** A sigma.js drawing of notes and their links. Hover highlights neighbours and previews the note;
- *  click opens it (Ctrl/Cmd+click in a split). */
+/** A sigma.js drawing of memory notes and folder notebook pages and their links. Hover highlights neighbours and previews
+ *  the node; click opens it (Ctrl/Cmd+click in a split). */
 export function GraphCanvas({ data, focus, onOpen, compact, dim }: {
-  data: LinkGraph; focus?: string; onOpen: (ref: string, title: string, split: boolean) => void; compact?: boolean;
+  data: UnifiedGraph; focus?: string; onOpen: (node: UnifiedNode, split: boolean) => void; compact?: boolean;
   /** Nodes drawn as context (greyed) unless hovered or next to the hovered node, e.g. a project's neighbours. */
   dim?: Set<string>;
 }) {
   const host = useRef<HTMLDivElement>(null);
-  const [preview, setPreview] = useState<{ ref: string; x: number; y: number } | null>(null);
+  const [preview, setPreview] = useState<{ node: UnifiedNode; x: number; y: number } | null>(null);
   const open = useRef(onOpen);
   open.current = onOpen;
   const theme = useTheme();   // the colours below are read from the theme's tokens
 
   useEffect(() => {
     if (!host.current) return;
+    const byId = new Map(data.nodes.map((n) => [n.id, n]));
     const graph = toGraphology(data);
     let hovered: string | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -49,8 +49,10 @@ export function GraphCanvas({ data, focus, onOpen, compact, dim }: {
     sigma.on("enterNode", ({ node, event }) => {
       hovered = node;
       sigma.refresh({ skipIndexation: true });
-      const rect = host.current!.getBoundingClientRect();
-      timer = setTimeout(() => setPreview({ ref: node, x: Math.min(rect.left + event.x + 12, window.innerWidth - 380), y: rect.top + event.y + 12 }), 400);
+      const found = byId.get(node);
+      if (!found || !host.current) return;
+      const rect = host.current.getBoundingClientRect();
+      timer = setTimeout(() => setPreview({ node: found, x: Math.min(rect.left + event.x + 12, window.innerWidth - 380), y: rect.top + event.y + 12 }), 400);
     });
     sigma.on("leaveNode", () => {
       hovered = null;
@@ -59,19 +61,23 @@ export function GraphCanvas({ data, focus, onOpen, compact, dim }: {
       sigma.refresh({ skipIndexation: true });
     });
     sigma.on("clickNode", ({ node, event }) => {
+      const found = byId.get(node);
+      if (!found) return;
       const original = event.original as MouseEvent;
-      open.current(node, graph.getNodeAttribute(node, "label"), original.ctrlKey || original.metaKey);
+      open.current(found, original.ctrlKey || original.metaKey);
     });
     // Re-fit when the pane is resized (splits, side panels, window size).
     const resize = new ResizeObserver(() => { sigma.resize(); sigma.refresh(); });
     resize.observe(host.current);
-    return () => { resize.disconnect(); if (timer) clearTimeout(timer); sigma.kill(); };
+    return () => { resize.disconnect(); if (timer) clearTimeout(timer); setPreview(null); sigma.kill(); };
   }, [data, focus, compact, dim, theme]);
 
   return (
     <div className={`graph-canvas ${compact ? "compact" : ""}`}>
       <div className="graph-host" ref={host} />
-      {preview && <PreviewCard refId={preview.ref} x={preview.x} y={preview.y} />}
+      {preview && (preview.node.kind === "note"
+        ? <PreviewCard refId={preview.node.ref} x={preview.x} y={preview.y} />
+        : <PagePreviewCard node={preview.node} x={preview.x} y={preview.y} />)}
     </div>
   );
 }

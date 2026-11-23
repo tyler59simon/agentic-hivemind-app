@@ -8,11 +8,11 @@ describe("navigation", () => {
   beforeEach(() => useApp.setState({ route: { page: "home" }, back: [], project: undefined }));
 
   it("go shows a page and Back returns to the one before", () => {
-    app().go({ page: "memory" });
+    app().go({ page: "notes" });
     app().go({ page: "inbox" });
     expect(app().route).toEqual({ page: "inbox" });
     app().goBack();
-    expect(app().route).toEqual({ page: "memory" });
+    expect(app().route).toEqual({ page: "notes" });
     app().goBack();
     expect(app().route).toEqual({ page: "home" });
     app().goBack();
@@ -26,9 +26,9 @@ describe("navigation", () => {
   });
 
   it("replace swaps the route without growing Back", () => {
-    app().go({ page: "memory", view: "graph" });
-    app().go({ page: "memory", view: "tags" }, { replace: true });
-    app().go({ page: "memory", view: "activity" }, { replace: true });
+    app().go({ page: "notes", view: "graph" });
+    app().go({ page: "notes", view: "tags" }, { replace: true });
+    app().go({ page: "notes", view: "tasks" }, { replace: true });
     expect(app().back).toEqual([{ page: "home" }]);
     app().goBack();
     expect(app().route).toEqual({ page: "home" });
@@ -41,7 +41,7 @@ describe("navigation", () => {
   });
 
   it("opens a project on its Home, and a system or session on its page", () => {
-    app().go({ page: "memory" });
+    app().go({ page: "notes" });
     openProject("paystream");
     expect([app().project, app().route]).toEqual(["paystream", { page: "home" }]);
     openSystem("ingestion");
@@ -85,7 +85,7 @@ describe("navigation", () => {
 
   // EXEC-R3a: Alt+Left and the palette Back left a capture review without its close check.
   it("a leave guard can stop a move and finish it later", () => {
-    app().go({ page: "memory" });
+    app().go({ page: "notes" });
     app().go({ page: "home", capture: "b1" });
     let later: (() => void) | null = null;
     const clear = setLeaveGuard((proceed) => { later = proceed; return false; });
@@ -127,22 +127,26 @@ describe("navigation", () => {
 describe("saved navigation", () => {
   const migrate = (route: object, version = 1) => useApp.persist.getOptions().migrate!({ project: "pay", domain: "demo", route }, version);
 
-  it("is version 6, and moves the Overview, Executive and Recap pages to Home", () => {
-    expect(useApp.persist.getOptions().version).toBe(6);
+  it("is version 7, and moves the Overview, Executive and Recap pages to Home", () => {
+    expect(useApp.persist.getOptions().version).toBe(7);
     for (const page of ["overview", "executive", "recap"]) expect(migrate({ page })).toEqual({ project: "pay", domain: "demo", route: { page: "home" } });
     expect(migrate({ page: "overview", view: "work" })).toMatchObject({ route: { page: "home" } });
   });
 
-  it("moves the v4 Memory workspace route and drops retired Memory search query on v6", () => {
+  it("moves Memory Graph/Tags/notes to Notes and retires Memory Activity/History/bare routes on v7", () => {
     expect(migrate({ page: "memory", view: "notes" }, 4)).toEqual({ project: "pay", domain: "demo", route: { page: "notes" } });
-    expect(migrate({ page: "memory", q: "ledger" }, 5)).toEqual({ project: "pay", domain: "demo", route: { page: "memory" } });
-    expect(migrate({ page: "memory", view: "graph" }, 4)).toMatchObject({ route: { page: "memory", view: "graph" } });
+    expect(migrate({ page: "memory", view: "graph" }, 6)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "graph" } });
+    expect(migrate({ page: "memory", view: "tags" }, 6)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "tags" } });
+    expect(migrate({ page: "memory", view: "activity" }, 6)).toEqual({ project: "pay", domain: "demo", route: { page: "home" } });
+    expect(migrate({ page: "memory", view: "history" }, 6)).toEqual({ project: "pay", domain: "demo", route: { page: "home" } });
+    expect(migrate({ page: "memory", q: "ledger" }, 5)).toEqual({ project: "pay", domain: "demo", route: { page: "home" } });
+    expect(migrate({ page: "memory" }, 6)).toEqual({ project: "pay", domain: "demo", route: { page: "home" } });
   });
 
   it("keeps the capture or briefing an Executive route showed, and leaves other pages alone", () => {
     expect(migrate({ page: "executive", tab: "briefings", briefing: "b9", draft: "d1", session: "s1" })).toMatchObject({ route: { page: "home", briefing: "b9" } });
     expect(migrate({ page: "executive", capture: "c1" })).toMatchObject({ route: { page: "home", capture: "c1" } });
-    expect(migrate({ page: "memory", view: "graph" })).toMatchObject({ route: { page: "memory", view: "graph" } });
+    expect(migrate({ page: "notes", view: "graph" })).toMatchObject({ route: { page: "notes", view: "graph" } });
     expect(migrateNav(null)).toBeNull();
     expect(migrateNav({ project: "pay" })).toEqual({ project: "pay" });
   });

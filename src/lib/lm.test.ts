@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { LmError, addAction, archiveNote, isPlan, supersedeNote, taxonomyAdd, undo, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, ruleAllowed, setPin, setRule, list, listArgs, logArgs, openArgs, writeProject, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setTransport, writeSystem, systemsArgs, update, setBridgeGeneration, noteTypes, typeWrite, timelineArgs, wikiModel, agentWikiModel, type Invoke } from "./lm";
+import { LmError, addAction, archiveNote, isPlan, supersedeNote, taxonomyAdd, undo, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, ruleAllowed, setPin, setRule, list, listArgs, openArgs, writeProject, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setTransport, writeSystem, systemsArgs, update, setBridgeGeneration, noteTypes, typeWrite, timelineArgs, wikiModel, agentWikiModel, type Invoke } from "./lm";
 
 afterEach(() => setTransport(invoke as Invoke));
 
@@ -108,12 +108,6 @@ describe("run", () => {
     expect(isPlan(await undo("op"))).toBe(false);
     fake({ exit_code: 0, result: { ok: true, plan_id: "p", digest: "d", kind: "undo", summary: {} }, error: null });
     expect(isPlan(await undo("op"))).toBe(true);
-  });
-
-  it("log reads as viewer and only sends the filters given", () => {
-    expect(logArgs({})).toEqual(["log", "--actor", "viewer"]);
-    expect(logArgs({ domain: "d", project: "hive", since: "2026-11-01", until: "2026-11-09", note: "demo:abc", type: "decision", event: "created", limit: 20 }))
-      .toEqual(["log", "--domain", "d", "--project", "hive", "--since", "2026-11-01", "--until", "2026-11-09", "--note", "demo:abc", "--type", "decision", "--event", "created", "--limit", "20", "--actor", "viewer"]);
   });
 
   it("recap covers every domain, narrowed by project and days", () => {

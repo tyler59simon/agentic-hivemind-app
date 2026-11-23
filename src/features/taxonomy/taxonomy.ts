@@ -1,5 +1,6 @@
-// Tag usage for the taxonomy manager. LM validates tags against tag_taxonomy.json; the four facets are fixed.
+// Tag usage for the unified Tags view (CON-12): Living Memory's registered taxonomy plus folder notebook #tags.
 import type { NoteRow } from "../../lib/lm";
+import type { TagCount } from "../../lib/noteindex";
 
 export const FACETS = ["subject", "concern", "platform", "technology", "project", "system"] as const;
 
@@ -7,20 +8,59 @@ export const FACETS = ["subject", "concern", "platform", "technology", "project"
 export const facetsOf = (taxonomy?: { facets?: string[] }): string[] =>
   taxonomy?.facets?.length ? taxonomy.facets : [...FACETS];
 
-export interface TagUsage { tag: string; count: number; known: boolean }
+export interface TagUsage { tag: string; count: number; pageCount: number; known: boolean }
 
-/** Registered tags grouped by facet with how many notes use each, plus tags in use that are not registered. */
-export function tagUsage(taxonomy: string[], notes: Pick<NoteRow, "tags">[], facets: readonly string[] = FACETS) {
-  const counts = new Map<string, number>();
-  for (const n of notes) for (const t of n.tags) counts.set(t, (counts.get(t) ?? 0) + 1);
+/** Human-readable usage summary for a tag across memory notes and folder notebook pages. */
+export function formatTagCounts(t: Pick<TagUsage, "count" | "pageCount">): string {
+  const parts: string[] = [];
+  if (t.count) parts.push(`${t.count} note${t.count === 1 ? "" : "s"}`);
+  if (t.pageCount) parts.push(`${t.pageCount} page${t.pageCount === 1 ? "" : "s"}`);
+  return parts.length ? parts.join(" · ") : "unused";
+}
+
+/** Registered tags grouped by facet with memory note + page counts, unregistered memory tags, and page-only #tags. */
+export function tagUsage(
+  taxonomy: string[],
+  notes: Pick<NoteRow, "tags">[],
+  facets: readonly string[] = FACETS,
+  pageTags: TagCount[] = [],
+) {
+  const noteCounts = new Map<string, number>();
+  for (const n of notes) for (const t of n.tags) noteCounts.set(t, (noteCounts.get(t) ?? 0) + 1);
+
+  const pageByLower = new Map<string, { tag: string; count: number }>();
+  for (const pt of pageTags) {
+    const key = pt.tag.trim().replace(/^#/, "").toLowerCase();
+    if (!key) continue;
+    const prev = pageByLower.get(key);
+    pageByLower.set(key, { tag: prev?.tag ?? key, count: (prev?.count ?? 0) + pt.count });
+  }
+  const claimedPages = new Set<string>();
+  const takePageCount = (tag: string): number => {
+    const key = tag.toLowerCase();
+    const hit = pageByLower.get(key);
+    if (!hit) return 0;
+    claimedPages.add(key);
+    return hit.count;
+  };
+
   const known = new Set(taxonomy);
   const byFacet: Record<string, TagUsage[]> = Object.fromEntries(facets.map((f) => [f, []]));
   for (const tag of [...taxonomy].sort()) {
     const facet = tag.split("/")[0];
-    (byFacet[facet] ??= []).push({ tag, count: counts.get(tag) ?? 0, known: true });
+    (byFacet[facet] ??= []).push({ tag, count: noteCounts.get(tag) ?? 0, pageCount: takePageCount(tag), known: true });
   }
-  const unknown = [...counts].filter(([t]) => !known.has(t)).map(([tag, count]) => ({ tag, count, known: false })).sort((a, b) => b.count - a.count);
-  return { byFacet, unknown };
+  const unknown = [...noteCounts]
+    .filter(([t]) => !known.has(t))
+    .map(([tag, count]) => ({ tag, count, pageCount: takePageCount(tag), known: false }))
+    .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+
+  const pageOnly: TagUsage[] = [...pageByLower.entries()]
+    .filter(([key]) => !claimedPages.has(key))
+    .map(([, v]) => ({ tag: v.tag, count: 0, pageCount: v.count, known: false }))
+    .sort((a, b) => b.pageCount - a.pageCount || a.tag.localeCompare(b.tag));
+
+  return { byFacet, unknown, pageOnly };
 }
 
 /** Normalised tags from free text (comma or space separated), and the ones LM would refuse. */

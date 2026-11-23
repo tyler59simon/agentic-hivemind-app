@@ -401,33 +401,6 @@ export function timelineArgs(o: TimelineOptions): string[] {
 }
 export const timeline = (o: TimelineOptions) => run<TimelineResult>(timelineArgs(o));
 
-/** One line of the `log` command: a journaled note event or an agent session. */
-export interface LogRow {
-  time: string; event: string; ref: string; title: string; type: string; domain: string; projects: string[]; op?: string;
-  detail?: string;
-  /** Note rows: what changed, and who did it (maintenance, auto_resolve, obsidian, undo, plan, agent:HARNESS or command). */
-  summary?: string; actor?: string;
-  /** Session rows only. */
-  harness?: string; notes?: string[]; /** How many files the session changed (a count, not paths). */ files?: number;
-}
-export interface LogResult { ok: boolean; count: number; rows: LogRow[] }
-export interface LogOptions {
-  domain?: string; project?: string; since?: string; until?: string; note?: string; type?: string; event?: string; limit?: number;
-}
-export function logArgs(o: LogOptions): string[] {
-  const argv = ["log"];
-  if (o.domain) argv.push("--domain", o.domain);
-  if (o.project) argv.push("--project", o.project);
-  if (o.since) argv.push("--since", o.since);
-  if (o.until) argv.push("--until", o.until);
-  if (o.note) argv.push("--note", o.note);
-  if (o.type) argv.push("--type", o.type);
-  if (o.event) argv.push("--event", o.event);
-  if (o.limit) argv.push("--limit", String(o.limit));
-  return view(argv);
-}
-export const log = (o: LogOptions = {}) => run<LogResult>(logArgs(o));
-
 // ---- Systems (an LM that has the `systems` command). ----
 
 export type SystemStatus = "active" | "deprecated" | "retired";

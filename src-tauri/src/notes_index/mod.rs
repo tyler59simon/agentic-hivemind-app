@@ -662,6 +662,35 @@ mod tests {
     }
 
     #[test]
+    fn graph_returns_every_page_with_its_tags_and_outgoing_links() {
+        let dir = scratch();
+        let (index, one, _) = corpus(&dir);
+        let data = index.read(query::graph).unwrap();
+        assert_eq!(data.pages.len(), 6);
+        let old = data.pages.iter().find(|p| p.notebook == "nb-1" && p.path == "Archive/Old plan.md").unwrap();
+        assert_eq!(old.tags, ["planning", "work"]);
+        let inbox = data.pages.iter().find(|p| p.notebook == "nb-1" && p.path == "Inbox.md").unwrap();
+        assert_eq!(inbox.tags, ["work"]);
+        assert_eq!(
+            data.links.iter().map(|l| format!("{}:{}:{}({})", l.notebook, l.path, l.raw, l.kind)).collect::<Vec<_>>(),
+            [
+                "nb-1:Archive/Roadmap.md:Inbox(wiki)",
+                "nb-1:Archive/Roadmap.md:../Inbox.md(md)",
+                "nb-1:Roadmap.md:Inbox(wiki)",
+                "nb-1:Roadmap.md:Other/Notes(wiki)",
+                "nb-2:Notes.md:Roadmap(wiki)",
+            ]
+        );
+        // Removing a notebook prunes its pages and links from the graph too.
+        index.sync(vec![one]);
+        index.flush();
+        let after = index.read(query::graph).unwrap();
+        assert!(after.pages.iter().all(|p| p.notebook == "nb-1"));
+        assert!(after.links.iter().all(|l| l.notebook == "nb-1"));
+        finish(index, &dir);
+    }
+
+    #[test]
     fn an_index_that_cannot_open_says_why_and_ignores_jobs() {
         let dir = scratch();
         // A file where the folder should be.

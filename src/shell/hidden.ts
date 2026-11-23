@@ -9,12 +9,14 @@ interface HiddenState {
   setShown: (page: Page, shown: boolean) => void;
 }
 
-/** Version 2: the Architecture and Changes sections were removed (CON-4, CON-17), so a saved hide of either is dropped.
- *  Version 3: the Review section became the Inbox (CON-6), so a saved hide of Review hides the Inbox. */
+const REMOVED_SECTIONS = new Set(["architecture", "changes", "overview", "executive", "recap", "memory"]);
+
+/** Version 2: Architecture and Changes removed (CON-4, CON-17). Version 3: Review became Inbox (CON-6).
+ *  Version 4: Memory retired (CON-21) and remaining removed sections (overview, executive, recap) dropped (CONR-7). */
 export function migrateHidden(persisted: unknown): unknown {
   const saved = persisted as { hidden?: string[] } | null;
   if (!Array.isArray(saved?.hidden)) return persisted;
-  const kept = saved.hidden.filter((p) => p !== "architecture" && p !== "changes").map((p) => (p === "review" ? "inbox" : p));
+  const kept = saved.hidden.filter((p) => !REMOVED_SECTIONS.has(p)).map((p) => (p === "review" ? "inbox" : p));
   return { ...saved, hidden: kept.filter((p, i) => kept.indexOf(p) === i) };
 }
 
@@ -26,8 +28,8 @@ export const useHidden = create<HiddenState>()(persist((set) => ({
   },
 }), {
   name: "hivemind.sidebar",
-  version: 3,
+  version: 4,
   storage: createJSONStorage(() => safeStorage),
-  migrate: (persisted, version) => (version < 3 ? migrateHidden(persisted) : persisted) as HiddenState,
+  migrate: (persisted, version) => (version < 4 ? migrateHidden(persisted) : persisted) as HiddenState,
   partialize: (s) => ({ hidden: s.hidden }),
 }));

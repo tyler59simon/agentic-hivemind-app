@@ -1969,7 +1969,7 @@ pub fn run() {
             studio::file_reveal, studio::asset_base, studio::lmdoc_assets, studio::notebook_add_dropped, studio::file_attach_bytes, studio::file_attach_dropped, opens::open_dropped, opens::claim_drop, opens::unclaimed_drops, studio::notebook_reach_record, lm_body, lmdoc_move, lmdoc_attach, studio::lmdoc_open_asset, opens::open_dialog, opens::open_pending, opens::open_recent,
             opens::open_forget, opens::file_save_as, bigfile::bigfile_open, bigfile::bigfile_lines, bigfile::bigfile_search, bigfile::bigfile_bytes, bigfile::bigfile_find_bytes, bigfile::bigfile_close, replace::replace_preview, replace::replace_apply, replace::replace_undo, history::history_list, history::history_read, history::history_pin, history::history_snapshot, history::git_file_log, history::git_file_commit,
             notes_index::commands::index_search, notes_index::commands::index_links, notes_index::commands::index_incoming, notes_index::commands::index_pages,
-            notes_index::commands::index_tags, notes_index::commands::index_tasks, notes_index::commands::index_query, notes_index::commands::index_status, notes_index::commands::index_rebuild, notes_index::commands::index_related
+            notes_index::commands::index_tags, notes_index::commands::index_graph, notes_index::commands::index_tasks, notes_index::commands::index_query, notes_index::commands::index_status, notes_index::commands::index_rebuild, notes_index::commands::index_related
         ])
         .build(context)
         .expect("error while running tauri application")

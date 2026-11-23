@@ -27,7 +27,7 @@ describe("lookingAt", () => {
     expect(lookingAt("b", here)).toBe(false);
     expect(lookingAt("b", { ...here, shown: ["a", "b"] })).toBe(true);
     expect(lookingAt("a", { ...here, windowFocused: false })).toBe(false);
-    expect(lookingAt("a", { ...here, page: "memory" })).toBe(false);
+    expect(lookingAt("a", { ...here, page: "notes" })).toBe(false);
     expect(lookingAt("a", { ...here, shown: [null] })).toBe(false);
   });
   it("is false while the Start screen or a chat session replaces the terminal workspace", () => {

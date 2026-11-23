@@ -716,6 +716,11 @@ input[type="checkbox"] { accent-color: var(--success); }
 /* Taxonomy */
 .taxonomy { max-width: 72rem; display: flex; flex-direction: column; gap: .8rem; padding-top: .8rem; }
 .taxonomy h2 { margin: 0; }
+.tags-filter { min-width: 14rem; font-size: .9rem; padding: .25rem .5rem; }
+.tag-results-head { display: flex; align-items: center; justify-content: space-between; gap: .6rem; flex-wrap: wrap; }
+.tag-results-head h3 { margin: 0; }
+.tag-result-group { margin-top: .5rem; }
+.tag-result-group h4 { margin: 0 0 .25rem; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .add-tags { display: flex; gap: .5rem; }
 .add-tags input { flex: 1; }
 .type-section { display: flex; gap: .25rem; align-items: center; }
@@ -1718,8 +1723,6 @@ button.icon { border: none; padding: .25rem; }
 .back-title { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .back-context { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .link-row.missing { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
-.tags-pane summary { cursor: pointer; display: flex; align-items: center; gap: .35rem; font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: .6rem .3rem 0; }
-.tag-list { list-style: none; margin: .2rem 0 0; padding: 0; max-height: 14rem; overflow: auto; }
 .index-line { margin: 0; }
 
 /* NS-7B: the Tasks and Views lists of the Notes page, the properties panel and a query's table and board. */
@@ -1727,6 +1730,7 @@ button.icon { border: none; padding: .25rem; }
 .notes-views .link-row { display: flex; align-items: center; gap: .4rem; }
 .link-row.on { background: var(--accent-soft); }
 .notes-lists { overflow: auto; min-height: 0; padding: .8rem 1rem 2rem; }
+.notes-lists.notes-graph { display: flex; flex-direction: column; overflow: hidden; padding: .5rem 1rem 1rem; }
 .views-head { display: flex; align-items: baseline; gap: .8rem; margin-bottom: .5rem; }
 .views-head h1 { font-size: 1.25rem; margin: 0; }
 .views-filters { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .6rem; }

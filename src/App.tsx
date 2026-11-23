@@ -48,8 +48,7 @@ function useShortcuts() {
         if (useApp.getState().route.page === "notes") void newPageHere(client);
         else useWorkspace.getState().openTab({ kind: "new-note" });
       }
-      else if (key === "g" && !e.shiftKey) { e.preventDefault(); go({ page: "memory", view: "graph" }); }
-      else if (key === "a" && e.shiftKey) { e.preventDefault(); go({ page: "memory", view: "activity" }); }
+      else if (key === "g" && !e.shiftKey) { e.preventDefault(); go({ page: "notes", view: "graph" }); }
       else if (key === "w") e.preventDefault(); // closes a note tab when notes are shown; never the window
     };
     window.addEventListener("keydown", onKey);
@@ -166,7 +165,6 @@ function useLiveRefresh(enabled: boolean) {
         client.invalidateQueries({ queryKey: ["taxonomy"] });
         client.invalidateQueries({ queryKey: ["types"] });
         client.invalidateQueries({ queryKey: ["views"] }); // views.json: dashboards added or removed from the CLI
-        client.invalidateQueries({ queryKey: ["log"] });
         client.invalidateQueries({ queryKey: ["recap"] });
         client.invalidateQueries({ queryKey: ["maintenance"] });
         invalidateWiki(client); // projects.json and bindings decide the wiki's projects and folders (both editions)

@@ -1,11 +1,13 @@
 import { useMemo, useState } from "react";
+import type { FileRef } from "../../documents/keys";
 import { useConnection } from "../../lib/connection";
 import { domainOf, type LinkNode } from "../../lib/lm";
 import { useWorkspace, type Tab } from "../../workspace/store";
 import { GraphCanvas } from "../graph/GraphCanvas";
-import { neighborhood, typeColor } from "../graph/graphData";
+import { neighborhood, pageNodeId, typeColor } from "../graph/graphData";
+import { openGraphNode, useUnifiedGraph } from "../graph/useUnifiedGraph";
 import { HoverPreview } from "../preview/HoverPreview";
-import { useLinks, useNoteLinks } from "./useLinks";
+import { useNoteLinks } from "./useLinks";
 
 function NoteLink({ node }: { node: LinkNode }) {
   const openNote = useWorkspace((s) => s.openNote);
@@ -54,23 +56,22 @@ export function LinksPanel({ tab }: { tab: Tab }) {
   );
 }
 
-/** The notes around this one, one or two links away. */
-export function LocalGraphPanel({ tab }: { tab: Tab }) {
-  const supported = useConnection((c) => c.commands.includes("links"));
-  const openNote = useWorkspace((s) => s.openNote);
+/** The notes and folder pages around this note or page, one or two links away (CON-12). */
+export function LocalGraphPanel({ focusRef, focusFile }: { focusRef?: string; focusFile?: FileRef }) {
   const [depth, setDepth] = useState(1);
-  const graph = useLinks(tab.ref ? domainOf(tab.ref) : null);
-  const near = useMemo(() => graph.data && tab.ref ? neighborhood(graph.data, tab.ref, depth) : null, [graph.data, tab.ref, depth]);
-  if (!supported) return needsUpdate;
-  if (!near) return <p className="muted pad">Loading…</p>;
+  const { graph, linksSupported, isLoading } = useUnifiedGraph();
+  const focusId = focusFile ? pageNodeId(focusFile) : focusRef;
+  const near = useMemo(() => (focusId ? neighborhood(graph, focusId, depth) : null), [graph, focusId, depth]);
+  if (focusRef && !linksSupported) return needsUpdate;
+  if (isLoading && (!near || near.nodes.length <= 1)) return <p className="muted pad">Loading…</p>;
   return (
     <div className="local-graph">
       <div className="segmented compact">
         {[1, 2].map((d) => <button key={d} className={depth === d ? "on" : ""} onClick={() => setDepth(d)}>{d} link{d > 1 ? "s" : ""} away</button>)}
       </div>
-      {near.nodes.length > 1
-        ? <GraphCanvas data={near} focus={tab.ref} compact onOpen={(ref, title, split) => openNote(ref, { split, title })} />
-        : <p className="muted pad">No links to or from this note yet.</p>}
+      {near && near.nodes.length > 1
+        ? <GraphCanvas data={near} focus={focusId} compact onOpen={openGraphNode} />
+        : <p className="muted pad">No links to or from this {focusFile ? "page" : "note"} yet.</p>}
     </div>
   );
 }

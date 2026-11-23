@@ -1,7 +1,7 @@
 //! The Tauri commands of the search index. The webview names a notebook by id and a page by its relative path, as every
 //! other notebook command does; nothing here reads a file.
 use super::structured::{self, Query, QueryRow, TaskFilters, TaskRow};
-use super::query::{self, Filters, Hit, Incoming, Mention, Outgoing, PageRow, TagCount};
+use super::query::{self, Filters, GraphData, Hit, Incoming, Mention, Outgoing, PageRow, TagCount};
 use super::Status;
 use crate::{blocking, AppState};
 use serde::Serialize;
@@ -102,6 +102,13 @@ pub async fn index_pages(state: State<'_, AppState>, notebook: Option<String>) -
 pub async fn index_tags(state: State<'_, AppState>, notebook: Option<String>) -> Result<Vec<TagCount>, String> {
     let index = state.index.clone();
     blocking(move || index.read(|c| query::tags(c, notebook.as_deref()))).await
+}
+
+/// Every indexed page with its tags and every outgoing link, for the unified graph (CON-12).
+#[tauri::command]
+pub async fn index_graph(state: State<'_, AppState>) -> Result<GraphData, String> {
+    let index = state.index.clone();
+    blocking(move || index.read(query::graph)).await
 }
 
 #[tauri::command]

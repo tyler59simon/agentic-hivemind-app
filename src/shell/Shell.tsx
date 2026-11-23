@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 import { AgentWorkspace } from "../features/agents/AgentWorkspace";
 import { DashboardsPage } from "../features/dashboards/DashboardsPage";
-import { MemoryPage } from "../features/library/MemoryPage";
 import { NotesPage } from "../features/notes/NotesPage";
 import { HomePage } from "../features/home/HomePage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
@@ -18,7 +17,6 @@ import { Topbar } from "./Topbar";
 const PAGES: Record<Page, () => ReactNode> = {
   home: () => <HomePage />,
   agents: () => <AgentWorkspace />,
-  memory: () => <MemoryPage />,
   notes: () => <NotesPage />,
   dashboards: () => <DashboardsPage />,
   wiki: () => <WikiPage />,

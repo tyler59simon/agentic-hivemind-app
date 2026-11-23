@@ -36,6 +36,9 @@ export interface IndexLinks { outgoing: OutgoingLink[]; incoming: IncomingLink[]
 
 export interface IndexedPage { notebook: string; path: string; kind: PageKind; title: string; mtimeMs: number }
 export interface TagCount { tag: string; count: number }
+export interface GraphPage { notebook: string; path: string; kind: PageKind; title: string; tags: string[] }
+export interface GraphLink { notebook: string; path: string; raw: string; kind: "wiki" | "md" | "file" }
+export interface IndexGraph { pages: GraphPage[]; links: GraphLink[] }
 
 /** `phase` says what `scanning` is doing: reading `pages`, or making the vectors for `meaning` search. */
 export interface IndexProgress { state: "idle" | "scanning"; phase?: "pages" | "meaning"; done: number; total: number; error: string | null }
@@ -51,6 +54,7 @@ export const indexLinks = (notebook: string, path: string) =>
 export const indexIncoming = (paths: string[]) => invoke<IncomingLink[]>("index_incoming", { paths }).then((r) => r ?? []);
 export const indexPages = (notebook?: string) => invoke<IndexedPage[]>("index_pages", { notebook: notebook ?? null }).then((r) => r ?? []);
 export const indexTags = (notebook?: string) => invoke<TagCount[]>("index_tags", { notebook: notebook ?? null }).then((r) => r ?? []);
+export const indexGraph = () => invoke<IndexGraph>("index_graph").then((r) => r ?? { pages: [], links: [] });
 /** A task line of a folder notebook's page (NS-7B). `sha256` is the page's hash when it was indexed. */
 export interface IndexTask { notebook: string; path: string; title: string; line: number; done: boolean; text: string; due: string | null; owner: string | null; priority: string | null; sha256: string }
 /** The task lines of the folder notebooks' pages, open before done; `done` limits them to one kind. */
@@ -62,6 +66,7 @@ export const indexRebuild = (notebook?: string) => invoke<void>("index_rebuild",
 export const INDEX_KEY = "index";
 export const pagesQuery = () => ({ queryKey: [INDEX_KEY, "pages"], queryFn: () => indexPages(), staleTime: 30_000 });
 export const tagsQuery = () => ({ queryKey: [INDEX_KEY, "tags"], queryFn: () => indexTags() });
+export const graphQuery = () => ({ queryKey: [INDEX_KEY, "graph"], queryFn: () => indexGraph(), staleTime: 30_000 });
 export const statusQuery = () => ({ queryKey: [INDEX_KEY, "status"], queryFn: indexStatus });
 export const relatedQuery = (notebook: string, path: string) => ({ queryKey: [INDEX_KEY, "related", notebook, path], queryFn: () => indexRelated(notebook, path) });
 export const linksQuery = (notebook: string, path: string) => ({ queryKey: [INDEX_KEY, "links", notebook, path], queryFn: () => indexLinks(notebook, path) });

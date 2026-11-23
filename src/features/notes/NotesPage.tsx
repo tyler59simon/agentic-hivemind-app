@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Kanban, ListChecks, NotebookPen, Plus } from "lucide-react";
+import { GitFork, Hash, Kanban, ListChecks, NotebookPen, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { lmContainer } from "../../documents/adapters/lmdoc";
 import { useConnection, useDocsEnabled, useFolderProposalsEnabled } from "../../lib/connection";
@@ -11,8 +11,11 @@ import { toast } from "../../ui/toast";
 import { ContextRail } from "../../workspace/RightSidebar";
 import { hasTabs, railShown, useWorkspace } from "../../workspace/store";
 import { statusQuery } from "../../lib/noteindex";
+import { GraphView } from "../graph/GraphView";
 import { RewriteDialog } from "../links/RewriteDialog";
+import { useCurrentProject } from "../projects/useProject";
 import { progressLine, useIndexState } from "../search/indexState";
+import { TaxonomyView } from "../taxonomy/TaxonomyView";
 import { Workspace } from "../../workspace/Workspace";
 import { newPageHere, openPage } from "./actions";
 import { NewNotebook } from "./NewNotebook";
@@ -22,7 +25,6 @@ import { MemoryTree, useMemoryTree } from "./MemoryTree";
 import { NotebookTree } from "./NotebookTree";
 import { ProposalInbox } from "./ProposalInbox";
 import { agentEdits, announceAdded } from "./reach";
-import { TagsPane } from "./TagsPane";
 import { TasksView } from "./TasksView";
 import { ViewsPage } from "./ViewsPage";
 
@@ -88,6 +90,7 @@ export function NotesPage() {
   const edits = useQuery({ ...allProposalsQuery(), enabled: useFolderProposalsEnabled(), retry: false });
   const route = useApp((s) => s.route);
   const go = useApp((s) => s.go);
+  const { project } = useCurrentProject();
   const open = useWorkspace(hasTabs);
   const rail = useWorkspace(railShown);
   const add = useAddNotebook();
@@ -124,15 +127,16 @@ export function NotesPage() {
   return (
     <div className="notes-page">
       <nav className="notebooks" aria-label="Notes and notebooks">
-        <div className="notes-views" aria-label="Lists of pages">
+        <div className="notes-views" aria-label="Lists of notes and pages">
           <button type="button" className={`link-row${route.page === "notes" && route.view === "tasks" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "tasks" })}><ListChecks size="1em" aria-hidden /> Tasks</button>
           <button type="button" className={`link-row${route.page === "notes" && route.view === "views" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "views" })}><Kanban size="1em" aria-hidden /> Views</button>
+          <button type="button" className={`link-row${route.page === "notes" && route.view === "tags" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "tags" })}><Hash size="1em" aria-hidden /> Tags</button>
+          <button type="button" className={`link-row${route.page === "notes" && route.view === "graph" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "graph" })}><GitFork size="1em" aria-hidden /> Graph</button>
         </div>
         <MemoryTree tree={memory} />
         {notebooks.isLoading && <p className="muted small pad" role="status">Loading notebooks…</p>}
         {notebooks.error && <p className="error small pad">{classify(notebooks.error).message}</p>}
         {list.map((nb) => <NotebookTree key={nb.id} notebook={nb} onSettings={() => setSettings(nb)} edits={agentEdits(edits.data ?? [], nb)} onEdits={() => openInbox(undefined, undefined, "pages")} />)}
-        <TagsPane />
         {(groups.length > 0 || damaged.length > 0) && (
           <div className="notebook-group" aria-label="Living Memory notebooks">
             <h2>Living Memory</h2>
@@ -156,7 +160,14 @@ export function NotesPage() {
         <button className="ghost add-notebook" onClick={newNotebook ?? add}><Plus size="1.1em" aria-hidden />{docs ? "New notebook" : "Add a notebook"}</button>
       </nav>
       {route.page === "notes" && route.view
-        ? <div className="notes-lists">{route.view === "tasks" ? <TasksView /> : <ViewsPage />}</div>
+        ? (
+          <div className={`notes-lists${route.view === "graph" ? " notes-graph" : ""}`}>
+            {route.view === "tasks" ? <TasksView />
+              : route.view === "views" ? <ViewsPage />
+              : route.view === "tags" ? <TaxonomyView />
+              : <GraphView key={project?.tag ?? ""} projectTag={project?.tag} projectName={project?.name} />}
+          </div>
+        )
         : open
         ? <div className="notes-area"><Workspace />{rail && <ContextRail />}</div>
         : empty ? <Empty onAdd={add} onNew={newNotebook} />

@@ -1,16 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { facetsOf, parseTags, SYSTEM_TAG_MESSAGE, tagUsage } from "./taxonomy";
+import { facetsOf, formatTagCounts, parseTags, SYSTEM_TAG_MESSAGE, tagUsage } from "./taxonomy";
 
 describe("taxonomy", () => {
-  it("counts usage per facet and finds unregistered tags", () => {
-    const { byFacet, unknown } = tagUsage(
+  it("counts usage per facet, merges overlapping page #tags, and lists page-only tags separately", () => {
+    const { byFacet, unknown, pageOnly } = tagUsage(
       ["subject/project", "concern/bug", "technology/python", "concern/decision"],
       [{ tags: ["subject/project", "concern/bug"] }, { tags: ["subject/project", "concern/legacy"] }, { tags: ["concern/legacy"] }],
+      undefined,
+      [
+        { tag: "technology/python", count: 2 },
+        { tag: "Concern/Legacy", count: 1 },
+        { tag: "roadmap", count: 3 },
+        { tag: "draft", count: 1 },
+      ],
     );
-    expect(byFacet.subject).toEqual([{ tag: "subject/project", count: 2, known: true }]);
-    expect(byFacet.concern.map((t) => [t.tag, t.count])).toEqual([["concern/bug", 1], ["concern/decision", 0]]);
+    expect(byFacet.subject).toEqual([{ tag: "subject/project", count: 2, pageCount: 0, known: true }]);
+    expect(byFacet.concern.map((t) => [t.tag, t.count, t.pageCount])).toEqual([["concern/bug", 1, 0], ["concern/decision", 0, 0]]);
+    expect(byFacet.technology).toEqual([{ tag: "technology/python", count: 0, pageCount: 2, known: true }]);
     expect(byFacet.platform).toEqual([]);
-    expect(unknown).toEqual([{ tag: "concern/legacy", count: 2, known: false }]);
+    expect(unknown).toEqual([{ tag: "concern/legacy", count: 2, pageCount: 1, known: false }]);
+    expect(pageOnly).toEqual([
+      { tag: "roadmap", count: 0, pageCount: 3, known: false },
+      { tag: "draft", count: 0, pageCount: 1, known: false },
+    ]);
+  });
+
+  it("formats combined note and page counts cleanly", () => {
+    expect(formatTagCounts({ count: 0, pageCount: 0 })).toBe("unused");
+    expect(formatTagCounts({ count: 1, pageCount: 0 })).toBe("1 note");
+    expect(formatTagCounts({ count: 0, pageCount: 2 })).toBe("2 pages");
+    expect(formatTagCounts({ count: 3, pageCount: 1 })).toBe("3 notes · 1 page");
   });
 
   it("parses new tags and rejects what LM would", () => {

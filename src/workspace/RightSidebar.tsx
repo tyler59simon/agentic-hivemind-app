@@ -38,7 +38,7 @@ export function NoteRail() {
       {note.data && <Section title="Details"><NoteDetails note={note.data} /></Section>}
       <details className="rail-more" open={graph} onToggle={(e) => setGraph(e.currentTarget.open)}>
         <summary>Local graph</summary>
-        {graph && <LocalGraphPanel key={ref} tab={tab} />}
+        {graph && <LocalGraphPanel key={ref} focusRef={ref} />}
       </details>
     </aside>
   );
@@ -100,6 +100,7 @@ export function PageRail() {
   const recent = useQuery({ ...recentQuery(), enabled: !!tab?.file && isLoose(tab.file) });
   const title = useNotebookTitle(tab?.file?.notebook, !!tab?.file && !isLoose(tab.file));
   const [calendar, setCalendar] = useState(false);
+  const [graph, setGraph] = useState(false);
   if (!tab?.file) return <aside className="note-rail"><p className="muted">Open a page to see its outline.</p></aside>;
   const full = recent.data?.find((r) => recentRef(r).notebook === tab.file!.notebook)?.path;
   const rows: [string, ReactNode][] = isLoose(tab.file)
@@ -128,6 +129,12 @@ export function PageRail() {
         <details className="rail-more" open={calendar} onToggle={(e) => setCalendar(e.currentTarget.open)}>
           <summary>Calendar</summary>
           {calendar && <DailyCalendar notebook={tab.file.notebook} page={tab.file.path} />}
+        </details>
+      )}
+      {!isLoose(tab.file) && !isLm(tab.file) && (
+        <details className="rail-more" open={graph} onToggle={(e) => setGraph(e.currentTarget.open)}>
+          <summary>Local graph</summary>
+          {graph && <LocalGraphPanel key={keyOf(tab.file)} focusFile={tab.file} />}
         </details>
       )}
       <Section title="File">

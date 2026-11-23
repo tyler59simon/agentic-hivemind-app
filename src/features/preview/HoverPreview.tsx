@@ -6,8 +6,25 @@ import remarkGfm from "remark-gfm";
 import { read } from "../../lib/lm";
 import { sections } from "../../lib/note";
 import { typeClass } from "../../lib/noteTypes";
+import type { UnifiedPageNode } from "../graph/graphData";
 
 const DELAY = 400;
+
+/** Compact preview card for a folder notebook page hovered on the graph. */
+export function PagePreviewCard({ node, x, y }: { node: UnifiedPageNode; x: number; y: number }) {
+  return createPortal(
+    <div className="hover-card" style={{ left: x, top: y }}>
+      <strong className="hover-title">{node.title}</strong>
+      <div className="result-meta">
+        <span className="badge">{node.pageKind}</span>
+        <span className="muted small">{node.notebookTitle}</span>
+      </div>
+      <p className="muted small">{node.file.path}</p>
+      {!!node.tags.length && <div className="tags">{node.tags.map((t) => <span key={t} className="tag">#{t}</span>)}</div>}
+    </div>,
+    document.body,
+  );
+}
 
 /** The preview card itself, at a screen position (used by HoverPreview and the graph). */
 export function PreviewCard({ refId, x, y }: { refId: string; x: number; y: number }) {

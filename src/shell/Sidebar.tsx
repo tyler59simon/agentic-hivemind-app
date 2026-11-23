@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, ChevronDown, Database, House, LayoutDashboard, NotebookPen, Wrench, Sparkles, SquareCheck, Terminal, Workflow, type LucideIcon } from "lucide-react";
+import { BookOpen, ChevronDown, House, LayoutDashboard, NotebookPen, Wrench, Sparkles, SquareCheck, Terminal, Workflow, type LucideIcon } from "lucide-react";
 import logo from "../assets/logo.png";
 import { ProjectSwitcher } from "../features/projects/ProjectSwitcher";
 import { useInboxItems } from "../features/review/useInboxItems";
@@ -18,7 +18,6 @@ import { useHidden } from "./hidden";
 export const SECTIONS: { page: Page; label: string; icon: LucideIcon }[] = [
   { page: "home", label: "Home", icon: House },
   { page: "agents", label: "Agent Workspace", icon: Terminal },
-  { page: "memory", label: "Memory", icon: Database },
   { page: "notes", label: "Notes", icon: NotebookPen },
   { page: "dashboards", label: "Dashboards", icon: LayoutDashboard },
   { page: "wiki", label: "Wiki", icon: BookOpen },

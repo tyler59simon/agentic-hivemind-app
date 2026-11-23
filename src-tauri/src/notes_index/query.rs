@@ -313,6 +313,71 @@ pub fn tags(conn: &Connection, notebook: Option<&str>) -> rusqlite::Result<Vec<T
     rows.collect()
 }
 
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphPage {
+    pub notebook: String,
+    pub path: String,
+    pub kind: String,
+    pub title: String,
+    pub tags: Vec<String>,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphLink {
+    pub notebook: String,
+    pub path: String,
+    pub raw: String,
+    pub kind: String,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphData {
+    pub pages: Vec<GraphPage>,
+    pub links: Vec<GraphLink>,
+}
+
+/// Every indexed page with its tags, plus every outgoing link across all folder notebooks, for the unified graph (CON-12).
+pub fn graph(conn: &Connection) -> rusqlite::Result<GraphData> {
+    let mut pages = Vec::new();
+    let mut by_id: HashMap<i64, usize> = HashMap::new();
+    {
+        let mut stmt = conn.prepare("SELECT id, notebook, path, kind, title FROM pages ORDER BY notebook, path")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                GraphPage { notebook: r.get(1)?, path: r.get(2)?, kind: r.get(3)?, title: r.get(4)?, tags: Vec::new() },
+            ))
+        })?;
+        for row in rows {
+            let (id, page) = row?;
+            by_id.insert(id, pages.len());
+            pages.push(page);
+        }
+    }
+    {
+        let mut stmt = conn.prepare("SELECT page, tag FROM tags ORDER BY page, tag")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+        for row in rows {
+            let (page_id, tag) = row?;
+            if let Some(&idx) = by_id.get(&page_id) {
+                pages[idx].tags.push(tag);
+            }
+        }
+    }
+    let links = {
+        let mut stmt = conn.prepare(
+            "SELECT p.notebook, p.path, l.target_raw, l.target_kind FROM links l JOIN pages p ON p.id = l.page \
+             ORDER BY p.notebook, p.path, l.line, l.rowid LIMIT 50000",
+        )?;
+        let rows = stmt.query_map([], |r| Ok(GraphLink { notebook: r.get(0)?, path: r.get(1)?, raw: r.get(2)?, kind: r.get(3)? }))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    Ok(GraphData { pages, links })
+}
+
 /// A link as one page wrote it.
 #[derive(Serialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]

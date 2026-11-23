@@ -17,7 +17,7 @@ import { SECTIONS } from "./Sidebar";
 
 interface Crumb { label: string; go?: () => void }
 
-const MEMORY_VIEWS = { graph: "Graph", activity: "Activity", history: "History", tags: "Tags" } as const;
+const NOTES_VIEWS = { tasks: "Tasks", views: "Views", tags: "Tags", graph: "Graph" } as const;
 
 function useCrumbs(): Crumb[] {
   const route = useApp((s) => s.route);
@@ -40,13 +40,12 @@ function useCrumbs(): Crumb[] {
     return system ? [{ label: "Projects" }, root, { label: system }] : [{ label: "Projects" }, { label: root.label }];
   }
   const section: Crumb = { label: SECTIONS.find((s) => s.page === route.page)?.label ?? route.page, go: () => go({ page: route.page }) };
-  if (route.page === "notes" && route.view) return [root, section, { label: route.view === "tasks" ? "Tasks" : "Views" }];
+  if (route.page === "notes" && route.view) return [root, section, { label: NOTES_VIEWS[route.view] }];
   if (route.page === "notes" && page && isLoose(page)) return [root, section, { label: "Opened files" }, { label: fileName(page.path) }];
   if (route.page === "notes" && page) {
     return [root, section, { label: notebook ?? "Notebook" }, { label: pageTitle(page.path) }];
   }
-  const leaf = route.page === "memory" ? MEMORY_VIEWS[route.view ?? "graph"]
-    : route.page === "notes" ? noteTitle
+  const leaf = route.page === "notes" ? noteTitle
     : route.page === "agents" ? (route.view === "new" ? "New session" : sessions.data?.find((s) => s.id === route.session)?.title)
     : route.page === "wiki" ? route.domain ?? domain ?? undefined
     : undefined;

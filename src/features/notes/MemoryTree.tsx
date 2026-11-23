@@ -11,10 +11,10 @@ import { projectsQuery } from "../projects/useProject";
 
 const PAGE_SIZE = 250;
 
-export async function listMemoryNotes(signal: AbortSignal) {
+export async function listMemoryNotes(signal: AbortSignal, status: "active" | "any" = "active") {
   const rows = new Map<string, NoteRow>();
   for (let offset = 0; !signal.aborted;) {
-    const page = await list({ allDomains: true, status: "active", offset, limit: PAGE_SIZE });
+    const page = await list({ allDomains: true, status, offset, limit: PAGE_SIZE });
     for (const note of page.notes) rows.set(note.ref, note);
     offset += page.notes.length;
     if (!page.notes.length || offset >= page.total) break;
