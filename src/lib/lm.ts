@@ -41,7 +41,7 @@ export const bridgeGeneration = () => generation;
  *  generation its base was read in (Codex review of 7320d7f, LM-2). */
 const bound = (argv: string[], at?: number) => {
   const g = at ?? generation;
-  return (argv[0] === "doc" || at !== undefined) && g !== undefined ? { generation: g } : {};
+  return (argv[0] === "doc" || argv[0] === "proposals" || at !== undefined) && g !== undefined ? { generation: g } : {};
 };
 
 export async function run<T>(argv: string[], stdin?: string, at?: number): Promise<T> {
@@ -59,10 +59,14 @@ const view = (argv: string[]) => [...argv, "--actor", "viewer"];
 export interface Capabilities {
   direct_writes?: number; history?: number; restore?: number; pin?: number; rule?: number; maintenance?: { version: number; actions: string[] };
   wiki_agent?: { version: number }; note_types?: number;
+  /** 1: `proposals` lists, shows, accepts and rejects staged notes and page edits (it replaced `doc proposals`, `doc accept` and `doc reject`). */
+  proposals?: number;
   /** 1: a system has a `project` field. */
   systems?: { project?: number };
   /** Notebook pages (NS-2A, NS-2B). */
-  docs?: { version: number; max_page_bytes: number; max_asset_bytes: number; notebook_only_domains?: boolean; search?: boolean; folder_policy?: boolean | number; accept_edited?: boolean };
+  docs?: { version: number; max_page_bytes: number; max_asset_bytes: number; notebook_only_domains?: boolean; search?: boolean; folder_policy?: boolean | number; accept_edited?: boolean;
+    /** 1: `doc read --file` and `doc propose --file` for folder notebook pages, and folder proposals in `proposals`. */
+    folder_proposals?: number };
 }
 
 export interface ConnectInfo {
@@ -232,17 +236,18 @@ export const ORIGIN = "hivemind:local";
 export const capture = (domain: string, payload: CapturePayload, opts: { redact?: boolean } = {}) =>
   run<WriteResult>(["capture", "--domain", domain, ...(opts.redact ? ["--redact"] : [])], JSON.stringify({ origin: ORIGIN, ...payload }));
 
-// ---- Proposals: drafts agents (and Hivemind's reviewer) staged for the user to accept or reject. ----
-export interface MemoryProposal { id: string; status: string; created: string; domain: string; type: NoteType; title: string; note_ref?: string; reason?: string }
+// ---- Proposals: drafts agents (and Hivemind's reviewer) staged for the user to accept or reject. One command, `proposals`,
+// covers staged notes (8 hex digit IDs) and page edits (12); the length of the ID tells them apart. ----
+export interface MemoryProposal { kind?: "note"; id: string; status: string; created: string; domain: string; type: NoteType; title: string; note_ref?: string; reason?: string }
 export interface MemoryProposalDetail {
   id: string; status: string; created: string; domain: string; warnings?: string[];
   note: { title: string; body: string; type?: NoteType; tags?: string[]; context?: string };
 }
-export const proposalsList = () => run<{ ok: boolean; proposals: MemoryProposal[] }>(view(["proposals", "list"]));
-export const proposalShow = (id: string) => run<MemoryProposalDetail>(view(["proposals", "show", id]));
+export const proposalsList = () => run<{ ok: boolean; proposals: MemoryProposal[] }>(view(["proposals", "list", "--kind", "note"]));
+export const proposalShow = (id: string) => run<{ kind: "note"; proposal: MemoryProposalDetail }>(view(["proposals", "show", id])).then((r) => r.proposal);
 /** Save the draft as staged, into the domain it was proposed for. */
-export const proposalAccept = (id: string) => run<WriteResult>(["capture", "--from-proposal", id]);
-/** Save a draft that has no concern tag the store knows (Living Memory refuses those), with the one the user picked. */
+export const proposalAccept = (id: string) => run<WriteResult>(["proposals", "accept", id]);
+/** Save a draft that has no concern tag the store knows (Living Memory refuses those), with the one the user picked: `capture` takes the whole note beside the ID. */
 export const proposalAcceptWith = (id: string, note: { title: string; body: string; type?: NoteType }, concern: string) =>
   run<WriteResult>(["capture", "--from-proposal", id, "--type", note.type ?? "knowledge", "--concern", concern, note.title, note.body]);
 export const proposalReject = (id: string, reason?: string) => run<{ ok: boolean }>(["proposals", "reject", id, ...(reason ? ["--reason", reason] : [])]);
@@ -605,8 +610,20 @@ export interface DocReceipt { operation_id: string; revision?: string; path?: st
 export interface DocProposalRow {
   id: string; domain: string; notebook: string; path: string; base_revision: string | null; note: string | null;
   created: string; status: "pending" | "accepted" | "rejected"; reason: string | null; settled: string | null; size: number;
+  /** A folder notebook's page (CON-9): `notebook` is then Living Memory's `nb-` id for the folder, `folder` the folder's canonical path
+   *  and `file` the page's full path. `orphaned`: the folder is no longer registered, so the edit can be rejected but not accepted. */
+  folder?: string | null; file?: string | null; orphaned?: boolean; applied?: boolean;
 }
-export interface DocProposal extends Omit<DocProposalRow, "reason" | "settled" | "size"> { body: string; session?: string | null }
+export interface DocProposal extends Omit<DocProposalRow, "reason" | "settled" | "size"> {
+  body: string; session?: string | null;
+  /** A folder proposal keeps the page as the agent read it (base64 of its bytes; null over 1 MiB), so the merge has its base. */
+  base?: string | null;
+}
+/** The page as the agent read it, from a folder proposal's `base`: the bytes decoded as UTF-8, a byte order mark kept for `pageText`. */
+export function decodeBase(base: string): string {
+  const bytes = Uint8Array.from(atob(base), (c) => c.charCodeAt(0));
+  return new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes);
+}
 export interface DocHistoryRow { operation_id: string; kind: string; state: string; created: string; before_revision: string | null; after_revision: string | null }
 
 const PRIVATE = "--include-private";
@@ -669,7 +686,7 @@ export const docQuery = (payload: object) =>
 export const lmNotebooksQuery = () => ({ queryKey: ["lm-notebooks"], queryFn: docNotebooks });
 /** Pending proposals of one notebook. */
 export const proposalsQuery = (domain: string, notebook: string) => ({ queryKey: ["lm-proposals", domain, notebook], queryFn: () => docProposals(domain, notebook) });
-/** Pending proposals of every notebook (`doc proposals` without a notebook), for the Inbox. */
+/** Pending page edits of every notebook, folder notebooks included (`proposals list --kind page`), for the Inbox. */
 export const allProposalsQuery = () => ({ queryKey: ["lm-proposals", "*"], queryFn: () => docProposals() });
 export const docNotebookCreate = (domain: string, notebook: string, title: string) =>
   run<DocReceipt>(doc(["notebook", "create"], [domain, notebook], [`--title=${title}`], { priv: false }));
@@ -686,6 +703,10 @@ export const docNotebookUpdate = (domain: string, notebook: string, patch: { tit
 export const docList = (domain: string, notebook: string) =>
   run<{ title: string; entries: DocEntry[] }>(doc(["list"], [domain, notebook], [], { viewer: true }));
 export const docRead = (domain: string, notebook: string, path: string, at?: number) => run<DocPage>(doc(["read"], [domain, notebook, path], [], { viewer: true }), undefined, at);
+/** A Markdown page of a folder notebook, read by its file path (`doc read --file`, needs `docs.folder_proposals`): `notebook` is
+ *  Living Memory's `nb-` id for the folder, `folder` its canonical path and `path` the page's path inside it. */
+export interface DocFilePage extends DocPage { origin: "folder"; folder: string; file: string }
+export const docReadFile = (file: string, at?: number) => run<DocFilePage>(doc(["read"], [], [`--file=${file}`], { viewer: true }), undefined, at);
 export const docWrite = (domain: string, notebook: string, path: string, body: string, expected: string) =>
   runBody<DocReceipt>(doc(["write"], [domain, notebook, path], ["--expected-revision", expected]), body);
 export const docCreate = (domain: string, notebook: string, path: string, body: string) =>
@@ -697,16 +718,20 @@ export const docHistory = (domain: string, notebook: string, path: string, limit
 /** The page as operation `op` left it. */
 export const docVersion = (domain: string, notebook: string, path: string, op: string) =>
   run<DocPage>(doc(["history"], [domain, notebook, path], ["--version", op], { viewer: true }));
+/** A `proposals` command for page edits: the ID follows the action (an ID is hex, never an option), then the options. */
+function proposals(action: string, id?: string, options: string[] = [], viewer = false) {
+  return ["proposals", action, ...(id ? [id] : []), ...options, PRIVATE, ...(viewer ? ["--actor", "viewer"] : [])];
+}
 export const docProposals = (domain?: string, notebook?: string) =>
-  run<{ proposals: DocProposalRow[] }>(doc(["proposals"], [...(domain ? [domain] : []), ...(notebook ? [notebook] : [])], [], { viewer: true })).then((r) => r.proposals);
-export const docProposal = (id: string) => run<{ proposal: DocProposal }>(doc(["proposal"], [id], [], { viewer: true })).then((r) => r.proposal);
-export const docAccept = (id: string) => run<DocReceipt>(doc(["accept"], [id]));
+  run<{ proposals: DocProposalRow[] }>(proposals("list", undefined, ["--kind", "page", ...(domain ? ["--domain", domain] : []), ...(notebook ? [`--notebook=${notebook}`] : [])], true)).then((r) => r.proposals);
+export const docProposal = (id: string) => run<{ proposal: DocProposal }>(proposals("show", id, [], true)).then((r) => r.proposal);
+export const docAccept = (id: string) => run<DocReceipt>(proposals("accept", id));
 /** Write the user's merge of a proposal and settle it as accepted, in one Living Memory operation, against the page's
  *  revision the merge was made from (null: the page must not exist). Needs `docs.accept_edited` (Codex review of
  *  32fee20, D3). */
 export const docAcceptEdited = (id: string, body: string, expected: string | null) =>
-  runBody<DocReceipt>(doc(["accept"], [id], ["--edited", ...(expected ? ["--expected-revision", expected] : [])]), body);
-export const docReject = (id: string, reason?: string) => run<DocReceipt>(doc(["reject"], [id], reason ? [`--reason=${reason}`] : []));
+  runBody<DocReceipt>(proposals("accept", id, ["--edited", ...(expected ? ["--expected-revision", expected] : [])]), body);
+export const docReject = (id: string, reason?: string) => run<DocReceipt>(proposals("reject", id, reason ? [`--reason=${reason}`] : []));
 export const domainCreateNotebook = (name: string) => run<{ domain: string; kind: string }>(["domain", "create", name, "--notebook-only"]);
 /** Register a folder notebook outside the store, or change how far agents reach into it. A field left undefined keeps
  *  what Living Memory holds: a folder registered again keeps the visibility and private flag kept for it, and a new one

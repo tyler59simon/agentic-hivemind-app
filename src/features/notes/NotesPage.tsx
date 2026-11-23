@@ -2,11 +2,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Kanban, ListChecks, NotebookPen, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { lmContainer } from "../../documents/adapters/lmdoc";
-import { useConnection, useDocsEnabled } from "../../lib/connection";
+import { useConnection, useDocsEnabled, useFolderProposalsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
-import { lmNotebooksQuery, type DocNotebook } from "../../lib/lm";
+import { allProposalsQuery, lmNotebooksQuery, type DocNotebook } from "../../lib/lm";
 import { addNotebook, notebooksQuery, type Notebook } from "../../lib/notebooks";
-import { useApp } from "../../store";
+import { openInbox, useApp } from "../../store";
 import { toast } from "../../ui/toast";
 import { ContextRail } from "../../workspace/RightSidebar";
 import { hasTabs, railShown, useWorkspace } from "../../workspace/store";
@@ -20,7 +20,7 @@ import { NewFromTemplate } from "./DailyViews";
 import { LmNotebookSettings, NotebookSettings } from "./NotebookSettings";
 import { NotebookTree } from "./NotebookTree";
 import { ProposalInbox } from "./ProposalInbox";
-import { announceAdded } from "./reach";
+import { agentEdits, announceAdded } from "./reach";
 import { TagsPane } from "./TagsPane";
 import { TasksView } from "./TasksView";
 import { ViewsPage } from "./ViewsPage";
@@ -82,6 +82,8 @@ export function NotesPage() {
   const docs = useDocsEnabled();
   const connected = useConnection((s) => s.commands.length > 0);
   const lm = useQuery({ ...lmNotebooksQuery(), enabled: docs });
+  // Page edits agents proposed to folder notebooks: each notebook says how many wait, and the Inbox's Pages group decides them (CON-9).
+  const edits = useQuery({ ...allProposalsQuery(), enabled: useFolderProposalsEnabled(), retry: false });
   const route = useApp((s) => s.route);
   const go = useApp((s) => s.go);
   const open = useWorkspace(hasTabs);
@@ -127,7 +129,7 @@ export function NotesPage() {
           <button type="button" className={`link-row${route.page === "notes" && route.view === "tasks" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "tasks" })}><ListChecks size="1em" aria-hidden /> Tasks</button>
           <button type="button" className={`link-row${route.page === "notes" && route.view === "views" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "views" })}><Kanban size="1em" aria-hidden /> Views</button>
         </div>
-        {list.map((nb) => <NotebookTree key={nb.id} notebook={nb} onSettings={() => setSettings(nb)} />)}
+        {list.map((nb) => <NotebookTree key={nb.id} notebook={nb} onSettings={() => setSettings(nb)} edits={agentEdits(edits.data ?? [], nb)} onEdits={() => openInbox(undefined, undefined, "pages")} />)}
         <TagsPane />
         {(groups.length > 0 || damaged.length > 0) && (
           <div className="notebook-group" aria-label="Living Memory notebooks">

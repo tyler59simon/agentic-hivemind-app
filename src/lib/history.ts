@@ -19,6 +19,11 @@ export const historyList = (notebook: string, path: string) => invoke<Listing>("
 /** `id`: a snapshot's number as text, or `git:<commit>`. */
 export const historyRead = (notebook: string, path: string, id: string) => invoke<Version>("history_read", { notebook, path, id });
 export const historyPin = (notebook: string, path: string, id: number, pinned: boolean) => invoke<void>("history_pin", { notebook, path, id, pinned });
+/** Keep the file as it is on disk now as a version: for a write Living Memory makes (an accepted folder proposal), the page before it
+ *  (`disk`) and as it leaves it (`agent`). With `expect`, only while the file still holds those bytes (its sha-256); null when nothing
+ *  was added (the file is not there, is over 16 MB, or its newest version already holds these bytes). */
+export const historySnapshot = (notebook: string, path: string, expect: string | null, source: "disk" | "agent") =>
+  invoke<Snapshot | null>("history_snapshot", { notebook, path, expect, source });
 export const gitFileLog = (notebook: string, path: string) => invoke<GitLog>("git_file_log", { notebook, path });
 /** Commits this file alone and returns the commit's id. Never pushes. */
 export const gitFileCommit = (notebook: string, path: string, message: string) => invoke<string>("git_file_commit", { notebook, path, message });

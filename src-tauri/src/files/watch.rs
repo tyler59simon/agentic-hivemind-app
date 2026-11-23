@@ -107,6 +107,8 @@ mod tests {
             r"C:\Notes\.obsidian\app.json",
             r"C:\Notes\.hivemind\trash\20261120-120000\Old.md",
             r"C:\Notes\.Page.md.hm-0123abcd.tmp",
+            r"C:\Notes\.tmpk2j4h1x9.mirror",
+            r"C:\Notes\.Page.md.4120-98123456789.aside",
             r"C:\Notes\web\node_modules\x\readme.md",
             r"C:\Other\Page.md",
             r"C:\Notes",

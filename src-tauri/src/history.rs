@@ -413,6 +413,26 @@ pub async fn history_pin(state: State<'_, AppState>, notebook: String, path: Str
     blocking(move || pin(&root, &full, id, pinned)).await
 }
 
+/// The ways a version is kept for a write Living Memory makes: `disk` is the page as it was before an accepted folder
+/// proposal wrote it, `agent` the page as the accept left it (CON-9).
+const SNAPSHOT_SOURCES: [&str; 2] = ["disk", "agent"];
+
+fn check_snapshot_source(source: &str) -> Result<(), String> {
+    if SNAPSHOT_SOURCES.contains(&source) { Ok(()) } else { Err(format!("\"{source}\" is not a way Hivemind keeps a version of a page Living Memory wrote")) }
+}
+
+/// Keep the file as it is on disk now as a version, for a write Living Memory makes outside Hivemind's save path (an
+/// accepted folder proposal): before it with source `disk`, after it with `agent`. With `expect`, only while the file still holds
+/// those bytes (its sha-256). Nothing is added for a file that is not there, is over 16 MB, or whose newest version already
+/// holds these bytes. The file is named as every file command names it, so a protected place or a hidden path is refused.
+#[tauri::command]
+pub async fn history_snapshot(state: State<'_, AppState>, notebook: String, path: String, expect: Option<String>, source: String) -> Result<Option<Entry>, String> {
+    check_snapshot_source(&source)?;
+    let (full, _) = crate::studio::resolve_file(&state, &notebook, &path, false)?;
+    let root = state.history_dir.clone();
+    blocking(move || snapshot_file(&root, &full, expect.as_deref(), &source, now_ms())).await
+}
+
 /// The commits that touched the file, when it is inside a git work tree.
 #[tauri::command]
 pub async fn git_file_log(state: State<'_, AppState>, notebook: String, path: String) -> Result<crate::git::FileLog, String> {
@@ -470,6 +490,33 @@ mod tests {
         assert_eq!(read(&root, file, 2).unwrap(), b"two\n");
         assert!(read(&root, file, 9).is_err());
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_accepted_folder_proposal_keeps_the_page_before_and_after_it() {
+        // `history_snapshot` (CON-9): Living Memory writes the page, so Hivemind keeps `disk` before and `agent` after.
+        let (root, dir) = (scratch(), scratch());
+        let file = dir.join("Page.md");
+        std::fs::write(&file, "one\r\n").unwrap();
+        let held = files::sha256(b"one\r\n");
+        // A page that changed since the user looked is not kept as the version they saw.
+        let other = files::sha256(b"other");
+        assert_eq!(snapshot_file(&root, &file, Some(other.as_str()), "disk", 1).unwrap(), None);
+        let before = snapshot_file(&root, &file, Some(held.as_str()), "disk", 2).unwrap().unwrap();
+        std::fs::write(&file, "one\r\ntwo\r\n").unwrap();
+        let after = snapshot_file(&root, &file, None, "agent", 3).unwrap().unwrap();
+        assert_eq!((before.source.as_str(), after.source.as_str()), ("disk", "agent"));
+        assert_eq!(read(&root, &file, before.id).unwrap(), b"one\r\n", "the bytes, line endings included");
+        assert_eq!(read(&root, &file, after.id).unwrap(), b"one\r\ntwo\r\n");
+        // The same bytes again add nothing; a page that is not there adds nothing and is no error (a new page's "before").
+        assert_eq!(snapshot_file(&root, &file, None, "agent", 4).unwrap(), None);
+        assert_eq!(snapshot_file(&root, &dir.join("New.md"), None, "disk", 5).unwrap(), None);
+        assert!(check_snapshot_source("disk").is_ok() && check_snapshot_source("agent").is_ok());
+        for other in ["you", "ai", "restore", "recovered", ""] {
+            assert!(check_snapshot_source(other).is_err(), "{other}");
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

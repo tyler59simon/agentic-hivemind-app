@@ -52,6 +52,11 @@ export const folderPolicyEnabled = () => folderPolicyOn(useConnection.getState()
  *  the settling would be two steps, so the inbox offers only Accept and Reject (Codex review of 32fee20, D3). */
 export const useAcceptEditedEnabled = () => useConnection((s) => docsOn(s) && !!s.capabilities?.docs?.accept_edited);
 
+/** Folder notebook pages can be read and proposed to (`doc read --file`, `doc propose --file`), and their proposals settle through
+ *  `proposals`: the Inbox then reads, merges and accepts them like a store notebook's (CON-9). */
+const folderProposalsOn = (s: { commands: string[]; capabilities?: Capabilities }) => docsOn(s) && Number(s.capabilities?.docs?.folder_proposals ?? 0) >= 1;
+export const useFolderProposalsEnabled = () => useConnection(folderProposalsOn);
+
 /** The agent-written wiki edition needs the `wiki_agent` capability and the `wiki` command. */
 export const useAgentWikiEnabled = () => useConnection((s) => (s.capabilities?.wiki_agent?.version ?? 0) >= 1 && s.commands.includes("wiki"));
 

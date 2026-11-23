@@ -4,14 +4,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { QueryClient } from "@tanstack/react-query";
-import { docAcceptEdited, docNotebooks, docReject, domains, setBridgeGeneration, setTransport, type DocProposal, type DomainInfo, type Invoke } from "../../lib/lm";
+import {
+  decodeBase, docAccept, docAcceptEdited, docNotebooks, docProposal, docProposals, docReadFile, docReject, domains, proposalAccept, proposalAcceptWith, proposalReject, proposalShow,
+  proposalsList, setBridgeGeneration, setTransport, type DocProposal, type DocProposalRow, type DomainInfo, type Invoke,
+} from "../../lib/lm";
 import { folderPolicyEnabled, useConnection } from "../../lib/connection";
 import type { Notebook } from "../../lib/notebooks";
 import { pageText, parseLm } from "../../documents/adapters/lmdoc";
 import { useWorkspace } from "../../workspace/store";
-import { domainForFolder, registerFolder, setFolderReach, stricter } from "./reach";
+import { agentEdits, domainForFolder, notebookForFolder, registerFolder, setFolderReach, stricter } from "./reach";
 import { notebookId } from "./NewNotebook";
-import { baseText, isStale, mergedBody, unmergeable } from "./ProposalInbox";
+import { baseText, isStale, mergedBody, proposalWhere, unmergeable } from "./ProposalInbox";
 import { newPageHere } from "./actions";
 import { onDocsChanged } from "../../documents/sync";
 
@@ -122,6 +125,101 @@ describe("proposals", () => {
   });
 });
 
+describe("one proposals command (CON-25)", () => {
+  it("every proposal wrapper runs `proposals`, a note's with its kind and a page edit's with --include-private", async () => {
+    const seen = answer(() => ({ proposals: [], proposal: {} }));
+    await proposalsList();
+    await proposalShow("abcd1234");
+    await proposalAccept("abcd1234");
+    await proposalAcceptWith("abcd1234", { title: "T", body: "B", type: "decision" }, "architecture");
+    await proposalReject("abcd1234", "known");
+    await proposalReject("abcd1235");
+    await docProposals();
+    await docProposals("demo", "plans");
+    await docProposal("0123456789ab");
+    await docAccept("0123456789ab");
+    await docReject("0123456789ab");
+    expect(seen).toEqual([
+      ["proposals", "list", "--kind", "note", "--actor", "viewer"],
+      ["proposals", "show", "abcd1234", "--actor", "viewer"],
+      ["proposals", "accept", "abcd1234"],
+      ["capture", "--from-proposal", "abcd1234", "--type", "decision", "--concern", "architecture", "T", "B"],
+      ["proposals", "reject", "abcd1234", "--reason", "known"],
+      ["proposals", "reject", "abcd1235"],
+      ["proposals", "list", "--kind", "page", "--include-private", "--actor", "viewer"],
+      ["proposals", "list", "--kind", "page", "--domain", "demo", "--notebook=plans", "--include-private", "--actor", "viewer"],
+      ["proposals", "show", "0123456789ab", "--include-private", "--actor", "viewer"],
+      ["proposals", "accept", "0123456789ab", "--include-private"],
+      ["proposals", "reject", "0123456789ab", "--include-private"],
+    ]);
+  });
+
+  it("a note's show reply is unwrapped from {kind, proposal}", async () => {
+    answer(() => ({ ok: true, kind: "note", proposal: { id: "abcd1234", status: "pending", note: { title: "T", body: "B" } } }));
+    expect((await proposalShow("abcd1234")).note.title).toBe("T");
+  });
+
+  it("proposals writes carry the bridge generation, like doc writes", async () => {
+    const args: Record<string, unknown>[] = [];
+    setTransport(async (_cmd, a) => { args.push(a); return { exit_code: 0, result: {}, error: null }; });
+    setBridgeGeneration(4);
+    try { await docAccept("0123456789ab"); } finally { setBridgeGeneration(undefined); }
+    expect(args[0].generation).toBe(4);
+  });
+});
+
+describe("folder proposals (CON-9)", () => {
+  const folder = (base: string | null | undefined, baseRevision: string | null = "r1"): DocProposal => ({
+    id: "0123456789ab", domain: "demo", notebook: "nb-0123456789", path: "A.md", base_revision: baseRevision, note: null, created: "", status: "pending",
+    body: "theirs", folder: "C:/Users/me/Wiki", base,
+  } as DocProposal);
+  const bytes = (text: string) => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
+
+  it("the merge base is the page as the agent read it, decoded with its byte order mark and line endings", async () => {
+    const seen = answer(() => ({}));
+    expect(await baseText(folder(bytes("\uFEFFone\r\ntwo\r\n")))).toBe("\uFEFFone\r\ntwo\r\n");
+    expect(pageText((await baseText(folder(bytes("\uFEFFone\r\ntwo\r\n"))))!).text).toBe("one\ntwo\n");
+    expect(decodeBase(bytes("caf\u00e9"))).toBe("caf\u00e9");
+    expect(seen).toEqual([]);   // no history lookup: the proposal carries its base
+  });
+
+  it("have no base when none was kept (a page over 1 MiB) and an empty one for a new page", async () => {
+    answer(() => ({}));
+    expect(await baseText(folder(null))).toBeNull();
+    expect(await baseText(folder(undefined))).toBeNull();
+    expect(await baseText(folder(null, null))).toBe("");
+  });
+
+  it("a folder is matched to Hivemind's notebook ignoring case and the kind of slash", () => {
+    const books = [{ id: "nb-1", path: "C:\\Users\\me\\Wiki", title: "Wiki" }, { id: "nb-2", path: "D:\\Other", title: "Other" }];
+    expect(notebookForFolder(books, "c:/users/me/wiki")?.id).toBe("nb-1");
+    expect(notebookForFolder(books, "C:/Users/me/Wiki/")?.id).toBe("nb-1");
+    expect(notebookForFolder(books, "C:/Users/me/Wiki2")).toBeNull();
+    expect(notebookForFolder(books, null)).toBeNull();
+  });
+
+  it("a folder notebook counts its pending page edits", () => {
+    const row = (folder: string | undefined, status: DocProposalRow["status"] = "pending") => ({ id: "x", folder, status }) as DocProposalRow;
+    const rows = [row("C:/Users/me/Wiki"), row("c:/users/me/wiki"), row("C:/Users/me/Wiki", "accepted"), row("D:/Other"), row(undefined)];
+    expect(agentEdits(rows, { path: "C:\\Users\\me\\Wiki" })).toBe(2);
+    expect(agentEdits(rows, { path: "E:\\Nothing" })).toBe(0);
+  });
+
+  it("the Inbox names a folder page's notebook by its title, else by the folder, never by the nb- id", () => {
+    const books = [{ path: "C:\\Users\\me\\Wiki", title: "Team wiki" }];
+    const row = (folderPath?: string) => ({ domain: "demo", notebook: folderPath ? "nb-0123456789" : "plans", folder: folderPath });
+    expect(proposalWhere(row("C:/Users/me/Wiki"), books)).toEqual({ short: "Team wiki", long: "Team wiki" });
+    expect(proposalWhere(row("C:/Users/me/Notes/"), books)).toEqual({ short: "Notes", long: "Notes" });
+    expect(proposalWhere(row(), books)).toEqual({ short: "plans", long: "demo / plans" });
+  });
+
+  it("a page is read by its file path, as an option of its own with no operands", async () => {
+    const seen = answer(() => ({ origin: "folder", text: "x", revision: "r" }));
+    await docReadFile("C:/Users/me/Wiki/-A.md");
+    expect(seen).toEqual([["doc", "read", "--file=C:/Users/me/Wiki/-A.md", "--include-private", "--actor", "viewer"]]);
+  });
+});
+
 describe("Codex re-review of 75ce884", () => {
   it("R2-C1: a doc command without operands has no `--`, which argparse would refuse", async () => {
     const seen = answer(() => ({ notebooks: [] }));
@@ -207,9 +305,9 @@ describe("Codex review of 32fee20", () => {
     await docAcceptEdited("p1", "merged\r\n", "r2");
     await docAcceptEdited("p2", "new page", null);
     expect(seen).toEqual([
-      ["doc", "reject", "--reason=-not an option", "--include-private", "--", "p1"],
-      ["doc", "accept", "--edited", "--expected-revision", "r2", "--include-private", "--", "p1"],
-      ["doc", "accept", "--edited", "--include-private", "--", "p2"],
+      ["proposals", "reject", "p1", "--reason=-not an option", "--include-private"],
+      ["proposals", "accept", "p1", "--edited", "--expected-revision", "r2", "--include-private"],
+      ["proposals", "accept", "p2", "--edited", "--include-private"],
     ]);
   });
 

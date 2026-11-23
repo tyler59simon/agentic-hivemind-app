@@ -78,8 +78,9 @@ const JSON_MAX: usize = 256 * 1024;
 
 /// `call_with_body` for any of the three file options. The body is the page, or the JSON of the settings or the query.
 pub fn call_with_file(bridge: &Bridge, generation: Option<u64>, staging: &Path, argv: &[String], body: &str, flag: &str) -> Result<Reply, String> {
-    if argv.first().map(String::as_str) != Some("doc") {
-        return Err("Only doc commands carry a page body".into());
+    // `proposals accept --edited` carries the user's merge of a page proposal as its body.
+    if !matches!(argv.first().map(String::as_str), Some("doc" | "proposals")) {
+        return Err("Only doc and proposals commands carry a page body".into());
     }
     if flag != BODY_FILE && flag != SETTINGS_FILE && flag != PAYLOAD_FILE {
         return Err(format!("\"{flag}\" is not a file option Hivemind passes"));
@@ -638,7 +639,7 @@ mod tests {
         std::fs::write(&body, "# Monday\nproposed\n").unwrap();
         let proposal = ok(bridge.call(&argv(&["doc", "propose", "jot", "daily", "Week/Mon.md", "--base-revision", &rev2, "--body-file", body.to_str().unwrap(), "--include-private"]), None).unwrap());
         let id = proposal["id"].as_str().unwrap().to_string();
-        ok(bridge.call(&argv(&["doc", "accept", &id, "--include-private"]), None).unwrap());
+        ok(bridge.call(&argv(&["proposals", "accept", &id, "--include-private"]), None).unwrap());
         assert_eq!(read("Week/Mon.md")["text"], "# Monday\nproposed\n");
 
         // A page named like an option opens, saves and moves (C4); a merge is written and settled in one step (D3).
@@ -648,7 +649,7 @@ mod tests {
         let rev = dash["revision"].as_str().unwrap();
         let propose = doc_argv("propose", &["--base-revision", rev, "--body-file", body.to_str().unwrap(), "--include-private"], &["jot", "daily", "-Other.md"]);
         let proposal = ok(bridge.call(&propose, None).unwrap());
-        let merged = doc_argv("accept", &["--edited", "--expected-revision", rev, "--include-private"], &[proposal["id"].as_str().unwrap()]);
+        let merged = argv(&["proposals", "accept", proposal["id"].as_str().unwrap(), "--edited", "--expected-revision", rev, "--include-private"]);
         ok(call_with_body(&bridge, None, &staging, &merged, "merged\n").unwrap());
         assert_eq!(read("-Other.md")["text"], "merged\n");
 

@@ -4,7 +4,7 @@
 // file applies the same byte-order-mark and line-ending rules as the Rust file service (`files/mod.rs` decode and
 // encode), so the editor gets LF text and a save writes the bytes back as they were except where the text changed.
 import { invoke } from "@tauri-apps/api/core";
-import { bridgeGeneration, docCreate, docDelete, docList, docRead, docWrite, LmError } from "../../lib/lm";
+import { bridgeGeneration, docCreate, docDelete, docList, docRead, docReadFile, docWrite, LmError, type DocPage } from "../../lib/lm";
 import type { Eol, FileFormat, Loaded, SaveOutcome, Stamp, Tree } from "../../lib/notebooks";
 
 export const LM = "lm:";
@@ -84,6 +84,21 @@ export async function readPage(where: LmNotebookRef, path: string): Promise<Load
   } catch (e) {
     throw missing(e);
   }
+  return loadedPage(page);
+}
+
+/** A page of a folder notebook Hivemind has no notebook for, read through Living Memory by its file path (`doc read --file`). */
+export async function readFolderPage(file: string): Promise<Loaded> {
+  let page;
+  try {
+    page = await docReadFile(file);
+  } catch (e) {
+    throw missing(e);
+  }
+  return loadedPage(page);
+}
+
+async function loadedPage(page: DocPage): Promise<Loaded> {
   // `doc read` decodes with replacement characters, so text whose bytes were not UTF-8 would be saved changed. The
   // revision is the SHA-256 of the page's bytes: text that encodes back to it is the page exactly.
   const exact = !page.truncated && (await sha256(page.text)) === page.revision;

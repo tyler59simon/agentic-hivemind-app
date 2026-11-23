@@ -87,8 +87,10 @@ function reachLabel(reach: { visibility?: DocNotebook["visibility"]; private?: b
 
 /** One notebook: its header, and its sections and pages as an expandable tree. A Living Memory notebook (`lm`, NS-2C)
  *  has no folder on disk to show, no empty sections and no section delete, and shows its agents' proposals. */
-export function NotebookTree({ notebook, onSettings, lm, onProposals }: {
+export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onEdits }: {
   notebook: Notebook; onSettings: () => void; lm?: DocNotebook; onProposals?: () => void;
+  /** Page edits agents proposed to a folder notebook (CON-9) wait in the Inbox's Pages group; `onEdits` opens it. */
+  edits?: number; onEdits?: () => void;
 }) {
   const client = useQueryClient();
   const tree = useQuery(treeQuery(notebook.id));
@@ -183,6 +185,10 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals }: {
           <span className="grow">{notebook.title}</span>
           {reach && <span className="badge">{reach}</span>}
         </button>
+        {!lm && !!edits && (
+          <button className="icon-button proposals-badge" title={`${edits} proposed ${edits === 1 ? "edit" : "edits"} from agents, waiting in the Inbox`}
+            onClick={onEdits}><Inbox size="1em" aria-hidden />{edits} agent {edits === 1 ? "edit" : "edits"}</button>
+        )}
         {lm && lm.proposals > 0 && (
           <button className="icon-button proposals-badge" title={`${lm.proposals} proposed ${lm.proposals === 1 ? "edit" : "edits"} from agents`}
             aria-label={`${lm.proposals} agent ${lm.proposals === 1 ? "proposal" : "proposals"}`} onClick={onProposals}><Inbox size="1em" aria-hidden />{lm.proposals}</button>

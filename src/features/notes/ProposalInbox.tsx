@@ -1,39 +1,58 @@
-// Edits agents staged for a Living Memory notebook (`alm doc propose`, NS-2C). The user reads each as a diff against
-// the page as it is now, then accepts, merges by hand or rejects it. Agents outside Notes Studio can only propose.
+// Edits agents staged for a notebook page (`alm doc propose`, NS-2C; `doc propose --file` for a folder notebook, CON-9). The user
+// reads each as a diff against the page as it is now, then accepts, merges by hand or rejects it. Agents can only propose.
 // `ProposalDetail` is one proposal's diff and decisions: the notebook's modal below and the Inbox's Pages group both use it.
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
-import { lmContainer, pageBody, pageText, readPage } from "../../documents/adapters/lmdoc";
+import { lmContainer, pageBody, pageText, readFolderPage, readPage } from "../../documents/adapters/lmdoc";
+import { isMissing } from "../../documents/store";
+import { onFilesChanged } from "../../documents/sync";
 import { useAcceptEditedEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
+import { historySnapshot } from "../../lib/history";
 import {
-  docAccept, docAcceptEdited, docHistory, docProposal, docReject, docVersion, LmError, proposalsQuery,
+  decodeBase, docAccept, docAcceptEdited, docHistory, docProposal, docReject, docVersion, LmError, proposalsQuery,
   type DocNotebook, type DocProposal, type DocProposalRow,
 } from "../../lib/lm";
-import type { Loaded as Page } from "../../lib/notebooks";
+import { notebooksQuery, readFile, type Loaded as Page, type Notebook } from "../../lib/notebooks";
 import { Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 import { PageMergeDialog } from "../editor/MergeDialog";
 import { CodeDiff } from "../review/CodeDiff";
 import { openPage } from "./actions";
+import { notebookForFolder } from "./reach";
 
 /** A proposal with the page as it is now (null when there is no such page), both read the way the editor reads a page:
- *  LF text, the format a save writes back, and why it could not be saved unchanged (Codex review of 32fee20, D2). */
-export interface Loaded { proposal: DocProposal; page: Page | null; proposed: ReturnType<typeof pageText> }
+ *  LF text, the format a save writes back, and why it could not be saved unchanged (Codex review of 32fee20, D2). `nb` is
+ *  Hivemind's notebook for a folder proposal's folder, null for a store notebook's proposal or a folder Hivemind does not have. */
+export interface Loaded { proposal: DocProposal; page: Page | null; proposed: ReturnType<typeof pageText>; nb: Notebook | null }
 
-/** `readPage` says a page that is not there this way (`lmdoc.missing`). */
-const gone = (e: unknown) => e instanceof Error && /^no page\b/.test(e.message);
+/** A page that is not there: `readPage` and `readFolderPage` say so as "no page ...: it does not exist", the file service as its own error. */
+const gone = isMissing;
 
-async function loadOne(id: string): Promise<Loaded> {
+/** A folder proposal's page is read by Hivemind's own file service when it has the folder as a notebook, else through Living Memory. */
+async function loadOne(id: string, client: QueryClient): Promise<Loaded> {
   const proposal = await docProposal(id);
-  const page = await readPage(proposal, proposal.path).catch((e) => { if (gone(e)) return null; throw e; });
-  return { proposal, page, proposed: pageText(proposal.body) };
+  const nb = proposal.folder ? notebookForFolder(await client.fetchQuery({ ...notebooksQuery(), staleTime: 30_000 }), proposal.folder) : null;
+  const reading = !proposal.folder ? readPage(proposal, proposal.path)
+    : nb ? readFile(nb.id, proposal.path)
+    : readFolderPage(`${proposal.folder.replace(/[\\/]+$/, "")}/${proposal.path}`);
+  const page = await reading.catch((e) => { if (gone(e)) return null; throw e; });
+  return { proposal, page, proposed: pageText(proposal.body), nb };
+}
+
+/** Where a page proposal lands, as the Inbox says it: a store notebook as `domain / notebook`, a folder notebook by the title of
+ *  Hivemind's notebook for the folder or else the folder's own name (its `nb-` id means nothing to the user). */
+export function proposalWhere(row: Pick<DocProposalRow, "domain" | "notebook" | "folder">, notebooks: Pick<Notebook, "path" | "title">[]): { short: string; long: string } {
+  if (!row.folder) return { short: row.notebook, long: `${row.domain} / ${row.notebook}` };
+  const name = notebookForFolder(notebooks, row.folder)?.title ?? (row.folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || row.folder);
+  return { short: name, long: name };
 }
 
 /** The page as the agent read it: the version the operation that left it at the proposal's base revision wrote. Null
  *  when retention has removed that operation, or the proposal is for a new page. */
 export async function baseText(p: DocProposal): Promise<string | null> {
   if (!p.base_revision) return "";
+  if (p.folder) return p.base ? decodeBase(p.base) : null;   // the proposal kept the page as it read it; none kept (over 1 MiB): the merge uses the page as it is
   const rows = await docHistory(p.domain, p.notebook, p.path, 200).catch(() => []);
   const op = rows.find((r) => r.after_revision === p.base_revision)?.operation_id;
   if (!op) return null;
@@ -65,20 +84,33 @@ const stale = (e: unknown) => e instanceof LmError && e.stale;
  *  once the proposal is accepted, merged or rejected; `onBusy` says when a decision is being written. */
 export function ProposalDetail({ row, onSettled, onBusy }: { row: DocProposalRow; onSettled: () => void; onBusy?: (busy: boolean) => void }) {
   const client = useQueryClient();
-  const one = useQuery({ queryKey: ["lm-proposal", row.id], queryFn: () => loadOne(row.id), gcTime: 0 });
+  const one = useQuery({ queryKey: ["lm-proposal", row.id], queryFn: () => loadOne(row.id, client), gcTime: 0 });
   const canMerge = useAcceptEditedEnabled();
   const [busy, setBusy] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [dialog, setDialog] = useState<ReactNode>(null);
-  const container = lmContainer(row.domain, row.notebook);
   const loaded = one.data;
-  const blocked = loaded && (unmergeable(loaded) ?? (canMerge ? null : "Merging needs a newer Living Memory (with doc accept --edited)"));
+  // The notebook the page opens in: a store notebook's container, or Hivemind's notebook for the folder (none when it has none).
+  const container = row.folder ? loaded?.nb?.id ?? null : lmContainer(row.domain, row.notebook);
+  const orphaned = !!row.orphaned;
+  const blocked = loaded && (unmergeable(loaded) ?? (canMerge ? null : "Merging needs a newer Living Memory (with proposals accept --edited)"));
 
   const settled = (text: string) => {
     toast(text);
     setRejecting(false);
     for (const key of [["lm-proposals"], ["lm-notebooks"], ["notebook-tree", container]]) client.invalidateQueries({ queryKey: key });
     onSettled();
+  };
+  /** Living Memory writes a folder notebook's page itself, outside Hivemind's save path, so its file history is kept here: the page as it
+   *  is before the write (`disk`; when that cannot be kept nothing is written) and as it is after (`agent`), then open tabs read it again. */
+  const written = async ({ proposal, page, nb }: Loaded, write: () => Promise<unknown>) => {
+    const where = proposal.folder && nb ? { notebook: nb.id, path: proposal.path } : null;
+    if (where) await historySnapshot(where.notebook, where.path, page?.sha256 ?? null, "disk");
+    await write();
+    if (where) {
+      await historySnapshot(where.notebook, where.path, null, "agent").catch(() => null);
+      onFilesChanged(client, { notebook: where.notebook, paths: [where.path] });
+    }
   };
   const run = async (work: () => Promise<void>) => {
     setBusy(true);
@@ -88,7 +120,7 @@ export function ProposalDetail({ row, onSettled, onBusy }: { row: DocProposalRow
 
   const accept = (loaded: Loaded) => run(async () => {
     try {
-      await docAccept(loaded.proposal.id);
+      await written(loaded, () => docAccept(loaded.proposal.id));
     } catch (e) {
       if (!stale(e)) throw e;
       // The page moved on since this view was read: show it as it is now, where the edit can be merged (U1).
@@ -109,7 +141,7 @@ export function ProposalDetail({ row, onSettled, onBusy }: { row: DocProposalRow
         onCancel={() => setDialog(null)}
         onResolve={(text) => void run(async () => {
           try {
-            await docAcceptEdited(proposal.id, mergedBody(text, loaded), page?.sha256 ?? null);
+            await written(loaded, () => docAcceptEdited(proposal.id, mergedBody(text, loaded), page?.sha256 ?? null));
           } catch (e) {
             if (!stale(e)) throw e;
             void one.refetch();
@@ -139,7 +171,8 @@ export function ProposalDetail({ row, onSettled, onBusy }: { row: DocProposalRow
               {loaded.page ? "The page changed after the agent read it" : "The page the agent edited is gone"}, so the edit cannot be applied as it is. Merge it into the page as it is now.
             </p>
           )}
-          {blocked && <p className="muted small">{blocked}, so Hivemind does not merge it here. Accept or reject it, or open the page.</p>}
+          {orphaned && <p className="banner warn small">Living Memory no longer has this folder registered, so the edit cannot be applied. Reject it.</p>}
+          {blocked && !orphaned && <p className="muted small">{blocked}, so Hivemind does not merge it here. Accept or reject it, or open the page.</p>}
           <div className="proposal-diff"><CodeDiff path={row.path} base={loaded.page?.text ?? ""} head={loaded.proposed.text} /></div>
           {rejecting ? (
             <div className="actions">
@@ -151,11 +184,11 @@ export function ProposalDetail({ row, onSettled, onBusy }: { row: DocProposalRow
             </div>
           ) : (
             <div className="actions">
-              {loaded.page && <button className="ghost" onClick={() => openPage({ notebook: container, path: row.path })}>Open page</button>}
+              {loaded.page && container && <button className="ghost" onClick={() => openPage({ notebook: container, path: row.path })}>Open page</button>}
               <span className="fill" />
               <button className="danger-text ghost" onClick={() => setRejecting(true)} disabled={busy}>Reject…</button>
-              {!blocked && <button onClick={() => void merge(loaded)} disabled={busy}>{isStale(loaded) ? "Merge…" : "Edit, then accept…"}</button>}
-              {!isStale(loaded) && <button className="primary" onClick={() => void accept(loaded)} disabled={busy}>Accept</button>}
+              {!blocked && !orphaned && <button onClick={() => void merge(loaded)} disabled={busy}>{isStale(loaded) ? "Merge…" : "Edit, then accept…"}</button>}
+              {!isStale(loaded) && !orphaned && <button className="primary" onClick={() => void accept(loaded)} disabled={busy}>Accept</button>}
             </div>
           )}
         </>

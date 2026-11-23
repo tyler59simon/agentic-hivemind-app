@@ -13,7 +13,7 @@ It runs on Tauri 2 with React and TypeScript, on Windows, macOS and Linux. It is
   - live refresh when agents write
 - **Notes:** open as tabs, side by side in up to three panes. A note page has Reading, Source and History tabs, and a context rail with its connections (backlinks, outgoing links, replaces / replaced by, links to missing notes), recent history, outline, details and a local graph. Hovering a note link shows its summary.
 - **Home:** the picked project's current plan, next open items, recent notes and commits, and what needs review. Its Architecture tab shows the project's systems (all systems when no project is picked).
-- **Inbox:** everything that waits for you, across projects, with one count on the sidebar. Its groups are agent code edits (with an Ask Codex button that has a read-only Codex review a diff), notes due for confirmation and drafts, notebook page edits agents proposed, Executive captures, what maintenance changed in the last week (each with Undo and Looks right), registry updates an agent proposed, and skill proposals.
+- **Inbox:** everything that waits for you, across projects, with one count on the sidebar. Its groups are agent code edits (with an Ask Codex button that has a read-only Codex review a diff), notes due for confirmation and drafts, notebook page edits agents proposed (store notebooks and folder notebooks; a folder notebook also shows "N agent edits" on the Notes page, and an accepted edit is kept in the page's file history), Executive captures, what maintenance changed in the last week (each with Undo and Looks right), registry updates an agent proposed, and skill proposals.
 - **Architecture** (Home tab): a system's containers drawn from its Architecture Suite model (context and container levels, pan, zoom, select a box to inspect it), with its decisions, runbooks and weaknesses. Background agent sessions are listed in Agent Workspace.
 - **Editor:**
   - CodeMirror with Obsidian-style live preview, plus a plain Source mode
@@ -47,7 +47,7 @@ Living Memory stays the only writer, and Hivemind never touches the store's file
 
 ## Requirements
 
-- **Living Memory with the app bridge and direct writes:** its `version` reports API level 1 or later, the `serve`, `list`, `domains` and `version` commands, and `capabilities.direct_writes` 1 or later. Hivemind will not open an older one and says to update it. Backlinks and the graph also need `links`; without it Hivemind says so and the rest still works.
+- **Living Memory with the app bridge and direct writes:** its `version` reports API level 1 or later, the `serve`, `list`, `domains` and `version` commands, and `capabilities.direct_writes` 1 or later. Hivemind will not open an older one and says to update it. The Inbox settles staged notes and page edits through the one `proposals` command (`capabilities.proposals` 1; it replaced `doc proposals`, `doc accept` and `doc reject`), so update Living Memory and Hivemind together. Backlinks and the graph also need `links`; without it Hivemind says so and the rest still works.
 - **Python 3.10+** with SQLite FTS5. Hivemind uses the interpreter Living Memory's installer recorded, so the app and Living Memory's hooks run the same one.
 - **To build:** Rust (stable), Node 20+, and the [Tauri prerequisites](https://tauri.app/start/prerequisites/). On Windows that means the MSVC C++ Build Tools and WebView2. On Linux the tray icon needs `libayatana-appindicator3`.
 

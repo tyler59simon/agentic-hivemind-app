@@ -5,7 +5,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { folderPolicyEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
-import { docFolderSet, docFolderUnset, domains, type DomainInfo, type Visibility } from "../../lib/lm";
+import { docFolderSet, docFolderUnset, domains, type DocProposalRow, type DomainInfo, type Visibility } from "../../lib/lm";
 import { metaQuery, setNotebookMeta, type Notebook } from "../../lib/notebooks";
 import { useApp } from "../../store";
 import { toast } from "../../ui/toast";
@@ -29,6 +29,16 @@ export function domainForFolder(path: string, known: DomainInfo[], fallback: str
   }
   return best?.name ?? fallback;
 }
+
+/** Hivemind's notebook for the folder a Living Memory folder proposal names (its canonical path, with `/` between parts): the
+ *  registered one whose folder is the same, ignoring case and the kind of slash. Null when Hivemind does not have that folder. */
+export function notebookForFolder<T extends { path: string }>(notebooks: T[], folder: string | null | undefined): T | null {
+  return folder ? notebooks.find((nb) => norm(nb.path) === norm(folder)) ?? null : null;
+}
+
+/** How many pending page edits agents proposed to this folder notebook's pages (CON-9). */
+export const agentEdits = (rows: DocProposalRow[], notebook: { path: string }) =>
+  rows.filter((r) => r.status === "pending" && notebookForFolder([notebook], r.folder)).length;
 
 /** Record Living Memory's answer in Hivemind's registry. */
 const record = (id: string, policy: FolderPolicy) => invoke<Notebook>("notebook_reach_record", { id, ...policy });

@@ -14,7 +14,8 @@ import { openSession, openSystem, useApp, type InboxKind } from "../../store";
 import { sections } from "../../lib/note";
 import { Markdown } from "../../ui/Markdown";
 import { ArrowLink, PageHeader, Tabs } from "../../ui/Page";
-import { age, ProposalDetail } from "../notes/ProposalInbox";
+import { notebooksQuery } from "../../lib/notebooks";
+import { age, ProposalDetail, proposalWhere } from "../notes/ProposalInbox";
 import { DirectDialog } from "../plans/DirectDialog";
 import { ReviewDialog } from "../executive/Capture";
 import { AppliedPane } from "../maintenance/AppliedPane";
@@ -73,6 +74,8 @@ export function InboxPage() {
   const routed = route.page === "inbox" ? route : { page: "inbox" as const };
   const projectsOn = useProjectsEnabled();
   const inbox = useInboxItems({ routed: routed.session });
+  const notebooks = useQuery(notebooksQuery());
+  const where = (row: DocProposalRow) => proposalWhere(row, notebooks.data ?? []);
   const { groups, sessions, due, drafts, pages, captures, applied, skills, proposals, behind, dismiss, counts } = inbox;
 
   // Code: each session's files. Sessions come from the hook; their file lists are read here, for the rows shown.
@@ -237,7 +240,7 @@ export function InboxPage() {
               {memoryRows && !!active.error && <p className="error small pad">{classify(active.error).message}</p>}
               {visible.map((item) => item.type === "memory" ? row(item, <Layers size="1.3em" aria-hidden />, item.row.title, item.due ? null : <span className="muted small">agent</span>)
                 : item.type === "draft" ? row(item, <Lightbulb size="1.3em" aria-hidden />, item.proposal.title, <span className="muted small">{item.run ? "review draft" : "agent draft"}</span>)
-                : item.type === "page" ? row(item, <NotebookPen size="1.3em" aria-hidden />, item.row.path, <span className="muted small">{item.row.notebook}</span>)
+                : item.type === "page" ? row(item, <NotebookPen size="1.3em" aria-hidden />, item.row.path, <span className="muted small">{where(item.row).short}{item.row.orphaned ? " · folder gone" : ""}</span>)
                 : item.type === "capture" ? row(item, <InboxIcon size="1.3em" aria-hidden />, item.batch.source.label,
                   <span className="muted small">{item.batch.project ?? ""}{item.batch.items.filter((i) => i.state === "pending").length ? ` ${item.batch.items.filter((i) => i.state === "pending").length}` : ""}</span>)
                 : item.type === "applied" ? row(item, <Wrench size="1.3em" aria-hidden />, titleOf(item.item.ref) ?? item.item.ref, <span className="muted small">{resultText(item.item.decision).toLowerCase()}</span>)
@@ -257,7 +260,7 @@ export function InboxPage() {
                   {selected.type === "page" && (
                     <>
                       <h2>{selected.row.path}</h2>
-                      <p className="muted small">In {selected.row.domain} / {selected.row.notebook} · {selected.row.base_revision ? "edit" : "new page"} · {age(selected.row.created)}</p>
+                      <p className="muted small">In {where(selected.row).long} · {selected.row.base_revision ? "edit" : "new page"} · {age(selected.row.created)}{selected.row.orphaned ? " · its folder is no longer registered" : ""}</p>
                       {selected.row.note && <p>{selected.row.note}</p>}
                       <ProposalDetail key={selected.row.id} row={selected.row} onSettled={done} />
                     </>
