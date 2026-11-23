@@ -1483,7 +1483,9 @@ sup.wiki-cite .removed { color: var(--muted); text-decoration: line-through; }
 .task-group h3 .link { text-transform: none; letter-spacing: 0; font-size: 1rem; }
 .milestone-row svg { flex: none; color: var(--accent); }
 .undated-group { flex-direction: column; align-items: stretch; gap: .1rem; }
-.undated-head { display: flex; align-items: center; gap: .5rem; width: auto; justify-content: flex-start; }
+.undated-head { display: flex; align-items: center; gap: .5rem; width: 100%; min-width: 0; justify-content: flex-start; }
+.undated-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.undated-head svg, .undated-head .muted { flex-shrink: 0; }
 .undated-first { padding-left: 1.6rem; }
 .undated-group .task-list { padding-left: 1.2rem; }
 .since-list { padding: .1rem 0; }

@@ -57,7 +57,7 @@ function MemoryCard({ row, due, why }: { row: ReviewRow; due: boolean; why?: str
   return (
     <>
       {!due && <p className="muted">An agent captured this note. Nobody has confirmed it yet.</p>}
-      {due && why !== undefined && <p className="muted">Maintenance did not decide this note{why ? `: ${why}` : ""}.</p>}
+      {due && why !== undefined && <p className="muted">Maintenance did not decide this note{why ? `: ${why.replace(/[.\s]+$/, "")}` : ""}.</p>}
       <ReviewQueue rows={[row]} snooze={due} />
       {summary && <div className="markdown"><Markdown>{summary}</Markdown></div>}
     </>
@@ -235,12 +235,12 @@ export function InboxPage() {
               )}
               {memoryRows && (active.isLoading || inbox.maintenanceLoading) && <p className="muted small pad">Loading…</p>}
               {memoryRows && !!active.error && <p className="error small pad">{classify(active.error).message}</p>}
-              {visible.map((item) => item.type === "memory" ? row(item, <Layers size="1.3em" aria-hidden />, `Memory: ${item.row.title}`, item.due ? null : <span className="muted small">agent</span>)
-                : item.type === "draft" ? row(item, <Lightbulb size="1.3em" aria-hidden />, `Memory draft: ${item.proposal.title}`, <span className="muted small">{item.run ? "review" : "agent"}</span>)
-                : item.type === "page" ? row(item, <NotebookPen size="1.3em" aria-hidden />, `Page: ${item.row.path}`, <span className="muted small">{item.row.notebook}</span>)
-                : item.type === "capture" ? row(item, <InboxIcon size="1.3em" aria-hidden />, `Capture: ${item.batch.source.label}`,
+              {visible.map((item) => item.type === "memory" ? row(item, <Layers size="1.3em" aria-hidden />, item.row.title, item.due ? null : <span className="muted small">agent</span>)
+                : item.type === "draft" ? row(item, <Lightbulb size="1.3em" aria-hidden />, item.proposal.title, <span className="muted small">{item.run ? "review draft" : "agent draft"}</span>)
+                : item.type === "page" ? row(item, <NotebookPen size="1.3em" aria-hidden />, item.row.path, <span className="muted small">{item.row.notebook}</span>)
+                : item.type === "capture" ? row(item, <InboxIcon size="1.3em" aria-hidden />, item.batch.source.label,
                   <span className="muted small">{item.batch.project ?? ""}{item.batch.items.filter((i) => i.state === "pending").length ? ` ${item.batch.items.filter((i) => i.state === "pending").length}` : ""}</span>)
-                : item.type === "applied" ? row(item, <Wrench size="1.3em" aria-hidden />, `${resultText(item.item.decision)}: ${titleOf(item.item.ref) ?? item.item.ref}`)
+                : item.type === "applied" ? row(item, <Wrench size="1.3em" aria-hidden />, titleOf(item.item.ref) ?? item.item.ref, <span className="muted small">{resultText(item.item.decision).toLowerCase()}</span>)
                 : item.type === "proposal" ? row(item, <Network size="1.3em" aria-hidden />, `Architecture: ${item.system.name} update`)
                 : item.type === "behind" ? row(item, <Layers size="1.3em" aria-hidden />, `Architecture: ${item.system.name} is ${item.stale.behind} commit${item.stale.behind === 1 ? "" : "s"} behind`)
                 : item.type === "skill" ? row(item, <Sparkles size="1.3em" aria-hidden />, proposalTitle(item.proposal))

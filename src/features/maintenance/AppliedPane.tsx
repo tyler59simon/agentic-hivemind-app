@@ -43,7 +43,7 @@ export function AppliedPane({ item, title }: { item: AppliedItem; title?: string
   return (
     <>
       <h2><NoteLink row={{ ref: item.ref, title: title ?? item.ref }} /></h2>
-      <p>Maintenance changed this note: {what.toLowerCase()}.</p>
+      <p>Maintenance {what.toLowerCase()} this note.</p>
       {reason && <p className="muted">{reason}</p>}
       <p className="muted small">The run started {new Date(item.run.attempted_at).toLocaleString()}. Undo reverses the change. Looks right takes it out of the Inbox.</p>
       <div className="work-actions">
