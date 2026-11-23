@@ -26,9 +26,9 @@ describe("navigation", () => {
   });
 
   it("replace swaps the route without growing Back", () => {
-    app().go({ page: "memory" });
-    app().go({ page: "memory", q: "idem" }, { replace: true });
-    app().go({ page: "memory", q: "idempotency" }, { replace: true });
+    app().go({ page: "memory", view: "graph" });
+    app().go({ page: "memory", view: "tags" }, { replace: true });
+    app().go({ page: "memory", view: "activity" }, { replace: true });
     expect(app().back).toEqual([{ page: "home" }]);
     app().goBack();
     expect(app().route).toEqual({ page: "home" });
@@ -127,15 +127,15 @@ describe("navigation", () => {
 describe("saved navigation", () => {
   const migrate = (route: object, version = 1) => useApp.persist.getOptions().migrate!({ project: "pay", domain: "demo", route }, version);
 
-  it("is version 5, and moves the Overview, Executive and Recap pages to Home", () => {
-    expect(useApp.persist.getOptions().version).toBe(5);
+  it("is version 6, and moves the Overview, Executive and Recap pages to Home", () => {
+    expect(useApp.persist.getOptions().version).toBe(6);
     for (const page of ["overview", "executive", "recap"]) expect(migrate({ page })).toEqual({ project: "pay", domain: "demo", route: { page: "home" } });
     expect(migrate({ page: "overview", view: "work" })).toMatchObject({ route: { page: "home" } });
   });
 
-  it("moves the v4 Memory workspace route and keeps the Memory library and its search", () => {
+  it("moves the v4 Memory workspace route and drops retired Memory search query on v6", () => {
     expect(migrate({ page: "memory", view: "notes" }, 4)).toEqual({ project: "pay", domain: "demo", route: { page: "notes" } });
-    expect(migrate({ page: "memory", q: "ledger" }, 4)).toMatchObject({ route: { page: "memory", q: "ledger" } });
+    expect(migrate({ page: "memory", q: "ledger" }, 5)).toEqual({ project: "pay", domain: "demo", route: { page: "memory" } });
     expect(migrate({ page: "memory", view: "graph" }, 4)).toMatchObject({ route: { page: "memory", view: "graph" } });
   });
 

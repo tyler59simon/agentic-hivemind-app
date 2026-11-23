@@ -7,7 +7,7 @@ import { domains, list, search, systems, type System } from "../../../lib/lm";
 import { classify } from "../../../lib/errors";
 import { Modal } from "../../../ui/Modal";
 import type { NotebookFiles } from "../../editor/rich/context";
-import { fromHit, fromRow, type Item } from "../../library/library";
+import { fromNoteRow, fromSearchHit, type MemoryItem } from "../../search/memory";
 import { captureRange, fileLines, rangeLabel } from "./codeRange";
 import { PICTURE_PATH, MAX_GALLERY, MAX_RANGE_LINES } from "../rules";
 
@@ -33,7 +33,7 @@ const NoNotebook = ({ onClose }: { onClose(): void }) => (
 
 export function NoteCardDialog({ initial, onPick, onClose }: DialogProps) {
   const [query, setQuery] = useState("");
-  const [hits, setHits] = useState<Item[] | null>(null);
+  const [hits, setHits] = useState<MemoryItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let gone = false;
@@ -43,9 +43,9 @@ export function NoteCardDialog({ initial, onPick, onClose }: DialogProps) {
           const known = await domains();
           const domain = known.domains[0]?.name;
           if (!domain) return [];
-          return (await search({ query: query.trim(), domain, scope: "all", limit: 20 })).results.map(fromHit);
+          return (await search({ query: query.trim(), domain, scope: "all", limit: 20 })).results.map(fromSearchHit);
         }
-        return (await list({ allDomains: true, status: "active", limit: 20 })).notes.map(fromRow);
+        return (await list({ allDomains: true, status: "active", limit: 20 })).notes.map(fromNoteRow);
       })().then((items) => { if (!gone) { setHits(items); setError(null); } }, (e) => { if (!gone) setError(classify(e).message); });
     }, query ? 250 : 0);
     return () => { gone = true; clearTimeout(timer); };

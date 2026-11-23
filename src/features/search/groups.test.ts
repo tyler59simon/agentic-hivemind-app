@@ -1,4 +1,4 @@
-// NS-4A: result grouping for the Notes page's search box, and the arrow keys' walk over it.
+// NS-4A / CON-11: result grouping for the unified top-bar search box, and the arrow keys' walk over it.
 import { describe, expect, it } from "vitest";
 import type { DocSearchHit, SearchHit } from "../../lib/lm";
 import { MARK_CLOSE, MARK_OPEN, marked, type IndexHit } from "../../lib/noteindex";
@@ -8,7 +8,9 @@ const page = (notebook: string, path: string, title = path): IndexHit => ({ note
 const lmHit = (domain: string, notebook: string, path: string): DocSearchHit => ({
   domain, notebook, notebook_title: `${notebook} title`, title: path, path, heading: "Part", snippet: "in a page", line_start: 3, line_end: 4, revision: "r", score: 1, relevance: 1,
 });
-const note = (id: string): SearchHit => ({ id, domain: "demo", title: `Note ${id}`, type: "knowledge", snippet: "words" } as SearchHit);
+const note = (id: string, over: Partial<SearchHit> = {}): SearchHit => ({
+  id, domain: "demo", title: `Note ${id}`, type: "knowledge", status: "active", tags: [], snippet: "words", ...over,
+} as SearchHit);
 
 const input = (over: Partial<GroupInput> = {}): GroupInput => ({
   current: "nb-1", titles: new Map([["nb-1", "Main"], ["nb-2", "Work"]]),
@@ -18,24 +20,27 @@ const input = (over: Partial<GroupInput> = {}): GroupInput => ({
 });
 
 describe("buildGroups", () => {
-  it("makes four groups in a fixed order, each in the order its own source gave", () => {
+  it("makes four groups in one fixed order (Memory notes first), each in the order its own source gave", () => {
     const groups = buildGroups(input({ here: [page("nb-1", "B.md"), page("nb-1", "A.md")] }));
-    expect(groups.map((g) => g.id)).toEqual(["here", "other", "lm", "memory"]);
-    expect(groups.map((g) => g.title)).toEqual(["This notebook", "Other notebooks", "Living Memory pages", "Memory notes"]);
-    expect(groups[0].rows.map((r) => r.title)).toEqual(["B.md", "A.md"]);
+    expect(groups.map((g) => g.id)).toEqual(["memory", "here", "other", "lm"]);
+    expect(groups.map((g) => g.title)).toEqual(["Memory notes", "This notebook", "Other notebooks", "Living Memory pages"]);
+    expect(groups[1].rows.map((r) => r.title)).toEqual(["B.md", "A.md"]);
   });
 
-  it("describes each row by its notebook and folder, and says where it opens", () => {
-    const [here, other, lm, memory] = buildGroups(input());
+  it("describes each row by its origin/project and says where it opens", () => {
+    const [memory, here, other, lm] = buildGroups(input({
+      projectNames: new Map([["project/pay", "Paystream"]]),
+      memory: [note("1", { tags: ["project/pay"], status: "archived" })],
+    }));
+    expect(memory.rows[0]).toMatchObject({ detail: "Paystream · knowledge · archived", open: { note: { ref: "demo:1", domain: "demo", title: "Note 1" } } });
     expect(here.rows[0]).toMatchObject({ detail: "Projects", open: { page: { notebook: "nb-1", path: "Projects/Plan.md" } }, snippet: "a snippet" });
     expect(other.rows[0]).toMatchObject({ detail: "Work", open: { page: { notebook: "nb-2", path: "Plan.md" } } });
     expect(lm.rows[0]).toMatchObject({ detail: "plans title · Part", open: { lm: { domain: "demo", notebook: "plans", path: "Roadmap.md" } } });
-    expect(memory.rows[0]).toMatchObject({ detail: "demo · knowledge", open: { note: { ref: "demo:1", domain: "demo", title: "Note demo:1" } } });
   });
 
   it("has no Living Memory group without the docs.search capability, whatever it was handed", () => {
     const groups = buildGroups(input({ lmSearch: false }));
-    expect(groups.map((g) => g.id)).toEqual(["here", "other", "memory"]);
+    expect(groups.map((g) => g.id)).toEqual(["memory", "here", "other"]);
   });
 
   it("shows only the Living Memory notebooks Hivemind lists, since those are the ones a tab can open", () => {
@@ -59,13 +64,13 @@ describe("buildGroups", () => {
 
   it("leaves out a group with nothing in it, and calls the pages 'Notebooks' when no page is being read", () => {
     expect(buildGroups(input({ here: [], lm: [], memory: [] })).map((g) => g.id)).toEqual(["other"]);
-    expect(buildGroups(input({ current: undefined, here: [] }))[0].title).toBe("Notebooks");
+    expect(buildGroups(input({ current: undefined, here: [], memory: [] }))[0].title).toBe("Notebooks");
     expect(buildGroups(input({ here: [], other: [], lm: [], memory: [] }))).toEqual([]);
   });
 
-  it("never merges or reorders across groups: a better memory note stays under the pages", () => {
+  it("never merges or reorders across groups: memory notes stay ahead of notebook pages", () => {
     const rows = flatRows(buildGroups(input({ memory: [note("a"), note("b")] })));
-    expect(rows.map((r) => r.group)).toEqual(["here", "other", "lm", "memory", "memory"]);
+    expect(rows.map((r) => r.group)).toEqual(["memory", "memory", "here", "other", "lm"]);
   });
 });
 

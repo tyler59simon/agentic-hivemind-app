@@ -1,12 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
-import { Layers, Search } from "lucide-react";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Layers } from "lucide-react";
+import { Fragment, useEffect, useRef } from "react";
 import { NotesSearchBox } from "../features/search/NotesSearch";
+import { useNotesSearch } from "../features/search/store";
 import { useCurrentProject } from "../features/projects/useProject";
 import { systemsQuery } from "../features/systems/useSystem";
 import { sessionsQuery } from "../lib/agent";
 import { useSystemsEnabled } from "../lib/connection";
-import { OTHER_FOLDERS, realProject } from "../lib/folders";
+import { OTHER_FOLDERS } from "../lib/folders";
 import { useApp } from "../store";
 import { fileName, pageTitle } from "../lib/notebooks";
 import { isLoose } from "../lib/opens";
@@ -44,7 +45,7 @@ function useCrumbs(): Crumb[] {
   if (route.page === "notes" && page) {
     return [root, section, { label: notebook ?? "Notebook" }, { label: pageTitle(page.path) }];
   }
-  const leaf = route.page === "memory" ? route.view && MEMORY_VIEWS[route.view]
+  const leaf = route.page === "memory" ? MEMORY_VIEWS[route.view ?? "graph"]
     : route.page === "notes" ? noteTitle
     : route.page === "agents" ? (route.view === "new" ? "New session" : sessions.data?.find((s) => s.id === route.session)?.title)
     : route.page === "wiki" ? route.domain ?? domain ?? undefined
@@ -52,22 +53,20 @@ function useCrumbs(): Crumb[] {
   return leaf ? [root, section, { label: leaf }] : [root, section];
 }
 
-/** Breadcrumb on the left; "Search project" on the right (Ctrl+K), which shows its results in Memory. On the Notes page the
- *  box searches pages instead and shows its results in a panel under it (NS-4A). */
+/** Breadcrumb on the left; one unified search box on the right (Ctrl+K / Ctrl+Shift+F) on every page (CON-11). */
 export function Topbar() {
   const crumbs = useCrumbs();
-  const go = useApp((s) => s.go);
-  const routeQuery = useApp((s) => (s.route.page === "memory" ? s.route.q ?? "" : ""));
-  const scoped = useApp((s) => !!realProject(s.project));
-  const notes = useApp((s) => s.route.page === "notes");
-  const [query, setQuery] = useState(routeQuery);
   const input = useRef<HTMLInputElement>(null);
-  useEffect(() => setQuery(routeQuery), [routeQuery]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return;
       const key = e.key.toLowerCase();
-      if ((key === "k" && !e.shiftKey) || (key === "f" && e.shiftKey)) { e.preventDefault(); input.current?.focus(); input.current?.select(); }
+      if ((key === "k" && !e.shiftKey) || (key === "f" && e.shiftKey)) {
+        e.preventDefault();
+        useNotesSearch.getState().show();
+        input.current?.focus();
+        input.current?.select();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -88,12 +87,7 @@ export function Topbar() {
           );
         })}
       </nav>
-      {notes ? <NotesSearchBox inputRef={input} /> : <form className="top-search" role="search" onSubmit={(e) => { e.preventDefault(); go({ page: "memory", q: query.trim() || undefined }); }}>
-        <Search size="1.2em" aria-hidden />
-        <input ref={input} value={query} placeholder={scoped ? "Search project" : "Search memory"} aria-label={scoped ? "Search project" : "Search memory"}
-          onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape") e.currentTarget.blur(); }} />
-        <kbd>Ctrl K</kbd>
-      </form>}
+      <NotesSearchBox inputRef={input} />
     </header>
   );
 }

@@ -1,10 +1,17 @@
-// What the Notes page's search box is showing (NS-4A). The box lives in the top bar and the Tags pane is in the notebook
-// list, so the query and the filters are kept here for both.
+// What the unified top-bar search box is showing (NS-4A, CON-11). The box lives in the top bar on every page;
+// the Notes Tags pane and Command Palette can open it with a pre-filled filter.
 import { create } from "zustand";
 import type { PageKind } from "../../lib/noteindex";
+import type { MemoryStatus } from "./memory";
 
 export interface SearchFilters {
-  /** A notebook id, or "" for every notebook. */
+  /** Memory note status filter: active, archived (archived/resolved/superseded), or any. */
+  status: MemoryStatus;
+  /** A memory note type (decision, bug, plan...), or "" for any type. */
+  noteType: string;
+  /** When a project is picked, true searches Memory notes across all projects instead of only the picked one. */
+  allProjects: boolean;
+  /** A folder notebook id, or "" for every notebook. */
   notebook: string;
   folder: string;
   tag: string;
@@ -13,24 +20,37 @@ export interface SearchFilters {
   modified: string;
 }
 
-export const NO_FILTERS: SearchFilters = { notebook: "", folder: "", tag: "", kind: "", modified: "any" };
+export const NO_FILTERS: SearchFilters = {
+  status: "active",
+  noteType: "",
+  allProjects: false,
+  notebook: "",
+  folder: "",
+  tag: "",
+  kind: "",
+  modified: "any",
+};
 
 interface SearchState {
   query: string;
   filters: SearchFilters;
-  /** Whether results are fused with pages found by meaning (needs the Living Memory model). */
+  /** Whether folder notebook results are fused with pages found by meaning (needs the Living Memory model). */
   meaning: boolean;
   /** Whether the results panel is showing. */
   open: boolean;
-  /** Bumped when something asks the box to take focus (a tag chosen in the Tags pane). */
+  /** Bumped when something asks the box to take focus (a tag chosen in the Tags pane, Ctrl+K, Command Palette). */
   focusTick: number;
   setQuery: (query: string) => void;
   setFilters: (filters: Partial<SearchFilters>) => void;
   setMeaning: (meaning: boolean) => void;
   show: () => void;
   close: () => void;
-  /** Search for the pages with a tag: opens the panel with that tag as the only filter. */
+  /** Open the panel and focus the search input. */
+  focus: () => void;
+  /** Search for pages and memory notes carrying a tag. */
   byTag: (tag: string) => void;
+  /** Open the panel filtered to a memory status (active, archived, any). */
+  byStatus: (status: MemoryStatus) => void;
 }
 
 export const useNotesSearch = create<SearchState>((set) => ({
@@ -44,8 +64,16 @@ export const useNotesSearch = create<SearchState>((set) => ({
   setMeaning: (meaning) => set({ meaning, open: true }),
   show: () => set({ open: true }),
   close: () => set({ open: false }),
+  focus: () => set((s) => ({ open: true, focusTick: s.focusTick + 1 })),
   byTag: (tag) => set((s) => ({ query: "", filters: { ...NO_FILTERS, tag }, open: true, focusTick: s.focusTick + 1 })),
+  byStatus: (status) => set((s) => ({ query: "", filters: { ...NO_FILTERS, status }, open: true, focusTick: s.focusTick + 1 })),
 }));
 
-/** Whether the filters narrow the search at all. */
-export const filtered = (f: SearchFilters) => !!(f.notebook || f.folder || f.tag || f.kind || f.modified !== "any");
+/** Filters that apply only to folder notebook pages. */
+export const pageOnlyFiltered = (f: SearchFilters) => !!(f.notebook || f.folder || f.kind || f.modified !== "any");
+
+/** Filters that apply only to Living Memory notes. */
+export const memoryOnlyFiltered = (f: SearchFilters) => f.status !== "active" || !!f.noteType;
+
+/** Whether any filter differs from the default. */
+export const filtered = (f: SearchFilters) => pageOnlyFiltered(f) || memoryOnlyFiltered(f) || !!f.tag || f.allProjects;

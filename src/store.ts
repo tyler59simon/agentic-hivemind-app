@@ -3,8 +3,6 @@
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
-export type Shelf = "active" | "archived" | "any";
-
 /** The Inbox's groups: each is a tab of the page. */
 export type InboxKind = "code" | "memory" | "pages" | "captures" | "maintenance" | "architecture" | "skills";
 
@@ -16,7 +14,7 @@ export type Route =
   | { page: "home"; view?: "briefings"; briefing?: string; capture?: string; tab?: "architecture"; system?: string }
   | { page: "agents"; session?: string; view?: "new" }
   | { page: "dashboards"; ref?: string }
-  | { page: "memory"; view?: "graph" | "activity" | "history" | "tags"; q?: string }
+  | { page: "memory"; view?: "graph" | "activity" | "history" | "tags" }
   | { page: "notes"; notebook?: string; path?: string; view?: "tasks" | "views" }
   | { page: "wiki"; domain?: string; at?: string; edition?: "agent"; project?: string }
   | { page: "maintenance" }
@@ -38,14 +36,12 @@ interface AppState {
   /** The picked project's slug; null is "All memory"; undefined until the first pick (the shell then chooses one). */
   project: string | null | undefined;
   domain: string | null;
-  shelf: Shelf;
   palette: "commands" | "notes" | null;
   route: Route;
   /** Earlier routes, oldest first, for Back. */
   back: Route[];
   setProject: (project: string | null) => void;
   setDomain: (domain: string) => void;
-  setShelf: (shelf: Shelf) => void;
   setPalette: (palette: AppState["palette"]) => void;
   /** Show a page. `replace` swaps the current route without adding to Back (filters, typed queries). `force` skips the leave
    *  guard. */
@@ -70,12 +66,16 @@ const whenFree = (move: () => void) => { if (!stopped(move)) move(); };
  *  route pointed at stays on the Home route. Version 3: the Architecture page became Home's Architecture tab (its system is kept)
  *  and the Changes page was removed (CON-4, CON-17); a saved route to a removed page would have no page to show. Version 4:
  *  the Review page became the Inbox (CON-6), so a saved Review route opens it on the same session and file.
- *  Version 5 moves the old Memory workspace to Notes (CON-10). */
+ *  Version 5 moves the old Memory workspace to Notes (CON-10). Version 6 removes `q` from the Memory route (CON-11). */
 export function migrateNav(persisted: unknown, version = 1): unknown {
-  const saved = persisted as { route?: { page?: string; view?: string; capture?: string; briefing?: string; system?: string } } | null;
+  const saved = persisted as { route?: { page?: string; view?: string; q?: string; capture?: string; briefing?: string; system?: string } } | null;
   const route = saved?.route;
   if (!route) return persisted;
   if (version < 5 && route.page === "memory" && route.view === "notes") return { ...saved, route: { page: "notes" } };
+  if (version < 6 && route.page === "memory" && "q" in route) {
+    const { q: _q, ...rest } = route;
+    return { ...saved, route: rest };
+  }
   if (version >= 4) return persisted;
   let home: Route;
   if (route.page === "overview" || route.page === "executive" || route.page === "recap") {
@@ -93,13 +93,11 @@ export function migrateNav(persisted: unknown, version = 1): unknown {
 export const useApp = create<AppState>()(persist((set) => ({
   project: undefined,
   domain: null,
-  shelf: "active",
   palette: null,
   route: { page: "home" },
   back: [],
   setProject: (project) => set({ project }),
   setDomain: (domain) => set({ domain }),
-  setShelf: (shelf) => set({ shelf }),
   setPalette: (palette) => set({ palette }),
   go: (route, opts = {}) => {
     if (!opts.force && stopped(() => useApp.getState().go(route, { ...opts, force: true }))) return;
@@ -112,7 +110,7 @@ export const useApp = create<AppState>()(persist((set) => ({
   },
 }), {
   name: "hivemind.nav",
-  version: 5,
+  version: 6,
   storage: createJSONStorage(() => safeStorage),
   migrate: (persisted, version) => migrateNav(persisted, version) as AppState,
   partialize: (s) => ({ project: s.project, domain: s.domain, route: s.route }),

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-// NS-4A: the Notes page's search box mounted for real: typing opens the panel with the groups, the arrow keys move, Enter
-// opens, Ctrl+Enter opens beside, Escape closes, a filter narrows the search, and the Living Memory group needs the capability.
-// NS-4B: the Meaning toggle asks the index for meaning, and the install hint appears when the model is missing.
+// NS-4A / NS-4B / CON-11: the unified top-bar search box mounted for real: typing opens the panel with Memory notes first,
+// then This notebook, Other notebooks, and Living Memory pages; supports project scoping, archive/type/tag filters,
+// Meaning search, keyboard navigation, and opening notes or pages directly in the workspace.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -27,9 +27,12 @@ vi.mock("@tauri-apps/api/core", () => ({
       }
       case "lm": {
         const argv = args.argv as string[];
+        if (argv[0] === "taxonomy") return { exit_code: 0, error: null, result: { tags: ["concern/decision", "project/pay"] } };
+        if (argv[0] === "projects") return { exit_code: 0, error: null, result: { ok: true, projects: [{ slug: "pay", name: "Paystream", status: "active", repos: [], aliases: [], description: "", charter: null, created: "", updated: "", tag: "project/pay", tag_registered: true }], warnings: [] } };
         if (argv[0] === "doc" && argv[1] === "search") return { exit_code: 0, error: null, result: { ok: true, pages: [{ origin: "lm", domain: "demo", notebook: "plans", notebook_title: "Release plans", title: "Roadmap.md", path: "Roadmap.md", heading: null, snippet: "the plan page", line_start: 1, line_end: 2, revision: "r", score: 1, relevance: 1 }] } };
         if (argv[0] === "doc" && argv[1] === "notebooks") return { exit_code: 0, error: null, result: { notebooks: [{ domain: "demo", notebook: "plans", title: "Release plans", visibility: "searchable", private: false, revision: "r", pages: 1, assets: 0, asset_bytes: 0, proposals: 0, updated: "" }] } };
-        if (argv[0] === "search") return { exit_code: 0, error: null, result: { mode: "lexical", domains: ["demo"], fallback: false, results: [{ id: "demo:1", domain: "demo", title: "Plan decision", type: "decision", snippet: "we plan", updated: "", tags: [], status: "active", score: 1, rank: 1, engine: "lexical", revision: "r", sourceField: "body", sourceScope: "active" }] } };
+        if (argv[0] === "search") return { exit_code: 0, error: null, result: { mode: "lexical", domains: ["demo"], fallback: false, results: [{ id: "demo:1", domain: "demo", title: "Plan decision", type: "decision", snippet: "we plan", updated: "2026-11-20", tags: ["project/pay"], status: "active", score: 1, rank: 1, engine: "lexical", revision: "r", sourceField: "body", sourceScope: "active", relevance: 1 }] } };
+        if (argv[0] === "list") return { exit_code: 0, error: null, result: { domains: ["demo"], total: 1, offset: 0, notes: [{ ref: "demo:2", id: "2", domain: "demo", title: "Old archived plan", type: "plan", status: "archived", tags: ["plan"], created: "2026-10-01", updated: "2026-10-02", revision: "r", path: "", summary: "Retired plan" }] } };
         return { exit_code: 0, error: null, result: {} };
       }
     }
@@ -52,23 +55,20 @@ function Box() {
   return <NotesSearchBox inputRef={ref} />;
 }
 
-// Updates made inside an async act() are rendered when it ends, so the debounce, the queries it starts and their answers
-// each need a turn of their own.
 const settle = async () => { for (let i = 0; i < 3; i++) await act(async () => { await new Promise((r) => setTimeout(r, 200)); }); };
-const input = () => document.querySelector<HTMLInputElement>("input[aria-label='Search pages']")!;
+const input = () => document.querySelector<HTMLInputElement>("input[role='combobox']")!;
 const setValue = async (e: Element, v: string) => {
   const proto = e instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
   await act(async () => { Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(e, v); e.dispatchEvent(new Event(e instanceof HTMLSelectElement ? "change" : "input", { bubbles: true })); });
 };
 const press = async (key: string, mods: { ctrlKey?: boolean } = {}) => act(async () => { input().dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...mods })); });
-/** Whether Living Memory was asked to search notes or notebook pages. */
 const searchedLm = () => calls.some((c) => c.cmd === "lm" && ((c.args.argv as string[])[0] === "search" || ((c.args.argv as string[])[0] === "doc" && (c.args.argv as string[])[1] === "search")));
 const groupTitles = () => [...document.querySelectorAll(".search-group h3")].map((h) => h.textContent);
 const rows = () => [...document.querySelectorAll<HTMLElement>("[role=option]")];
 const activeRow = () => rows().findIndex((r) => r.getAttribute("aria-selected") === "true");
 
 async function mount(lmSearch: boolean) {
-  useConnection.setState({ commands: ["doc", "search"], api: 2, capabilities: lmSearch ? { docs: { version: 1, max_page_bytes: 1, max_asset_bytes: 1, search: true } } : { docs: { version: 1, max_page_bytes: 1, max_asset_bytes: 1 } } });
+  useConnection.setState({ commands: ["doc", "search", "list", "taxonomy", "projects"], api: 2, capabilities: lmSearch ? { docs: { version: 1, max_page_bytes: 1, max_asset_bytes: 1, search: true } } : { docs: { version: 1, max_page_bytes: 1, max_asset_bytes: 1 } } });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   (globalThis as { __qc?: unknown }).__qc = client;
   const el = document.createElement("div");
@@ -82,8 +82,7 @@ beforeEach(() => {
   opened.length = 0;
   meaningState = "ready";
   useNotesSearch.setState({ query: "", filters: NO_FILTERS, meaning: false, open: false, focusTick: 0 });
-  useApp.setState({ domain: "demo" });
-  // A page of notebook nb-1 is the one being read.
+  useApp.setState({ domain: "demo", project: null });
   useWorkspace.setState({
     panes: [{ id: "p1", tabs: [{ id: "t1", kind: "file", file: { notebook: "nb-1", path: "Inbox.md" }, mode: "live", title: "Inbox" }], active: "t1" }], focused: "p1",
     openTab: ((tab: Record<string, unknown>, opts?: { split?: boolean }) => { opened.push({ tab, split: !!opts?.split }); }) as never,
@@ -91,8 +90,8 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root?.unmount()); root = null; document.body.innerHTML = ""; });
 
-describe("the Notes page's search box", () => {
-  it("is quiet until there is something to search, then shows the four groups with this notebook first", async () => {
+describe("the unified top-bar search box (CON-11)", () => {
+  it("is quiet until there is something to search, then shows Memory notes first followed by notebook groups", async () => {
     await mount(true);
     await act(async () => input().focus());
     expect(document.querySelector(".search-panel")).not.toBeNull();
@@ -100,21 +99,22 @@ describe("the Notes page's search box", () => {
     expect(calls.some((c) => c.cmd === "index_search")).toBe(false);
     await setValue(input(), "plan");
     await settle();
-    expect(groupTitles()).toEqual(["This notebook", "Other notebooks", "Living Memory pages", "Memory notes"]);
-    expect(rows().map((r) => r.querySelector(".search-title")?.textContent)).toEqual(["Plan · Projects", "Inbox", "Plan notes · Work", "Roadmap.md · Release plans", "Plan decision · demo · decision"]);
-    // The match is marked, as an element and never as markup.
+    expect(groupTitles()).toEqual(["Memory notes", "This notebook", "Other notebooks", "Living Memory pages"]);
+    expect(rows().map((r) => r.querySelector(".search-title")?.textContent)).toEqual([
+      "Plan decision · Paystream · decision", "Plan · Projects", "Inbox", "Plan notes · Work", "Roadmap.md · Release plans",
+    ]);
     expect(document.querySelector(".search-panel mark")?.textContent).toBe("Plan");
-    // This notebook and the others were asked apart.
+    expect(document.body.textContent).not.toContain("Show all in Memory");
     const asked = calls.filter((c) => c.cmd === "index_search").map((c) => c.args.filters);
     expect(asked).toEqual(expect.arrayContaining([expect.objectContaining({ notebook: "nb-1" }), expect.objectContaining({ excludeNotebook: "nb-1" })]));
   });
 
-  it("has no Living Memory group when Living Memory cannot search pages, and never asks it", async () => {
+  it("has no Living Memory pages group when Living Memory cannot search pages, and never asks it", async () => {
     await mount(false);
     await act(async () => input().focus());
     await setValue(input(), "plan");
     await settle();
-    expect(groupTitles()).toEqual(["This notebook", "Other notebooks", "Memory notes"]);
+    expect(groupTitles()).toEqual(["Memory notes", "This notebook", "Other notebooks"]);
     expect(calls.some((c) => c.cmd === "lm" && (c.args.argv as string[])[0] === "doc" && (c.args.argv as string[])[1] === "search")).toBe(false);
   });
 
@@ -130,27 +130,26 @@ describe("the Notes page's search box", () => {
     await press("ArrowUp");
     expect(activeRow()).toBe(1);
     await press("Enter");
-    expect(opened).toEqual([{ tab: expect.objectContaining({ kind: "file", file: { notebook: "nb-1", path: "Inbox.md" } }), split: false }]);
+    expect(opened).toEqual([{ tab: expect.objectContaining({ kind: "file", file: { notebook: "nb-1", path: "Projects/Plan.md" } }), split: false }]);
     expect(document.querySelector(".search-panel")).toBeNull();
   });
 
-  it("Ctrl+Enter opens beside, a Living Memory page opens as a notebook page, and a memory note opens as a note", async () => {
+  it("Ctrl+Enter opens beside, a memory note opens as a note, and a Living Memory page opens as a notebook page", async () => {
     await mount(true);
     await act(async () => input().focus());
     await setValue(input(), "plan");
     await settle();
     await press("End");   // End belongs to the text cursor: the rows do not move
     expect(activeRow()).toBe(0);
-    for (let i = 0; i < 3; i++) await press("ArrowDown");
-    await press("Enter", { ctrlKey: true });
-    expect(opened[0]).toMatchObject({ split: true, tab: { kind: "file", file: { notebook: "lm:demo:plans", path: "Roadmap.md" } } });
+    await press("Enter");
+    expect(opened[0]).toMatchObject({ split: false, tab: { kind: "note", ref: "demo:1" } });
+    expect(useApp.getState().domain).toBe("demo");
     await act(async () => input().focus());
     await setValue(input(), "plan ");
     await settle();
-    await press("ArrowDown"); await press("ArrowDown"); await press("ArrowDown"); await press("ArrowDown");
-    await press("Enter");
-    expect(opened[1]).toMatchObject({ split: false, tab: { kind: "note", ref: "demo:1" } });
-    expect(useApp.getState().domain).toBe("demo");
+    for (let i = 0; i < 4; i++) await press("ArrowDown");
+    await press("Enter", { ctrlKey: true });
+    expect(opened[1]).toMatchObject({ split: true, tab: { kind: "file", file: { notebook: "lm:demo:plans", path: "Roadmap.md" } } });
   });
 
   it("Escape closes the panel first and leaves the box after that", async () => {
@@ -163,19 +162,42 @@ describe("the Notes page's search box", () => {
     expect(input().value).toBe("plan");
   });
 
-  it("a filter narrows the search to pages, and a tag chosen in the Tags pane opens the panel with it", async () => {
+  it("browses archived Memory notes with an empty query when Status is Archive", async () => {
+    await mount(true);
+    await act(async () => { useNotesSearch.getState().byStatus("archived"); });
+    await settle();
+    expect(groupTitles()).toEqual(["Memory notes"]);
+    expect(rows()[0].querySelector(".search-title")?.textContent).toBe("Old archived plan · Unassigned · plan · archived");
+    expect(calls.some((c) => c.cmd === "index_search")).toBe(false);
+  });
+
+  it("scopes Memory notes to the picked project and widens them with All memory", async () => {
+    useApp.setState({ domain: "demo", project: "pay" });
+    await mount(true);
+    await settle();
+    await act(async () => input().focus());
+    await setValue(input(), "plan");
+    await settle();
+    const searchCall = calls.filter((c) => c.cmd === "lm" && (c.args.argv as string[])[0] === "search").pop();
+    expect(searchCall?.args.argv).toContain("tag=project/pay");
+    const scopeBtn = [...document.querySelectorAll<HTMLButtonElement>(".search-filters button")].find((b) => b.textContent === "Paystream")!;
+    calls.length = 0;
+    await act(async () => { scopeBtn.click(); });
+    await settle();
+    const wideCall = calls.filter((c) => c.cmd === "lm" && (c.args.argv as string[])[0] === "search").pop();
+    expect(wideCall?.args.argv).not.toContain("tag=project/pay");
+  });
+
+  it("page-only filters narrow to pages, while a tag searches both pages and memory notes", async () => {
     await mount(true);
     await act(async () => { useNotesSearch.getState().byTag("plan"); });
     await settle();
     expect(document.querySelector<HTMLSelectElement>("select[aria-label='Tag']")!.value).toBe("plan");
-    const asked = calls.filter((c) => c.cmd === "index_search").map((c) => c.args);
-    expect(asked.length).toBeGreaterThan(0);
-    expect(asked.every((a) => (a.filters as { tag?: string }).tag === "plan" && a.query === "")).toBe(true);
-    // Filters apply to the pages of folder notebooks only, so the other sources are not asked.
-    expect(searchedLm()).toBe(false);
-    expect(groupTitles()).toEqual(["This notebook", "Other notebooks"]);
+    expect(calls.some((c) => c.cmd === "index_search" && (c.args.filters as { tag?: string }).tag === "plan")).toBe(true);
+    calls.length = 0;
     await setValue(document.querySelector("select[aria-label='Kind']")!, "hmdoc");
     await settle();
+    expect(searchedLm()).toBe(false);
     expect(calls.filter((c) => c.cmd === "index_search").some((c) => (c.args.filters as { kind?: string }).kind === "hmdoc")).toBe(true);
   });
 });
@@ -198,7 +220,6 @@ describe("the Meaning toggle (NS-4B)", () => {
     expect(toggle().getAttribute("aria-pressed")).toBe("true");
     expect(asked().length).toBeGreaterThanOrEqual(2);
     expect(asked().every((a) => a.meaning === true)).toBe(true);
-    // The model is ready: results as before, and no hint.
     expect(groupTitles()).toContain("This notebook");
     expect(document.querySelector(".semantic-hint")).toBeNull();
   });

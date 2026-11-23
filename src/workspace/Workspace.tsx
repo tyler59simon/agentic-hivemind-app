@@ -1,4 +1,4 @@
-import { Columns2, LayoutPanelTop, Library, PanelRight, Plus, X } from "lucide-react";
+import { Columns2, LayoutPanelTop, PanelRight, Plus, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NewNote } from "../features/editor/NewNote";
@@ -14,7 +14,7 @@ import { fileName, isMarkdown, isRichDoc, pageTitle } from "../lib/notebooks";
 import { announceDocumentLook, useWhitePaper } from "../lib/paper";
 import { useApp } from "../store";
 import { Confirm } from "../ui/Modal";
-import { MAX_PANES, railShown, showTab, useWorkspace, type Pane, type Tab } from "./store";
+import { MAX_PANES, railShown, useWorkspace, type Pane, type Tab } from "./store";
 
 /** What a tab shows. */
 export const TAB_VIEWS: Record<Tab["kind"], (tab: Tab) => ReactNode> = {
@@ -82,16 +82,6 @@ function TabPill({ tab, active, onPick, onClose }: { tab: Tab; active: boolean; 
   );
 }
 
-/** The pinned first tab: back to the library, where notes are found. */
-function LibraryPill({ active }: { active: boolean }) {
-  const go = useApp((s) => s.go);
-  return (
-    <button role="tab" aria-selected={active} className={`note-tab-pill library ${active ? "on" : ""}`} onClick={() => go({ page: "memory" })}>
-      <Library size="1.1em" aria-hidden /><span className="tab-label">Library</span>
-    </button>
-  );
-}
-
 const newNote = () => useWorkspace.getState().openTab({ kind: "new-note" });
 
 /** The strip's + button: a new page on the Notes page, a new note elsewhere. */
@@ -105,8 +95,8 @@ function NewButton({ onBefore }: { onBefore?: () => void }) {
   );
 }
 
-function PaneView({ pane, focused, first, last, onClose }: {
-  pane: Pane; focused: boolean; first: boolean; last: boolean; onClose: (paneId: string, tabId: string) => void;
+function PaneView({ pane, focused, last, onClose }: {
+  pane: Pane; focused: boolean; last: boolean; onClose: (paneId: string, tabId: string) => void;
 }) {
   const { activate, focus, split, panes, setRail } = useWorkspace();
   const rail = useWorkspace(railShown);
@@ -126,7 +116,6 @@ function PaneView({ pane, focused, first, last, onClose }: {
   return (
     <section className={`pane ${focused ? "focused" : ""}`} onMouseDown={() => !focused && focus(pane.id)}>
       <div className="note-tabs" role="tablist" ref={strip} onWheel={(e) => { if (e.deltaY) e.currentTarget.scrollLeft += e.deltaY; }}>
-        {first && <LibraryPill active={false} />}
         {pane.tabs.map((t) => <TabPill key={t.id} tab={t} active={t.id === active?.id} onPick={() => activate(pane.id, t.id)} onClose={() => onClose(pane.id, t.id)} />)}
         <NewButton onBefore={() => focus(pane.id)} />
         <span className="fill" />
@@ -146,24 +135,6 @@ function PaneView({ pane, focused, first, last, onClose }: {
         )}
       </div>
     </section>
-  );
-}
-
-/** The open notes above the library, so a note is one click away while you browse. */
-export function OpenTabs() {
-  const panes = useWorkspace((s) => s.panes);
-  const activate = useWorkspace((s) => s.activate);
-  const close = useCloseTab();
-  return (
-    <div className="note-tabs standalone" role="tablist">
-      <LibraryPill active />
-      {panes.flatMap((p) => p.tabs.map((t) => (
-        <TabPill key={t.id} tab={t} active={false} onClose={() => close.request(p.id, t.id)}
-          onPick={() => { activate(p.id, t.id); showTab(); }} />
-      )))}
-      <button className="icon-button" title="New note (Ctrl+N)" aria-label="New note" onClick={newNote}><Plus size="1.2em" aria-hidden /></button>
-      {close.dialog}
-    </div>
   );
 }
 
@@ -200,7 +171,7 @@ export function Workspace() {
   return (
     <div className="workspace">
       {panes.map((p, i) => (
-        <PaneView key={p.id} pane={p} focused={p.id === focused || panes.length === 1} first={i === 0} last={i === panes.length - 1} onClose={close.request} />
+        <PaneView key={p.id} pane={p} focused={p.id === focused || panes.length === 1} last={i === panes.length - 1} onClose={close.request} />
       ))}
       {close.dialog}
     </div>

@@ -1,8 +1,10 @@
-// The results of the Notes page's search box, grouped by where they come from (NS-4A). Scores of different origins are
-// never compared: each group keeps the order its own source gave, and a group is as long as its source made it.
+// The results of the unified top-bar search box, grouped by origin in one consistent order everywhere (NS-4A, CON-11):
+// Memory notes, This notebook, Other notebooks / Notebooks, Living Memory pages.
+// Scores of different origins are never compared: each group keeps the order its own source gave.
 import type { FileRef } from "../../documents/keys";
 import type { DocNotebook, DocSearchHit, SearchHit } from "../../lib/lm";
 import { markWords, type IndexHit } from "../../lib/noteindex";
+import { fromSearchHit, memoryProjectLabel, type MemoryItem } from "./memory";
 
 /** The cosine at which a result found by meaning counts: `min_similarity` of Living Memory's model. */
 export const MIN_SIMILARITY = 0.45;
@@ -22,7 +24,7 @@ export function isRelatedNote(hit: { relevance?: number; similarity?: number }):
   return hit.relevance === undefined || hit.relevance > 0;
 }
 
-export type GroupId = "here" | "other" | "lm" | "memory";
+export type GroupId = "memory" | "here" | "other" | "lm";
 
 export type Target = { page: FileRef } | { lm: { domain: string; notebook: string; path: string } } | { note: { ref: string; domain: string; title: string } };
 
@@ -30,7 +32,7 @@ export interface ResultRow {
   key: string;
   group: GroupId;
   title: string;
-  /** The title with the index's match marks, when it has any. */
+  /** The title with match marks, when it has any. */
   marked?: string;
   detail: string;
   snippet?: string;
@@ -51,12 +53,16 @@ export interface GroupInput {
   lm: DocSearchHit[];
   /** The Living Memory notebooks Hivemind lists, the only ones a tab can open. */
   lmNotebooks: Pick<DocNotebook, "domain" | "notebook">[];
-  memory: SearchHit[];
-  /** What was typed: Living Memory's page snippets carry no marks, so its words are marked here. */
+  /** Matching Memory notes (from `alm search` or `alm list`). */
+  memory: (SearchHit | MemoryItem)[];
+  /** Project tag (`project/<slug>`) -> project name, so Memory rows show project names instead of raw domain names. */
+  projectNames?: Map<string, string>;
+  /** What was typed: used to highlight matches in Living Memory note and page titles/snippets. */
   query?: string;
 }
 
 const folderOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
+const oneLine = (text: string) => text.replace(/\s+/g, " ").trim();
 
 function pageRow(hit: IndexHit, group: GroupId, titles: Map<string, string>, showNotebook: boolean): ResultRow {
   const detail = [showNotebook ? titles.get(hit.notebook) ?? hit.notebook : "", folderOf(hit.path)].filter(Boolean).join(" · ");
@@ -66,10 +72,35 @@ function pageRow(hit: IndexHit, group: GroupId, titles: Map<string, string>, sho
   };
 }
 
-/** The groups that have rows, in the order they are shown. */
+function asMemoryItem(n: SearchHit | MemoryItem): MemoryItem {
+  return "ref" in n ? n : fromSearchHit(n);
+}
+
+/** The groups that have rows, in one consistent order everywhere: Memory notes, This notebook, Other notebooks / Notebooks, Living Memory pages. */
 export function buildGroups(input: GroupInput): Group[] {
   const groups: Group[] = [];
   const add = (id: GroupId, title: string, rows: ResultRow[]) => { if (rows.length) groups.push({ id, title, rows }); };
+  const q = input.query?.trim() || "";
+
+  const memRows: ResultRow[] = [];
+  for (const raw of input.memory) {
+    const n = asMemoryItem(raw);
+    if (q && !isRelevantPage(n)) continue;
+    const where = memoryProjectLabel(n.tags, input.projectNames) ?? n.domain;
+    const detail = [where, n.type, n.status && n.status !== "active" ? n.status : ""].filter(Boolean).join(" · ");
+    const snippet = n.snippet ? oneLine(n.snippet) : "";
+    memRows.push({
+      key: `note:${n.ref}`,
+      group: "memory",
+      title: n.title,
+      marked: q ? markWords(n.title, q) : undefined,
+      detail,
+      snippet: snippet ? (q ? markWords(snippet, q) : snippet) : undefined,
+      open: { note: { ref: n.ref, domain: n.domain, title: n.title } },
+    });
+  }
+  add("memory", "Memory notes", memRows);
+
   add("here", "This notebook", input.here.map((h) => pageRow(h, "here", input.titles, false)));
   add("other", input.current ? "Other notebooks" : "Notebooks", input.other.map((h) => pageRow(h, "other", input.titles, true)));
   if (input.lmSearch) {
@@ -79,15 +110,11 @@ export function buildGroups(input: GroupInput): Group[] {
       if (!known.has(`${hit.domain}\n${hit.notebook}`) || !isRelevantPage(hit)) continue;
       rows.push({
         key: `lm:${hit.domain}:${hit.notebook}:${hit.path}:${hit.line_start}`, group: "lm", title: hit.title, detail: [hit.notebook_title, hit.heading].filter(Boolean).join(" · "),
-        snippet: input.query ? markWords(hit.snippet, input.query) : hit.snippet, open: { lm: { domain: hit.domain, notebook: hit.notebook, path: hit.path } },
+        snippet: q ? markWords(hit.snippet, q) : hit.snippet, open: { lm: { domain: hit.domain, notebook: hit.notebook, path: hit.path } },
       });
     }
     add("lm", "Living Memory pages", rows);
   }
-  add("memory", "Memory notes", input.memory.map((n) => ({
-    key: `note:${n.id}`, group: "memory" as const, title: n.title, detail: `${n.domain} · ${n.type}`, snippet: n.snippet || undefined,
-    open: { note: { ref: n.id, domain: n.domain, title: n.title } },
-  })));
   return groups;
 }
 

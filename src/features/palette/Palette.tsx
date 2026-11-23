@@ -19,6 +19,7 @@ import { openProject, openSystem, useApp, type Page, type Route } from "../../st
 import { activeTab, railShown, useWorkspace } from "../../workspace/store";
 import { useComparePicker } from "../power/ComparePicker";
 import { openFindInFiles } from "../search/FindInFiles";
+import { useNotesSearch } from "../search/store";
 import { LINE_TOOLS } from "../power/lineTools";
 import { playMacro, toggleRecording, useRecorder, type Target } from "../power/macros";
 import { toolRunner } from "../power/PowerBar";
@@ -141,9 +142,9 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       ...EXTRA_COMMANDS.map((c) => ({ ...c, run: () => { close(); c.run(); } })),
       { key: "split", label: "Open the note side by side", detail: "Ctrl+\\", run: () => { ws.split(); close(); } },
       { key: "rail", label: railShown(ws) ? "Hide the note's context rail" : "Show the note's context rail", run: () => { ws.setRail(!railShown(ws)); close(); } },
-      { key: "search", label: "Search notes", detail: "Ctrl+K", section: "memory", run: page({ page: "memory" }) },
-      { key: "active", label: "Show active notes", run: () => { app.setShelf("active"); close(); app.go({ page: "memory" }); } },
-      { key: "archive", label: "Show the archive", run: () => { app.setShelf("archived"); close(); app.go({ page: "memory" }); } },
+      { key: "search", label: "Search notes and pages", detail: "Ctrl+K", run: () => { close(); useNotesSearch.getState().focus(); } },
+      { key: "active", label: "Search active notes", run: () => { close(); useNotesSearch.getState().byStatus("active"); } },
+      { key: "archive", label: "Search the archive", run: () => { close(); useNotesSearch.getState().byStatus("archived"); } },
       { key: "back", label: "Back", detail: "Alt+Left", run: () => { close(); app.goBack(); } },
       { key: "refresh", label: "Refresh", run: () => { refreshStore(client); close(); } },
       { key: "reconnect", label: "Reconnect to Living Memory", run: () => { onReconnect(); close(); } },

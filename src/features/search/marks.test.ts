@@ -80,7 +80,7 @@ describe("UI-2: marking a query's words in a snippet", () => {
     expect(on(markWords("Über Straße naïve", "uber über"))).toEqual(["Über"]);
   });
 
-  it("marks only Living Memory page snippets in the grouped results, never memory notes or folder pages that come marked", () => {
+  it("marks Living Memory page and memory note snippets in the grouped results, while keeping folder page marks intact", () => {
     const lm = { domain: "demo", notebook: "plans", notebook_title: "Plans", title: "Roadmap.md", path: "Roadmap.md", heading: null, snippet: "Release 2.0 is out", line_start: 1, line_end: 1, revision: "r", score: 1, relevance: 1 } as DocSearchHit;
     const groups = buildGroups({
       titles: new Map(), query: "release", lmSearch: true, lm: [lm], lmNotebooks: [{ domain: "demo", notebook: "plans" }],
@@ -90,6 +90,6 @@ describe("UI-2: marking a query's words in a snippet", () => {
     const snippet = (id: string) => groups.find((g) => g.id === id)!.rows[0].snippet;
     expect(snippet("lm")).toBe(`${MARK_OPEN}Release${MARK_CLOSE} 2.0 is out`);
     expect(snippet("here")).toBe(`the ${MARK_OPEN}release${MARK_CLOSE} plan`);
-    expect(snippet("memory")).toBe("Release notes");
+    expect(snippet("memory")).toBe(`${MARK_OPEN}Release${MARK_CLOSE} notes`);
   });
 });
