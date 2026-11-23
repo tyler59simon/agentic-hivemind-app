@@ -1,4 +1,4 @@
-import type { Note, NoteRow, ReviewRow } from "../../lib/lm";
+import { domainOf, type Note, type NoteRow, type ReviewRow } from "../../lib/lm";
 
 export const RECENT_DAYS = 14;
 export const CANDIDATES = 40;
@@ -20,4 +20,11 @@ export function unconfirmed(rows: NoteRow[], metas: (Meta | undefined)[], due: S
     if (!meta || !agentCaptured(meta) || due.has(r.ref)) return [];
     return [{ ref: r.ref, title: r.title, type: r.type, updated: r.updated, revision: r.revision, domain: r.domain }];
   });
+}
+
+/** The due notes the Inbox lists. With maintenance on, `deferred` holds the notes it deferred or could not decide (CON-7), and
+ *  only those show; null (maintenance off or unavailable) keeps every due note. A note in a domain maintenance does not cover
+ *  (`covered`) shows too: nothing there decides it. */
+export function dueNotes(rows: ReviewRow[], deferred: Map<string, unknown> | null, covered: string[] = []): ReviewRow[] {
+  return deferred ? rows.filter((r) => deferred.has(r.ref) || !covered.includes(domainOf(r.ref))) : rows;
 }

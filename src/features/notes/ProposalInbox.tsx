@@ -1,5 +1,6 @@
 // Edits agents staged for a Living Memory notebook (`alm doc propose`, NS-2C). The user reads each as a diff against
 // the page as it is now, then accepts, merges by hand or rejects it. Agents outside Notes Studio can only propose.
+// `ProposalDetail` is one proposal's diff and decisions: the notebook's modal below and the Inbox's Pages group both use it.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import { lmContainer, pageBody, pageText, readPage } from "../../documents/adapters/lmdoc";
@@ -51,7 +52,7 @@ export function unmergeable({ page, proposed }: Pick<Loaded, "page" | "proposed"
 /** The bytes a merge writes: the page's own line endings and byte order mark, or the proposal's for a new page (D5). */
 export const mergedBody = (text: string, { page, proposed }: Pick<Loaded, "page" | "proposed">) => pageBody(text, (page ?? proposed).format);
 
-const age = (iso: string) => {
+export const age = (iso: string) => {
   const mins = Math.round((Date.now() - Date.parse(iso)) / 60000);
   if (mins < 60) return `${Math.max(1, mins)} min ago`;
   if (mins < 48 * 60) return `${Math.round(mins / 60)} h ago`;
@@ -60,27 +61,29 @@ const age = (iso: string) => {
 
 const stale = (e: unknown) => e instanceof LmError && e.stale;
 
-export function ProposalInbox({ nb, onClose }: { nb: DocNotebook; onClose: () => void }) {
+/** One proposal as the user decides it: the page it would change as a diff, and Accept, merge or Reject. `onSettled` runs
+ *  once the proposal is accepted, merged or rejected; `onBusy` says when a decision is being written. */
+export function ProposalDetail({ row, onSettled, onBusy }: { row: DocProposalRow; onSettled: () => void; onBusy?: (busy: boolean) => void }) {
   const client = useQueryClient();
-  const list = useQuery(proposalsQuery(nb.domain, nb.notebook));
-  const [selected, setSelected] = useState<string | null>(null);
-  const one = useQuery({ queryKey: ["lm-proposal", selected], queryFn: () => loadOne(selected!), enabled: !!selected, gcTime: 0 });
+  const one = useQuery({ queryKey: ["lm-proposal", row.id], queryFn: () => loadOne(row.id), gcTime: 0 });
   const canMerge = useAcceptEditedEnabled();
   const [busy, setBusy] = useState(false);
-  const [rejecting, setRejecting] = useState<string | null>(null);
+  const [rejecting, setRejecting] = useState(false);
   const [dialog, setDialog] = useState<ReactNode>(null);
-  const pending = (list.data ?? []).filter((p) => p.status === "pending");
-  const container = lmContainer(nb.domain, nb.notebook);
+  const container = lmContainer(row.domain, row.notebook);
+  const loaded = one.data;
+  const blocked = loaded && (unmergeable(loaded) ?? (canMerge ? null : "Merging needs a newer Living Memory (with doc accept --edited)"));
 
   const settled = (text: string) => {
     toast(text);
-    setSelected(null);
-    setRejecting(null);
-    for (const key of [["lm-proposals", nb.domain, nb.notebook], ["lm-notebooks"], ["notebook-tree", container]]) client.invalidateQueries({ queryKey: key });
+    setRejecting(false);
+    for (const key of [["lm-proposals"], ["lm-notebooks"], ["notebook-tree", container]]) client.invalidateQueries({ queryKey: key });
+    onSettled();
   };
   const run = async (work: () => Promise<void>) => {
     setBusy(true);
-    try { await work(); } catch (e) { toast(classify(e).message, "error"); } finally { setBusy(false); }
+    onBusy?.(true);
+    try { await work(); } catch (e) { toast(classify(e).message, "error"); } finally { setBusy(false); onBusy?.(false); }
   };
 
   const accept = (loaded: Loaded) => run(async () => {
@@ -119,10 +122,54 @@ export function ProposalInbox({ nb, onClose }: { nb: DocNotebook; onClose: () =>
     );
   });
 
-  const reject = (row: DocProposalRow, reason: string) => run(async () => {
+  const reject = (reason: string) => run(async () => {
     await docReject(row.id, reason.trim() || undefined);
     settled(`Rejected the edit to ${row.path}.`);
   });
+
+  return (
+    <>
+      {one.isLoading && <p className="muted small">Loading…</p>}
+      {one.error && <p className="error small">{classify(one.error).message}</p>}
+      {loaded && (
+        <>
+          <p className="muted small">Proposed by session {loaded.proposal.session ?? "unknown"}.</p>
+          {isStale(loaded) && (
+            <p className="banner warn small">
+              {loaded.page ? "The page changed after the agent read it" : "The page the agent edited is gone"}, so the edit cannot be applied as it is. Merge it into the page as it is now.
+            </p>
+          )}
+          {blocked && <p className="muted small">{blocked}, so Hivemind does not merge it here. Accept or reject it, or open the page.</p>}
+          <div className="proposal-diff"><CodeDiff path={row.path} base={loaded.page?.text ?? ""} head={loaded.proposed.text} /></div>
+          {rejecting ? (
+            <div className="actions">
+              <input autoFocus placeholder="Reason (optional)" aria-label="Reason for rejecting" id={`reason-${row.id}`}
+                onKeyDown={(e) => { if (e.key === "Enter") void reject(e.currentTarget.value); else if (e.key === "Escape") setRejecting(false); }} />
+              <button onClick={() => setRejecting(false)} disabled={busy}>Cancel</button>
+              <button className="danger" disabled={busy}
+                onClick={() => void reject((document.getElementById(`reason-${row.id}`) as HTMLInputElement | null)?.value ?? "")}>Reject</button>
+            </div>
+          ) : (
+            <div className="actions">
+              {loaded.page && <button className="ghost" onClick={() => openPage({ notebook: container, path: row.path })}>Open page</button>}
+              <span className="fill" />
+              <button className="danger-text ghost" onClick={() => setRejecting(true)} disabled={busy}>Reject…</button>
+              {!blocked && <button onClick={() => void merge(loaded)} disabled={busy}>{isStale(loaded) ? "Merge…" : "Edit, then accept…"}</button>}
+              {!isStale(loaded) && <button className="primary" onClick={() => void accept(loaded)} disabled={busy}>Accept</button>}
+            </div>
+          )}
+        </>
+      )}
+      {dialog}
+    </>
+  );
+}
+
+export function ProposalInbox({ nb, onClose }: { nb: DocNotebook; onClose: () => void }) {
+  const list = useQuery(proposalsQuery(nb.domain, nb.notebook));
+  const [selected, setSelected] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const pending = (list.data ?? []).filter((p) => p.status === "pending");
 
   return (
     <Modal title={`Agent proposals · ${nb.title}`} onClose={onClose} locked={busy} wide>
@@ -132,8 +179,6 @@ export function ProposalInbox({ nb, onClose }: { nb: DocNotebook; onClose: () =>
       <div className="form">
         {pending.map((row) => {
           const open = selected === row.id;
-          const loaded = open ? one.data : undefined;
-          const blocked = loaded && (unmergeable(loaded) ?? (canMerge ? null : "Merging needs a newer Living Memory (with doc accept --edited)"));
           return (
             <div key={row.id} className="proposal">
               <div className="note-top">
@@ -141,42 +186,11 @@ export function ProposalInbox({ nb, onClose }: { nb: DocNotebook; onClose: () =>
                 <span className="muted small">{row.base_revision ? "edit" : "new page"} · {age(row.created)}</span>
               </div>
               {row.note && <p className="small">{row.note}</p>}
-              {open && one.isLoading && <p className="muted small">Loading…</p>}
-              {open && one.error && <p className="error small">{classify(one.error).message}</p>}
-              {loaded && (
-                <>
-                  <p className="muted small">Proposed by session {loaded.proposal.session ?? "unknown"}.</p>
-                  {isStale(loaded) && (
-                    <p className="banner warn small">
-                      {loaded.page ? "The page changed after the agent read it" : "The page the agent edited is gone"}, so the edit cannot be applied as it is. Merge it into the page as it is now.
-                    </p>
-                  )}
-                  {blocked && <p className="muted small">{blocked}, so Hivemind does not merge it here. Accept or reject it, or open the page.</p>}
-                  <div className="proposal-diff"><CodeDiff path={row.path} base={loaded.page?.text ?? ""} head={loaded.proposed.text} /></div>
-                  {rejecting === row.id ? (
-                    <div className="actions">
-                      <input autoFocus placeholder="Reason (optional)" aria-label="Reason for rejecting" id={`reason-${row.id}`}
-                        onKeyDown={(e) => { if (e.key === "Enter") void reject(row, e.currentTarget.value); else if (e.key === "Escape") setRejecting(null); }} />
-                      <button onClick={() => setRejecting(null)} disabled={busy}>Cancel</button>
-                      <button className="danger" disabled={busy}
-                        onClick={() => void reject(row, (document.getElementById(`reason-${row.id}`) as HTMLInputElement | null)?.value ?? "")}>Reject</button>
-                    </div>
-                  ) : (
-                    <div className="actions">
-                      {loaded.page && <button className="ghost" onClick={() => openPage({ notebook: container, path: row.path })}>Open page</button>}
-                      <span className="fill" />
-                      <button className="danger-text ghost" onClick={() => setRejecting(row.id)} disabled={busy}>Reject…</button>
-                      {!blocked && <button onClick={() => void merge(loaded)} disabled={busy}>{isStale(loaded) ? "Merge…" : "Edit, then accept…"}</button>}
-                      {!isStale(loaded) && <button className="primary" onClick={() => void accept(loaded)} disabled={busy}>Accept</button>}
-                    </div>
-                  )}
-                </>
-              )}
+              {open && <ProposalDetail row={row} onSettled={() => setSelected(null)} onBusy={setBusy} />}
             </div>
           );
         })}
       </div>
-      {dialog}
     </Modal>
   );
 }

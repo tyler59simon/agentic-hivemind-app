@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleCheck, CircleX, Ellipsis, GitBranch, LoaderCircle, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import {
-  agentSession, reviewApprove, reviewBase, reviewDiscard, reviewDismiss, reviewFile, reviewRequestChanges, reviewRequestTerminalChanges, reviewStopAndApprove, reviewToolOutput, type FileChange, type SessionInfo,
+  agentSession, reviewApprove, reviewAskCodex, reviewBase, reviewDiscard, reviewDismiss, reviewFile, reviewRequestChanges, reviewRequestTerminalChanges, reviewStopAndApprove, reviewToolOutput, sessionsQuery,
+  type FileChange, type SessionInfo,
 } from "../../lib/agent";
 import { classify } from "../../lib/errors";
 import { openSession } from "../../store";
@@ -11,12 +12,42 @@ import { Menu } from "../../ui/Menu";
 import { Confirm, Modal } from "../../ui/Modal";
 import { ArrowLink } from "../../ui/Page";
 import { toast } from "../../ui/toast";
+import { useShownEngines } from "../agents/engines";
 import { isEnded, repoName } from "../agents/session";
 import { dispose } from "../terminal/registry";
 import { tabLabel } from "../terminal/tabs";
 import { CodeDiff } from "./CodeDiff";
-import { baseName, directBase, DIRECT_NOTE, EARLIER_NOTE, filesWord, NOT_GIT_NOTE, reviewActions, reviewVersion } from "./review";
+import { baseName, codexBlock, codexReviewer, codexState, directBase, DIRECT_NOTE, EARLIER_NOTE, filesWord, NOT_GIT_NOTE, reviewActions, reviewVersion } from "./review";
 import { validation, type Check } from "./validation";
+
+/** Ask Codex for a read-only review of the session's edits (CON-8). It never runs by itself. Hivemind commits the edits as a
+ *  checkpoint on the session's branch and starts a Codex reviewer on them; the link shows where that review stands. */
+function AskCodex({ info }: { info: SessionInfo }) {
+  const client = useQueryClient();
+  const { shows } = useShownEngines();
+  const sessions = useQuery(sessionsQuery());
+  const reviewer = codexReviewer(info, sessions.data ?? []);
+  const ask = useMutation({
+    mutationFn: () => reviewAskCodex(info.id),
+    onSuccess: (started) => {
+      client.invalidateQueries({ queryKey: ["agent", "sessions"] });
+      toast("Codex is reviewing the edits", "info", { label: "Open the review", run: () => openSession(started.id) });
+    },
+    onError: (e) => toast(classify(e).message, "error"),
+  });
+  if (!shows("codex")) return null;
+  const running = reviewer?.status === "running" || reviewer?.status === "waiting";
+  const block = codexBlock(info) ?? (running ? "Codex is still reviewing these edits." : null);
+  return (
+    <div className="review-codex">
+      <button className="outline" disabled={!!block || ask.isPending} title={block ?? "Commit the edits as a checkpoint and have Codex read them. Nothing is changed."} onClick={() => ask.mutate()}>
+        {ask.isPending ? "Starting…" : reviewer ? "Ask Codex again" : "Ask Codex"}
+      </button>
+      {reviewer && <ArrowLink onClick={() => openSession(reviewer.id)}>Codex review: {codexState(reviewer)}</ArrowLink>}
+      {block && !running && <span className="muted small">{block}</span>}
+    </div>
+  );
+}
 
 /** The selected file of a session: its diff and what the agent ran to check its work. */
 export function FilePane({ info, file }: { info: SessionInfo; file: FileChange }) {
@@ -39,6 +70,7 @@ export function FilePane({ info, file }: { info: SessionInfo; file: FileChange }
         <span className="fill" />
         {file.binary ? <span className="muted">binary</span> : <><span className="num-add">+{file.added}</span><span className="num-del">−{file.removed}</span></>}
       </div>
+      <AskCodex info={info} />
       {direct && <p className="muted small">{DIRECT_NOTE}{directBase(info) === "head" && ` ${EARLIER_NOTE}`}</p>}
       {contents.isLoading ? <p className="muted">Loading diff…</p>
         : contents.error ? <p className="error">{classify(contents.error).message}</p>
@@ -124,6 +156,7 @@ export function SessionPane({ info }: { info: SessionInfo }) {
           : directBase(info) === "none" ? NOT_GIT_NOTE
           : "This session has no proposed edits."}
       </p>
+      <AskCodex info={info} />
       <div><ArrowLink onClick={() => openSession(info.id)}>Open session</ArrowLink></div>
     </div>
   );

@@ -5,6 +5,9 @@ import { createJSONStorage, persist, type StateStorage } from "zustand/middlewar
 
 export type Shelf = "active" | "archived" | "any";
 
+/** The Inbox's groups: each is a tab of the page. */
+export type InboxKind = "code" | "memory" | "pages" | "captures" | "maintenance" | "architecture" | "skills";
+
 /** One page per sidebar section. Memory also holds the open notes (`view: "notes"`) and its sub-views; Notes holds the
  *  notebooks and shows the same open documents. Home shows the picked project (or all of them); `view: "briefings"` opens its
  *  list of briefings, `briefing` one briefing, and `capture` the review of one capture batch; `tab: "architecture"` shows the
@@ -17,7 +20,7 @@ export type Route =
   | { page: "notes"; notebook?: string; path?: string; view?: "tasks" | "views" }
   | { page: "wiki"; domain?: string; at?: string; edition?: "agent"; project?: string }
   | { page: "maintenance" }
-  | { page: "review"; session?: string; file?: string }
+  | { page: "inbox"; session?: string; file?: string; kind?: InboxKind }
   | { page: "skills"; skill?: string }
   | { page: "workflows"; tab?: "runs" | "automations"; run?: string; automation?: string };
 export type Page = Route["page"];
@@ -65,7 +68,8 @@ const whenFree = (move: () => void) => { if (!stopped(move)) move(); };
 
 /** Version 2 of the saved navigation: the Overview, Executive and Recap pages became Home. A capture or a briefing the Executive
  *  route pointed at stays on the Home route. Version 3: the Architecture page became Home's Architecture tab (its system is kept)
- *  and the Changes page was removed (CON-4, CON-17); a saved route to a removed page would have no page to show. */
+ *  and the Changes page was removed (CON-4, CON-17); a saved route to a removed page would have no page to show. Version 4:
+ *  the Review page became the Inbox (CON-6), so a saved Review route opens it, on the same session and file. */
 export function migrateNav(persisted: unknown): unknown {
   const saved = persisted as { route?: { page?: string; capture?: string; briefing?: string; system?: string } } | null;
   const route = saved?.route;
@@ -77,6 +81,8 @@ export function migrateNav(persisted: unknown): unknown {
     home = { page: "home", tab: "architecture", ...(route.system ? { system: route.system } : {}) };
   } else if (route.page === "changes") {
     home = { page: "home" };
+  } else if (route.page === "review") {
+    return { ...saved, route: { ...route, page: "inbox" } };
   } else return persisted;
   return { ...saved, route: home };
 }
@@ -103,9 +109,9 @@ export const useApp = create<AppState>()(persist((set) => ({
   },
 }), {
   name: "hivemind.nav",
-  version: 3,
+  version: 4,
   storage: createJSONStorage(() => safeStorage),
-  migrate: (persisted, version) => (version < 3 ? migrateNav(persisted) : persisted) as AppState,
+  migrate: (persisted, version) => (version < 4 ? migrateNav(persisted) : persisted) as AppState,
   partialize: (s) => ({ project: s.project, domain: s.domain, route: s.route }),
 }));
 
@@ -115,8 +121,8 @@ export const openProject = (slug: string | null) => whenFree(() => { app().setPr
 /** Show a system on Home's Architecture tab, whichever project is picked. */
 export const openSystem = (slug: string) => app().go({ page: "home", tab: "architecture", system: slug });
 export const openSession = (session: string) => app().go({ page: "agents", session });
-/** Show the Review page, on one session's edits (and one file) when given. */
-export const openReview = (session?: string, file?: string) => app().go({ page: "review", session, file });
+/** Show the Inbox: on one session's edits (and one file) when given, or on one group. */
+export const openInbox = (session?: string, file?: string, kind?: InboxKind) => app().go({ page: "inbox", session, file, kind });
 export const openSkills = (skill?: string) => app().go({ page: "skills", skill });
 export const openWorkflows = (to: { tab?: "runs" | "automations"; run?: string; automation?: string } = {}) =>
   app().go({ page: "workflows", ...to, tab: to.automation ? "automations" : to.run ? "runs" : to.tab }, { replace: app().route.page === "workflows" });

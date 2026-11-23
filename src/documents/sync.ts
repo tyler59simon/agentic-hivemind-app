@@ -71,7 +71,10 @@ export function onDocsChanged(client: QueryClient, { domain, notebook, paths }: 
   client.invalidateQueries({ queryKey: ["notebook-tree", container] });
   if (paths.some((p) => p === "notebook.json" || p.startsWith(".proposals/"))) client.invalidateQueries({ queryKey: ["lm-notebooks"] });
   if (paths.some((p) => p === "notebook.json")) client.invalidateQueries({ queryKey: ["daily-settings", container] });
-  if (paths.some((p) => p.startsWith(".proposals/"))) client.invalidateQueries({ queryKey: ["lm-proposals", domain, notebook] });
+  if (paths.some((p) => p.startsWith(".proposals/"))) {
+    client.invalidateQueries({ queryKey: ["lm-proposals", domain, notebook] });
+    client.invalidateQueries({ queryKey: ["lm-proposals", "*"] });
+  }
   // `![[picture.png]]` looks among the notebook's attachments (Codex re-review of 87a0a1f).
   if (paths.some((p) => /^assets\//i.test(p))) client.invalidateQueries({ queryKey: ["lm-assets", container] });
   const pages = paths.filter((p) => /\.md$/i.test(p) && !p.startsWith(".") && !/^assets\//i.test(p));

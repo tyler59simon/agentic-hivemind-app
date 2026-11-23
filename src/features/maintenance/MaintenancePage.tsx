@@ -13,9 +13,8 @@ import { PageHeader } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
 import { isUnbound } from "../recap/recap";
-import { costText, nextRunText, resultText, runSummary, sortDecisions, usd, wasArchived } from "./maintenance";
+import { costText, HISTORY_LIMIT, nextRunText, resultText, runSummary, sortDecisions, usd, wasArchived } from "./maintenance";
 
-const HISTORY_LIMIT = 30;
 // The store's file watcher does not cover maintenance/ (run records and accounting), so the open page polls.
 const POLL_MS = 60_000;
 

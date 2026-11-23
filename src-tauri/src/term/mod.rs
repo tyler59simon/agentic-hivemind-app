@@ -1146,6 +1146,7 @@ mod tests {
                 summary: None,
                 verdict: None,
                 origin: None,
+                reviewed_by: None,
             }
         }
 

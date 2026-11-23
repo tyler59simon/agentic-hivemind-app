@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Review, SessionInfo } from "../../lib/agent";
-import { afterDecision, directBase, proposedFiles, reviewActions, reviewLabel, reviewSessions, reviewVersion, step } from "./review";
+import { afterDecision, codexBlock, codexReviewer, codexState, directBase, proposedFiles, reviewActions, reviewLabel, reviewSessions, reviewVersion, step } from "./review";
 
 const tree = { repo: "C:/code/ingestion", path: "C:/data/worktrees/x/1", branch: "hivemind/1", baseBranch: "main", baseSha: "a".repeat(40) };
 const base: SessionInfo = {
@@ -93,11 +93,34 @@ describe("review helpers", () => {
   it("afterDecision goes to the next waiting session", () => {
     const w1 = make("a"), w2 = make("b"), done = make("c", { review: review("dismissed") });
     const listed = [w1, w2, done];
-    expect(afterDecision(listed, "a")).toEqual({ page: "review", session: "b" });
-    expect(afterDecision(listed, "b")).toEqual({ page: "review", session: "a" });
-    expect(afterDecision(listed, "c")).toEqual({ page: "review", session: "a" });
-    expect(afterDecision([w1], "a")).toEqual({ page: "review" });
+    expect(afterDecision(listed, "a")).toEqual({ page: "inbox", session: "b" });
+    expect(afterDecision(listed, "b")).toEqual({ page: "inbox", session: "a" });
+    expect(afterDecision(listed, "c")).toEqual({ page: "inbox", session: "a" });
+    expect(afterDecision([w1], "a")).toEqual({ page: "inbox" });
     const never = [make("x", { status: "running" }), make("y", { review: review("approved") }), make("z")];
-    expect(afterDecision(never, "z")).toEqual({ page: "review" });
+    expect(afterDecision(never, "z")).toEqual({ page: "inbox" });
+  });
+
+  // CON-8: Ask Codex on a code diff.
+  it("says why a session cannot be sent to Codex", () => {
+    expect(codexBlock(make("a"))).toBeNull();
+    expect(codexBlock(make("a", { worktree: null, direct: { path: "C:/code", repo: null, headSha: null, startTree: null } }))).toMatch(/own worktree/);
+    expect(codexBlock(make("a", { status: "running" }))).toMatch(/finish its turn/);
+    expect(codexBlock(make("a", { status: "waiting" }))).toMatch(/finish its turn/);
+    expect(codexBlock(make("a", { filesChanged: files(0) }))).toMatch(/no proposed edits/);
+  });
+
+  it("finds the Codex review of a session and says where it stands", () => {
+    const reviewer = make("r", { status: "idle", verdict: "changes_needed" });
+    const asked = make("a", { reviewedBy: "r" });
+    expect(codexReviewer(asked, [asked, reviewer])).toBe(reviewer);
+    expect(codexReviewer(asked, [asked])).toBeUndefined();
+    expect(codexReviewer(make("a"), [reviewer])).toBeUndefined();
+    expect(codexState(make("r", { status: "running" }))).toBe("running");
+    expect(codexState(reviewer)).toBe("changes needed");
+    expect(codexState(make("r", { verdict: "pass" }))).toBe("passed");
+    expect(codexState(make("r", { status: "failed" }))).toBe("failed");
+    expect(codexState(make("r", { status: "cancelled" }))).toBe("stopped");
+    expect(codexState(make("r", { status: "succeeded" }))).toBe("finished, no verdict");
   });
 });

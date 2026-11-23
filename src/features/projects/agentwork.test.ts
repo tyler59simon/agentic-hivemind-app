@@ -17,10 +17,16 @@ describe("agentNeeds", () => {
       "Workflow failed: Add retries", "Architecture drift: 3 commits behind", "4 stale notes and 1 possible duplicate in memory",
     ]);
     expect(needs[4].target).toEqual({ page: "architecture", system: "pay" });
+    expect(needs[0].target).toEqual({ page: "inbox", kind: "memory" });
+    expect(needs[5].target).toEqual({ page: "inbox", kind: "memory" });
     const behindOnly = { system: "pay", attention: true, summary: "3 commits behind", edited: [], findings: null, layout: null } as never;
     const none = { memoryDrafts: 0, skillDrafts: 0, runs: [], workflows: [], now: NOW };
     expect(agentNeeds({ ...none, drift: behindOnly, behindShown: true })).toEqual([]);
     expect(agentNeeds({ ...none, drift: behindOnly })).toHaveLength(1);
+  });
+  it("sends skill drafts alone to the Inbox's Skills group", () => {
+    const [need] = agentNeeds({ memoryDrafts: 0, skillDrafts: 2, runs: [], workflows: [], now: NOW });
+    expect(need.target).toEqual({ page: "inbox", kind: "skills" });
   });
   it("is empty when nothing waits", () => {
     expect(agentNeeds({ memoryDrafts: 0, skillDrafts: 0, runs: [run("succeeded")], workflows: [], drift: { attention: false } as never, now: NOW })).toEqual([]);

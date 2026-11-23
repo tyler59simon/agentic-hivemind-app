@@ -30,7 +30,7 @@ A chat session can start in a role: architect, developer, reviewer, researcher o
 | `research` | researcher | the same, plus WebFetch and WebSearch |
 | `edit_worktree` | developer, tester | the same reads, edits inside its own worktree, and the project's allowed commands (Settings, per project) |
 
-A tester edits its worktree so it can run the project's test commands and add tests; like any session's edits, they wait in Review.
+A tester edits its worktree so it can run the project's test commands and add tests; like any session's edits, they wait in the Inbox.
 
 Every session, whatever its profile, is denied Living Memory's governed commands and `git push`, `git reset --hard`, `git clean` and `git branch -D`. An attended `edit_worktree` session accepts edits and asks about everything else. An unattended one (the user ticked it, or a workflow or automation started it) refuses what is not allowed instead of asking.
 
@@ -38,12 +38,14 @@ A session that never asks (read only, research, or unattended) starts Claude wit
 
 Reviewers and testers end their reply with a verdict line (pass or changes needed), shown on the session and in workflow reports. An architect or reviewer whose repository belongs to a registered system gets an Architecture section in its briefing (model, report, how far the output is behind) and the system's architecture folder as an extra folder it may read but not edit: a deny rule on the folder wins over any allow rule, the user's own included. The folder is given again when the session resumes. An attended editing session would accept edits there, so it gets only the paths.
 
+**Ask Codex.** On a code diff in the Inbox, Ask Codex has Codex review the session's edits. Hivemind commits them as a checkpoint on the session's branch (a later approval finds that commit), then starts a read-only Codex reviewer in a worktree at the checkpoint. The reviewer is told the session's base commit, so `git diff <base>..HEAD` shows the same edits. It runs only when asked, and only for a session in its own worktree that is between turns. The session records the reviewer, and the diff links to it with its state and verdict.
+
 ## Post-session reviewer
 
 When a chat work session ends in a way worth learning from, Hivemind asks a separate, tool-free Claude call (Sonnet) to read a digest of the session and propose what to keep. The call has no tools, no MCP servers, no session persistence, its own system prompt and a JSON schema, a budget per review set in Settings, Budgets ($0.25 by default), and `LIVING_MEMORY_OFF=1` so Living Memory's hooks stay out of it. Before the call, Hivemind removes credentials it recognizes from the digest or commit log: private keys, tokens with a known prefix (`sk-`, `ghp_`, `AKIA` and others), passwords in URLs, and values of settings named like `password`, `secret`, `token` or `api_key`.
 
 - **When it runs:** after the user approves a session's edits (notes and skills), after the user dismisses them (notes only), and after a session without edits that made at least 15 tool calls (notes only). Each session is reviewed once; a failed review can be run again from the session's rail.
-- **What it produces:** note drafts staged with Living Memory's `propose` (the user saves or rejects them in Review, Learned tab), and at most one skill proposal. "Nothing" is a normal answer.
+- **What it produces:** note drafts staged with Living Memory's `propose` (the user saves or rejects them in the Inbox, Memory group), and at most one skill proposal. "Nothing" is a normal answer.
 - **Daily cap:** Settings, Budgets, sets the most the reviewer, the executive calls, and the commit reviews and briefings automations ask for may spend per UTC day (default $1). Each review reserves its limit per call ($0.25 by default) first and settles at its real cost; a crash leaves the reservation counted. Sessions and workflows started by automations have their own daily budget (default $5).
 
 ## Skills
@@ -64,7 +66,7 @@ A workflow runs a goal as tasks, each an agent session in a role, with dependenc
 - When an editing task succeeds, Hivemind commits its edits as a checkpoint on the task's own `hivemind/<id8>` branch. A task with "worktree starts from" set gets a new worktree branched from that checkpoint, so parallel and sequential agents never share a working tree. If that branch no longer points at the checkpoint (the user discarded or committed meanwhile), the task fails instead of starting from a different revision. A skipped task leaves nothing to start from, so its dependents start from the base branch.
 - Each task's briefing has the goal, its own task, and for each task it depends on: the role, branch, files changed, verdict and summary (up to 2,000 characters).
 - A failed task blocks what depends on it until the user retries or skips it; a task that needs two failed tasks stays blocked until both are dealt with. Cancelling stops running sessions. A run that was running when Hivemind stopped comes back with its running tasks failed, ready to retry.
-- Nothing is merged or pushed. Each editing task's branch waits in Review like any session's; approving it adopts the checkpoint commit.
+- Nothing is merged or pushed. Each editing task's branch waits in the Inbox like any session's; approving it adopts the checkpoint commit.
 - The run report (Markdown, Copy report) lists each task's state, branch, checkpoint, verdict and summary.
 
 ## Automations

@@ -38,7 +38,7 @@ export function BeforeUninstall({ onOpenReview, onOpenSession }: { onOpenReview?
       case "stop": return <button type="button" disabled={busy} onClick={() => run(() => agentCancel(tree.session).then(() => waitStopped(tree.session, agentSessions)))}>Stop session</button>;
       case "end": return <button type="button" disabled={busy} onClick={() => run(() => agentEnd(tree.session))}>End session</button>;
       case "review": return <>
-        {onOpenReview && <button type="button" disabled={busy} onClick={() => onOpenReview(tree.session)}>Open in Review</button>}
+        {onOpenReview && <button type="button" disabled={busy} onClick={() => onOpenReview(tree.session)}>Open in the Inbox</button>}
         <button type="button" className="danger-text" disabled={busy} onClick={() => setDiscarding(tree)}>Discard…</button>
       </>;
       case "remove": return <button type="button" disabled={busy} onClick={() => run(() => uninstallRemoveWorktree(tree.session))}>Remove worktree</button>;

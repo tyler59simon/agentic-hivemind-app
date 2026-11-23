@@ -669,6 +669,8 @@ export const docQuery = (payload: object) =>
 export const lmNotebooksQuery = () => ({ queryKey: ["lm-notebooks"], queryFn: docNotebooks });
 /** Pending proposals of one notebook. */
 export const proposalsQuery = (domain: string, notebook: string) => ({ queryKey: ["lm-proposals", domain, notebook], queryFn: () => docProposals(domain, notebook) });
+/** Pending proposals of every notebook (`doc proposals` without a notebook), for the Inbox. */
+export const allProposalsQuery = () => ({ queryKey: ["lm-proposals", "*"], queryFn: () => docProposals() });
 export const docNotebookCreate = (domain: string, notebook: string, title: string) =>
   run<DocReceipt>(doc(["notebook", "create"], [domain, notebook], [`--title=${title}`], { priv: false }));
 /** `settings` is merged into the notebook's `settings` object one key at a time (a key given replaces that key). It goes as

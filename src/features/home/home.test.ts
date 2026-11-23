@@ -3,7 +3,8 @@ import type { Milestone } from "../../lib/executive";
 import type { NoteRow } from "../../lib/lm";
 import type { Notebook } from "../../lib/notebooks";
 import { itemOf, type TaskItem } from "../notes/taskList";
-import { dueSoon, homeSections, lastVisit, looseItems, projectItems, rememberVisit, sinceDays, visitScope } from "./home";
+import { NO_COUNTS } from "../review/worklist";
+import { dueSoon, homeSections, inboxNeeds, lastVisit, looseItems, projectItems, rememberVisit, sinceDays, visitScope } from "./home";
 
 const TODAY = "2026-11-22";
 const DAY = 86_400_000;
@@ -128,5 +129,22 @@ describe("since you were last here", () => {
       expect(lastVisit("pay")).toBeNull();
       expect(() => rememberVisit("pay")).not.toThrow();
     });
+  });
+});
+
+describe("Needs you rows for the Inbox", () => {
+  it("has a row for each group with something, opening that group", () => {
+    const rows = inboxNeeds({ ...NO_COUNTS, code: 4, memory: 6, pages: 1, maintenance: 2 }, 3);
+    expect(rows).toEqual([
+      { key: "code", text: "4 proposed file changes", kind: "code" },
+      { key: "due", text: "3 notes due for review", kind: "memory" },
+      { key: "pages", text: "1 page edit proposed by agents", kind: "pages" },
+      { key: "maintenance", text: "2 changes made by maintenance to look over", kind: "maintenance" },
+    ]);
+  });
+
+  it("has no row for an empty group, and none for captures (the page lists each batch)", () => {
+    expect(inboxNeeds({ ...NO_COUNTS, captures: 2, skills: 1, architecture: 1 }, 0)).toEqual([]);
+    expect(inboxNeeds({ ...NO_COUNTS, code: 1 }, 1).map((r) => r.text)).toEqual(["1 proposed file change", "1 note due for review"]);
   });
 });

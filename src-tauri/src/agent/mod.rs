@@ -241,9 +241,12 @@ pub struct SessionInfo {
     /// A reviewer's or tester's conclusion from its last turn.
     #[serde(default)]
     pub verdict: Option<Verdict>,
-    /// What started the session when it was not the user: `workflow:<run>:<task>` or `automation:<id>`.
+    /// What started the session when it was not the user: `workflow:<run>:<task>`, `automation:<id>` or `review:<session>`.
     #[serde(default)]
     pub origin: Option<String>,
+    /// The Codex review session the user asked for from the Inbox, for this session's edits.
+    #[serde(default)]
+    pub reviewed_by: Option<String>,
 }
 
 /// What the user decided about a work session's edits.
@@ -748,6 +751,7 @@ fn session_info(id: &str, adapter: &str, task: AgentTask, scope: &Scope, options
         summary: None,
         verdict: None,
         origin: options.origin.clone(),
+        reviewed_by: None,
     }
 }
 
@@ -3677,6 +3681,7 @@ mod tests {
             summary: None,
             verdict: None,
             origin: None,
+            reviewed_by: None,
         }
     }
 

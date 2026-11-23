@@ -5,7 +5,7 @@ import { BookOpenCheck, History, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { classify } from "../../lib/errors";
 import { learningQuery, skillAction, skillHistory, skillProposalsQuery, skillsQuery, skillsUpkeep, type Skill } from "../../lib/skills";
-import { openReview, openSession, useApp } from "../../store";
+import { openInbox, openSession, useApp } from "../../store";
 import { Markdown } from "../../ui/Markdown";
 import { Confirm } from "../../ui/Modal";
 import { ArrowLink, PageHeader, Row, Section } from "../../ui/Page";
@@ -96,7 +96,7 @@ export function SkillsPage() {
   const selected = list.find((s) => s.name === picked) ?? list[0];
   const waiting = proposals.data?.length ?? 0;
   const upkeep = () => skillsUpkeep().then((made) => {
-    toast(made.length ? `${made.length} archive proposal${made.length === 1 ? "" : "s"} added to Review` : "No skill is stale or flagged");
+    toast(made.length ? `${made.length} archive proposal${made.length === 1 ? "" : "s"} added to the Inbox` : "No skill is stale or flagged");
     client.invalidateQueries({ queryKey: ["skills"] });
   }, (e) => toast(classify(e).message, "error"));
   const status = learning.data;
@@ -106,9 +106,9 @@ export function SkillsPage() {
         actions={<button onClick={upkeep} title="Propose archiving skills unused for 30 days, or whose sessions are mostly rejected">Check for stale skills</button>} />
       <p className="muted small">
         {status ? (status.enabled
-          ? <>The reviewer reads finished sessions and proposes notes and skills; you approve them in Review. Spending: {spendText(status.spentToday, status.dailyUsd)}, at most ${status.reviewUsd.toFixed(2)} per review.</>
+          ? <>The reviewer reads finished sessions and proposes notes and skills; you approve them in the Inbox. Spending: {spendText(status.spentToday, status.dailyUsd)}, at most ${status.reviewUsd.toFixed(2)} per review.</>
           : <>The post-session reviewer is off (Settings).</>) : null}
-        {waiting > 0 && <> <ArrowLink onClick={() => openReview()}>{waiting} proposal{waiting === 1 ? "" : "s"} waiting in Review</ArrowLink></>}
+        {waiting > 0 && <> <ArrowLink onClick={() => openInbox(undefined, undefined, "skills")}>{waiting} proposal{waiting === 1 ? "" : "s"} waiting in the Inbox</ArrowLink></>}
       </p>
       <div className="review">
         <nav className="review-list" aria-label="Skills">

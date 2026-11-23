@@ -96,8 +96,10 @@ export interface SessionInfo {
   summary: string | null;
   /** A reviewer's or tester's conclusion from its last turn. */
   verdict: Verdict | null;
-  /** What started the session when it was not the user: `workflow:<run>:<task>` or `automation:<id>`. */
+  /** What started the session when it was not the user: `workflow:<run>:<task>`, `automation:<id>` or `review:<session>`. */
   origin?: string | null;
+  /** The Codex review session asked for from the Inbox, for this session's edits. */
+  reviewedBy?: string | null;
 }
 
 /** The engine of a session, whatever adapter name older code stored. */
@@ -208,6 +210,8 @@ export const reviewApprove = (sessionId: string, message: string) => invoke<stri
 export const reviewStopAndApprove = (sessionId: string, message: string) => invoke<string>("review_stop_and_approve", { sessionId, message });
 export const reviewRequestTerminalChanges = (sessionId: string, text: string) => invoke<void>("review_request_terminal_changes", { sessionId, text });
 export const reviewRequestChanges = (sessionId: string, text: string) => invoke<void>("review_request_changes", { sessionId, text });
+/** Commit the session's edits as a checkpoint and start a read-only Codex reviewer on them. Resolves to the reviewer's session. */
+export const reviewAskCodex = (sessionId: string) => invoke<SessionInfo>("review_ask_codex", { sessionId });
 export const reviewDismiss = (sessionId: string) => invoke<void>("review_dismiss", { sessionId });
 export const reviewDiscard = (sessionId: string) => invoke<void>("review_discard", { sessionId });
 /** Have Rust look at every session's worktree again; resolves to how many sessions changed. */

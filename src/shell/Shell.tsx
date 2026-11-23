@@ -5,7 +5,7 @@ import { MemoryPage } from "../features/library/MemoryPage";
 import { NotesPage } from "../features/notes/NotesPage";
 import { HomePage } from "../features/home/HomePage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
-import { ReviewPage } from "../features/review/ReviewPage";
+import { InboxPage } from "../features/review/InboxPage";
 import { SkillsPage } from "../features/skills/SkillsPage";
 import { WorkflowsPage } from "../features/workflows/WorkflowsPage";
 import { WikiPage } from "../features/wiki/WikiPage";
@@ -23,7 +23,7 @@ const PAGES: Record<Page, () => ReactNode> = {
   dashboards: () => <DashboardsPage />,
   wiki: () => <WikiPage />,
   maintenance: () => <MaintenancePage />,
-  review: () => <ReviewPage />,
+  inbox: () => <InboxPage />,
   skills: () => <SkillsPage />,
   workflows: () => <WorkflowsPage />,
 };

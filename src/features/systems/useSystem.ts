@@ -1,7 +1,7 @@
 // Data for one system's passport. The registry and member notes load together; the architecture folder is a
 // separate query so its cards load and fail on their own, and the file watcher never refetches it.
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { create } from "zustand";
 import { systemArchitecture, systemDiagram, systemSnapshot, systemSnapshots, systemStaleness } from "../../lib/architecture";
 import { useSystemsEnabled } from "../../lib/connection";
@@ -75,11 +75,18 @@ export function useSnapshot(slug: string, id: string | null) {
 
 const DISMISSED = "hivemind.system-proposals-dismissed";
 const dismissedProposals = (): string[] => { try { return JSON.parse(localStorage.getItem(DISMISSED) ?? "[]"); } catch { return []; } };
+/** Every mounted `useSystemProposals` hears the new list when one of them dismisses: the Inbox page and the sidebar badge both
+ *  hold one, and their counts must agree. */
+const dismissListeners = new Set<(dismissed: string[]) => void>();
 
 /** For each system: the agent sessions run for it, and the registry update the newest successful one proposed (until dismissed). */
 export function useSystemProposals(systems: System[], all: System[]) {
   const sessions = useQuery(sessionsQuery());
   const [dismissed, setDismissed] = useState(dismissedProposals);
+  useEffect(() => {
+    dismissListeners.add(setDismissed);
+    return () => { dismissListeners.delete(setDismissed); };
+  }, []);
   const items = useMemo(() => systems.map((system) => {
     const mine = (sessions.data ?? []).filter((s) => s.task.kind === "system_passport" && s.task.slug === system.slug);
     const proposer = mine.find((s) => s.status === "succeeded");
@@ -91,7 +98,7 @@ export function useSystemProposals(systems: System[], all: System[]) {
   const dismiss = (sessionId: string) => {
     const next = [...dismissedProposals(), sessionId].slice(-50);
     try { localStorage.setItem(DISMISSED, JSON.stringify(next)); } catch { /* not persisted */ }
-    setDismissed(next);
+    dismissListeners.forEach((listener) => listener(next));
   };
   return { items, dismiss };
 }

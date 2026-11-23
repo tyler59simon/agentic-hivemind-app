@@ -1,6 +1,7 @@
 // What the agent side of Hivemind needs from the user, and what it did lately, for the Overview. Pure: the page passes in
 // what its queries returned.
 import type { SessionInfo } from "../../lib/agent";
+import type { InboxKind } from "../../store";
 import type { Drift } from "../../lib/architecture";
 import type { LedgerEntry } from "../../lib/skills";
 import type { AutomationRun, WorkflowRun } from "../../lib/workflows";
@@ -8,7 +9,7 @@ import type { AutomationRun, WorkflowRun } from "../../lib/workflows";
 const DAY = 86_400_000;
 
 export type NeedTarget =
-  | { page: "review" }
+  | { page: "inbox"; kind?: InboxKind }
   | { page: "workflows"; tab: "runs" | "automations"; run?: string }
   | { page: "architecture"; system: string };
 export interface Need { key: string; text: string; target: NeedTarget }
@@ -32,7 +33,7 @@ const n = (count: number, word: string, plural = `${word}s`) => `${count} ${coun
 export function agentNeeds(i: NeedsInput): Need[] {
   const out: Need[] = [];
   const drafts = i.memoryDrafts + i.skillDrafts;
-  if (drafts) out.push({ key: "drafts", text: `${n(drafts, "learned draft")} to approve or reject`, target: { page: "review" } });
+  if (drafts) out.push({ key: "drafts", text: `${n(drafts, "learned draft")} to approve or reject`, target: { page: "inbox", kind: i.memoryDrafts ? "memory" : "skills" } });
   const waiting = i.runs.filter((r) => r.state === "waiting").length;
   if (waiting) out.push({ key: "waiting", text: `${n(waiting, "automation run")} waiting for you to start`, target: { page: "workflows", tab: "automations" } });
   const failed = i.runs.filter((r) => r.state === "failed" && i.now - r.at < DAY).length;
@@ -45,7 +46,7 @@ export function agentNeeds(i: NeedsInput): Need[] {
   const beyondBehind = (x: Drift) => (x.edited?.length ?? 0) > 0 || !!x.findings?.some((f) => f.severity === "error" && !f.existing) || (x.layout?.findings ?? 0) > 0;
   if (d?.attention && (!i.behindShown || beyondBehind(d))) out.push({ key: "drift", text: `Architecture drift: ${d.summary}`, target: { page: "architecture", system: d.system } });
   const tidy = [i.stale ? n(i.stale, "stale note") : "", i.duplicates ? n(i.duplicates, "possible duplicate") : ""].filter(Boolean);
-  if (tidy.length) out.push({ key: "tidy", text: `${tidy.join(" and ")} in memory`, target: { page: "review" } });
+  if (tidy.length) out.push({ key: "tidy", text: `${tidy.join(" and ")} in memory`, target: { page: "inbox", kind: "memory" } });
   return out;
 }
 

@@ -1129,6 +1129,22 @@ async fn review_request_changes(state: State<'_, AppState>, session_id: String, 
     blocking(move || review::request_changes(&agents, &bridge, &settings::load(&path), &session_id, &text)).await
 }
 
+/// Commit the session's edits as a checkpoint and start a read-only Codex reviewer on them. Returns the reviewer's session.
+#[tauri::command]
+async fn review_ask_codex(state: State<'_, AppState>, session_id: String) -> Result<agent::SessionInfo, String> {
+    let (agents, bridge, path) = (state.agents.clone(), state.bridge.clone(), state.settings_path.clone());
+    let (worktrees, terminals) = (state.worktrees_dir.clone(), state.terminals_dir.clone());
+    blocking(move || {
+        let saved = settings::load(&path);
+        // Before the checkpoint: a missing Codex CLI should leave the session's edits as they are.
+        term::launch::program(agent::Engine::Codex, &saved)?;
+        review::ask_codex(&agents, &worktrees, &saved, &session_id, |task, prompt, options| {
+            agent::start_task(&agents, &bridge, &saved, &worktrees, &terminals, task, prompt, options)
+        })
+    })
+    .await
+}
+
 /// Take a session's edits out of the review queue and leave them where they are.
 #[tauri::command]
 async fn review_dismiss(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
@@ -1946,7 +1962,7 @@ pub fn run() {
             agent_available, agent_roles, learning_status, learning_review, skills_list, skill_proposals, skill_decide, skill_action, skill_version, skill_history,
             skills_upkeep, skill_from_note, workflow_templates, workflow_list, workflow_create, workflow_edit, workflow_act, workflow_delete, workflow_report,
             automation_list, automation_put, automation_delete, automation_act, architecture_drift, architecture_rules_set, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, uninstall_inventory, uninstall_remove_worktree, uninstall_delete_branch, repo_branches,
-            agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_stop_and_approve, review_request_changes, review_request_terminal_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
+            agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_stop_and_approve, review_ask_codex, review_request_changes, review_request_terminal_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
             system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export, wiki_agent_build, wiki_agent_cancel,
             studio::notebooks_list, studio::notebook_add, studio::notebook_remove, studio::notebook_rename, studio::notebook_tree, studio::notebook_meta_get,
             studio::notebook_meta_set, studio::notebook_append, studio::obsidian_setting, studio::query_views, studio::query_view_save, studio::query_view_delete, studio::file_read, studio::file_reopen, studio::file_save, studio::file_create, studio::file_mkdir, studio::file_rename, studio::file_delete,

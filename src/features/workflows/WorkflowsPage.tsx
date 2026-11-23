@@ -145,7 +145,7 @@ function NewWorkflow({ onDone }: { onDone: (run?: WorkflowRun) => void }) {
   return (
     <div className="review-pane">
       <h2>New workflow</h2>
-      <p className="muted">Each task runs as its own agent session in a role. A task starts when the tasks it depends on are done. Editing tasks work in their own worktree, and their edits wait for your approval in Review; nothing is merged or pushed.</p>
+      <p className="muted">Each task runs as its own agent session in a role. A task starts when the tasks it depends on are done. Editing tasks work in their own worktree, and their edits wait for your approval in the Inbox; nothing is merged or pushed.</p>
       <label className="field">
         <span>Template</span>
         <select value={form.template ?? ""} onChange={(e) => pick(e.target.value)}>

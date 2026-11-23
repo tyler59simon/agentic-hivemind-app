@@ -1,4 +1,4 @@
-// The Review page's Learned items: a memory draft in Living Memory's proposal inbox, and a skill proposal.
+// The Inbox's draft items: a memory draft in Living Memory's proposal inbox, and a skill proposal.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { classify } from "../../lib/errors";

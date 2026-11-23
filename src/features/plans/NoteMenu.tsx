@@ -7,7 +7,7 @@ import { resolvable, useNoteTypes } from "../../lib/noteTypes";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
 import { skillFromNote } from "../../lib/skills";
-import { openReview } from "../../store";
+import { openInbox } from "../../store";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
 import { noteQuery } from "../viewer/NoteView";
@@ -68,7 +68,7 @@ export function NoteMenu({ refId, paper }: { refId: string; paper?: { white: boo
       setOpen(false);
       skillFromNote(refId).then((p) => {
         client.invalidateQueries({ queryKey: ["skills"] });
-        toast(`Skill proposal ${p.name} is waiting in Review`, "info", { label: "Open Review", run: () => openReview() });
+        toast(`Skill proposal ${p.name} is waiting in the Inbox`, "info", { label: "Open Inbox", run: () => openInbox(undefined, undefined, "skills") });
       }, (e) => toast(classify(e).message, "error"));
     } },
     { label: paper?.white ? "Theme background" : "White background", show: !!paper, act: () => { setOpen(false); paper?.flip(); } },

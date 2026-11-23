@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { wikiRoute } from "./features/wiki/wiki";
-import { migrateNav, openProject, openReview, openSession, openSystem, setLeaveGuard, startSession, useApp } from "./store";
+import { migrateNav, openInbox, openProject, openSession, openSystem, setLeaveGuard, startSession, useApp } from "./store";
 
 const app = () => useApp.getState();
 
@@ -9,8 +9,8 @@ describe("navigation", () => {
 
   it("go shows a page and Back returns to the one before", () => {
     app().go({ page: "memory" });
-    app().go({ page: "review" });
-    expect(app().route).toEqual({ page: "review" });
+    app().go({ page: "inbox" });
+    expect(app().route).toEqual({ page: "inbox" });
     app().goBack();
     expect(app().route).toEqual({ page: "memory" });
     app().goBack();
@@ -53,12 +53,14 @@ describe("navigation", () => {
     expect(app().project).toBeNull();
   });
 
-  it("openReview routes to a session and file", () => {
-    openReview("s1", "a/b.ts");
-    expect(app().route).toEqual({ page: "review", session: "s1", file: "a/b.ts" });
+  it("openInbox routes to a session and file, or to a group", () => {
+    openInbox("s1", "a/b.ts");
+    expect(app().route).toEqual({ page: "inbox", session: "s1", file: "a/b.ts" });
     expect(app().back).toEqual([{ page: "home" }]);
-    openReview();
-    expect(app().route).toEqual({ page: "review" });
+    openInbox();
+    expect(app().route).toEqual({ page: "inbox" });
+    openInbox(undefined, undefined, "captures");
+    expect(app().route).toEqual({ page: "inbox", kind: "captures" });
   });
 
   it("opens the New session screen", () => {
@@ -88,7 +90,7 @@ describe("navigation", () => {
     let later: (() => void) | null = null;
     const clear = setLeaveGuard((proceed) => { later = proceed; return false; });
     app().goBack();
-    app().go({ page: "review" });
+    app().go({ page: "inbox" });
     expect(app().route).toEqual({ page: "home", capture: "b1" });
     app().go({ page: "home" }, { force: true });
     expect(app().route).toEqual({ page: "home" });
@@ -100,8 +102,8 @@ describe("navigation", () => {
     app().goBack();
     expect(app().route).toEqual({ page: "home", capture: "b1" });
     const allow = setLeaveGuard(() => true);
-    app().go({ page: "review" });
-    expect(app().route).toEqual({ page: "review" });
+    app().go({ page: "inbox" });
+    expect(app().route).toEqual({ page: "inbox" });
     allow();
   });
 
@@ -125,8 +127,8 @@ describe("navigation", () => {
 describe("saved navigation", () => {
   const migrate = (route: object, version = 1) => useApp.persist.getOptions().migrate!({ project: "pay", domain: "demo", route }, version);
 
-  it("is version 3, and moves the Overview, Executive and Recap pages to Home", () => {
-    expect(useApp.persist.getOptions().version).toBe(3);
+  it("is version 4, and moves the Overview, Executive and Recap pages to Home", () => {
+    expect(useApp.persist.getOptions().version).toBe(4);
     for (const page of ["overview", "executive", "recap"]) expect(migrate({ page })).toEqual({ project: "pay", domain: "demo", route: { page: "home" } });
     expect(migrate({ page: "overview", view: "work" })).toMatchObject({ route: { page: "home" } });
   });
@@ -150,7 +152,15 @@ describe("saved navigation", () => {
     expect(migrate({ page: "changes", id: 14, view: "detail" }, 2)).toEqual({ project: "pay", domain: "demo", route: { page: "home" } });
   });
 
-  it("does not migrate a version 3 save", () => {
-    expect(migrate({ page: "home", tab: "architecture", system: "s" }, 3)).toMatchObject({ route: { page: "home", tab: "architecture", system: "s" } });
+  // CON-6: the Review page became the Inbox.
+  it("moves a saved Review route to the Inbox, keeping its session and file", () => {
+    expect(migrate({ page: "review" }, 3)).toEqual({ project: "pay", domain: "demo", route: { page: "inbox" } });
+    expect(migrate({ page: "review", session: "s1", file: "a/b.ts" }, 3)).toEqual({ project: "pay", domain: "demo", route: { page: "inbox", session: "s1", file: "a/b.ts" } });
+    expect(migrate({ page: "review" }, 1)).toMatchObject({ route: { page: "inbox" } });
+  });
+
+  it("does not migrate a version 4 save", () => {
+    expect(migrate({ page: "home", tab: "architecture", system: "s" }, 4)).toMatchObject({ route: { page: "home", tab: "architecture", system: "s" } });
+    expect(migrate({ page: "review" }, 4)).toMatchObject({ route: { page: "review" } });
   });
 });

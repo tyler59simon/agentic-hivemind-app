@@ -68,3 +68,66 @@ export function sortDecisions(ds: MaintenanceDecision[]): MaintenanceDecision[] 
   const weight = (d: MaintenanceDecision) => (applied(d) ? 0 : 1);
   return ds.map((d, i) => ({ d, i })).sort((a, b) => weight(a.d) - weight(b.d) || a.i - b.i).map((x) => x.d);
 }
+
+// ---- The Inbox: what maintenance deferred, and what it did that the user may want to undo. ----
+
+/** Runs listed on the Maintenance page and read for the Inbox. */
+export const HISTORY_LIMIT = 30;
+/** A due note shows in the Inbox when the latest decision about it in this many days was a defer. */
+export const DEFER_DAYS = 30;
+/** An applied decision shows in the Inbox for this many days. */
+export const APPLIED_DAYS = 7;
+const DAY = 86_400_000;
+
+/** A run with the decisions it recorded. */
+export interface RunDecisions { run: MaintenanceRun; decisions: MaintenanceDecision[] }
+const startedAt = (r: Pick<MaintenanceRun, "attempted_at">) => Date.parse(r.attempted_at);
+
+/** The runs to read decisions from: ones that reviewed notes, started within `days` days of `now`. */
+export const runsWithin = (runs: MaintenanceRun[], now: number, days: number): MaintenanceRun[] =>
+  runs.filter((r) => r.reviewed > 0 && now - startedAt(r) <= days * DAY);
+
+/** A decision's rule and reason, or its reason code in words. */
+export function reasonText(d: Pick<MaintenanceDecision, "rule" | "reason" | "reason_code">): string {
+  const text = [d.rule, d.reason].filter(Boolean).join(": ");
+  return text || (d.reason_code ? d.reason_code.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()) : "");
+}
+
+/** The notes whose latest decision in the last `DEFER_DAYS` days was a defer or a refusal by policy (maintenance could not
+ *  decide), with that decision. A later run that kept or changed a note takes it off the list. */
+export function deferredNotes(done: RunDecisions[], now: number): Map<string, MaintenanceDecision> {
+  const latest = new Map<string, { at: number; decision: MaintenanceDecision }>();
+  for (const { run, decisions } of done) {
+    const at = startedAt(run);
+    if (Number.isNaN(at) || now - at > DEFER_DAYS * DAY) continue;
+    for (const decision of decisions) {
+      const seen = latest.get(decision.ref);
+      if (!seen || at >= seen.at) latest.set(decision.ref, { at, decision });
+    }
+  }
+  return new Map([...latest].filter(([, v]) => v.decision.result === "deferred" || v.decision.result === "rejected").map(([ref, v]) => [ref, v.decision]));
+}
+
+/** An applied decision the Inbox lists: undoable through `operation_id`, which is also its key. */
+export interface AppliedItem { key: string; ref: string; decision: MaintenanceDecision; run: MaintenanceRun; at: number }
+const UNDOABLE = new Set(["archive", "resolve", "supersede", "update"]);
+
+/** The decisions of the last `APPLIED_DAYS` days that archived, resolved, superseded or updated a note, newest first, without
+ *  the ones the user marked "Looks right". `seen` maps an operation id to the time of the run it came from. */
+export function appliedDecisions(done: RunDecisions[], now: number, seen: Record<string, number>): AppliedItem[] {
+  const out: AppliedItem[] = [];
+  for (const { run, decisions } of done) {
+    const at = startedAt(run);
+    if (Number.isNaN(at) || now - at > APPLIED_DAYS * DAY) continue;
+    for (const decision of decisions) {
+      const id = decision.operation_id;
+      if (decision.result === "applied" && UNDOABLE.has(decision.action) && id && !(id in seen)) out.push({ key: id, ref: decision.ref, decision, run, at });
+    }
+  }
+  return out.sort((a, b) => b.at - a.at);
+}
+
+/** The ids still worth keeping: those of runs from the last `APPLIED_DAYS` days. */
+export function pruneSeen(seen: Record<string, number> | undefined, now: number): Record<string, number> {
+  return Object.fromEntries(Object.entries(seen ?? {}).filter(([, at]) => Number.isFinite(at) && now - at <= APPLIED_DAYS * DAY));
+}

@@ -122,7 +122,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
         <>
           <label className="check"><input type="checkbox" checked={value.learning_reviewer ?? true}
             onChange={(e) => setValue({ ...value, learning_reviewer: e.target.checked })} /> Review finished sessions for notes and skills worth keeping</label>
-          <p className="muted small">When you approve or discard a chat session's edits, or a long session ends, Hivemind sends a summary of the session to Claude (Sonnet, no tools, within the limits under Budgets). Notes it proposes wait in Review and are saved only when you accept them; skills are proposed only from sessions you approved.</p>
+          <p className="muted small">When you approve or discard a chat session's edits, or a long session ends, Hivemind sends a summary of the session to Claude (Sonnet, no tools, within the limits under Budgets). Notes it proposes wait in the Inbox and are saved only when you accept them; skills are proposed only from sessions you approved.</p>
           <label className="check"><input type="checkbox" checked={value.skills_auto_patch ?? false}
             onChange={(e) => setValue({ ...value, skills_auto_patch: e.target.checked })} /> Apply reviewer changes to a skill without asking when sessions using it were approved at least 3 times</label>
           <p className="muted small">New skills always wait for you. Every change is in the skill's history and can be undone with Restore.</p>

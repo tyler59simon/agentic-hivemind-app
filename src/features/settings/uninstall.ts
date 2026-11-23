@@ -9,7 +9,7 @@ export function treeStep(tree: UninstallTree): TreeStep {
     if (tree.interface === "terminal") return "terminal";
     return tree.mode === "interactive" ? "end" : "stop";
   }
-  // A worktree git cannot read may still hold edits: send the user to Review rather than offer removal.
+  // A worktree git cannot read may still hold edits: send the user to the Inbox rather than offer removal.
   if (tree.exists && (tree.files === null || tree.files > 0)) return "review";
   return "remove";
 }

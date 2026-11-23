@@ -5,22 +5,21 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Bot, Clock, CodeXml, Inbox, Layers } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import { reviewRefresh, sessionsQuery } from "../../lib/agent";
-import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
+import { useSystemsEnabled } from "../../lib/connection";
 import type { RepoActivity } from "../../lib/git";
 import { driftQuery } from "../../lib/architecture";
-import { proposalsList, review, type Project } from "../../lib/lm";
-import { skillHistory, skillProposalsQuery } from "../../lib/skills";
+import type { Project } from "../../lib/lm";
+import { skillHistory } from "../../lib/skills";
 import { automationsQuery, workflowsQuery } from "../../lib/workflows";
 import { ago } from "../../lib/text";
-import { openSession, openSkills, openSystem, openWorkflows, useApp } from "../../store";
+import { openInbox, openSession, openSkills, openSystem, openWorkflows, useApp } from "../../store";
 import { ArrowLink, Row, Section } from "../../ui/Page";
-import { useInbox } from "../executive/useExecutive";
 import { agentActivity, agentNeeds, type Need } from "../projects/agentwork";
-import { proposedFiles } from "../review/review";
+import { useInboxItems } from "../review/useInboxItems";
 import { systemsForProject } from "../projects/scope";
-import { useProject } from "../projects/useProject";
 import { MiniDiagram } from "../systems/MiniDiagram";
 import { systemsQuery, useStaleness, useSystem } from "../systems/useSystem";
+import { inboxNeeds } from "./home";
 
 const folderName = (path: string) => path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
 
@@ -86,52 +85,46 @@ export function SystemContext({ project }: { project: Project }) {
   );
 }
 
-/** What waits for the user: proposed file changes, an architecture output that is behind its repository, notes due, and captures
- *  to review. */
+/** What waits for the user: what the Inbox holds (counted by the hook that also counts the sidebar badge), an architecture output
+ *  that is behind its repository, and what agents and automations did that needs a look. */
 export function NeedsReview({ project }: { project?: Project }) {
-  const go = useApp((s) => s.go);
-  const projectsOn = useProjectsEnabled();
   const systemsOn = useSystemsEnabled();
-  const sessions = useQuery(sessionsQuery());
-  const mine = useProject(project?.slug).due;
-  const everything = useQuery({ queryKey: ["review", "*"], queryFn: () => review({ allDomains: true, limit: 100 }), enabled: projectsOn && !project });
-  const due = project ? mine : everything;
+  const inbox = useInboxItems({ project });
+  const due = inbox.due;
   // Edits made in a worktree by hand count too, so every worktree is looked at once when this is shown.
   useEffect(() => { reviewRefresh().catch(() => undefined); }, []);
   const registry = useQuery({ ...systemsQuery(), enabled: systemsOn && !!project });
   const system = useMemo(() => (project ? systemsForProject(project, (registry.data?.systems ?? []).filter((s) => s.status !== "retired"))[0] : undefined), [project, registry.data]);
   const { architecture } = useSystem(system?.slug);
   const stale = useStaleness(system?.slug, architecture.data?.generatedAt);
-  const files = proposedFiles((sessions.data ?? []).filter((s) => !project || s.project === project.slug));
   const behind = system && stale.data?.behind ? stale.data.behind : 0;
-  const notes = due.data?.due ?? 0;
-  const inbox = useInbox();
   // A capture batch with no project, or one for a project not picked, still waits; it is shown on the project it is for, or everywhere when it has none.
-  const captures = inbox.waiting.filter((b) => !project || !b.project || b.project === project.slug);
-  const memoryDrafts = useQuery({ queryKey: ["proposals", "list"], queryFn: proposalsList, enabled: projectsOn, retry: false });
-  const skillDrafts = useQuery({ ...skillProposalsQuery(), retry: false });
+  const captures = inbox.captures;
+  const rows = inboxNeeds(inbox.counts, inbox.dueRows.length);
   const automations = useQuery({ ...automationsQuery(), retry: false });
   const workflows = useQuery({ ...workflowsQuery(), retry: false });
   const drift = useQuery({ ...driftQuery(system?.slug ?? ""), enabled: !!system, retry: false });
   const needs = agentNeeds({
-    memoryDrafts: memoryDrafts.data?.proposals.length ?? 0, skillDrafts: skillDrafts.data?.length ?? 0,
+    memoryDrafts: inbox.drafts.length, skillDrafts: inbox.skills.length,
     runs: automations.data?.runs ?? [], workflows: (workflows.data ?? []).filter((w) => !project || w.project === project.slug),
-    drift: drift.data, behindShown: behind > 0, stale: due.data?.counts?.stale, duplicates: due.data?.counts?.duplicate, now: Date.now(),
+    drift: drift.data, behindShown: behind > 0, stale: inbox.kindTotals?.stale, duplicates: inbox.kindTotals?.duplicate, now: Date.now(),
   });
-  const open = (n: Need) => (n.target.page === "review" ? go({ page: "review" })
+  const open = (n: Need) => (n.target.page === "inbox" ? openInbox(undefined, undefined, n.target.kind)
     : n.target.page === "architecture" ? openSystem(n.target.system) : openWorkflows({ tab: n.target.tab, run: n.target.run }));
   return (
-    <Section title="Needs you" count={(files ? 1 : 0) + (behind ? 1 : 0) + (notes ? 1 : 0) + needs.length + captures.length} loading={due.isLoading} error={due.error}
-      empty={due.data && !files && !behind && !notes && !needs.length && !captures.length ? "Nothing is waiting for you." : undefined}>
-      {files > 0 && (
-        <Row icon={<CodeXml size="1.3em" aria-hidden />} onClick={() => go({ page: "review" })}>{files} proposed file change{files === 1 ? "" : "s"}</Row>
-      )}
+    <Section title="Needs you" count={rows.length + (behind ? 1 : 0) + needs.length + captures.length} loading={due.isLoading || inbox.maintenanceLoading} error={due.error}
+      empty={!due.isLoading && !inbox.maintenanceLoading && !rows.length && !behind && !needs.length && !captures.length ? "Nothing is waiting for you." : undefined}>
+      {rows.filter((r) => r.kind === "code").map((r) => (
+        <Row key={r.key} icon={<CodeXml size="1.3em" aria-hidden />} onClick={() => openInbox(undefined, undefined, r.kind)}>{r.text}</Row>
+      ))}
       {behind > 0 && system && (
         <Row icon={<Layers size="1.3em" aria-hidden />} onClick={() => openSystem(system.slug)}>Architecture snapshot is {behind} commit{behind === 1 ? "" : "s"} behind</Row>
       )}
-      {notes > 0 && <Row icon={<Clock size="1.3em" aria-hidden />} onClick={() => go({ page: "review" })}>{notes} note{notes === 1 ? "" : "s"} due for review</Row>}
+      {rows.filter((r) => r.kind !== "code").map((r) => (
+        <Row key={r.key} icon={<Clock size="1.3em" aria-hidden />} onClick={() => openInbox(undefined, undefined, r.kind)}>{r.text}</Row>
+      ))}
       {captures.map((b) => (
-        <Row key={b.id} icon={<Inbox size="1.3em" aria-hidden />} onClick={() => go({ page: "home", capture: b.id })} meta={b.items.filter((i) => i.state === "pending").length || undefined}>
+        <Row key={b.id} icon={<Inbox size="1.3em" aria-hidden />} onClick={() => openInbox(undefined, undefined, "captures")} meta={b.items.filter((i) => i.state === "pending").length || undefined}>
           Capture to review: {b.source.label}
         </Row>
       ))}

@@ -3,7 +3,8 @@
 use crate::agent::direct::{self, Direct};
 use crate::agent::events::Status;
 use crate::agent::scope::{self, AgentTask};
-use crate::agent::{self, Manager, Review, ReviewState, SendOptions, SessionInfo};
+use crate::agent::roles::Role;
+use crate::agent::{self, Engine, Interface, Manager, Review, ReviewState, SendOptions, SessionInfo, StartOptions};
 use crate::bridge::Bridge;
 use crate::git::{is_sha, run_captured};
 use crate::settings::Settings;
@@ -407,6 +408,63 @@ pub fn checkpoint(agents: &Manager, worktrees_dir: &Path, id: &str, message: &st
     }
 }
 
+/// Ask Codex to review a session's edits: checkpoint them as a commit on the session's branch, then start a read-only Codex
+/// reviewer whose worktree begins at that commit. The worktree starts at the branch tip, so the prompt names the commit
+/// the Inbox compares with; `git diff <base>..HEAD` then shows the same edits. `start` starts the session (the
+/// command passes `agent::start_task`). The reviewer's id is recorded on the reviewed session as `reviewed_by`.
+pub fn ask_codex(
+    agents: &Manager,
+    worktrees_dir: &Path,
+    saved: &Settings,
+    id: &str,
+    start: impl FnOnce(AgentTask, &str, StartOptions) -> Result<SessionInfo, String>,
+) -> Result<SessionInfo, String> {
+    let info = agents.info(id)?;
+    if info.direct.is_some() {
+        return Err("This session works in your own folder, not in a worktree of Hivemind's, so Codex cannot review its edits here.".into());
+    }
+    if matches!(info.status, Status::Running | Status::Waiting) {
+        return Err("Wait until the session finishes its turn, then ask Codex to review it.".into());
+    }
+    if !saved.shows(Engine::Codex) {
+        return Err("Codex is hidden in Settings. Show it there to ask it for a review.".into());
+    }
+    let AgentTask::Work { project, repo, .. } = &info.task else {
+        return Err("Only a work session can be reviewed by Codex.".into());
+    };
+    let tree = checked_worktree(&info, worktrees_dir)?;
+    let base = tree.review_base().to_string();
+    let tip = checkpoint(agents, worktrees_dir, id, "Checkpoint for Codex review")?.ok_or("Hivemind could not read the session's latest commit")?;
+    if tip == base {
+        return Err("This session has no edits to review.".into());
+    }
+    // The first line becomes the reviewer's title.
+    let mut prompt = format!(
+        "Review the edits of the session \"{}\"\nBranch: {}. Your worktree starts at its latest commit, so it matches the branch tip, not the base. \
+Compare with the base commit {base}: run `git diff {base}..HEAD` and `git log {base}..HEAD`. Do not edit files.",
+        info.title.trim(),
+        tree.branch,
+    );
+    if let Some(summary) = info.summary.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
+        prompt.push_str(&format!("\n\nWhat the session reported:\n{summary}"));
+    }
+    let options = StartOptions {
+        engine: Engine::Codex,
+        interface: Interface::Chat,
+        role: Some(Role::Reviewer),
+        unattended: true,
+        origin: Some(format!("review:{id}")),
+        start: Some(tip),
+        ..Default::default()
+    };
+    let task = AgentTask::Work { project: project.clone(), repo: repo.clone(), branch: Some(tree.branch.clone()) };
+    let reviewer = start(task, &prompt, options)?;
+    agents
+        .amend(id, |info| info.reviewed_by = Some(reviewer.id.clone()))
+        .map_err(|e| format!("Codex started reviewing as session {}, but Hivemind did not record the link. {e}", reviewer.id))?;
+    Ok(reviewer)
+}
+
 /// Send the text to the session as a new message, and record that changes were requested once it is on its way.
 pub fn request_changes(agents: &Manager, bridge: &Bridge, saved: &Settings, id: &str, text: &str) -> Result<(), String> {
     if text.trim().is_empty() {
@@ -587,6 +645,7 @@ mod tests {
             summary: None,
             verdict: None,
             origin: None,
+            reviewed_by: None,
         }
     }
 
@@ -924,6 +983,75 @@ mod tests {
         let made = checkpoint(&manager, &rig.worktrees, &id(1), "edits").unwrap().unwrap();
         assert_ne!(made, tree.base_sha);
         assert_eq!(head(Path::new(&tree.path)), made);
+    }
+
+    /// What `ask_codex` handed to its `start`, and the reviewer session it returned.
+    type Asked = (AgentTask, String, StartOptions);
+
+    #[test]
+    fn asking_codex_checkpoints_then_starts_a_reader_at_the_checkpoint() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let tree = rig.tree(1);
+        make_edits(&tree);
+        let (manager, _) = rig.manager(&[session(1, Some(tree.clone()))]);
+        let asked: Mutex<Option<Asked>> = Mutex::new(None);
+        let reviewer = ask_codex(&manager, &rig.worktrees, &Settings::default(), &id(1), |task, prompt, options| {
+            *asked.lock().unwrap() = Some((task, prompt.to_string(), options));
+            Ok(session(2, None))
+        })
+        .unwrap();
+        assert_eq!(reviewer.id, id(2));
+        let tip = head(Path::new(&tree.path));
+        assert_ne!(tip, tree.base_sha, "the edits were committed");
+        let (task, prompt, options) = asked.lock().unwrap().take().unwrap();
+        let AgentTask::Work { project, repo, branch } = task else { panic!("not a work task") };
+        assert_eq!((project.as_str(), repo.as_str(), branch), ("paystream", "repo", Some(tree.branch.clone())));
+        assert_eq!((options.engine, options.role, options.interface, options.unattended), (Engine::Codex, Some(Role::Reviewer), Interface::Chat, true));
+        assert_eq!(options.start, Some(tip));
+        assert_eq!(options.origin, Some(format!("review:{}", id(1))));
+        assert!(prompt.starts_with("Review the edits of the session \"Fix the bug\"\nBranch: hivemind/"), "{prompt}");
+        assert!(prompt.contains(&format!("git diff {0}..HEAD", tree.base_sha)), "{prompt}");
+        assert_eq!(manager.info(&id(1)).unwrap().reviewed_by, Some(id(2)));
+        // Approving later still finds the checkpoint: the review base did not move.
+        assert_eq!(manager.info(&id(1)).unwrap().worktree.unwrap().review_base(), tree.base_sha);
+    }
+
+    #[test]
+    fn asking_codex_refuses_direct_running_hidden_and_unchanged_sessions() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let (tree, idle) = (rig.tree(1), rig.tree(3));
+        let direct = checkout_session(2, &rig.repo, Direct { path: rig.repo.display().to_string(), repo: Some(rig.repo.display().to_string()), head_sha: None, start_tree: None });
+        let (manager, _) = rig.manager(&[session(1, Some(tree.clone())), direct, session(3, Some(idle)), session(4, Some(rig.tree(4)))]);
+        // A stored running session is settled when the history loads, so the status is set on the loaded one.
+        manager.amend(&id(4), |info| info.status = Status::Running).unwrap();
+        let never = |_: AgentTask, _: &str, _: StartOptions| -> Result<SessionInfo, String> { panic!("must not start") };
+        let saved = Settings::default();
+        let ask = |n: u32, saved: &Settings| ask_codex(&manager, &rig.worktrees, saved, &id(n), never).unwrap_err();
+        assert!(ask(2, &saved).contains("your own folder"));
+        assert!(ask(4, &saved).starts_with("Wait until the session finishes"));
+        assert_eq!(ask(3, &saved), "This session has no edits to review.");
+        make_edits(&tree);
+        let hidden = Settings { hidden_engines: Some(vec!["codex".into()]), ..Settings::default() };
+        assert!(ask(1, &hidden).starts_with("Codex is hidden"));
+        assert_eq!(head(Path::new(&tree.path)), tree.base_sha, "a refused request commits nothing");
+        // A start that fails leaves the checkpoint and records no reviewer.
+        let failing = ask_codex(&manager, &rig.worktrees, &saved, &id(1), |_, _, _| Err("Codex is not installed".into()));
+        assert_eq!(failing.unwrap_err(), "Codex is not installed");
+        assert_eq!(manager.info(&id(1)).unwrap().reviewed_by, None);
+    }
+
+    #[test]
+    fn a_session_record_from_before_reviewed_by_still_loads() {
+        let mut value = serde_json::to_value(session(1, None)).unwrap();
+        assert!(value.as_object_mut().unwrap().remove("reviewedBy").is_some());
+        let loaded: SessionInfo = serde_json::from_value(value).unwrap();
+        assert_eq!(loaded.reviewed_by, None);
     }
 
     #[test]

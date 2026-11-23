@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { BookOpen, ChevronDown, Database, House, LayoutDashboard, NotebookPen, Wrench, Sparkles, SquareCheck, Terminal, Workflow, type LucideIcon } from "lucide-react";
 import logo from "../assets/logo.png";
 import { ProjectSwitcher } from "../features/projects/ProjectSwitcher";
+import { useInboxItems } from "../features/review/useInboxItems";
 import { dotOf, useAttention } from "../features/terminal/attention";
 import { sessionsQuery } from "../lib/agent";
 import { useMaintenanceEnabled, useSystemsEnabled, useViewsEnabled, useWikiEnabled } from "../lib/connection";
@@ -23,7 +24,7 @@ export const SECTIONS: { page: Page; label: string; icon: LucideIcon }[] = [
   { page: "dashboards", label: "Dashboards", icon: LayoutDashboard },
   { page: "wiki", label: "Wiki", icon: BookOpen },
   { page: "maintenance", label: "Maintenance", icon: Wrench },
-  { page: "review", label: "Review", icon: SquareCheck },
+  { page: "inbox", label: "Inbox", icon: SquareCheck },
   { page: "skills", label: "Skills", icon: Sparkles },
   { page: "workflows", label: "Workflows", icon: Workflow },
 ];
@@ -64,6 +65,8 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
     const kinds = new Set(s.panes.flatMap((p) => p.tabs.filter((t) => s.dirty[t.id]).map((t) => (t.kind === "file" ? "notes" : "memory"))));
     return { memory: kinds.has("memory"), notes: kinds.has("notes") };
   }));
+  // One count for the Inbox: the same total as its All tab.
+  const inboxTotal = useInboxItems().total;
   const user = info.user || "You";
   const mark = (p: Page) => (p === "agents" && waiting ? "An agent session is waiting for you" : p === "agents" && attention === "done" ? "A terminal finished" : p === "agents" && running ? "An agent session is running" : p === "memory" && unsaved.memory ? "A note has unsaved edits" : p === "notes" && unsaved.notes ? "A page has unsaved edits" : null);
 
@@ -76,6 +79,7 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
           <button key={p} className={`nav-item ${page === p ? "on" : ""}`} aria-current={page === p ? "page" : undefined} onClick={() => go({ page: p })}
             onContextMenu={(e) => { e.preventDefault(); setMenu(p === "home" ? null : { page: p, x: e.clientX, y: e.clientY, from: e.currentTarget }); }}>
             <Icon size="1.35em" aria-hidden /><span className="grow">{label}</span>
+            {p === "inbox" && inboxTotal > 0 && <span className="nav-count" title={`${inboxTotal} waiting for you`} aria-label={`${inboxTotal} waiting for you`}>{inboxTotal}</span>}
             {mark(p) && <span className={`nav-dot ${p === "agents" && waiting ? "waiting" : p === "agents" && attention === "done" ? "done" : p === "memory" || p === "notes" ? "unsaved" : ""}`} title={mark(p)!} aria-label={mark(p)!} />}
           </button>
         ))}

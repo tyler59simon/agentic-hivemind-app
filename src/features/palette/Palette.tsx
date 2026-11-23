@@ -118,7 +118,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "graph", label: "Open the graph", detail: "Ctrl+G", run: page({ page: "memory", view: "graph" }) },
       { key: "activity", label: "Recent activity (who changed what)", detail: "Ctrl+Shift+A", run: page({ page: "memory", view: "activity" }) },
       { key: "tags", label: "Manage tags", run: page({ page: "memory", view: "tags" }) },
-      { key: "review", label: "Review", section: "review" as Page, run: page({ page: "review" }) },
+      { key: "inbox", label: "Inbox", section: "inbox" as Page, run: page({ page: "inbox" }) },
       ...(wikiOn ? [{ key: "wiki", label: "Wiki", section: "wiki" as Page, run: page({ page: "wiki" }) }] : []),
       ...(projectsOn ? [
         { key: "new-project", label: "New project…", run: () => { close(); useProjectIntent.getState().openWizard(); } },

@@ -10,7 +10,7 @@ import { lastRun, runText } from "../skills/skills";
 import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { sessionCapture } from "../../lib/executive";
 import { connect } from "../../lib/lm";
-import { openProject, openReview, openSession, openSystem, openWorkflows, startSession, useApp } from "../../store";
+import { openInbox, openProject, openSession, openSystem, openWorkflows, startSession, useApp } from "../../store";
 import { Markdown } from "../../ui/Markdown";
 import { Menu } from "../../ui/Menu";
 import { Confirm } from "../../ui/Modal";
@@ -232,7 +232,7 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
   const claudeShown = useShownEngines().shows("claude");
   const reviewNow = () => {
     setReviewing(true);
-    learningReview(info.id).then(() => toast("Reviewing the session for lessons. Drafts appear in Review."), (e) => toast(String(e), "error"))
+    learningReview(info.id).then(() => toast("Reviewing the session for lessons. Drafts appear in the Inbox."), (e) => toast(String(e), "error"))
       .finally(() => setReviewing(false));
   };
   const refresh = () => client.invalidateQueries({ queryKey: ["agent", "sessions"] });
@@ -343,7 +343,7 @@ function Session({ id }: { id: string }) {
   const system = passport ? systems.data?.systems.find((s) => s.slug === passport.slug) : undefined;
   const interactive = info.mode === "interactive";
   const live = { ...info, status };
-  const review = info.worktree ? () => openReview(info.id) : undefined;
+  const review = info.worktree ? () => openInbox(info.id) : undefined;
   // What an Executive Assistant conversation decided is captured when it ends; this takes it again, and opens the review.
   const captureChat = async () => {
     setCapturing(true);

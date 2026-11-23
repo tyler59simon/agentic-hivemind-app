@@ -24,7 +24,12 @@ describe("hidden sidebar sections", () => {
   it("drops a saved hide of the removed Architecture and Changes sections", () => {
     expect(migrateHidden({ hidden: ["architecture", "wiki", "changes"] })).toEqual({ hidden: ["wiki"] });
     expect(migrateHidden(null)).toBeNull();
-    expect(useHidden.persist.getOptions().version).toBe(2);
+    expect(useHidden.persist.getOptions().version).toBe(3);
+  });
+
+  it("hides the Inbox where the user hid Review", () => {
+    expect(migrateHidden({ hidden: ["wiki", "review"] })).toEqual({ hidden: ["wiki", "inbox"] });
+    expect(migrateHidden({ hidden: ["review", "inbox"] })).toEqual({ hidden: ["inbox"] });
   });
 
   it("never hides Home", () => {

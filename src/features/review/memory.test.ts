@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { NoteRow } from "../../lib/lm";
-import { agentCaptured, candidates, unconfirmed } from "./memory";
+import type { NoteRow, ReviewRow } from "../../lib/lm";
+import { agentCaptured, candidates, dueNotes, unconfirmed } from "./memory";
 
 const now = new Date("2026-11-12T12:00:00Z");
 const note = (over: Partial<NoteRow> = {}): NoteRow => ({
@@ -30,5 +30,21 @@ describe("memory items", () => {
     expect(unconfirmed(rows, [agent, undefined, agent], new Set(["d:3"]))).toEqual([
       { ref: "d:1", title: "One", type: "knowledge", updated: "2026-11-10", revision: "r1", domain: "d" },
     ]);
+  });
+
+  // CON-7: a due note shows only when maintenance deferred it, while maintenance is on.
+  it("lists every due note unless maintenance filters them", () => {
+    const row = (ref: string): ReviewRow => ({ ref, title: ref, type: "knowledge", updated: "2026-11-01" });
+    const rows = [row("d:a"), row("d:b"), row("d:c")];
+    expect(dueNotes(rows, null)).toEqual(rows);
+    expect(dueNotes(rows, new Map([["d:b", {}]]), ["d"]).map((r) => r.ref)).toEqual(["d:b"]);
+    expect(dueNotes(rows, new Map(), ["d"])).toEqual([]);
+  });
+
+  it("keeps the due notes of a domain maintenance does not cover", () => {
+    const row = (ref: string): ReviewRow => ({ ref, title: ref, type: "knowledge", updated: "2026-11-01" });
+    const rows = [row("work:a"), row("work:b"), row("home:c")];
+    expect(dueNotes(rows, new Map([["work:b", {}]]), ["work"]).map((r) => r.ref)).toEqual(["work:b", "home:c"]);
+    expect(dueNotes(rows, null, ["work"])).toEqual(rows);
   });
 });

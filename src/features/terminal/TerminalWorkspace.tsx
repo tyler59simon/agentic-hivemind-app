@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import { agentRename, agentTranscript, agentUsage, engineOf, enginesText, reviewFiles, type SessionInfo } from "../../lib/agent";
 import { getSettings } from "../../lib/lm";
 import { OTHER_FOLDERS, otherFolders, realProject } from "../../lib/folders";
-import { openReview, openSession, openSystem, startSession, useApp } from "../../store";
+import { openInbox, openSession, openSystem, startSession, useApp } from "../../store";
 import { Menu } from "../../ui/Menu";
 import { Confirm } from "../../ui/Modal";
 import { ArrowLink, Row, Section, Tabs } from "../../ui/Page";
@@ -110,7 +110,7 @@ function Rail({ s }: { s: SessionInfo }) {
       )}
       {(s.filesChanged?.files ?? 0) > 0 && (
         <div>
-          <ArrowLink onClick={() => openReview(s.id)}>Review diff</ArrowLink>
+          <ArrowLink onClick={() => openInbox(s.id)}>Review diff</ArrowLink>
           {running && <p className="muted small">Stop the session to approve the edits.</p>}
         </div>
       )}

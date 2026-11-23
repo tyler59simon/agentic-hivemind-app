@@ -4,8 +4,10 @@ import type { Milestone } from "../../lib/executive";
 import type { NoteRow, Project } from "../../lib/lm";
 import type { Notebook } from "../../lib/notebooks";
 import { itemsTagged, looseRefs } from "../executive/portfolio";
+import type { InboxKind } from "../../store";
 import { insideRepos } from "../projects/scope";
 import { dueBucket, sortTasks, type TaskItem } from "../notes/taskList";
+import type { InboxCounts } from "../review/worklist";
 
 /** One row of the open list: a task with a due date, or a milestone. */
 export type Entry =
@@ -101,4 +103,20 @@ export function lastVisit(scope: string): number | null {
 
 export function rememberVisit(scope: string, now = Date.now()) {
   try { localStorage.setItem(`${VISIT_KEY}.${scope}`, String(now)); } catch { /* not remembered */ }
+}
+
+/** A row of "Needs you" for something the Inbox holds, and the group it opens. */
+export interface InboxRow { key: string; text: string; kind: InboxKind }
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/** One row for each Inbox group that has something, except Captures (a row each, built by the page), Architecture and the
+ *  drafts and skills (the other "Needs you" rows). `notesDue` is the due notes alone: the Memory group also holds drafts and
+ *  unconfirmed notes, which have their own rows. */
+export function inboxNeeds(counts: InboxCounts, notesDue: number): InboxRow[] {
+  const out: InboxRow[] = [];
+  if (counts.code) out.push({ key: "code", text: `${plural(counts.code, "proposed file change")}`, kind: "code" });
+  if (notesDue) out.push({ key: "due", text: `${plural(notesDue, "note")} due for review`, kind: "memory" });
+  if (counts.pages) out.push({ key: "pages", text: `${plural(counts.pages, "page edit")} proposed by agents`, kind: "pages" });
+  if (counts.maintenance) out.push({ key: "maintenance", text: `${plural(counts.maintenance, "change")} made by maintenance to look over`, kind: "maintenance" });
+  return out;
 }
