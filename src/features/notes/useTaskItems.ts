@@ -75,5 +75,4 @@ export function openSource(t: TaskItem) {
   }
   useApp.getState().setDomain(t.notebook);
   useWorkspace.getState().openNote(t.ref!, { title: t.title });
-  useApp.getState().go({ page: "notes" }, { replace: true });
 }

@@ -17,6 +17,7 @@ import { useWorkspace, type Mode, type Tab } from "../../workspace/store";
 import { BigFileView } from "../bigfile/BigFileView";
 import { HexView } from "../bigfile/HexView";
 import { CodeEditor } from "../editor/CodeEditor";
+import { DocumentHeader, HISTORY_MODE as HISTORY, MARKDOWN_MODES } from "../editor/DocumentHeader";
 import { FileHistory } from "../history/FileHistory";
 import { PageMergeDialog } from "../editor/MergeDialog";
 import { useFollowLink } from "../links/follow";
@@ -35,8 +36,7 @@ import { runExport } from "./richActions";
 import { useComparePicker } from "../power/ComparePicker";
 import { encodingLabel, StatusLine } from "../power/StatusLine";
 
-const HISTORY = { id: "history" as Mode, label: "History" };
-const MODES: { id: Mode; label: string }[] = [{ id: "reading", label: "Reading" }, { id: "live", label: "Live" }, { id: "rich", label: "Rich" }, { id: "source", label: "Source" }, HISTORY];
+const MODES: { id: Mode; label: string }[] = [...MARKDOWN_MODES.slice(0, 2), { id: "rich", label: "Rich" }, ...MARKDOWN_MODES.slice(2)];
 /** A text file has its source and its history; a rich page has no modes of its own (NS-3C), only the page and its history. */
 const TEXT_MODES: { id: Mode; label: string }[] = [{ id: "source", label: "Source" }, HISTORY];
 const RICH_MODES: { id: Mode; label: string }[] = [{ id: "live", label: "Page" }, HISTORY];
@@ -424,8 +424,9 @@ export function FileTab({ tab }: { tab: Tab }) {
   );
   return (
     <div className="note-page file-page">
-      <header className="note-header">
-        <div className="note-top">
+      <DocumentHeader modes={markdown ? MODES : richDoc ? RICH_MODES : canvas ? CANVAS_MODES : TEXT_MODES}
+        mode={!markdown && !canvas && mode !== "history" ? (richDoc ? "live" : "source") : mode === "board" && canvasIssue ? "source" : mode}
+        label="Page view" onMode={(v) => updateTab(tab.id, { mode: v })} top={<>
           <PageName tab={tab} notebook={notebook} />
           <span className="fill" />
           <DayNav file={ref} />
@@ -458,9 +459,7 @@ export function FileTab({ tab }: { tab: Tab }) {
               );
             }}
           </Menu>
-        </div>
-        <Tabs items={markdown ? MODES : richDoc ? RICH_MODES : canvas ? CANVAS_MODES : TEXT_MODES} value={!markdown && !canvas && mode !== "history" ? (richDoc ? "live" : "source") : mode === "board" && canvasIssue ? "source" : mode} label="Page view" onChange={(v) => updateTab(tab.id, { mode: v })} />
-      </header>
+        </>} />
       <Banners doc={doc} docKey={key} onMerge={merge} onRecreate={recreate} conflict={richDoc || canvas ? { mine: keepMine, both: loose ? undefined : saveBoth } : undefined} />
       {canvas && canvasIssue && mode !== "history" && <div className="banner warn note-banner">This canvas cannot be shown as a board: {canvasIssue}. It is open as source, and nothing was written.</div>}
       {markdown && mode !== "history" && <PropertiesPanel docKey={key} readOnly={doc.status === "readOnly" || arriving || !own} onOpenLink={(target) => follow(target, false)} />}

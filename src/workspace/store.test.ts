@@ -65,12 +65,22 @@ describe("workspace", () => {
     expect(ws().panes[0].tabs.map((t) => t.ref)).toEqual(["d:1", "d:9"]);
   });
 
-  it("opening a note or a new note shows the Memory page's notes", () => {
+  it("opens and refocuses notes in the Notes workspace", () => {
     ws().openNote("d:1");
-    expect(useApp.getState().route).toEqual({ page: "memory", view: "notes" });
+    expect(useApp.getState().route).toEqual({ page: "notes" });
     useApp.getState().go({ page: "home" });
     ws().openNote("d:1"); // already open: still brought into view
-    expect(useApp.getState().route).toEqual({ page: "memory", view: "notes" });
+    expect(useApp.getState().route).toEqual({ page: "notes" });
+  });
+
+  it("brings the workspace into view when a note opens from Tasks or Views", () => {
+    for (const view of ["tasks", "views"] as const) {
+      useApp.getState().go({ page: "notes", view });
+      const back = useApp.getState().back;
+      ws().openNote("d:1");
+      expect(useApp.getState().route).toEqual({ page: "notes" });
+      expect(useApp.getState().back).toEqual(back);
+    }
   });
 
   it("the context rail steps aside when notes are side by side, and each layout remembers its own choice", () => {

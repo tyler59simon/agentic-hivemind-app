@@ -182,6 +182,25 @@ describe("two panes showing the same note in Edit (DATA-2)", () => {
     expect(draftOf("a", "d:5")?.baseRevision).toBe("r1+");
   });
 
+  it("includes edits typed while a stale save was in flight in the merge", async () => {
+    notes.a["d:13"] = makeNote("13", "A summary sentence.");
+    const pane = await open("d:13");
+    await typeAtEnd(pane, " Draft text.");
+    let release!: () => void;
+    gate = new Promise<void>((r) => { release = r; });
+    press(pane);
+    await settle();
+    await typeAtEnd(pane, " Typed during the save.");
+    notes.a["d:13"].revision = "r2";
+    release();
+    await settle();
+
+    const merge = [...document.querySelectorAll("button")].find((b) => b.textContent === "Save merged note")!;
+    await act(async () => merge.click());
+    await settle();
+    expect(writes[0].payload).toMatchObject({ body: "A summary sentence. Draft text. Typed during the save.", expected_revision: "r2" });
+  });
+
   it("does not delete a draft that holds more than the save that finished after its panes closed", async () => {
     notes.a["d:6"] = makeNote("6", "A summary sentence.");
     const pane = await open("d:6");

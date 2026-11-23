@@ -163,16 +163,17 @@ describe("the Tasks view", () => {
     expect(useToasts.getState().items.map((t) => [t.kind, t.text])).toEqual([["error", expect.stringMatching(/changed since it was read, so nothing was written/)]]);
   });
 
-  it("ticks an action item with check, and opens the note of a task from its link", async () => {
+  it("ticks an action item and opens both notes and pages from Tasks", async () => {
     await mount();
     await act(async () => tickBox("write the notes").click());
     await settle();
     expect(calls.find((c) => c.cmd === "lm" && (c.args.argv as string[])[0] === "check")!.args.argv).toEqual(["check", "demo:abc", "--index", "1", "--domain", "demo"]);
-    const opened: unknown[] = [];
-    useWorkspace.setState({ openTab: ((tab: unknown) => { opened.push(tab); }) as never });
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>(".task-page")].find((b) => b.textContent === "Release work")!.click());
+    expect(useWorkspace.getState().panes[0].tabs).toEqual([expect.objectContaining({ kind: "note", ref: "demo:abc" })]);
+    expect(useApp.getState().route).toEqual({ page: "notes" });
+    useApp.getState().go({ page: "notes", view: "tasks" });
     await act(async () => [...document.querySelectorAll<HTMLButtonElement>(".task-page")].find((b) => b.textContent === "Plan")!.click());
-    expect(opened).toEqual([expect.objectContaining({ kind: "file", file: { notebook: "nb-1", path: "Plan.md" } })]);
-    // The list gives way to the page.
+    expect(useWorkspace.getState().panes[0].tabs[1]).toMatchObject({ kind: "file", file: { notebook: "nb-1", path: "Plan.md" } });
     expect(useApp.getState().route).toEqual({ page: "notes" });
   });
 });

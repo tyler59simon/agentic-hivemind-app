@@ -5,7 +5,6 @@ import { useMemo } from "react";
 import type { WikiFolder, WikiNote, WikiProject, WikiSection } from "../../lib/lm";
 import { outline } from "../../lib/note";
 import { useWorkspace } from "../../workspace/store";
-import { useApp } from "../../store";
 import { PageHeader, Split } from "../../ui/Page";
 import { Infobox, More, NoteRows, PageRow, Toc, TypeBadge, WikiMarkdown, WikiSection as Sec, cap, plural, useNav, type TocItem } from "./parts";
 import { CitedOn } from "./agent";
@@ -154,7 +153,6 @@ export function FolderPage({ folder: f }: { folder: WikiFolder }) {
 
 export function NotePage({ note: n }: { note: WikiNote }) {
   const { ix, goTo } = useNav();
-  const go = useApp((s) => s.go);
   const p = ix.projects.get(n.project), section = ix.sections.get(n.section);
   const { prev, next } = neighbours(ix, n);
   const path = pathPrefix(n) || (n.section === "code" ? n.files[0] ?? "" : "");
@@ -165,10 +163,7 @@ export function NotePage({ note: n }: { note: WikiNote }) {
     ...(cited.length ? [{ text: "Cited on", id: "cited-on" }] : []),
     { text: "See also", id: "see-also" },
   ], [n.body, cited]);
-  const openInMemory = () => {
-    go({ page: "memory", view: "notes" });
-    useWorkspace.getState().openNote(`${ix.model.domain}:${n.id}`, { title: n.title });
-  };
+  const openInNotes = () => useWorkspace.getState().openNote(`${ix.model.domain}:${n.id}`, { title: n.title });
   const related = (title: string, ids: string[]) => {
     const notes = ids.map((id) => ix.notes.get(id)).filter((m): m is WikiNote => !!m);
     return (
@@ -181,7 +176,7 @@ export function NotePage({ note: n }: { note: WikiNote }) {
   return (
     <>
       <PageHeader eyebrow={isSource(n) ? "Source note" : `${p?.name} · ${section?.label}`} title={shortTitle(n)} meta={path ? <PathLine text={path} /> : undefined}
-        actions={<button className="outline" onClick={openInMemory} title="Open this note in Memory, to edit it">Open in Memory</button>} />
+        actions={<button className="outline" onClick={openInNotes}>Open in Notes</button>} />
       {n.retired && <div className="wiki-banner">This page is {n.status}. It is kept for history and may be out of date.</div>}
       <Split rail={<>
         <Infobox title="Page details" icon={<Package size="1.2em" aria-hidden />} pairs={[

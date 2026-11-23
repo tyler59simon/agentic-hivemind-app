@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, CircleCheck, Pin, PinOff, Play, ScrollText, SquarePen } from "lucide-react";
+import { Check, CircleCheck, Pin, PinOff, Play, ScrollText } from "lucide-react";
 import { useState } from "react";
 import { classify } from "../../lib/errors";
 import { usePinEnabled, useRuleEnabled, useViewsEnabled } from "../../lib/connection";
@@ -8,19 +8,17 @@ import { useWhitePaper } from "../../lib/paper";
 import { recordOperation } from "../../lib/oplog";
 import { startSession } from "../../store";
 import { toast } from "../../ui/toast";
-import { dayMonth, Tabs } from "../../ui/Page";
+import { dayMonth } from "../../ui/Page";
 import { useWorkspace, type Tab } from "../../workspace/store";
 import { useSessionDraft } from "../agents/draft";
 import { DashboardToggle } from "../dashboards/DashboardToggle";
 import { HistoryPanel } from "../history/HistoryViews";
 import { NoteMenu } from "../plans/NoteMenu";
 import { NoteTags, NoteView, noteQuery } from "../viewer/NoteView";
+import { DocumentHeader, MARKDOWN_MODES } from "./DocumentHeader";
 import { NoteEditor } from "./NoteEditor";
 
-type View = "reading" | "source" | "history";
-const VIEWS: { id: View; label: string }[] = [{ id: "reading", label: "Reading" }, { id: "source", label: "Source" }, { id: "history", label: "History" }];
-
-/** A note page: type, title, status and actions; Reading / Source / History; then the note or its editor. */
+/** The shared document layout with Living Memory properties and actions. */
 export function NoteTab({ tab }: { tab: Tab }) {
   const refId = tab.ref!;
   const client = useQueryClient();
@@ -30,7 +28,7 @@ export function NoteTab({ tab }: { tab: Tab }) {
   const note = useQuery(noteQuery(refId));
   // The editor draws its title field and Save button here, where the reading view has the title.
   const [head, setHead] = useState<HTMLDivElement | null>(null);
-  const mode = tab.mode ?? "reading";
+  const mode = MARKDOWN_MODES.find((item) => item.id === tab.mode)?.id ?? "reading";
   const editing = mode === "live" || mode === "source";
   const n = note.data;
   const still = useMutation({
@@ -67,14 +65,10 @@ export function NoteTab({ tab }: { tab: Tab }) {
 
   return (
     <div className="note-page">
-      <header className="note-header">
-        <div className="note-top">
+      <DocumentHeader modes={MARKDOWN_MODES} mode={mode} label="Note view" onMode={(v) => updateTab(tab.id, { mode: v })}
+        top={<>
           <span className="eyebrow">{n?.type ?? "note"}</span>
           <span className="fill" />
-          <button className={`text ${mode === "live" ? "on" : ""}`} title="Edit with a live preview (Ctrl+E)"
-            onClick={() => updateTab(tab.id, { mode: mode === "live" ? "reading" : "live" })}>
-            <SquarePen size="1.15em" aria-hidden />{mode === "live" ? "Done editing" : "Edit"}
-          </button>
           {n?.status === "active" && !editing && (
             <>
               <button className="text" onClick={() => still.mutate()} disabled={still.isPending} title="Confirm this note still holds (pushes its review date out)">
@@ -99,7 +93,7 @@ export function NoteTab({ tab }: { tab: Tab }) {
           )}
           {viewsOn && n && !editing && <DashboardToggle refId={refId} title={n.title} />}
           <NoteMenu refId={refId} paper={{ white, flip: () => updateTab(tab.id, { paper: !white }) }} />
-        </div>
+        </>}>
         {editing ? <div ref={setHead} /> : n && (
           <>
             <h1 onDoubleClick={() => updateTab(tab.id, { mode: "live" })} title="Double-click to edit">{n.title}</h1>
@@ -110,9 +104,7 @@ export function NoteTab({ tab }: { tab: Tab }) {
             </div>
           </>
         )}
-        <Tabs items={VIEWS} value={mode === "live" ? "reading" : mode} label="Note view"
-          onChange={(v) => updateTab(tab.id, { mode: v === "reading" && mode === "live" ? "live" : v })} />
-      </header>
+      </DocumentHeader>
       {mode === "reading" && dirty && (
         <div className="banner warn note-banner">This shows the saved note; your unsaved edits are kept as a draft.
           <div className="actions"><button onClick={() => updateTab(tab.id, { mode: "live" })}>Back to editing</button></div>

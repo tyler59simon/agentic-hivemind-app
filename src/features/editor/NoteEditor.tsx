@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Save } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { classify, type Problem } from "../../lib/errors";
@@ -132,9 +133,17 @@ export function NoteEditor({ tab, live, head }: { tab: Tab; live: boolean; head:
     } catch (e) {
       const problem = classify(e);
       if (problem.kind === "stale") {
-        const fresh = await client.fetchQuery({ ...noteQuery(ref), staleTime: 0 });
-        if (fresh.truncated && payload.body !== undefined) { setBanner({ kind: "error", problem: { kind: "other", message: TOO_LONG } }); return; }
-        patchSession(key, { merging: { base: s.base, mine: s.mine, theirs: fieldsOf(fresh), rev: fresh.revision } });
+        try {
+          const fresh = await client.fetchQuery({ ...noteQuery(ref), staleTime: 0 });
+          const mine = getSession(key)?.st?.mine ?? s.mine;
+          if (fresh.truncated && changedPayload(s.base, mine).body !== undefined) {
+            setBanner({ kind: "error", problem: { kind: "other", message: TOO_LONG } });
+            return;
+          }
+          patchSession(key, { merging: { base: s.base, mine, theirs: fieldsOf(fresh), rev: fresh.revision } });
+        } catch (reloadError) {
+          setBanner({ kind: "error", problem: classify(reloadError) });
+        }
       } else setBanner({ kind: "error", problem });
     } finally { patchSession(key, { saving: false }); }
   }, [key, ref, tax.data, types, client]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -159,17 +168,17 @@ export function NoteEditor({ tab, live, head }: { tab: Tab; live: boolean; head:
       </article>
     );
   }
+  if (note.error && !st) return <p className="error pad">{classify(note.error).message}</p>;
   if (note.isLoading || !st) return <p className="muted pad">Loading…</p>;
-  if (note.error) return <p className="error pad">{classify(note.error).message}</p>;
   const n = note.data!;
   return (
-    <article className="note editing">
+    <article className="note editing file-editor">
       {createPortal(
         <div className="note-head">
           <input className="title-input" value={st.mine.title} aria-label="Title" onChange={(e) => edit({ title: e.target.value })}
             onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); } }} />
           <span className={`save-state ${dirty ? "dirty" : ""}`}>{saving ? "Saving…" : dirty ? "Unsaved" : "Saved"}</span>
-          <button className="primary" disabled={!dirty || saving} onClick={() => save()} title="Save (Ctrl+S)">Save</button>
+          <button className="primary" disabled={!dirty || saving} onClick={() => save()} title="Save (Ctrl+S)"><Save size="1.1em" aria-hidden />Save</button>
         </div>,
         head,
       )}

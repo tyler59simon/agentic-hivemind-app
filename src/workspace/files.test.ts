@@ -29,16 +29,16 @@ describe("workspace with notebook pages", () => {
     expect(ws().panes[0].tabs.map((t) => t.kind)).toEqual(["note", "file"]);
   });
 
-  it("goes to Notes for a page and Memory for a note, but stays where the workspace already shows", () => {
+  it("goes to Notes for both pages and memory notes", () => {
     ws().openTab(page("A.md"));
     expect(useApp.getState().route).toEqual({ page: "notes" });
     ws().openNote("d:1");
     expect(useApp.getState().route).toEqual({ page: "notes" });
     useApp.setState({ route: { page: "home" } });
     ws().openNote("d:2");
-    expect(useApp.getState().route).toEqual({ page: "memory", view: "notes" });
+    expect(useApp.getState().route).toEqual({ page: "notes" });
     ws().openTab(page("B.md"));
-    expect(useApp.getState().route).toEqual({ page: "memory", view: "notes" });
+    expect(useApp.getState().route).toEqual({ page: "notes" });
   });
 
   it("splits a page into reading mode, and a text file into source", () => {

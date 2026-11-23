@@ -848,6 +848,13 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .tree-toggle { border: none; padding: 0; width: 1.3rem; height: 1.6rem; flex: none; color: var(--muted); }
 .tree-icon { flex: none; color: var(--muted); }
 .tree-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.memory-branch { min-width: 0; }
+.memory-branch > summary { list-style: none; padding: .1rem .35rem; }
+.memory-branch > summary::-webkit-details-marker { display: none; }
+.memory-branch-content { padding-left: .9rem; }
+.memory-chevron { flex: none; color: var(--muted); }
+.memory-branch[open] > summary .memory-chevron { transform: rotate(90deg); }
+.memory-leaf { width: 100%; padding: .1rem .35rem; border: 0; text-align: left; }
 .tree-input { flex: 1; min-width: 0; font: inherit; padding: .1rem .3rem; margin: .1rem 0; }
 .add-notebook { align-self: flex-start; display: flex; align-items: center; gap: .3rem; margin-top: .3rem; }
 .notebook-toggle .badge { flex: none; font-weight: 400; }

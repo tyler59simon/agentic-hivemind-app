@@ -20,8 +20,8 @@ describe("navigation", () => {
   });
 
   it("going to the route already shown adds nothing to Back", () => {
-    app().go({ page: "memory", view: "notes" });
-    app().go({ page: "memory", view: "notes" });
+    app().go({ page: "notes" });
+    app().go({ page: "notes" });
     expect(app().back).toEqual([{ page: "home" }]);
   });
 
@@ -127,10 +127,16 @@ describe("navigation", () => {
 describe("saved navigation", () => {
   const migrate = (route: object, version = 1) => useApp.persist.getOptions().migrate!({ project: "pay", domain: "demo", route }, version);
 
-  it("is version 4, and moves the Overview, Executive and Recap pages to Home", () => {
-    expect(useApp.persist.getOptions().version).toBe(4);
+  it("is version 5, and moves the Overview, Executive and Recap pages to Home", () => {
+    expect(useApp.persist.getOptions().version).toBe(5);
     for (const page of ["overview", "executive", "recap"]) expect(migrate({ page })).toEqual({ project: "pay", domain: "demo", route: { page: "home" } });
     expect(migrate({ page: "overview", view: "work" })).toMatchObject({ route: { page: "home" } });
+  });
+
+  it("moves the v4 Memory workspace route and keeps the Memory library and its search", () => {
+    expect(migrate({ page: "memory", view: "notes" }, 4)).toEqual({ project: "pay", domain: "demo", route: { page: "notes" } });
+    expect(migrate({ page: "memory", q: "ledger" }, 4)).toMatchObject({ route: { page: "memory", q: "ledger" } });
+    expect(migrate({ page: "memory", view: "graph" }, 4)).toMatchObject({ route: { page: "memory", view: "graph" } });
   });
 
   it("keeps the capture or briefing an Executive route showed, and leaves other pages alone", () => {
@@ -159,7 +165,7 @@ describe("saved navigation", () => {
     expect(migrate({ page: "review" }, 1)).toMatchObject({ route: { page: "inbox" } });
   });
 
-  it("does not migrate a version 4 save", () => {
+  it("does not rerun older migrations on a version 4 save", () => {
     expect(migrate({ page: "home", tab: "architecture", system: "s" }, 4)).toMatchObject({ route: { page: "home", tab: "architecture", system: "s" } });
     expect(migrate({ page: "review" }, 4)).toMatchObject({ route: { page: "review" } });
   });

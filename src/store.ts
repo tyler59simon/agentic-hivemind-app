@@ -1,5 +1,5 @@
 // Where the app is: the picked project, the page in the sidebar, and the palette. Open notes live in the
-// workspace store (src/workspace/store.ts); a note is shown on the Memory page.
+// workspace store (src/workspace/store.ts) and are shown in Notes.
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
@@ -8,15 +8,15 @@ export type Shelf = "active" | "archived" | "any";
 /** The Inbox's groups: each is a tab of the page. */
 export type InboxKind = "code" | "memory" | "pages" | "captures" | "maintenance" | "architecture" | "skills";
 
-/** One page per sidebar section. Memory also holds the open notes (`view: "notes"`) and its sub-views; Notes holds the
- *  notebooks and shows the same open documents. Home shows the picked project (or all of them); `view: "briefings"` opens its
+/** One page per sidebar section. Notes holds the notebook and memory trees and the open documents.
+ *  Home shows the picked project (or all of them); `view: "briefings"` opens its
  *  list of briefings, `briefing` one briefing, and `capture` the review of one capture batch; `tab: "architecture"` shows the
  *  Architecture tab, on one system when `system` is given. */
 export type Route =
   | { page: "home"; view?: "briefings"; briefing?: string; capture?: string; tab?: "architecture"; system?: string }
   | { page: "agents"; session?: string; view?: "new" }
   | { page: "dashboards"; ref?: string }
-  | { page: "memory"; view?: "notes" | "graph" | "activity" | "history" | "tags"; q?: string }
+  | { page: "memory"; view?: "graph" | "activity" | "history" | "tags"; q?: string }
   | { page: "notes"; notebook?: string; path?: string; view?: "tasks" | "views" }
   | { page: "wiki"; domain?: string; at?: string; edition?: "agent"; project?: string }
   | { page: "maintenance" }
@@ -69,11 +69,14 @@ const whenFree = (move: () => void) => { if (!stopped(move)) move(); };
 /** Version 2 of the saved navigation: the Overview, Executive and Recap pages became Home. A capture or a briefing the Executive
  *  route pointed at stays on the Home route. Version 3: the Architecture page became Home's Architecture tab (its system is kept)
  *  and the Changes page was removed (CON-4, CON-17); a saved route to a removed page would have no page to show. Version 4:
- *  the Review page became the Inbox (CON-6), so a saved Review route opens it, on the same session and file. */
-export function migrateNav(persisted: unknown): unknown {
-  const saved = persisted as { route?: { page?: string; capture?: string; briefing?: string; system?: string } } | null;
+ *  the Review page became the Inbox (CON-6), so a saved Review route opens it on the same session and file.
+ *  Version 5 moves the old Memory workspace to Notes (CON-10). */
+export function migrateNav(persisted: unknown, version = 1): unknown {
+  const saved = persisted as { route?: { page?: string; view?: string; capture?: string; briefing?: string; system?: string } } | null;
   const route = saved?.route;
   if (!route) return persisted;
+  if (version < 5 && route.page === "memory" && route.view === "notes") return { ...saved, route: { page: "notes" } };
+  if (version >= 4) return persisted;
   let home: Route;
   if (route.page === "overview" || route.page === "executive" || route.page === "recap") {
     home = { page: "home", ...(route.page === "executive" && route.capture ? { capture: route.capture } : {}), ...(route.page === "executive" && route.briefing ? { briefing: route.briefing } : {}) };
@@ -109,9 +112,9 @@ export const useApp = create<AppState>()(persist((set) => ({
   },
 }), {
   name: "hivemind.nav",
-  version: 4,
+  version: 5,
   storage: createJSONStorage(() => safeStorage),
-  migrate: (persisted, version) => (version < 4 ? migrateNav(persisted) : persisted) as AppState,
+  migrate: (persisted, version) => migrateNav(persisted, version) as AppState,
   partialize: (s) => ({ project: s.project, domain: s.domain, route: s.route }),
 }));
 

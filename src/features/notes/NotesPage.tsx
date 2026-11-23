@@ -18,6 +18,7 @@ import { newPageHere, openPage } from "./actions";
 import { NewNotebook } from "./NewNotebook";
 import { NewFromTemplate } from "./DailyViews";
 import { LmNotebookSettings, NotebookSettings } from "./NotebookSettings";
+import { MemoryTree, useMemoryTree } from "./MemoryTree";
 import { NotebookTree } from "./NotebookTree";
 import { ProposalInbox } from "./ProposalInbox";
 import { agentEdits, announceAdded } from "./reach";
@@ -81,6 +82,7 @@ export function NotesPage() {
   const notebooks = useQuery(notebooksQuery());
   const docs = useDocsEnabled();
   const connected = useConnection((s) => s.commands.length > 0);
+  const memory = useMemoryTree();
   const lm = useQuery({ ...lmNotebooksQuery(), enabled: docs });
   // Page edits agents proposed to folder notebooks: each notebook says how many wait, and the Inbox's Pages group decides them (CON-9).
   const edits = useQuery({ ...allProposalsQuery(), enabled: useFolderProposalsEnabled(), retry: false });
@@ -101,7 +103,7 @@ export function NotesPage() {
   useEffect(() => {
     if (!target) return;
     openPage(target);
-    go({ page: "notes" });
+    go({ page: "notes" }, { replace: true });
   }, [target?.notebook, target?.path]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const dialogs = (
@@ -116,19 +118,19 @@ export function NotesPage() {
   );
   const newNotebook = docs ? () => setCreating(true) : undefined;
 
-  if (notebooks.isLoading) return <div className="center muted">Loading notebooks…</div>;
-  if (notebooks.error) return <div className="center error">{classify(notebooks.error).message}</div>;
   const list = notebooks.data ?? [];
-  // Open tabs (a Memory note opened with Ctrl+O, pages of a notebook just removed) stay visible without notebooks
-  // (Codex review of 32fd236, M1).
-  if (!list.length && !groups.length && !damaged.length && !open && !lm.isLoading) return <><Empty onAdd={add} onNew={newNotebook} />{dialogs}</>;
+  const empty = !list.length && !groups.length && !damaged.length && !memory.groups.length
+    && !notebooks.isLoading && !lm.isLoading && !memory.loading;
   return (
     <div className="notes-page">
-      <nav className="notebooks" aria-label="Notebooks">
+      <nav className="notebooks" aria-label="Notes and notebooks">
         <div className="notes-views" aria-label="Lists of pages">
           <button type="button" className={`link-row${route.page === "notes" && route.view === "tasks" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "tasks" })}><ListChecks size="1em" aria-hidden /> Tasks</button>
           <button type="button" className={`link-row${route.page === "notes" && route.view === "views" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "views" })}><Kanban size="1em" aria-hidden /> Views</button>
         </div>
+        <MemoryTree tree={memory} />
+        {notebooks.isLoading && <p className="muted small pad" role="status">Loading notebooks…</p>}
+        {notebooks.error && <p className="error small pad">{classify(notebooks.error).message}</p>}
         {list.map((nb) => <NotebookTree key={nb.id} notebook={nb} onSettings={() => setSettings(nb)} edits={agentEdits(edits.data ?? [], nb)} onEdits={() => openInbox(undefined, undefined, "pages")} />)}
         <TagsPane />
         {(groups.length > 0 || damaged.length > 0) && (
@@ -157,9 +159,10 @@ export function NotesPage() {
         ? <div className="notes-lists">{route.view === "tasks" ? <TasksView /> : <ViewsPage />}</div>
         : open
         ? <div className="notes-area"><Workspace />{rail && <ContextRail />}</div>
+        : empty ? <Empty onAdd={add} onNew={newNotebook} />
         : (
           <div className="center muted">
-            <p>Pick a page on the left, or <button className="link" onClick={() => newPageHere(client)}>create a page</button> (<kbd>Ctrl</kbd>+<kbd>N</kbd>).</p>
+            <p>Pick a note or page on the left, or <button className="link" onClick={() => newPageHere(client)}>create a page</button> (<kbd>Ctrl</kbd>+<kbd>N</kbd>).</p>
           </div>
         )}
       {dialogs}

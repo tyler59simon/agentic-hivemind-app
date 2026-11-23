@@ -11,9 +11,8 @@ import { useApp, type Shelf } from "../../store";
 import { Markdown } from "../../ui/Markdown";
 import { ArrowLink, dayMonth, PageHeader, Tabs } from "../../ui/Page";
 import { toast } from "../../ui/toast";
-import { ContextRail } from "../../workspace/RightSidebar";
-import { hasTabs, railShown, useWorkspace } from "../../workspace/store";
-import { OpenTabs, Workspace } from "../../workspace/Workspace";
+import { hasTabs, useWorkspace } from "../../workspace/store";
+import { OpenTabs } from "../../workspace/Workspace";
 import { useSessionDraft } from "../agents/draft";
 import { GraphView } from "../graph/GraphView";
 import { ActivityView } from "../history/HistoryViews";
@@ -245,14 +244,10 @@ export function MemoryPage() {
   const go = useApp((s) => s.go);
   const logOn = useLogEnabled();
   const open = useWorkspace(hasTabs);
-  const rail = useWorkspace(railShown);
   const { project } = useCurrentProject();
   const view = route.page === "memory" ? route.view : undefined;
 
-  if (view === "notes" && open) {
-    return <div className="notes-area"><Workspace />{rail && <ContextRail />}</div>;
-  }
-  const sub = view && view !== "notes" && (view !== "history" || logOn) ? VIEWS[view] : null;
+  const sub = view && (view !== "history" || logOn) ? VIEWS[view] : null;
   return (
     <div className="memory">
       {open && <OpenTabs />}

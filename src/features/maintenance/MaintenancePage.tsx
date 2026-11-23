@@ -8,7 +8,6 @@ import {
 } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
-import { useApp } from "../../store";
 import { PageHeader } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
@@ -19,10 +18,9 @@ import { costText, HISTORY_LIMIT, nextRunText, resultText, runSummary, sortDecis
 const POLL_MS = 60_000;
 
 function NoteLink({ refId, title }: { refId: string; title?: string | null }) {
-  const go = useApp((s) => s.go);
   const openNote = useWorkspace((s) => s.openNote);
   return (
-    <a href="#" className="wikilink" onClick={(e) => { e.preventDefault(); go({ page: "memory", view: "notes" }); openNote(refId, { split: e.ctrlKey || e.metaKey, title: title ?? undefined }); }}>
+    <a href="#" className="wikilink" onClick={(e) => { e.preventDefault(); openNote(refId, { split: e.ctrlKey || e.metaKey, title: title ?? undefined }); }}>
       {title || refId}
     </a>
   );

@@ -1,5 +1,4 @@
-// The open documents: side-by-side panes, each with tabs, shared by the Memory page (notes) and the Notes page (notebook
-// pages). The layout survives restarts (per device).
+// The Notes workspace holds open documents in side-by-side panes. The layout survives restarts.
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { movedPath, sameDoc, type FileRef } from "../documents/keys";
@@ -62,12 +61,11 @@ export const unsavedUntitled = (s: { panes: Pane[]; dirty: Record<string, boolea
 /** A document is open at most once per pane set; a new note is always its own tab. */
 export const sameTab = (a: Omit<Tab, "id">, b: Tab) => sameDoc(a, b);
 
-/** Showing a tab also shows a page that holds the workspace: the one already shown, else Memory for notes and Notes
- *  for notebook pages. */
-export function showTab(tab: Pick<Tab, "kind">) {
+/** Bring the Notes workspace into view when a document opens. */
+export function showTab() {
   const { route, go } = useApp.getState();
-  if (route.page === "notes" || (route.page === "memory" && route.view === "notes")) return;
-  go(tab.kind === "file" || tab.kind === "new-file" || tab.kind === "compare" || tab.kind === "find" ? { page: "notes" } : { page: "memory", view: "notes" });
+  if (route.page === "notes" && !route.view) return;
+  go({ page: "notes" }, { replace: route.page === "notes" });
 }
 
 /** The mode a second view of a tab opens in. */
@@ -88,7 +86,7 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
 
     openTab: (tab, opts = {}) => {
       const s = get();
-      showTab(tab);
+      showTab();
       // Already open somewhere: show it (a split request still opens a second view).
       if (!opts.split) {
         for (const pane of s.panes) {

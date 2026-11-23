@@ -24,7 +24,10 @@ function useCrumbs(): Crumb[] {
   const { project } = useCurrentProject();
   const other = useApp((s) => s.project === OTHER_FOLDERS);
   const domain = useApp((s) => s.domain);
-  const noteTitle = useWorkspace((s) => activeTab(s)?.title);
+  const noteTitle = useWorkspace((s) => {
+    const tab = activeTab(s);
+    return tab?.kind === "note" ? tab.title : undefined;
+  });
   const page = useWorkspace((s) => { const t = activeTab(s); return t?.kind === "file" ? t.file : undefined; });
   const notebook = useNotebookTitle(page && !isLoose(page) ? page.notebook : undefined, route.page === "notes");
   const systemsOn = useSystemsEnabled();
@@ -36,11 +39,13 @@ function useCrumbs(): Crumb[] {
     return system ? [{ label: "Projects" }, root, { label: system }] : [{ label: "Projects" }, { label: root.label }];
   }
   const section: Crumb = { label: SECTIONS.find((s) => s.page === route.page)?.label ?? route.page, go: () => go({ page: route.page }) };
+  if (route.page === "notes" && route.view) return [root, section, { label: route.view === "tasks" ? "Tasks" : "Views" }];
   if (route.page === "notes" && page && isLoose(page)) return [root, section, { label: "Opened files" }, { label: fileName(page.path) }];
   if (route.page === "notes" && page) {
     return [root, section, { label: notebook ?? "Notebook" }, { label: pageTitle(page.path) }];
   }
-  const leaf = route.page === "memory" ? (route.view === "notes" ? noteTitle : route.view && MEMORY_VIEWS[route.view])
+  const leaf = route.page === "memory" ? route.view && MEMORY_VIEWS[route.view]
+    : route.page === "notes" ? noteTitle
     : route.page === "agents" ? (route.view === "new" ? "New session" : sessions.data?.find((s) => s.id === route.session)?.title)
     : route.page === "wiki" ? route.domain ?? domain ?? undefined
     : undefined;

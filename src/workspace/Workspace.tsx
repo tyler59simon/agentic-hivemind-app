@@ -14,7 +14,7 @@ import { fileName, isMarkdown, isRichDoc, pageTitle } from "../lib/notebooks";
 import { announceDocumentLook, useWhitePaper } from "../lib/paper";
 import { useApp } from "../store";
 import { Confirm } from "../ui/Modal";
-import { MAX_PANES, railShown, useWorkspace, type Pane, type Tab } from "./store";
+import { MAX_PANES, railShown, showTab, useWorkspace, type Pane, type Tab } from "./store";
 
 /** What a tab shows. */
 export const TAB_VIEWS: Record<Tab["kind"], (tab: Tab) => ReactNode> = {
@@ -153,14 +153,13 @@ function PaneView({ pane, focused, first, last, onClose }: {
 export function OpenTabs() {
   const panes = useWorkspace((s) => s.panes);
   const activate = useWorkspace((s) => s.activate);
-  const go = useApp((s) => s.go);
   const close = useCloseTab();
   return (
     <div className="note-tabs standalone" role="tablist">
       <LibraryPill active />
       {panes.flatMap((p) => p.tabs.map((t) => (
         <TabPill key={t.id} tab={t} active={false} onClose={() => close.request(p.id, t.id)}
-          onPick={() => { activate(p.id, t.id); go({ page: "memory", view: "notes" }); }} />
+          onPick={() => { activate(p.id, t.id); showTab(); }} />
       )))}
       <button className="icon-button" title="New note (Ctrl+N)" aria-label="New note" onClick={newNote}><Plus size="1.2em" aria-hidden /></button>
       {close.dialog}
