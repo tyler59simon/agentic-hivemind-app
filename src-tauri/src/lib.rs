@@ -1681,7 +1681,7 @@ fn executive_reports(app: AppHandle) -> conductor::Handler {
         let (app, id) = (app.clone(), id.clone());
         std::thread::spawn(move || {
             match capture_session(&app, &id, false) {
-                Ok(Some(_)) => notify::session(&app, &id, "Executive assistant", "What this conversation decided is ready to review in Executive"),
+                Ok(Some(_)) => notify::session(&app, &id, "Executive assistant", "What this conversation decided is ready to review in Inbox"),
                 Ok(None) => {}
                 Err(e) => notify::session(&app, &id, "Executive assistant", &format!("Could not capture what this conversation decided ({e}). Capture it again from the conversation.")),
             }

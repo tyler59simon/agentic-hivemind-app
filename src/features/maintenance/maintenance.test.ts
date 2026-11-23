@@ -81,12 +81,16 @@ describe("maintenance in the Inbox", () => {
     expect(deferredNotes([], NOW).size).toBe(0);
   });
 
-  it("uses the later run whichever order the runs come in", () => {
+  it("uses the later run whichever order the runs come in, and keeps the first run on equal timestamps", () => {
     const later = made("later", 1, [{ ref: "d:x", result: "deferred", action: "defer" }]);
     const earlier = made("earlier", 5, [{ ref: "d:x", result: "applied", action: "update", operation_id: "op1" }]);
     expect([...deferredNotes([earlier, later], NOW).keys()]).toEqual(["d:x"]);
     expect([...deferredNotes([later, earlier], NOW).keys()]).toEqual(["d:x"]);
     expect(deferredNotes([made("later", 1, [{ ref: "d:x", result: "kept" }]), earlier], NOW).size).toBe(0);
+    // Equal timestamps (newest-first from history): the newer run (index 0) wins.
+    const sameNew = made("r2", 1, [{ ref: "d:x", result: "kept", action: "keep" }]);
+    const sameOld = made("r1", 1, [{ ref: "d:x", result: "deferred", action: "defer" }]);
+    expect(deferredNotes([sameNew, sameOld], NOW).size).toBe(0);
   });
 
   it("words why a note was not decided", () => {

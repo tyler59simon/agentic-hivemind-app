@@ -169,6 +169,8 @@ function ProjectHome({ project }: { project: Project }) {
       </>}>
         <Section title="Open work" loading={tasks.loading || notes.rows.isLoading} actions={<button className="link small" onClick={() => setDialog("new")}>Add a milestone</button>}>
           {tasks.problems.map((p) => <p key={p} className="error small">{p}</p>)}
+          {notes.rows.error ? <p className="error small">Could not load notes for this project: {classify(notes.rows.error).message}</p> : null}
+          {!notes.rows.error && data.error ? <p className="error small">Could not load project summary: {classify(data.error).message}</p> : null}
           {failed ? <p className="error small">Milestones or project health did not load, so they are missing here: {classify(failed).message}</p> : null}
           <OpenList sections={openSections} today={today} ticks={ticks} onMilestone={setDialog} empty="No open work for this project. Items are open action items on notes tagged with the project, and tasks in notebooks inside its repositories." />
         </Section>
@@ -241,8 +243,8 @@ function AllHome({ projectsOn }: { projectsOn: boolean }) {
                 <thead><tr><th>Project</th><th>Health</th><th>Overdue</th><th>Next due</th><th>Last activity</th></tr></thead>
                 <tbody>
                   {groups.map(({ row: r, sections: s, next }) => (
-                    <tr key={r.project.slug} onClick={() => openProject(r.project.slug)} title={`Open ${r.project.name}`}>
-                      <td><strong>{r.project.name}</strong>{r.project.status === "paused" && <span className="muted small"> paused</span>}</td>
+                    <tr key={r.project.slug} onClick={(e) => { if (!(e.target as HTMLElement).closest("button,a")) openProject(r.project.slug); }} title={`Open ${r.project.name}`}>
+                      <td><button type="button" className="link" onClick={() => openProject(r.project.slug)}><strong>{r.project.name}</strong></button>{r.project.status === "paused" && <span className="muted small"> paused</span>}</td>
                       <td><HealthChip status={r.health.status} suggested={!r.health.set} /><div className="muted small">{r.health.suggestion.reasons[0]}</div></td>
                       <td>{s.overdue.length ? <span className="status-chip bad">{s.overdue.length} overdue</span> : <span className="muted">0</span>}</td>
                       <td>{next ? <>{next.due}<div className="muted small">{next.kind === "task" ? displayText(next.task.text) : next.milestone.title}</div></> : <span className="muted">none</span>}</td>

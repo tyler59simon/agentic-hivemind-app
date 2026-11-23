@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown, FolderOpen, Layers, Plus, TriangleAlert } from "lucide-react";
 import { useEffect, useMemo } from "react";
+import { useOpenPagesFlag } from "../../lib/connection";
 import { OTHER_FOLDERS } from "../../lib/folders";
 import { list, openWork, type Project } from "../../lib/lm";
 import { openProject, useApp } from "../../store";
@@ -16,8 +17,13 @@ export function ProjectSwitcher() {
   const picked = useApp((s) => s.project);
   const setProject = useApp((s) => s.setProject);
   const { wizard, openWizard, closeWizard } = useProjectIntent();
+  const openPagesFlag = useOpenPagesFlag();
   // The same keys and calls as the note palette, so the cache is shared.
-  const open = useQuery({ queryKey: ["open", "*"], queryFn: () => openWork({ allDomains: true, limit: 500 }), enabled });
+  const open = useQuery({
+    queryKey: ["open", "*", openPagesFlag],
+    queryFn: () => openWork({ allDomains: true, limit: 500, ...(openPagesFlag ? { pages: "none" as const } : {}) }),
+    enabled,
+  });
   const rows = useQuery({ queryKey: ["list", "*"], queryFn: () => list({ allDomains: true }), enabled });
   const all = registry.data?.projects;
   const counts = useMemo(() => openCountsByProject(open.data?.items ?? [], rows.data?.notes ?? [], all ?? []), [open.data, rows.data, all]);

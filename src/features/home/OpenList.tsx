@@ -13,34 +13,50 @@ import { displayText } from "../notes/tasks";
 import { openSource, tickTask } from "../notes/useTaskItems";
 import type { Entry, HomeSections, UndatedGroup } from "./home";
 
-/** Tick a task and offer Undo. `busy` is the id of the task being written. */
+/** Tick a task and offer Undo. Tracks in-flight and recently-ticked IDs so concurrent clicks and re-index lag cannot double-tick. */
 export function useTick() {
   const client = useQueryClient();
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
+  const [ticked, setTicked] = useState<ReadonlySet<string>>(() => new Set());
+  const update = (setter: React.Dispatch<React.SetStateAction<ReadonlySet<string>>>, id: string, add: boolean) => {
+    setter((prev) => {
+      const next = new Set(prev);
+      if (add) next.add(id); else next.delete(id);
+      return next;
+    });
+  };
   const tick = async (t: TaskItem, next: boolean): Promise<void> => {
-    setBusy(t.id);
+    if (busy.has(t.id) || (next && ticked.has(t.id))) return;
+    update(setBusy, t.id, true);
+    if (!next) update(setTicked, t.id, false);
     try {
-      await tickTask(t, next);
+      const state = await tickTask(t, next);
+      if (next) {
+        update(setTicked, t.id, true);
+        setTimeout(() => update(setTicked, t.id, false), 1500);
+      }
       // The line is ticked now, in a page whose hash has changed: undo checks the line, not the hash it was listed at.
-      if (next) toast(`Done: ${displayText(t.text)}`, "info", { label: "Undo", run: () => void tick({ ...t, done: true, sha256: undefined }, false) });
+      if (next && state !== "unsaved") toast(`Done: ${displayText(t.text)}`, "info", { label: "Undo", run: () => void tick({ ...t, done: true, sha256: undefined }, false) });
     } catch (e) {
+      update(setTicked, t.id, false);
       toast(classify(e).message, "error");
     } finally {
-      setBusy(null);
+      update(setBusy, t.id, false);
       refreshLists(client);
       void refreshStore(client);
     }
   };
-  return { tick, busy };
+  return { tick, isBusy: (id: string) => busy.has(id) || ticked.has(id), isTicked: (id: string) => ticked.has(id) };
 }
 
 type Tick = ReturnType<typeof useTick>;
 
 function TaskRow({ t, today, ticks }: { t: TaskItem; today: string; ticks: Tick }) {
   const overdue = !!t.due && t.due < today;
+  const done = ticks.isTicked(t.id);
   return (
     <li>
-      <input type="checkbox" checked={false} disabled={ticks.busy === t.id} aria-label={`Tick ${displayText(t.text)}`} onChange={() => void ticks.tick(t, true)} />
+      <input type="checkbox" checked={done} disabled={ticks.isBusy(t.id)} aria-label={`Tick ${displayText(t.text)}`} onChange={() => void ticks.tick(t, true)} />
       <span className="task-text">{displayText(t.text)}</span>
       {t.priority && <span className="chip small" title="Priority">{t.priority}</span>}
       {t.owner && <span className="chip small" title="Owner">{t.owner}</span>}

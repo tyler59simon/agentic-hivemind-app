@@ -327,6 +327,7 @@ export function useTranscript(id: string) {
 
 /** One session: its log from disk, kept current by live events; and the rail that says what it may touch. */
 function Session({ id }: { id: string }) {
+  const client = useQueryClient();
   const { log, state } = useTranscript(id);
   const sessions = useQuery(sessionsQuery());
   const systems = useQuery(systemsQuery());
@@ -349,7 +350,10 @@ function Session({ id }: { id: string }) {
     setCapturing(true);
     try {
       const batch = await sessionCapture(info.id);
-      if (batch) useApp.getState().go({ page: "home", capture: batch.id });
+      if (batch) {
+        client.setQueryData<unknown[]>(["executive", "capture"], (prev) => [batch, ...((prev ?? []) as { id: string }[]).filter((b) => b.id !== batch.id)]);
+        useApp.getState().go({ page: "home", capture: batch.id });
+      }
       else toast("Nothing to capture from this conversation yet.");
     } catch (e) { toast(String(e), "error"); }
     finally { setCapturing(false); }

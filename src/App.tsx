@@ -235,7 +235,7 @@ export default function App() {
           <div className="card">
             <h1 className="brand"><img src={logo} alt="" />Hivemind</h1>
             {link.error && <p className="error">{String(link.error)}</p>}
-            {outdated && <p className="error">This version of Living Memory is too old: Hivemind needs one with direct writes (<code>alm version</code> lists <code>direct_writes</code> under capabilities). Update Living Memory, then reconnect.</p>}
+            {outdated && <p className="error">This version of Living Memory is too old: Hivemind needs one with direct writes and unified proposals (<code>alm version</code> lists <code>direct_writes</code> and <code>proposals</code> under capabilities). Update Living Memory, then reconnect.</p>}
             <SettingsForm onSaved={reconnect} />
             <BeforeUninstall
               onOpenReview={link.isSuccess && !outdated ? (id) => { setSettings(false); openInbox(id); } : undefined}

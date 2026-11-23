@@ -72,7 +72,7 @@ export function sortDecisions(ds: MaintenanceDecision[]): MaintenanceDecision[] 
 // ---- The Inbox: what maintenance deferred, and what it did that the user may want to undo. ----
 
 /** Runs listed on the Maintenance page and read for the Inbox. */
-export const HISTORY_LIMIT = 30;
+export const HISTORY_LIMIT = 200;
 /** A due note shows in the Inbox when the latest decision about it in this many days was a defer. */
 export const DEFER_DAYS = 30;
 /** An applied decision shows in the Inbox for this many days. */
@@ -96,15 +96,19 @@ export function reasonText(d: Pick<MaintenanceDecision, "rule" | "reason" | "rea
 /** The notes whose latest decision in the last `DEFER_DAYS` days was a defer or a refusal by policy (maintenance could not
  *  decide), with that decision. A later run that kept or changed a note takes it off the list. */
 export function deferredNotes(done: RunDecisions[], now: number): Map<string, MaintenanceDecision> {
-  const latest = new Map<string, { at: number; decision: MaintenanceDecision }>();
-  for (const { run, decisions } of done) {
+  const latest = new Map<string, { at: number; runIndex: number; decision: MaintenanceDecision }>();
+  done.forEach(({ run, decisions }, runIndex) => {
     const at = startedAt(run);
-    if (Number.isNaN(at) || now - at > DEFER_DAYS * DAY) continue;
+    if (Number.isNaN(at) || now - at > DEFER_DAYS * DAY) return;
     for (const decision of decisions) {
       const seen = latest.get(decision.ref);
-      if (!seen || at >= seen.at) latest.set(decision.ref, { at, decision });
+      // Newer timestamp wins regardless of input order; on equal timestamps, earlier run in newest-first history wins,
+      // while later decisions within the same run win.
+      if (!seen || at > seen.at || (at === seen.at && runIndex === seen.runIndex)) {
+        latest.set(decision.ref, { at, runIndex, decision });
+      }
     }
-  }
+  });
   return new Map([...latest].filter(([, v]) => v.decision.result === "deferred" || v.decision.result === "rejected").map(([ref, v]) => [ref, v.decision]));
 }
 

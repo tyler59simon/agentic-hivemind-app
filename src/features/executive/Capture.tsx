@@ -22,6 +22,7 @@ const keep = (text: string) => { try { localStorage.setItem(KEPT_KEY, text); } c
 
 /** The universal input: meeting notes, a conversation, a document, loose thoughts. */
 export function CaptureDialog({ projects, project, onClose }: { projects: Project[]; project?: Project; onClose: () => void }) {
+  const client = useQueryClient();
   const [text, setText] = useState(kept);
   const [label, setLabel] = useState("");
   const [scope, setScope] = useState(project?.slug ?? "");
@@ -33,6 +34,7 @@ export function CaptureDialog({ projects, project, onClose }: { projects: Projec
     try {
       const batch = await extract(text, scope || null, label.trim() || undefined);
       keep("");
+      if (batch) client.setQueryData<CaptureBatch[]>(["executive", "capture"], (prev) => [batch, ...(prev ?? []).filter((b) => b.id !== batch.id)]);
       onClose();
       if (!batch) toast("Nothing worth keeping was found in that text.");
       else useApp.getState().go({ page: "home", capture: batch.id });
@@ -213,7 +215,7 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
     setClosing(true);
     return false;
   }), []);
-  if (batches.isLoading) return <Modal title="Review capture" onClose={onClose}><p className="muted">Loading…</p></Modal>;
+  if ((batches.isLoading || batches.isFetching) && !stored) return <Modal title="Review capture" onClose={onClose}><p className="muted">Loading…</p></Modal>;
   if (batches.error && !stored) return <Modal title="Review capture" onClose={onClose}><p className="error">{classify(batches.error).message}</p></Modal>;
   if (!stored) return <Modal title="Review capture" onClose={onClose}><p className="muted">This capture is no longer here.</p></Modal>;
   const items = stored.items.map((i) => edits[i.id] ?? i);

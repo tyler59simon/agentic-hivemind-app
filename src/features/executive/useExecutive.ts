@@ -2,6 +2,7 @@
 // all-domain read of Living Memory's notes and open items (keys start with "list" and "open", so store changes refetch them).
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
+import { useOpenPagesFlag } from "../../lib/connection";
 import { recordsQuery, type CaptureBatch, type Health, type Milestone, type RecordKind } from "../../lib/executive";
 import { domains, list, openWork, taxonomy, type Project } from "../../lib/lm";
 import { projectsQuery, useCurrentProject } from "../projects/useProject";
@@ -11,8 +12,12 @@ import { attention, crossProject, portfolio } from "./portfolio";
 export const useRecords = <T>(kind: RecordKind) => useQuery(recordsQuery<T>(kind));
 
 export function useNotes() {
+  const openPagesFlag = useOpenPagesFlag();
   const rows = useQuery({ queryKey: ["list", "executive"], queryFn: () => list({ allDomains: true, status: "active", summary: true }) });
-  const open = useQuery({ queryKey: ["open", "executive"], queryFn: () => openWork({ allDomains: true, limit: 1000 }) });
+  const open = useQuery({
+    queryKey: ["open", "executive", openPagesFlag],
+    queryFn: () => openWork({ allDomains: true, limit: 1000, ...(openPagesFlag ? { pages: "none" as const } : {}) }),
+  });
   return { rows, open };
 }
 

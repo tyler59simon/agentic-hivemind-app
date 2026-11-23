@@ -30,10 +30,11 @@ export interface Loaded { proposal: DocProposal; page: Page | null; proposed: Re
 const gone = isMissing;
 
 /** A folder proposal's page is read by Hivemind's own file service when it has the folder as a notebook, else through Living Memory. */
-async function loadOne(id: string, client: QueryClient): Promise<Loaded> {
+async function loadOne(id: string, client: QueryClient, orphaned = false): Promise<Loaded> {
   const proposal = await docProposal(id);
   const nb = proposal.folder ? notebookForFolder(await client.fetchQuery({ ...notebooksQuery(), staleTime: 30_000 }), proposal.folder) : null;
   const reading = !proposal.folder ? readPage(proposal, proposal.path)
+    : orphaned ? Promise.resolve(null)
     : nb ? readFile(nb.id, proposal.path)
     : readFolderPage(`${proposal.folder.replace(/[\\/]+$/, "")}/${proposal.path}`);
   const page = await reading.catch((e) => { if (gone(e)) return null; throw e; });
@@ -52,7 +53,7 @@ export function proposalWhere(row: Pick<DocProposalRow, "domain" | "notebook" | 
  *  when retention has removed that operation, or the proposal is for a new page. */
 export async function baseText(p: DocProposal): Promise<string | null> {
   if (!p.base_revision) return "";
-  if (p.folder) return p.base ? decodeBase(p.base) : null;   // the proposal kept the page as it read it; none kept (over 1 MiB): the merge uses the page as it is
+  if (p.folder) return p.base != null ? decodeBase(p.base) : null;   // the proposal kept the page as it read it; none kept (over 1 MiB): the merge uses the page as it is
   const rows = await docHistory(p.domain, p.notebook, p.path, 200).catch(() => []);
   const op = rows.find((r) => r.after_revision === p.base_revision)?.operation_id;
   if (!op) return null;
@@ -65,7 +66,9 @@ export const isStale = ({ proposal, page }: Pick<Loaded, "proposal" | "page">) =
 /** Why a merge could not be written without changing bytes the merge dialog does not show, or null: a page holding bytes
  *  that are not UTF-8, or a page or proposal that mixes line endings. Accept still writes the agent's text as it is. */
 export function unmergeable({ page, proposed }: Pick<Loaded, "page" | "proposed">): string | null {
-  return page?.readOnly ?? (proposed.readOnly ? "The proposed text mixes line-ending styles" : null);
+  if (page?.readOnly) return page.readOnly;
+  if (page && page.format.encoding !== "UTF-8") return `This page is encoded as ${page.format.encoding}, not UTF-8`;
+  return proposed.readOnly ? "The proposed text mixes line-ending styles" : null;
 }
 
 /** The bytes a merge writes: the page's own line endings and byte order mark, or the proposal's for a new page (D5). */
@@ -84,7 +87,7 @@ const stale = (e: unknown) => e instanceof LmError && e.stale;
  *  once the proposal is accepted, merged or rejected; `onBusy` says when a decision is being written. */
 export function ProposalDetail({ row, onSettled, onBusy }: { row: DocProposalRow; onSettled: () => void; onBusy?: (busy: boolean) => void }) {
   const client = useQueryClient();
-  const one = useQuery({ queryKey: ["lm-proposal", row.id], queryFn: () => loadOne(row.id, client), gcTime: 0 });
+  const one = useQuery({ queryKey: ["lm-proposal", row.id, !!row.orphaned], queryFn: () => loadOne(row.id, client, !!row.orphaned), gcTime: 0 });
   const canMerge = useAcceptEditedEnabled();
   const [busy, setBusy] = useState(false);
   const [rejecting, setRejecting] = useState(false);
@@ -109,6 +112,7 @@ export function ProposalDetail({ row, onSettled, onBusy }: { row: DocProposalRow
     await write();
     if (where) {
       await historySnapshot(where.notebook, where.path, null, "agent").catch(() => null);
+      client.invalidateQueries({ queryKey: ["file-history", where.notebook, where.path] });
       onFilesChanged(client, { notebook: where.notebook, paths: [where.path] });
     }
   };
@@ -166,7 +170,7 @@ export function ProposalDetail({ row, onSettled, onBusy }: { row: DocProposalRow
       {loaded && (
         <>
           <p className="muted small">Proposed by session {loaded.proposal.session ?? "unknown"}.</p>
-          {isStale(loaded) && (
+          {!orphaned && isStale(loaded) && (
             <p className="banner warn small">
               {loaded.page ? "The page changed after the agent read it" : "The page the agent edited is gone"}, so the edit cannot be applied as it is. Merge it into the page as it is now.
             </p>

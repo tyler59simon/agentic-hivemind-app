@@ -150,8 +150,10 @@ export function InboxPage() {
     || (routedKey && visible.find((i) => i.key === routedKey)) || firstOfRouted || visible[0] || null;
 
   const select = (item: Item) => {
-    if (item.type === "file") go({ page: "inbox", session: item.info.id, file: item.file.path, kind: routed.kind }, { replace: true });
-    else if (item.type === "session") go({ page: "inbox", session: item.info.id, kind: routed.kind }, { replace: true });
+    const k = kind === "all" ? undefined : kind;
+    if (item.type === "file") go({ page: "inbox", session: item.info.id, file: item.file.path, kind: k }, { replace: true });
+    else if (item.type === "session") go({ page: "inbox", session: item.info.id, kind: k }, { replace: true });
+    else if (routed.session || routed.file) go({ page: "inbox", kind: k }, { replace: true });
     setPicked(item.type === "file" || item.type === "session" ? null : item.key);
   };
   const list = useRef<HTMLElement>(null);
@@ -192,7 +194,7 @@ export function InboxPage() {
   return (
     <div className="page fill-page">
       <PageHeader title="Inbox" subtitle="Agent changes and drafts that wait for you before they count as accepted." />
-      <Tabs pill label="Kind" value={kind} onChange={(id: Kind) => go({ page: "inbox", kind: id === "all" ? undefined : id }, { replace: true })} items={inboxTabs(counts)} />
+      <Tabs pill label="Kind" value={kind} onChange={(id: Kind) => { setPicked(null); setKinds([]); go({ page: "inbox", kind: id === "all" ? undefined : id }, { replace: true }); }} items={inboxTabs(counts)} />
       {!projectsOn && <p className="muted">Memory review needs a newer Living Memory (API 2 with the <code>review</code> command).</p>}
       {sessions.error && <p className="error">{classify(sessions.error).message}</p>}
       {loading ? <p className="muted">Loading…</p>
@@ -248,10 +250,13 @@ export function InboxPage() {
                 : item.type === "behind" ? row(item, <Layers size="1.3em" aria-hidden />, `Architecture: ${item.system.name} is ${item.stale.behind} commit${item.stale.behind === 1 ? "" : "s"} behind`)
                 : item.type === "skill" ? row(item, <Sparkles size="1.3em" aria-hidden />, proposalTitle(item.proposal))
                 : null)}
-              {!visible.length && kind !== "all" && <p className="muted pad">{EMPTY[kind]}</p>}
+              {!visible.length && kind !== "all" && !inbox.loading
+                && !(kind === "code" && lists.some((q) => q.isLoading))
+                && !(kind === "memory" && (active.isLoading || inbox.maintenanceLoading))
+                && <p className="muted pad">{EMPTY[kind]}</p>}
             </nav>
-            {selected?.type === "file" ? <FilePane info={selected.info} file={selected.file} />
-              : selected?.type === "session" ? <SessionPane info={selected.info} />
+            {selected?.type === "file" ? <FilePane key={selected.info.id} info={selected.info} file={selected.file} />
+              : selected?.type === "session" ? <SessionPane key={selected.info.id} info={selected.info} />
               : selected ? (
                 <div className="review-pane">
                   {selected.type === "memory" && <MemoryCard row={selected.row} due={selected.due} why={selected.why} />}
@@ -297,7 +302,12 @@ export function InboxPage() {
               ) : <div className="review-pane" />}
           </div>
           {info && <ReviewBar key={info.id} info={info} files={infoFiles} title={info.title}
-            onDecided={() => { setPicked(null); go({ ...afterDecision(groups, info.id), kind: routed.kind }, { replace: true }); }} />}
+            onDecided={() => {
+              setPicked(null);
+              const next = afterDecision(groups, info.id);
+              const nextKind = kind === "code" && !next.session ? undefined : (kind === "all" ? undefined : kind);
+              go({ ...next, kind: nextKind }, { replace: true });
+            }} />}
           </>
         )}
       {capturing && <ReviewDialog key={capturing} id={capturing} projects={projects.data?.projects ?? []} onClose={() => setCapturing(null)} />}

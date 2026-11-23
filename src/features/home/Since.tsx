@@ -12,10 +12,23 @@ import { changeGroups, harnessLine, isQuiet, isUnbound, repeatLabel } from "../r
 import { lastVisit, rememberVisit, sinceDays } from "./home";
 import { Commits } from "./panels";
 
-/** How many days back this visit reads. It is worked out once when Home opens, and the time is remembered when Home closes. */
+/** How many days back this visit reads. Recorded on unmount, window hide (close-to-tray), and pagehide; recomputed when shown again. */
 export function useVisit(scope: string): number {
-  const [days] = useState(() => sinceDays(lastVisit(scope), Date.now()));
-  useEffect(() => () => rememberVisit(scope), [scope]);
+  const [days, setDays] = useState(() => sinceDays(lastVisit(scope), Date.now()));
+  useEffect(() => {
+    const stamp = () => rememberVisit(scope);
+    const onVis = () => {
+      if (document.hidden) stamp();
+      else setDays(sinceDays(lastVisit(scope), Date.now()));
+    };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("pagehide", stamp);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("pagehide", stamp);
+      stamp();
+    };
+  }, [scope]);
   return days;
 }
 

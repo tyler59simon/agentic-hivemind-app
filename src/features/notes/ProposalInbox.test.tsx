@@ -197,13 +197,22 @@ describe("a proposal for a page of a folder notebook", () => {
     expect(order).toEqual(["accept", "settled"]);
   });
 
-  it("an orphaned proposal (its folder is no longer registered) can only be rejected", async () => {
+  it("an orphaned proposal (its folder is no longer registered) can only be rejected and never shows a gone-page banner", async () => {
     await folderInbox({ books: [wiki], page: { text: "one\n", sha256: "r1" }, orphaned: true });
     await until(() => !!button("Reject…"));
     expect(document.body.textContent).toMatch(/no longer has this folder registered/);
+    expect(document.body.textContent).not.toMatch(/page the agent edited is gone/i);
     expect(button("Accept")).toBeUndefined();
     expect(button("Edit, then accept…")).toBeUndefined();
     expect(button("Merge…")).toBeUndefined();
+  });
+
+  it("keeps an empty string base for a 0-byte existing folder page", async () => {
+    await folderInbox({ books: [wiki], page: { text: "now\n", sha256: "r9" }, base: "" });
+    await until(() => !!button("Merge…"));
+    await act(async () => button("Merge…")!.click());
+    await until(() => !!document.querySelector("[data-merge]"));
+    expect(document.querySelector("[data-merge]")?.getAttribute("data-base")).toBe("");
   });
 
   it("a page that is gone reads as no page: the proposal is stale and only a merge is offered", async () => {

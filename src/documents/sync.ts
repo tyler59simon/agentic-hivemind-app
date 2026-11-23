@@ -67,20 +67,27 @@ export interface DocsChanged { domain: string; notebook: string; paths: string[]
 /** Living Memory changed a notebook's files (an agent's proposal, an Obsidian edit, Hivemind's own saves). The tree
  *  follows, open pages follow or warn, and the notebook list and proposals refresh when their files changed. */
 export function onDocsChanged(client: QueryClient, { domain, notebook, paths }: DocsChanged) {
+  const hasFolderProposals = paths.some((p) => p.startsWith(".folder-proposals/"));
+  if (hasFolderProposals) {
+    client.invalidateQueries({ queryKey: ["lm-proposals", "*"] });
+    client.invalidateQueries({ queryKey: ["lm-proposal"] });
+  }
+  const rest = paths.filter((p) => !p.startsWith(".folder-proposals/"));
+  if (!rest.length) return;
   const container = lmContainer(domain, notebook);
   client.invalidateQueries({ queryKey: ["notebook-tree", container] });
-  if (paths.some((p) => p === "notebook.json" || p.startsWith(".proposals/"))) client.invalidateQueries({ queryKey: ["lm-notebooks"] });
-  if (paths.some((p) => p === "notebook.json")) client.invalidateQueries({ queryKey: ["daily-settings", container] });
-  if (paths.some((p) => p.startsWith(".proposals/"))) {
+  if (rest.some((p) => p === "notebook.json" || p.startsWith(".proposals/"))) client.invalidateQueries({ queryKey: ["lm-notebooks"] });
+  if (rest.some((p) => p === "notebook.json")) client.invalidateQueries({ queryKey: ["daily-settings", container] });
+  if (rest.some((p) => p.startsWith(".proposals/"))) {
     client.invalidateQueries({ queryKey: ["lm-proposals", domain, notebook] });
     client.invalidateQueries({ queryKey: ["lm-proposals", "*"] });
   }
   // `![[picture.png]]` looks among the notebook's attachments (Codex re-review of 87a0a1f).
-  if (paths.some((p) => /^assets\//i.test(p))) client.invalidateQueries({ queryKey: ["lm-assets", container] });
-  const pages = paths.filter((p) => /\.md$/i.test(p) && !p.startsWith(".") && !/^assets\//i.test(p));
+  if (rest.some((p) => /^assets\//i.test(p))) client.invalidateQueries({ queryKey: ["lm-assets", container] });
+  const pages = rest.filter((p) => /\.md$/i.test(p) && !p.startsWith(".") && !/^assets\//i.test(p));
   // The proposal open in the inbox compares against its page as it is now: either changing asks for it again, so the
   // inbox moves from Accept to Merge when the page moves on (Codex review of 32fee20, U1).
-  if (pages.length || paths.some((p) => p.startsWith(".proposals/"))) client.invalidateQueries({ queryKey: ["lm-proposal"] });
+  if (pages.length || rest.some((p) => p.startsWith(".proposals/"))) client.invalidateQueries({ queryKey: ["lm-proposal"] });
   if (pages.length) void refresh(container, pages);
 }
 
@@ -91,6 +98,7 @@ export function onFilesChanged(client: QueryClient, { notebook, paths }: FilesCh
     client.invalidateQueries({ queryKey: ["notebook-meta", notebook] });
     client.invalidateQueries({ queryKey: ["daily-settings", notebook] });
   }
+  if (paths.some((p) => /\.(md|markdown)$/i.test(p))) client.invalidateQueries({ queryKey: ["lm-proposal"] });
   void refresh(notebook, paths);
 }
 

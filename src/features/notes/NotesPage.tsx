@@ -162,7 +162,9 @@ export function NotesPage() {
         : empty ? <Empty onAdd={add} onNew={newNotebook} />
         : (
           <div className="center muted">
-            <p>Pick a note or page on the left, or <button className="link" onClick={() => newPageHere(client)}>create a page</button> (<kbd>Ctrl</kbd>+<kbd>N</kbd>).</p>
+            {list.length > 0 || groups.length > 0
+              ? <p>Pick a note or page on the left, or <button className="link" onClick={() => newPageHere(client)}>create a page</button> (<kbd>Ctrl</kbd>+<kbd>N</kbd>).</p>
+              : <p>Pick a memory note on the left, <button className="link" onClick={() => useWorkspace.getState().openTab({ kind: "new-note" })}>capture a new note</button>, or <button className="link" onClick={newNotebook ?? add}>add a notebook</button>.</p>}
           </div>
         )}
       {dialogs}

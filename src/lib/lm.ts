@@ -61,6 +61,8 @@ export interface Capabilities {
   wiki_agent?: { version: number }; note_types?: number;
   /** 1: `proposals` lists, shows, accepts and rejects staged notes and page edits (it replaced `doc proposals`, `doc accept` and `doc reject`). */
   proposals?: number;
+  /** 2: `open` supports `--pages none|injectable|searchable` and returns `kind: "note" | "page"`. */
+  items?: { fields?: number };
   /** 1: a system has a `project` field. */
   systems?: { project?: number };
   /** Notebook pages (NS-2A, NS-2B). */
@@ -353,10 +355,15 @@ function scopeArgs(name: string, o: ScopeOptions): string[] {
   return view(argv);
 }
 
-export interface OpenItem { ref: string; short_ref: string; title: string; type: NoteType; updated: string; index: number; item: string }
+export interface OpenItem { kind?: "note" | "page"; ref: string; short_ref: string; title: string; type: NoteType; updated: string; index: number; item: string }
 export interface OpenWork { ok: boolean; domain: string | null; notes: number; count: number; items: OpenItem[]; hint?: string }
-export const openArgs = (o: ScopeOptions) => scopeArgs("open", o);
-export const openWork = (o: ScopeOptions) => run<OpenWork>(openArgs(o));
+export interface OpenOptions extends ScopeOptions { pages?: "none" | "injectable" | "searchable" }
+export const openArgs = (o: OpenOptions) => {
+  const argv = scopeArgs("open", o);
+  if (o.pages) argv.splice(argv.length - 2, 0, "--pages", o.pages);
+  return argv;
+};
+export const openWork = (o: OpenOptions) => run<OpenWork>(openArgs(o));
 
 export interface ReviewRow {
   ref: string; title: string; type: NoteType; updated: string;

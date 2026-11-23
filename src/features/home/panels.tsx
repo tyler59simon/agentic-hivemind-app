@@ -18,7 +18,7 @@ import { agentActivity, agentNeeds, type Need } from "../projects/agentwork";
 import { useInboxItems } from "../review/useInboxItems";
 import { systemsForProject } from "../projects/scope";
 import { MiniDiagram } from "../systems/MiniDiagram";
-import { systemsQuery, useStaleness, useSystem } from "../systems/useSystem";
+import { systemsQuery, useSystem } from "../systems/useSystem";
 import { inboxNeeds } from "./home";
 
 const folderName = (path: string) => path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
@@ -95,32 +95,33 @@ export function NeedsReview({ project }: { project?: Project }) {
   useEffect(() => { reviewRefresh().catch(() => undefined); }, []);
   const registry = useQuery({ ...systemsQuery(), enabled: systemsOn && !!project });
   const system = useMemo(() => (project ? systemsForProject(project, (registry.data?.systems ?? []).filter((s) => s.status !== "retired"))[0] : undefined), [project, registry.data]);
-  const { architecture } = useSystem(system?.slug);
-  const stale = useStaleness(system?.slug, architecture.data?.generatedAt);
-  const behind = system && stale.data?.behind ? stale.data.behind : 0;
   // A capture batch with no project, or one for a project not picked, still waits; it is shown on the project it is for, or everywhere when it has none.
   const captures = inbox.captures;
-  const rows = inboxNeeds(inbox.counts, inbox.dueRows.length);
+  const rows = inboxNeeds(inbox.counts, inbox.dueRows.length, {
+    unconfirmed: inbox.unconfirmedNotes.length,
+    archProposals: inbox.proposals.length,
+    archBehind: inbox.behind.length,
+  });
   const automations = useQuery({ ...automationsQuery(), retry: false });
   const workflows = useQuery({ ...workflowsQuery(), retry: false });
   const drift = useQuery({ ...driftQuery(system?.slug ?? ""), enabled: !!system, retry: false });
   const needs = agentNeeds({
     memoryDrafts: inbox.drafts.length, skillDrafts: inbox.skills.length,
     runs: automations.data?.runs ?? [], workflows: (workflows.data ?? []).filter((w) => !project || w.project === project.slug),
-    drift: drift.data, behindShown: behind > 0, stale: inbox.kindTotals?.stale, duplicates: inbox.kindTotals?.duplicate, now: Date.now(),
+    drift: drift.data, behindShown: inbox.behind.length > 0, stale: inbox.kindTotals?.stale, duplicates: inbox.kindTotals?.duplicate, now: Date.now(),
   });
   const open = (n: Need) => (n.target.page === "inbox" ? openInbox(undefined, undefined, n.target.kind)
     : n.target.page === "architecture" ? openSystem(n.target.system) : openWorkflows({ tab: n.target.tab, run: n.target.run }));
   return (
-    <Section title="Needs you" count={rows.length + (behind ? 1 : 0) + needs.length + captures.length} loading={due.isLoading || inbox.maintenanceLoading} error={due.error}
-      empty={!due.isLoading && !inbox.maintenanceLoading && !rows.length && !behind && !needs.length && !captures.length ? "Nothing is waiting for you." : undefined}>
+    <Section title="Needs you" count={rows.length + needs.length + captures.length} loading={due.isLoading || inbox.maintenanceLoading} error={due.error}
+      empty={!due.isLoading && !inbox.maintenanceLoading && !rows.length && !needs.length && !captures.length ? "Nothing is waiting for you." : undefined}>
       {rows.filter((r) => r.kind === "code").map((r) => (
         <Row key={r.key} icon={<CodeXml size="1.3em" aria-hidden />} onClick={() => openInbox(undefined, undefined, r.kind)}>{r.text}</Row>
       ))}
-      {behind > 0 && system && (
-        <Row icon={<Layers size="1.3em" aria-hidden />} onClick={() => openSystem(system.slug)}>Architecture snapshot is {behind} commit{behind === 1 ? "" : "s"} behind</Row>
-      )}
-      {rows.filter((r) => r.kind !== "code").map((r) => (
+      {rows.filter((r) => r.kind === "architecture").map((r) => (
+        <Row key={r.key} icon={<Layers size="1.3em" aria-hidden />} onClick={() => openInbox(undefined, undefined, r.kind)}>{r.text}</Row>
+      ))}
+      {rows.filter((r) => r.kind !== "code" && r.kind !== "architecture").map((r) => (
         <Row key={r.key} icon={<Clock size="1.3em" aria-hidden />} onClick={() => openInbox(undefined, undefined, r.kind)}>{r.text}</Row>
       ))}
       {captures.map((b) => (

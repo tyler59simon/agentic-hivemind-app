@@ -120,36 +120,55 @@ pub fn file_contents(tree: &Worktree, path: &str) -> Result<FileContents, String
     Ok(FileContents { base, head, binary, too_large })
 }
 
+const CHECKPOINT_MSG: &str = "Checkpoint for Codex review";
+
+fn run_commit(dir: &Path, args: &[&str]) -> Result<(), String> {
+    let mut command = worktree::git(dir);
+    command.args(args);
+    let ran = run_captured(command, WRITE)?;
+    if !ran.status.success() {
+        if ran.stderr.contains("Author identity unknown") || ran.stderr.contains("empty ident name") {
+            return Err(NO_IDENTITY.into());
+        }
+        let last = |text: &str| -> Vec<String> {
+            let lines: Vec<&str> = text.lines().map(str::trim_end).filter(|line| !line.trim().is_empty()).collect();
+            lines[lines.len().saturating_sub(OUTPUT_LINES)..].iter().map(|line| line.to_string()).collect()
+        };
+        let shown: Vec<String> = last(&ran.stderr).into_iter().chain(last(&ran.stdout)).collect();
+        return Err(format!("The commit did not go through:\n{}", shown.join("\n")));
+    }
+    Ok(())
+}
+
 /// Everything the worktree changed goes into one commit on its branch; returns the commit id. When nothing is left to
 /// stage but the branch is ahead of the review base (the agent committed its own work), that commit is the result.
+/// If the tip commit is Hivemind's own Codex review checkpoint and `message` differs, it is amended with the user's message.
 pub fn commit_all(tree: &Worktree, message: &str) -> Result<String, String> {
     if message.trim().is_empty() {
         return Err("Write a commit message first.".into());
     }
     let dir = Path::new(&tree.path);
     run(dir, &["add", "-A"], WRITE)?;
-    if !run(dir, &["diff", "--cached", "--name-only", "-z", "HEAD"], READ)?.is_empty() {
-        let mut command = worktree::git(dir);
-        command.args(["commit", "-m", message]);
-        let ran = run_captured(command, WRITE)?;
-        if !ran.status.success() {
-            if ran.stderr.contains("Author identity unknown") || ran.stderr.contains("empty ident name") {
-                return Err(NO_IDENTITY.into());
-            }
-            let last = |text: &str| -> Vec<String> {
-                let lines: Vec<&str> = text.lines().map(str::trim_end).filter(|line| !line.trim().is_empty()).collect();
-                lines[lines.len().saturating_sub(OUTPUT_LINES)..].iter().map(|line| line.to_string()).collect()
-            };
-            let shown: Vec<String> = last(&ran.stderr).into_iter().chain(last(&ran.stdout)).collect();
-            return Err(format!("The commit did not go through:\n{}", shown.join("\n")));
-        }
+    let staged = !run(dir, &["diff", "--cached", "--name-only", "-z", "HEAD"], READ)?.is_empty();
+    if staged {
+        run_commit(dir, &["commit", "-m", message])?;
     }
-    let head = run(dir, &["rev-parse", "HEAD"], READ)?.trim().to_string();
+    let mut head = run(dir, &["rev-parse", "HEAD"], READ)?.trim().to_string();
     if !is_sha(&head) {
         return Err("git did not print a commit id".into());
     }
     if head == tree.review_base() {
         return Err("There is nothing to approve: the worktree matches its base commit.".into());
+    }
+    if !staged && message.trim() != CHECKPOINT_MSG {
+        let subject = run(dir, &["log", "-1", "--format=%s", "HEAD"], READ).unwrap_or_default();
+        if subject.trim() == CHECKPOINT_MSG {
+            run_commit(dir, &["commit", "--amend", "-m", message])?;
+            head = run(dir, &["rev-parse", "HEAD"], READ)?.trim().to_string();
+            if !is_sha(&head) {
+                return Err("git did not print a commit id".into());
+            }
+        }
     }
     Ok(head)
 }
@@ -394,18 +413,22 @@ pub fn approve(agents: &Manager, worktrees_dir: &Path, id: &str, message: &str) 
     Ok(commit)
 }
 
+fn checkpoint_held(id: &str, tree: &Worktree, message: &str) -> Result<Option<String>, String> {
+    checked_for_write(id, tree)?;
+    match commit_all(tree, message) {
+        Ok(commit) => Ok(Some(commit)),
+        Err(e) if e.starts_with("There is nothing to approve") => crate::git::head_sha(Path::new(&tree.path)).map(Some),
+        Err(e) => Err(e),
+    }
+}
+
 /// A workflow checkpoint: the session's edits as a commit on its own branch, without recording a review decision (the
 /// user still approves the session in Review; the approval then finds this commit). When nothing changed, the worktree's
 /// commit as it is, read while the session is held, so the checkpoint is the commit this call saw (Codex review F7-1).
 pub fn checkpoint(agents: &Manager, worktrees_dir: &Path, id: &str, message: &str) -> Result<Option<String>, String> {
     let _held = agents.reserve(id)?;
     let tree = checked_worktree(&agents.info(id)?, worktrees_dir)?;
-    checked_for_write(id, &tree)?;
-    match commit_all(&tree, message) {
-        Ok(commit) => Ok(Some(commit)),
-        Err(e) if e.starts_with("There is nothing to approve") => crate::git::head_sha(Path::new(&tree.path)).map(Some),
-        Err(e) => Err(e),
-    }
+    checkpoint_held(id, &tree, message)
 }
 
 /// Ask Codex to review a session's edits: checkpoint them as a commit on the session's branch, then start a read-only Codex
@@ -419,6 +442,11 @@ pub fn ask_codex(
     id: &str,
     start: impl FnOnce(AgentTask, &str, StartOptions) -> Result<SessionInfo, String>,
 ) -> Result<SessionInfo, String> {
+    let pre = agents.info(id)?;
+    if matches!(pre.status, Status::Running | Status::Waiting) {
+        return Err("Wait until the session finishes its turn, then ask Codex to review it.".into());
+    }
+    let _held = agents.reserve(id)?;
     let info = agents.info(id)?;
     if info.direct.is_some() {
         return Err("This session works in your own folder, not in a worktree of Hivemind's, so Codex cannot review its edits here.".into());
@@ -429,12 +457,17 @@ pub fn ask_codex(
     if !saved.shows(Engine::Codex) {
         return Err("Codex is hidden in Settings. Show it there to ask it for a review.".into());
     }
+    if let Some(prev) = info.reviewed_by.as_deref() {
+        if agents.info(prev).is_ok_and(|r| matches!(r.status, Status::Running | Status::Waiting)) {
+            return Err("Codex is already reviewing this session.".into());
+        }
+    }
     let AgentTask::Work { project, repo, .. } = &info.task else {
         return Err("Only a work session can be reviewed by Codex.".into());
     };
     let tree = checked_worktree(&info, worktrees_dir)?;
     let base = tree.review_base().to_string();
-    let tip = checkpoint(agents, worktrees_dir, id, "Checkpoint for Codex review")?.ok_or("Hivemind could not read the session's latest commit")?;
+    let tip = checkpoint_held(id, &tree, CHECKPOINT_MSG)?.ok_or("Hivemind could not read the session's latest commit")?;
     if tip == base {
         return Err("This session has no edits to review.".into());
     }
@@ -1017,6 +1050,37 @@ mod tests {
         assert_eq!(manager.info(&id(1)).unwrap().reviewed_by, Some(id(2)));
         // Approving later still finds the checkpoint: the review base did not move.
         assert_eq!(manager.info(&id(1)).unwrap().worktree.unwrap().review_base(), tree.base_sha);
+    }
+
+    #[test]
+    fn approving_after_asking_codex_replaces_the_checkpoint_message() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let tree = rig.tree(1);
+        make_edits(&tree);
+        let (manager, _) = rig.manager(&[session(1, Some(tree.clone()))]);
+        ask_codex(&manager, &rig.worktrees, &Settings::default(), &id(1), |_, _, _| Ok(session(2, None))).unwrap();
+        let before = head(Path::new(&tree.path));
+        let approved = approve(&manager, &rig.worktrees, &id(1), "Ship the bug fix").unwrap();
+        assert_ne!(approved, before, "the checkpoint commit was amended with the user's message");
+        assert_eq!(sh(Path::new(&tree.path), &["log", "-1", "--format=%s", "HEAD"]).trim(), "Ship the bug fix");
+    }
+
+    #[test]
+    fn asking_codex_refuses_when_a_reviewer_is_already_running() {
+        if !git_available() {
+            return;
+        }
+        let rig = Rig::new();
+        let tree = rig.tree(1);
+        make_edits(&tree);
+        let (manager, _) = rig.manager(&[session(1, Some(tree.clone())), session(2, None)]);
+        manager.amend(&id(1), |info| info.reviewed_by = Some(id(2))).unwrap();
+        manager.amend(&id(2), |info| info.status = Status::Running).unwrap();
+        let err = ask_codex(&manager, &rig.worktrees, &Settings::default(), &id(1), |_, _, _| panic!("must not start")).unwrap_err();
+        assert!(err.contains("already"), "{err}");
     }
 
     #[test]

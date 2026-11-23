@@ -14,6 +14,7 @@ import { Confirm, Modal } from "../../ui/Modal";
 import { Section } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { automationPut, automationsQuery, type Automation } from "../../lib/workflows";
+import { useShownEngines } from "../agents/engines";
 import { domainOf, tagsFor } from "../executive/items";
 import { EvidenceList, Gaps } from "../executive/parts";
 import { allGaps, briefingMarkdown, numbered, unsupported } from "../executive/texts";
@@ -94,6 +95,7 @@ function MorningToggle({ project }: { project: Project | undefined }) {
   const [busy, setBusy] = useState(false);
   const found = morningOf(automations.data?.automations ?? [], project?.slug ?? null);
   const toggle = async (on: boolean) => {
+    if (automations.isError) return;
     setBusy(true);
     try {
       await automationPut(found ? { ...found, enabled: on } : {
@@ -105,9 +107,12 @@ function MorningToggle({ project }: { project: Project | undefined }) {
     finally { setBusy(false); }
   };
   return (
-    <label className="check" title="Writes a priorities briefing every day at 08:00 while Hivemind is open or in the tray">
-      <input type="checkbox" checked={!!found?.enabled} disabled={busy || automations.isLoading} onChange={(e) => void toggle(e.target.checked)} /> Write one every morning at 8:00
-    </label>
+    <>
+      <label className="check" title="Writes a priorities briefing every day at 08:00 while Hivemind is open or in the tray">
+        <input type="checkbox" checked={!!found?.enabled} disabled={busy || automations.isLoading || automations.isError} onChange={(e) => void toggle(e.target.checked)} /> Write one every morning at 8:00
+      </label>
+      {automations.isError && <p className="error small">Could not load briefing schedule: {classify(automations.error).message}</p>}
+    </>
   );
 }
 
@@ -143,7 +148,9 @@ export function BriefingModals({ project, projects }: { project: Project | undef
 
 /** The newest briefing for the scope, with the ways to read, write and schedule them. */
 export function BriefingCard({ project }: { project: Project | undefined }) {
+  const client = useQueryClient();
   const go = useApp((s) => s.go);
+  const claudeShown = useShownEngines().shows("claude");
   const briefings = useRecords<Briefing>("briefing");
   const [busy, setBusy] = useState(false);
   const mine = (briefings.data ?? []).filter((b) => (b.project ?? null) === (project?.slug ?? null));
@@ -152,6 +159,7 @@ export function BriefingCard({ project }: { project: Project | undefined }) {
     setBusy(true);
     try {
       const b = await brief(project ? "project" : "weekly", project?.slug ?? null, 7);
+      client.setQueryData<Briefing[]>(["executive", "briefing"], (prev) => [b, ...(prev ?? []).filter((x) => x.id !== b.id)]);
       go({ page: "home", briefing: b.id });
     } catch (e) { toast(classify(e).message, "error"); }
     finally { setBusy(false); }
@@ -164,13 +172,15 @@ export function BriefingCard({ project }: { project: Project | undefined }) {
         </button>
       ) : <p className="muted small">No briefing yet. Write one to see what changed, what is overdue and what needs you.</p>}
       <div className="exec-row">
-        <button className="primary" onClick={write} disabled={busy} title="Reads Living Memory and your milestones and health. Takes about a minute.">
-          {busy ? <><LoaderCircle className="spin" size="1em" aria-hidden /> Writing</> : <><Sparkles size="1em" aria-hidden /> Write now</>}
-        </button>
+        {claudeShown && (
+          <button className="primary" onClick={write} disabled={busy} title="Reads Living Memory and your milestones and health. Takes about a minute.">
+            {busy ? <><LoaderCircle className="spin" size="1em" aria-hidden /> Writing</> : <><Sparkles size="1em" aria-hidden /> Write now</>}
+          </button>
+        )}
         {latest && <button onClick={() => go({ page: "home", briefing: latest.id })}>Open</button>}
         {mine.length > 1 && <button className="link small" onClick={() => go({ page: "home", view: "briefings" })}>All briefings ({mine.length})</button>}
       </div>
-      <MorningToggle project={project} />
+      {claudeShown ? <MorningToggle project={project} /> : <p className="muted small">Briefings run on Claude Code. Show Claude Code in Settings to write or schedule them.</p>}
     </Section>
   );
 }

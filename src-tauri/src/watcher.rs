@@ -29,9 +29,9 @@ pub struct DocsChanged {
     pub paths: Vec<String>,
 }
 
-/// The notebook a changed path belongs to, if it lies under `domains/<d>/notebooks/<nb>/`: its domain, notebook and path
-/// in the notebook. The index (`docs.sqlite3`) and the mirror state (`notebook-sync.json`) sit beside `notebooks/`, so
-/// they never match.
+/// The notebook a changed path belongs to, if it lies under `domains/<d>/notebooks/<nb>/` or `domains/<d>/folder-proposals/<nb>/`:
+/// its domain, notebook and path. Folder proposals carry a `.folder-proposals/` prefix so the UI refreshes proposals without
+/// treating the folder notebook's `nb-` id as a store notebook.
 pub fn doc_change(domains_dir: &Path, path: &Path) -> Option<(String, String, String)> {
     let rel = path.strip_prefix(domains_dir).ok()?;
     let parts: Vec<String> = rel
@@ -41,10 +41,16 @@ pub fn doc_change(domains_dir: &Path, path: &Path) -> Option<(String, String, St
             _ => None,
         })
         .collect();
-    if parts.len() < 4 || parts[1] != "notebooks" {
+    if parts.len() < 4 {
         return None;
     }
-    Some((parts[0].clone(), parts[2].clone(), parts[3..].join("/")))
+    if parts[1] == "notebooks" {
+        return Some((parts[0].clone(), parts[2].clone(), parts[3..].join("/")));
+    }
+    if parts[1] == "folder-proposals" {
+        return Some((parts[0].clone(), parts[2].clone(), format!(".folder-proposals/{}", parts[3..].join("/"))));
+    }
+    None
 }
 
 /// Changed notebook files grouped by notebook.
@@ -127,6 +133,10 @@ mod tests {
         assert_eq!(doc_change(&base, &nb.join("assets").join("1a2b-pic.png")).map(|c| c.2).as_deref(), Some("assets/1a2b-pic.png"));
         assert_eq!(doc_change(&base, &nb.join("notebook.json")).map(|c| c.2).as_deref(), Some("notebook.json"));
         assert_eq!(doc_change(&base, &nb.join(".proposals").join("abc.json")).map(|c| c.2).as_deref(), Some(".proposals/abc.json"));
+        assert_eq!(
+            doc_change(&base, &base.join("demo").join("folder-proposals").join("nb-1234567890").join("abcdef123456.json")),
+            Some(("demo".into(), "nb-1234567890".into(), ".folder-proposals/abcdef123456.json".into())),
+        );
         assert_eq!(doc_change(&base, &nb), None, "the notebook folder itself");
         assert_eq!(doc_change(&base, &base.join("demo").join("docs.sqlite3")), None);
         assert_eq!(doc_change(&base, &base.join("demo").join("docs.sqlite3-wal")), None);

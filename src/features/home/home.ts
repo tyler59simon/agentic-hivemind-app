@@ -109,13 +109,19 @@ export function rememberVisit(scope: string, now = Date.now()) {
 export interface InboxRow { key: string; text: string; kind: InboxKind }
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-/** One row for each Inbox group that has something, except Captures (a row each, built by the page), Architecture and the
- *  drafts and skills (the other "Needs you" rows). `notesDue` is the due notes alone: the Memory group also holds drafts and
- *  unconfirmed notes, which have their own rows. */
-export function inboxNeeds(counts: InboxCounts, notesDue: number): InboxRow[] {
+/** One row for each Inbox group that has something, except Captures (a row each, built by the page) and drafts/skills (which
+ *  appear under agent needs). Includes unconfirmed agent-captured notes and architecture items so Home matches the Inbox badge. */
+export function inboxNeeds(
+  counts: InboxCounts,
+  notesDue: number,
+  extra: { unconfirmed?: number; archProposals?: number; archBehind?: number } = {},
+): InboxRow[] {
   const out: InboxRow[] = [];
   if (counts.code) out.push({ key: "code", text: `${plural(counts.code, "proposed file change")}`, kind: "code" });
+  if (extra.archProposals) out.push({ key: "arch-proposals", text: `${plural(extra.archProposals, "architecture update")} proposed`, kind: "architecture" });
+  if (extra.archBehind) out.push({ key: "arch-behind", text: `${plural(extra.archBehind, "architecture snapshot")} behind`, kind: "architecture" });
   if (notesDue) out.push({ key: "due", text: `${plural(notesDue, "note")} due for review`, kind: "memory" });
+  if (extra.unconfirmed) out.push({ key: "unconfirmed", text: `${plural(extra.unconfirmed, "agent note")} to confirm`, kind: "memory" });
   if (counts.pages) out.push({ key: "pages", text: `${plural(counts.pages, "page edit")} proposed by agents`, kind: "pages" });
   if (counts.maintenance) out.push({ key: "maintenance", text: `${plural(counts.maintenance, "change")} made by maintenance to look over`, kind: "maintenance" });
   return out;

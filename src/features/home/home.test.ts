@@ -134,10 +134,13 @@ describe("since you were last here", () => {
 
 describe("Needs you rows for the Inbox", () => {
   it("has a row for each group with something, opening that group", () => {
-    const rows = inboxNeeds({ ...NO_COUNTS, code: 4, memory: 6, pages: 1, maintenance: 2 }, 3);
+    const rows = inboxNeeds({ ...NO_COUNTS, code: 4, memory: 6, pages: 1, maintenance: 2 }, 3, { unconfirmed: 2, archProposals: 1, archBehind: 2 });
     expect(rows).toEqual([
       { key: "code", text: "4 proposed file changes", kind: "code" },
+      { key: "arch-proposals", text: "1 architecture update proposed", kind: "architecture" },
+      { key: "arch-behind", text: "2 architecture snapshots behind", kind: "architecture" },
       { key: "due", text: "3 notes due for review", kind: "memory" },
+      { key: "unconfirmed", text: "2 agent notes to confirm", kind: "memory" },
       { key: "pages", text: "1 page edit proposed by agents", kind: "pages" },
       { key: "maintenance", text: "2 changes made by maintenance to look over", kind: "maintenance" },
     ]);

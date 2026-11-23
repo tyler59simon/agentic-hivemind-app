@@ -170,7 +170,7 @@ export function NoteEditor({ tab, live, head }: { tab: Tab; live: boolean; head:
   }
   if (note.error && !st) return <p className="error pad">{classify(note.error).message}</p>;
   if (note.isLoading || !st) return <p className="muted pad">Loading…</p>;
-  const n = note.data!;
+  const n = note.data;
   return (
     <article className="note editing file-editor">
       {createPortal(
@@ -182,9 +182,10 @@ export function NoteEditor({ tab, live, head }: { tab: Tab; live: boolean; head:
         </div>,
         head,
       )}
+      {note.error && <div className="banner error">Could not refresh this note: {classify(note.error).message}</div>}
       {banner?.kind === "restored" && (
         <div className="banner">Restored unsaved edits from {new Date(banner.at).toLocaleString()}.
-          <div className="actions"><button onClick={() => { const f = fieldsOf(n); replaceEdit(key!, { base: f, rev: n.revision, mine: f, version: st.version + 1 }); setBanner(null); }}>Discard them</button></div>
+          {n && <div className="actions"><button onClick={() => { const f = fieldsOf(n); replaceEdit(key!, { base: f, rev: n.revision, mine: f, version: st.version + 1 }); setBanner(null); }}>Discard them</button></div>}
         </div>
       )}
       {banner?.kind === "draft-old" && <div className="banner warn">These unsaved edits from {new Date(banner.at).toLocaleString()} started from an older version of the note. Saving will ask you to merge.</div>}

@@ -412,7 +412,7 @@ function AutomationForm({ initial, onDone }: { initial: Automation; onDone: (sav
             <label className="field">
               <span>Period</span>
               <select value={act.days} onChange={(e) => setA({ ...a, action: { ...act, days: Number(e.target.value) } })}>
-                {[7, 14, 30].map((d) => <option key={d} value={d}>Last {d} days</option>)}
+                {[...new Set([1, 7, 14, 30, act.days])].sort((x, y) => x - y).map((d) => <option key={d} value={d}>Last {d} {d === 1 ? "day" : "days"}</option>)}
               </select>
             </label>
             <label className="field">

@@ -76,7 +76,7 @@ export function useInboxItems({ project, routed }: InboxScope = {}) {
   });
   const recentRows = useMemo(() => candidates(recent.data?.notes ?? []), [recent.data]);
   const metas = useQueries({ queries: recentRows.map((r) => ({ queryKey: ["meta", r.ref], queryFn: () => meta(r.ref), staleTime: Infinity })) });
-  const dueRefs = useMemo(() => new Set((due.data?.notes ?? []).map((r) => r.ref)), [due.data]);
+  const dueRefs = useMemo(() => new Set(dueRows.map((r) => r.ref)), [dueRows]);
   const unconfirmedNotes = useMemo(() => unconfirmed(recentRows, metas.map((m) => m.data), dueRefs), [recentRows, metas, dueRefs]);
   // Agents stage drafts without telling the app, so read the inbox again whenever a page that lists them opens.
   const memoryDrafts = useQuery({ queryKey: ["proposals", "list"], queryFn: proposalsList, enabled: projectsOn, retry: false, refetchOnMount: "always" });
@@ -112,7 +112,7 @@ export function useInboxItems({ project, routed }: InboxScope = {}) {
 
   const counts: InboxCounts = {
     ...NO_COUNTS,
-    code: groups.reduce((sum, g) => sum + (g.filesChanged?.files ?? 0), 0),
+    code: groups.reduce((sum, g) => (g.review?.state === "approved" || g.review?.state === "dismissed" ? sum : sum + (g.filesChanged?.files ?? 0)), 0),
     memory: dueRows.length + unconfirmedNotes.length + drafts.length,
     pages: pages.length,
     captures: captures.length,
@@ -120,7 +120,9 @@ export function useInboxItems({ project, routed }: InboxScope = {}) {
     architecture: proposals.length + behind.length,
     skills: skills.length,
   };
-  const loading = sessions.isLoading || (projectsOn && due.isLoading) || (systemsOn && registry.isLoading);
+  const loading = sessions.isLoading || (projectsOn && (due.isLoading || memoryDrafts.isLoading))
+    || (docsOn && pageDrafts.isLoading) || (systemsOn && registry.isLoading)
+    || maintenanceLoading || captureInbox.batches.isLoading || skillDrafts.isLoading;
   return {
     counts, total: inboxTotal(counts), loading, sessions, groups,
     due, dueRows, kindTotals, deferred, covered, maintenanceLoading, unconfirmedNotes, drafts, pages, captures, applied, skills,
