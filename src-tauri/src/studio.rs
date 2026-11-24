@@ -443,6 +443,25 @@ pub(crate) fn save_kept(history: &Path, full: &Path, change: &Change) -> Result<
     Ok(outcome)
 }
 
+/// Save binary bytes (`.docx`, `.pdf`) with version-history snapshot before and after overwriting.
+pub(crate) fn save_bytes_kept(history: &Path, full: &Path, bytes: &[u8], pre: &Stamp, source: &str) -> Result<SaveOutcome, String> {
+    if !history::SOURCES.contains(&source) {
+        return Err(format!("\"{source}\" is not a way Hivemind saves a file"));
+    }
+    if !history::has_history(history, full) || source != "you" {
+        if let Err(e) = history::snapshot_file(history, full, Some(&pre.sha256), "disk", history::now_ms()) {
+            eprintln!("Hivemind: could not keep the previous version of {}: {e}", full.display());
+        }
+    }
+    let outcome = files::save_bytes(full, bytes, pre)?;
+    if matches!(&outcome, SaveOutcome::Saved(_))
+        && let Err(e) = history::snapshot(history, full, bytes, source, history::now_ms())
+    {
+        eprintln!("Hivemind: could not keep a version of {}: {e}", full.display());
+    }
+    Ok(outcome)
+}
+
 /// `save_kept` for the page `rel` of a notebook: inside it, outside every protected place, and not through a link.
 fn save_in(root: &Path, protected: &Protected, history: &Path, rel: &str, change: &Change) -> Result<SaveOutcome, String> {
     save_kept(history, &inside(root, protected, rel, true)?, change)

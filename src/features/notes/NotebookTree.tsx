@@ -1,15 +1,15 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, ChevronDown, ChevronRight, Ellipsis, File, FileText, Folder, FolderPlus, Inbox, LayoutPanelTop, Plus, Workflow } from "lucide-react";
+import { CalendarDays, ChevronDown, ChevronRight, Ellipsis, File, FileText, Folder, FolderPlus, GitBranch, Image as ImageIcon, Inbox, LayoutPanelTop, Plus, Workflow } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { classify } from "../../lib/errors";
 import { treeQuery } from "../../documents/io";
 import type { DocNotebook } from "../../lib/lm";
-import { isCanvas, isMarkdown, isRichDoc, metaQuery, revealFile, type Notebook } from "../../lib/notebooks";
+import { isCanvas, isDocx, isDrawio, isMarkdown, isMermaid, isPdf, isRichDoc, isSvg, metaQuery, revealFile, type Notebook } from "../../lib/notebooks";
 import { Menu } from "../../ui/Menu";
 import { toast } from "../../ui/toast";
 import { activeTab, useWorkspace } from "../../workspace/store";
 import { dropOnBoard } from "../canvas/treeDrop";
-import { convertToRich, movePath, newCanvas, newPage, newRichPage, newSection, openPage, renamed, trashPath } from "./actions";
+import { convertToRich, movePath, newCanvas, newDocx, newDrawio, newMermaid, newPage, newRichPage, newSection, newSvg, openPage, renamed, trashPath } from "./actions";
 import { openToday } from "./dailyActions";
 import { useTemplateIntent } from "./DailyViews";
 import { runExport } from "./richActions";
@@ -21,7 +21,7 @@ import { openFindInFiles } from "../search/FindInFiles";
 const low = (s: string) => s.toLowerCase();
 const PAGE = /\.(md|markdown|hmdoc)$/i;
 /** Files Windows has a real viewer for: they still open in it. Any other file that is not text opens in a tab (the hex view). */
-const SYSTEM_VIEWED = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf)$/i;
+const SYSTEM_VIEWED = /\.(png|jpe?g|gif|webp|avif|bmp|ico)$/i;
 const label = (node: Node) => (node.kind === "page" ? node.name.replace(PAGE, "") : node.name);
 
 /** Pointer-event dragging (HTML5 drag and drop is unreliable in WebView2 with Tauri's own drop handling). `over` is a
@@ -160,6 +160,22 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
     const folder = folderFor(node);
     newCanvas(client, notebook.id, folder).then(() => { if (node) toggle(node.path, true); }, fail);
   };
+  const createMermaid = (node: Node | null) => {
+    const folder = folderFor(node);
+    newMermaid(client, notebook.id, folder).then(() => { if (node) toggle(node.path, true); }, fail);
+  };
+  const createSvg = (node: Node | null) => {
+    const folder = folderFor(node);
+    newSvg(client, notebook.id, folder).then(() => { if (node) toggle(node.path, true); }, fail);
+  };
+  const createDrawio = (node: Node | null) => {
+    const folder = folderFor(node);
+    newDrawio(client, notebook.id, folder).then(() => { if (node) toggle(node.path, true); }, fail);
+  };
+  const createDocx = (node: Node | null) => {
+    const folder = folderFor(node);
+    newDocx(client, notebook.id, folder).then(() => { if (node) toggle(node.path, true); }, fail);
+  };
   const commitRename = () => {
     const r = renaming;
     setRenaming(null);
@@ -202,6 +218,10 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
               <li><button role="menuitem" onClick={() => { close(); useTemplateIntent.getState().open(notebook.id); }}>New page from template…</button></li>
               {!lm && <li><button role="menuitem" onClick={() => { close(); createRich(null); }}>New rich page</button></li>}
               {!lm && <li><button role="menuitem" onClick={() => { close(); createCanvas(null); }}>New canvas</button></li>}
+              {!lm && <li><button role="menuitem" onClick={() => { close(); createMermaid(null); }}>New Mermaid diagram</button></li>}
+              {!lm && <li><button role="menuitem" onClick={() => { close(); createDrawio(null); }}>New Draw.io diagram</button></li>}
+              {!lm && <li><button role="menuitem" onClick={() => { close(); createSvg(null); }}>New SVG</button></li>}
+              {!lm && <li><button role="menuitem" onClick={() => { close(); createDocx(null); }}>New Word document</button></li>}
               <li><button role="menuitem" onClick={() => { close(); onSettings(); }}>Notebook settings…</button></li>
               {lm
                 ? <li><button role="menuitem" onClick={() => { close(); onProposals?.(); }}>Agent proposals…</button></li>
@@ -224,7 +244,7 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
           {tree.data && !rows.length && !naming && <p className="muted pad">No pages yet. <button className="link" onClick={() => create(null)}>Create one</button></p>}
           {rows.map(({ node, depth, open: isOpen }) => {
             // A rich page has its own icon, so it is told from the Markdown page of the same name (UI-2).
-            const Icon = node.kind === "dir" ? Folder : node.kind === "page" ? (isRichDoc(node.path) ? LayoutPanelTop : FileText) : isCanvas(node.path) ? Workflow : File;
+            const Icon = node.kind === "dir" ? Folder : node.kind === "page" ? (isRichDoc(node.path) ? LayoutPanelTop : FileText) : isCanvas(node.path) || isDrawio(node.path) ? Workflow : isMermaid(node.path) ? GitBranch : isSvg(node.path) ? ImageIcon : isDocx(node.path) || isPdf(node.path) ? FileText : File;
             const branch = node.kind === "dir" || node.children.length > 0;
             const target = drag && drag.over && low(drag.over) === low(node.path) && dropTarget(drag.path, node);
             return (
@@ -274,6 +294,10 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
                 {n.kind !== "other" && !sharesFolder(n) && item(n.kind === "dir" ? "New page here" : "New subpage", () => create(n))}
                 {!lm && n.kind !== "other" && !sharesFolder(n) && item(n.kind === "dir" ? "New rich page here" : "New rich subpage", () => createRich(n))}
                 {!lm && n.kind === "dir" && item("New canvas here", () => createCanvas(n))}
+                {!lm && n.kind === "dir" && item("New Mermaid diagram here", () => createMermaid(n))}
+                {!lm && n.kind === "dir" && item("New Draw.io diagram here", () => createDrawio(n))}
+                {!lm && n.kind === "dir" && item("New SVG here", () => createSvg(n))}
+                {!lm && n.kind === "dir" && item("New Word document here", () => createDocx(n))}
                 {n.kind === "dir" && item("New page from template…", () => useTemplateIntent.getState().open(notebook.id, folderFor(n)))}
                 {!lm && n.kind === "page" && isMarkdown(n.path) && item("Convert to rich page", () => convertToRich(client, { notebook: notebook.id, path: n.path }).catch(fail))}
                 {!lm && n.kind === "page" && isRichDoc(n.path) && item("Export to Markdown…", () => runExport(client, { notebook: notebook.id, path: n.path }, setDialog))}

@@ -4,18 +4,9 @@
 // WebAssembly is off (the CSP has no `wasm-unsafe-eval`), so the JPEG 2000 and JBIG2 decoders, which need it, do not
 // run: a page that holds such an image draws without it.
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
+import { loadPdfjs } from "../../../lib/pdfjs";
 
-type Pdfjs = typeof import("pdfjs-dist");
-let library: Promise<Pdfjs> | null = null;
-
-function load(): Promise<Pdfjs> {
-  library ??= (async () => {
-    const [pdfjs, { default: PdfWorker }] = await Promise.all([import("pdfjs-dist"), import("pdfjs-dist/build/pdf.worker.min.mjs?worker")]);
-    pdfjs.GlobalWorkerOptions.workerPort = new PdfWorker();
-    return pdfjs;
-  })();
-  return library;
-}
+const load = loadPdfjs;
 
 /** Documents by URL, shared by the blocks that show pages of the same file and closed when the last one lets go. */
 const open = new Map<string, { task: Promise<PDFDocumentLoadingTask>; doc: Promise<PDFDocumentProxy>; users: number }>();

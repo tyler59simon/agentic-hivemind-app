@@ -1,7 +1,9 @@
 // Keeps the documents store and the workspace in step: a tab showing an unsaved page gets the unsaved dot, and a page
 // no tab shows any more is let go (its draft stays). Also routes the notebook watcher's events.
 import type { QueryClient } from "@tanstack/react-query";
-import type { FilesChanged } from "../lib/notebooks";
+import { isDocx, isPdf, type FilesChanged } from "../lib/notebooks";
+import { refreshDocxOnDisk } from "../features/docx/store";
+import { refreshPdfOnDisk } from "../features/pdf/store";
 import { lmContainer } from "./adapters/lmdoc";
 import { useWorkspace } from "../workspace/store";
 import { toast } from "../ui/toast";
@@ -26,6 +28,8 @@ function apply() {
         continue;
       }
       if (tab.kind !== "file" || !tab.file) continue;
+      // Binary document tabs (.docx, .pdf) manage their own session & dirty flag.
+      if (isDocx(tab.file.path) || isPdf(tab.file.path)) continue;
       const key = keyOf(tab.file);
       shown.add(key);
       const dirty = isUnsaved(docs[key]);
@@ -100,6 +104,8 @@ export function onFilesChanged(client: QueryClient, { notebook, paths }: FilesCh
   }
   if (paths.some((p) => /\.(md|markdown)$/i.test(p))) client.invalidateQueries({ queryKey: ["lm-proposal"] });
   void refresh(notebook, paths);
+  void refreshDocxOnDisk(notebook, paths);
+  void refreshPdfOnDisk(notebook, paths);
 }
 
 /** The Quick capture window added a line to a page (NS-7A). Rust's own writes are not reported by the watcher, so the window

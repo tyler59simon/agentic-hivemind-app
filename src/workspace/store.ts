@@ -2,12 +2,12 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { movedPath, sameDoc, type FileRef } from "../documents/keys";
-import { isCanvas, isMarkdown } from "../lib/notebooks";
+import { isCanvas, isDocx, isDrawio, isMarkdown, isMermaid, isPdf, isSvg } from "../lib/notebooks";
 import type { NoteType } from "../lib/lm";
 import { prefs } from "../lib/prefs";
 import { safeStorage, useApp } from "../store";
 
-export type Mode = "reading" | "live" | "rich" | "source" | "history" | "bigfile" | "hex" | "board";
+export type Mode = "reading" | "live" | "rich" | "source" | "history" | "bigfile" | "hex" | "board" | "preview" | "split" | "edit";
 export type TabKind = "note" | "new-note" | "file" | "new-file" | "compare" | "find";
 const KINDS: readonly string[] = ["note", "new-note", "file", "new-file", "compare", "find"];
 export type { FileRef };
@@ -69,7 +69,18 @@ export function showTab() {
 }
 
 /** The mode a second view of a tab opens in. */
-const splitMode = (tab: Tab): Mode => (tab.mode === "bigfile" || tab.mode === "hex" ? tab.mode : tab.kind === "file" && tab.file && !isMarkdown(tab.file.path) ? (isCanvas(tab.file.path) ? "board" : "source") : "reading");
+const splitMode = (tab: Tab): Mode => {
+  if (tab.mode === "bigfile" || tab.mode === "hex") return tab.mode;
+  if (tab.kind === "file" && tab.file) {
+    const p = tab.file.path;
+    if (isMarkdown(p)) return "reading";
+    if (isCanvas(p) || isDrawio(p)) return "board";
+    if (isSvg(p) || isMermaid(p)) return tab.mode === "source" ? "preview" : "source";
+    if (isDocx(p) || isPdf(p)) return "preview";
+    return "source";
+  }
+  return "reading";
+};
 
 export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
   const initial = firstPane();

@@ -1,0 +1,290 @@
+// Zustand session store for open `.pdf` documents: binary load, non-destructive edits with undo/redo,
+// atomic SHA-256 save via `pdf-lib` + Rust `pdf_save`, conflict handling, and workspace dirty tracking.
+import { create } from "zustand";
+import { docKey, type FileRef } from "../../documents/keys";
+import { pdfBytes, pdfMeta, restorePdfVersion, savePdfBytes } from "../../lib/pdf";
+import type { Stamp } from "../../lib/notebooks";
+import { useWorkspace } from "../../workspace/store";
+import { applyPdfEdits, initPdfPages, type PdfAnnotation, type PdfEdits, type PdfFormFieldInfo, type PdfPageSpec } from "./pdfWriter";
+
+export type PdfStatus = "loading" | "clean" | "dirty" | "saving" | "stale" | "readOnly" | "error";
+
+export interface PdfSession {
+  status: PdfStatus;
+  baseBytes: Uint8Array | null;
+  mergedSources: Uint8Array[];
+  stamp: Stamp | null;
+  readOnly: string | null;
+  encrypted: boolean;
+  tooLarge: boolean;
+  formFields: PdfFormFieldInfo[];
+  edits: PdfEdits;
+  past: PdfEdits[];
+  future: PdfEdits[];
+  version: number;
+  error: string | null;
+}
+
+const emptyEdits = (): PdfEdits => ({ pages: [], annotations: [], formValues: {} });
+
+const initial: PdfSession = {
+  status: "loading",
+  baseBytes: null,
+  mergedSources: [],
+  stamp: null,
+  readOnly: null,
+  encrypted: false,
+  tooLarge: false,
+  formFields: [],
+  edits: emptyEdits(),
+  past: [],
+  future: [],
+  version: 0,
+  error: null,
+};
+
+interface PdfStoreState {
+  sessions: Record<string, PdfSession>;
+  refs: Record<string, FileRef>;
+}
+
+export const usePdfStore = create<PdfStoreState>(() => ({ sessions: {}, refs: {} }));
+
+export const pdfKey = (ref: FileRef) => docKey({ kind: "file", file: ref });
+const MAX_UNDO = 100;
+
+function syncDirty(key: string, dirty: boolean) {
+  const ws = useWorkspace.getState();
+  for (const pane of ws.panes) {
+    for (const tab of pane.tabs) {
+      if (tab.kind === "file" && tab.file && pdfKey(tab.file) === key) {
+        ws.setDirty(tab.id, dirty);
+      }
+    }
+  }
+}
+
+function setSession(key: string, fn: (cur: PdfSession) => PdfSession) {
+  usePdfStore.setState((s) => {
+    const prev = s.sessions[key] ?? initial;
+    const next = fn(prev);
+    syncDirty(key, next.status === "dirty" || next.status === "stale");
+    return { sessions: { ...s.sessions, [key]: next } };
+  });
+}
+
+export async function openPdf(ref: FileRef, force = false): Promise<void> {
+  const key = pdfKey(ref);
+  usePdfStore.setState((s) => ({ refs: { ...s.refs, [key]: ref } }));
+  const cur = usePdfStore.getState().sessions[key];
+  if (!force && cur && cur.status !== "error") return;
+  setSession(key, (p) => ({ ...p, status: "loading", error: null }));
+  try {
+    const meta = await pdfMeta(ref.notebook, ref.path);
+    if (meta.tooLarge) {
+      setSession(key, (p) => ({
+        ...p,
+        status: "readOnly",
+        baseBytes: null,
+        stamp: { sha256: meta.sha256, size: meta.size, mtimeMs: meta.mtimeMs },
+        readOnly: "This PDF is larger than 64 MB, so it opens read-only.",
+        tooLarge: true,
+        encrypted: false,
+        version: p.version + 1,
+        error: null,
+      }));
+      return;
+    }
+    const bytes = await pdfBytes(ref.notebook, ref.path);
+    const info = await initPdfPages(bytes);
+    const formValues: Record<string, string | boolean | string[]> = {};
+    for (const f of info.formFields) formValues[f.name] = f.value;
+    const ro = meta.readOnly ?? (info.encrypted ? "This PDF is password-protected or encrypted, so editing is disabled." : null);
+    setSession(key, (p) => ({
+      status: ro ? "readOnly" : "clean",
+      baseBytes: bytes,
+      mergedSources: [],
+      stamp: { sha256: meta.sha256, size: meta.size, mtimeMs: meta.mtimeMs },
+      readOnly: ro,
+      encrypted: info.encrypted,
+      tooLarge: false,
+      formFields: info.formFields,
+      edits: { pages: info.pages, annotations: [], formValues },
+      past: [],
+      future: [],
+      version: p.version + 1,
+      error: null,
+    }));
+  } catch (e) {
+    setSession(key, (p) => ({ ...p, status: "error", error: e instanceof Error ? e.message : String(e) }));
+  }
+}
+
+export function mutatePdf(key: string, fn: (edits: PdfEdits) => PdfEdits) {
+  setSession(key, (p) => {
+    if (p.status === "readOnly" || p.status === "loading" || p.status === "error") return p;
+    const nextEdits = fn(p.edits);
+    if (nextEdits === p.edits) return p;
+    const past = [...p.past, p.edits].slice(-MAX_UNDO);
+    return { ...p, edits: nextEdits, past, future: [], status: "dirty", error: null };
+  });
+}
+
+export function addPdfAnnotation(key: string, ann: PdfAnnotation) {
+  mutatePdf(key, (e) => ({ ...e, annotations: [...e.annotations, ann] }));
+}
+
+export function updatePdfAnnotation(key: string, id: string, patch: Partial<PdfAnnotation>) {
+  mutatePdf(key, (e) => ({
+    ...e,
+    annotations: e.annotations.map((a) => (a.id === id ? ({ ...a, ...patch } as PdfAnnotation) : a)),
+  }));
+}
+
+export function removePdfAnnotation(key: string, id: string) {
+  mutatePdf(key, (e) => ({ ...e, annotations: e.annotations.filter((a) => a.id !== id) }));
+}
+
+export function setPdfFormValue(key: string, name: string, value: string | boolean | string[]) {
+  mutatePdf(key, (e) => ({ ...e, formValues: { ...e.formValues, [name]: value } }));
+}
+
+export function rotatePdfPage(key: string, pageId: string, delta: 90 | 270) {
+  mutatePdf(key, (e) => ({
+    ...e,
+    pages: e.pages.map((p) => (p.id === pageId ? { ...p, rotation: (((p.rotation + delta) % 360) as 0 | 90 | 180 | 270) } : p)),
+  }));
+}
+
+export function reorderPdfPages(key: string, fromIdx: number, toIdx: number) {
+  mutatePdf(key, (e) => {
+    if (fromIdx === toIdx || fromIdx < 0 || toIdx < 0 || fromIdx >= e.pages.length || toIdx >= e.pages.length) return e;
+    const pages = [...e.pages];
+    const [moved] = pages.splice(fromIdx, 1);
+    pages.splice(toIdx, 0, moved);
+    return { ...e, pages };
+  });
+}
+
+export function deletePdfPage(key: string, pageId: string) {
+  mutatePdf(key, (e) => {
+    if (e.pages.length <= 1) return e;
+    return { ...e, pages: e.pages.filter((p) => p.id !== pageId), annotations: e.annotations.filter((a) => a.pageId !== pageId) };
+  });
+}
+
+export function insertBlankPdfPage(key: string, afterIndex: number) {
+  mutatePdf(key, (e) => {
+    const pages = [...e.pages];
+    const blank: PdfPageSpec = { id: `blank-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`, source: "blank", rotation: 0 };
+    pages.splice(Math.min(pages.length, afterIndex + 1), 0, blank);
+    return { ...e, pages };
+  });
+}
+
+export async function mergePdfBytes(key: string, otherBytes: Uint8Array): Promise<number> {
+  const info = await initPdfPages(otherBytes);
+  if (info.encrypted) throw new Error("Cannot merge a password-protected PDF");
+  setSession(key, (p) => {
+    if (p.status === "readOnly") return p;
+    const mergedIndex = p.mergedSources.length;
+    const added: PdfPageSpec[] = info.pages.map((_, idx) => ({
+      id: `merged-${mergedIndex}-${idx}-${Date.now().toString(36)}`,
+      source: "merged",
+      mergedIndex,
+      sourcePageIndex: idx,
+      rotation: 0,
+    }));
+    const past = [...p.past, p.edits].slice(-MAX_UNDO);
+    return {
+      ...p,
+      mergedSources: [...p.mergedSources, otherBytes],
+      edits: { ...p.edits, pages: [...p.edits.pages, ...added] },
+      past,
+      future: [],
+      status: "dirty",
+      error: null,
+    };
+  });
+  return info.pages.length;
+}
+
+export function undoPdf(key: string) {
+  setSession(key, (p) => {
+    if (!p.past.length) return p;
+    const prev = p.past[p.past.length - 1];
+    return { ...p, edits: prev, past: p.past.slice(0, -1), future: [p.edits, ...p.future], status: "dirty" };
+  });
+}
+
+export function redoPdf(key: string) {
+  setSession(key, (p) => {
+    if (!p.future.length) return p;
+    const next = p.future[0];
+    return { ...p, edits: next, past: [...p.past, p.edits], future: p.future.slice(1), status: "dirty" };
+  });
+}
+
+export async function savePdfSession(key: string, opts: { forceOverwrite?: boolean; flattenForm?: boolean } = {}): Promise<boolean> {
+  const state = usePdfStore.getState();
+  const s = state.sessions[key];
+  const ref = state.refs[key];
+  if (!s || !ref || !s.baseBytes || !s.stamp) return false;
+  if (s.status !== "dirty" && !(opts.forceOverwrite && s.status === "stale") && !opts.flattenForm) return false;
+
+  let pre = s.stamp;
+  if (opts.forceOverwrite) {
+    try {
+      const fresh = await pdfMeta(ref.notebook, ref.path);
+      pre = { sha256: fresh.sha256, size: fresh.size, mtimeMs: fresh.mtimeMs };
+    } catch (e) {
+      setSession(key, (p) => ({ ...p, error: e instanceof Error ? e.message : String(e) }));
+      return false;
+    }
+  }
+  const baseBytes = s.baseBytes;
+  const merged = s.mergedSources;
+  const edits: PdfEdits = opts.flattenForm ? { ...s.edits, flattenForm: true } : s.edits;
+  setSession(key, (p) => ({ ...p, status: "saving", error: null }));
+  try {
+    const outBytes = await applyPdfEdits(baseBytes, merged, edits);
+    const outcome = await savePdfBytes(ref.notebook, ref.path, outBytes, pre, "you");
+    if (outcome.status === "saved") {
+      await openPdf(ref, true);
+      return true;
+    }
+    if (outcome.status === "stale") {
+      setSession(key, (p) => ({ ...p, status: "stale" }));
+      return false;
+    }
+    setSession(key, (p) => ({ ...p, status: "dirty", error: "The PDF file was deleted or moved on disk." }));
+    return false;
+  } catch (e) {
+    setSession(key, (p) => ({ ...p, status: "dirty", error: e instanceof Error ? e.message : String(e) }));
+    return false;
+  }
+}
+
+export async function restorePdfSnapshot(key: string, id: number): Promise<boolean> {
+  const state = usePdfStore.getState();
+  const s = state.sessions[key];
+  const ref = state.refs[key];
+  if (!s || !ref || !s.stamp || s.status !== "clean") return false;
+  const outcome = await restorePdfVersion(ref.notebook, ref.path, id, s.stamp);
+  if (outcome.status !== "saved") return false;
+  await openPdf(ref, true);
+  return true;
+}
+
+export async function refreshPdfOnDisk(notebook: string, paths: string[]) {
+  const wanted = new Set(paths.map((p) => pdfKey({ notebook, path: p })));
+  const state = usePdfStore.getState();
+  for (const key of Object.keys(state.sessions)) {
+    if (!wanted.has(key)) continue;
+    const s = state.sessions[key];
+    const ref = state.refs[key];
+    if (!ref || !s) continue;
+    if (s.status === "clean" || s.status === "readOnly") await openPdf(ref, true);
+    else if (s.status === "dirty") setSession(key, (p) => ({ ...p, status: "stale" }));
+  }
+}

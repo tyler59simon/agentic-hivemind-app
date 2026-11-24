@@ -41,6 +41,18 @@ export async function drawMermaid(source: string, dark: boolean, id = `mermaid-$
   try { return (await mermaid.render(id, source, box)).svg; } finally { box.remove(); }
 }
 
+/** Render Mermaid source to SVG, returning the syntax error message on failure (for standalone `.mmd` editing). */
+export async function renderMermaid(source: string, dark: boolean): Promise<{ ok: true; svg: string } | { ok: false; error: string }> {
+  const skip = skipReason(source);
+  if (skip) return { ok: false, error: skip };
+  try {
+    const svg = await drawMermaid(source, dark);
+    return { ok: true, svg };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /** A diagram link never navigates the app window: web links open in the system browser, others do nothing. */
 function onDiagramClick(e: MouseEvent<HTMLDivElement>) {
   diagramClick(e.nativeEvent);

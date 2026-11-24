@@ -11,9 +11,13 @@ import { bridgeGeneration, lmNotebooksQuery } from "../../lib/lm";
 import { forgetMoved } from "../../lib/drafts";
 import { createDoc, createSection, deleteDoc, moveDoc, readDoc } from "../../documents/io";
 import { NEW_CANVAS_TEXT } from "../canvas/model";
+import { NEW_DRAWIO_TEXT } from "../drawio/starter";
+import { NEW_MERMAID_TEXT } from "../mermaid/starter";
+import { NEW_SVG_TEXT } from "../svg/svg";
 import { newPageText } from "../hmdoc/envelope";
 import { planFor, useRewritePlan } from "../links/plan";
-import { fileName, folderOf, isCanvas, isMarkdown, isRichDoc, notebooksQuery, pageTitle } from "../../lib/notebooks";
+import { createDocx } from "../../lib/docx";
+import { fileName, folderOf, isCanvas, isDocx, isDrawio, isMarkdown, isMermaid, isPdf, isRichDoc, isSvg, notebooksQuery, pageTitle } from "../../lib/notebooks";
 import { isLoose, saveAs } from "../../lib/opens";
 import { untitledText } from "./untitled";
 import { toast } from "../../ui/toast";
@@ -23,7 +27,12 @@ const join = (folder: string, name: string) => (folder ? `${folder}/${name}` : n
 
 /** Open a page in the focused pane (or beside it with `split`). Markdown opens for editing with a live preview. */
 export function openPage(ref: FileRef, opts: { split?: boolean } = {}) {
-  useWorkspace.getState().openTab({ kind: "file", file: ref, mode: isMarkdown(ref.path) ? "live" : isCanvas(ref.path) ? "board" : "source", title: pageTitle(ref.path) }, opts);
+  const mode = isMarkdown(ref.path) ? "live"
+    : isCanvas(ref.path) || isDrawio(ref.path) ? "board"
+    : isSvg(ref.path) || isDocx(ref.path) || isPdf(ref.path) ? "preview"
+    : isMermaid(ref.path) ? "split"
+    : "source";
+  useWorkspace.getState().openTab({ kind: "file", file: ref, mode, title: pageTitle(ref.path) }, opts);
 }
 
 /** The notebook new pages go into: the focused page's, else the first one. A file opened from outside every notebook
@@ -83,6 +92,51 @@ export async function newCanvas(client: QueryClient, notebook: string, folder = 
   return path;
 }
 
+/** A new Mermaid diagram: `Untitled.mmd` with a starter flowchart. */
+export async function newMermaid(client: QueryClient, notebook: string, folder = "", title = "Untitled") {
+  folderOnly(notebook);
+  const path = await createUnique(notebook, folder, title, NEW_MERMAID_TEXT, "mmd");
+  client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
+  openPage({ notebook, path });
+  return path;
+}
+
+/** A new Draw.io diagram: `Untitled.drawio` with one blank page. */
+export async function newDrawio(client: QueryClient, notebook: string, folder = "", title = "Untitled") {
+  folderOnly(notebook);
+  const path = await createUnique(notebook, folder, title, NEW_DRAWIO_TEXT, "drawio");
+  client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
+  openPage({ notebook, path });
+  return path;
+}
+
+/** A new SVG file: `Untitled.svg` with a starter viewBox. */
+export async function newSvg(client: QueryClient, notebook: string, folder = "", title = "Untitled") {
+  folderOnly(notebook);
+  const path = await createUnique(notebook, folder, title, NEW_SVG_TEXT, "svg");
+  client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
+  openPage({ notebook, path });
+  return path;
+}
+
+/** A new Word document: `Untitled.docx` with minimal OOXML structure. */
+export async function newDocx(client: QueryClient, notebook: string, folder = "", title = "Untitled") {
+  folderOnly(notebook);
+  for (let n = 1; n < 100; n++) {
+    const name = n === 1 ? title : `${title} ${n}`;
+    const path = join(folder, `${name}.docx`);
+    try {
+      await createDocx(notebook, path);
+      client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
+      openPage({ notebook, path });
+      return path;
+    } catch (e) {
+      if (!/exists/i.test(String(e))) throw e;
+    }
+  }
+  throw new Error(`Too many documents named ${title} in this folder`);
+}
+
 /** The text of a page as it is now: an open page's, unsaved edits included, else the file's. */
 async function currentText(ref: FileRef): Promise<string> {
   const open = useDocuments.getState().docs[keyOf(ref)];
@@ -119,7 +173,10 @@ export async function exportToMarkdown(client: QueryClient, ref: FileRef, text?:
 export async function saveBothVersions(client: QueryClient, ref: FileRef, text: string) {
   folderOnly(ref.notebook);
   const canvas = isCanvas(ref.path);
-  const path = await createUnique(ref.notebook, folderOf(ref.path), `${canvas ? pageTitle(ref.path).replace(/\.canvas$/i, "") : pageTitle(ref.path)} (my edits)`, text, canvas ? "canvas" : "hmdoc");
+  const drawio = isDrawio(ref.path);
+  const ext = canvas ? "canvas" : drawio ? (ref.path.toLowerCase().endsWith(".dio") ? "dio" : "drawio") : "hmdoc";
+  const stem = pageTitle(ref.path).replace(/\.(canvas|drawio|dio)$/i, "");
+  const path = await createUnique(ref.notebook, folderOf(ref.path), `${stem} (my edits)`, text, ext);
   client.invalidateQueries({ queryKey: ["notebook-tree", ref.notebook] });
   return path;
 }

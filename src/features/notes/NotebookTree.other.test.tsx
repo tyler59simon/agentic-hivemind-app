@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// NS-6B UI-2: a file that is not text (a binary, an archive) opens in a tab, where the file tab shows its hex view. A picture or a PDF
+// NS-6B UI-2: a file that is not text (a binary, an archive, a PDF, a DOCX) opens in a tab. A raster picture
 // still opens in the program Windows has for it, and the menu keeps both ways to reach the file outside Hivemind.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
@@ -49,12 +49,14 @@ describe("clicking a file that is not text in the notebook tree", () => {
     expect(reveals()).toEqual([]);
   });
 
-  it("still opens a picture or a PDF in the program Windows has for it", async () => {
+  it("still opens a raster picture in the program Windows has for it, while PDFs open in a tab", async () => {
     await mount();
     await click("photo.PNG");
-    await click("manual.pdf");
-    expect(reveals()).toEqual([["photo.PNG", true], ["manual.pdf", true]]);
+    expect(reveals()).toEqual([["photo.PNG", true]]);
     expect(tabs()).toHaveLength(0);
+    await click("manual.pdf");
+    expect(tabs().map((t) => t.file)).toEqual([{ notebook: "nb-1", path: "manual.pdf" }]);
+    expect(reveals()).toEqual([["photo.PNG", true]]);
   });
 
   it("keeps Open with default app and Show in Explorer in the file's menu", async () => {
