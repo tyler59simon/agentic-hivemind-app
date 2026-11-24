@@ -38,25 +38,23 @@ pub fn add(settings_path: &Path, picked: &Path) -> Result<String, String> {
         return Err(format!("{} is not a folder", picked.display()));
     }
     let real = plain(&real);
-    let mut saved = settings::load(settings_path);
-    if let Some(known) = find(&saved, &real) {
-        return Ok(known.to_string());
-    }
-    saved.other_folders.get_or_insert_with(Vec::new).push(real.clone());
-    settings::save(settings_path, &saved)?;
-    Ok(real)
+    settings::update(settings_path, |saved| {
+        if let Some(known) = find(saved, &real) {
+            return Ok(known.to_string());
+        }
+        saved.other_folders.get_or_insert_with(Vec::new).push(real.clone());
+        Ok(real)
+    })
 }
 
 /// Take a folder out of the saved list. Forgetting one that is not there is not an error.
 pub fn forget(settings_path: &Path, path: &str) -> Result<(), String> {
-    let mut saved = settings::load(settings_path);
-    let Some(list) = saved.other_folders.as_mut() else { return Ok(()) };
-    let before = list.len();
-    list.retain(|folder| !same(folder, path));
-    if list.len() == before {
-        return Ok(());
-    }
-    settings::save(settings_path, &saved)
+    settings::update(settings_path, |saved| {
+        if let Some(list) = saved.other_folders.as_mut() {
+            list.retain(|folder| !same(folder, path));
+        }
+        Ok(())
+    })
 }
 
 /// The settings to save when the webview sends `value`: everything it sent except the folder list, which stays as saved.

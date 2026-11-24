@@ -105,8 +105,9 @@
   --font-sans: "Plus Jakarta Sans Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, "Cascadia Code", Consolas, monospace;
   font-family: var(--font-sans);
-  /* The mocks are drawn at 18px on a 1487px window; smaller windows scale the whole interface down with them. */
-  font-size: clamp(14px, 1.2vw, 18px);
+  /* A fixed base: the user sizes the interface with the window zoom (Ctrl+= / Ctrl+-) and documents with the document
+     text size in Settings (DESK-ZOOM), never with the window width. */
+  font-size: 16px;
   line-height: 1.5;
   color: var(--fg);
   background: var(--bg);
@@ -582,7 +583,7 @@ input[type="checkbox"] { accent-color: var(--success); }
 .tag.unknown { border-color: var(--warn); color: var(--warn); }
 .tag-x { border: none; padding: 0 0 0 .25rem; line-height: 1; }
 
-.md-editor { min-height: 22rem; }
+.md-editor { min-height: 22rem; font-size: calc(1rem * var(--doc-size, 1)); }
 .md-editor .cm-h1 { font-size: 1.55em; } .md-editor .cm-h2 { font-size: 1.3em; } .md-editor .cm-h3 { font-size: 1.15em; }
 .md-editor .cm-h { font-weight: 700; }
 .md-editor .cm-h2 { padding-top: .7rem; }
@@ -771,11 +772,11 @@ input[type="checkbox"] { accent-color: var(--success); }
 .properties dt { color: var(--muted); }
 .properties dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .properties.editable { margin-bottom: .6rem; }
-.markdown { font-size: 1.05rem; line-height: 1.6; overflow-wrap: anywhere; }
+.markdown { font-size: calc(1.05rem * var(--doc-size, 1)); line-height: 1.6; overflow-wrap: anywhere; }
 .markdown > :first-child { margin-top: 0; }
-.markdown h1 { font-size: 1.7rem; }
-.markdown h2 { font-size: 1.45rem; margin: 1.9rem 0 .5rem; }
-.markdown h3 { font-size: 1.2rem; margin: 1.4rem 0 .4rem; }
+.markdown h1 { font-size: 1.62em; }
+.markdown h2 { font-size: 1.38em; margin: 1.9rem 0 .5rem; }
+.markdown h3 { font-size: 1.14em; margin: 1.4rem 0 .4rem; }
 .markdown p { margin: 0 0 .8rem; }
 .markdown code { background: var(--bg-code); padding: 1px .25rem; border-radius: .3rem; font-family: var(--font-mono); font-size: .9em; }
 .markdown pre { background: var(--bg-code); border: 1px solid var(--border); padding: .8rem; border-radius: .5rem; overflow: auto; }
@@ -949,7 +950,7 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .timeline-row { display: flex; flex-wrap: wrap; gap: 0 .7rem; background: none; border: none; padding: 0; margin: 0; font: inherit; color: inherit; text-align: left; justify-content: flex-start; width: 100%; cursor: pointer; }
 .timeline-row:hover strong { color: var(--accent); }
 .page-view img { max-width: 100%; height: auto; }
-.md-editor.text-editor .cm-scroller { font-family: var(--font-mono); font-size: .9rem; line-height: 1.5; }
+.md-editor.text-editor .cm-scroller { font-family: var(--font-mono); font-size: .9em; line-height: 1.5; }
 .md-editor.text-editor .cm-gutters { background: transparent; border-right: 1px solid var(--border); color: var(--muted); }
 .md-editor.text-editor .cm-activeLine, .md-editor.text-editor .cm-activeLineGutter { background: var(--bg-hover); }
 .page-view .wikilink { color: var(--accent); border-bottom: 1px dashed var(--accent); text-decoration: none; }
@@ -1866,3 +1867,29 @@ button.icon { border: none; padding: .25rem; }
 .error-boundary { max-width: 40rem; margin: 2rem auto; padding: 1.3rem; border: 1px solid var(--border-strong); border-radius: .6rem; background: var(--bg-alt); display: flex; flex-direction: column; gap: .6rem; }
 .error-boundary h2 { margin: 0; font-size: 1.3rem; }
 .error-boundary p { margin: 0; }
+
+/* ---- Window zoom badge (DESK-ZOOM) ---- */
+.zoom-badge { position: fixed; bottom: 1.2rem; left: 50%; transform: translateX(-50%); z-index: 60; padding: .3rem .9rem; border-radius: .45rem; border: 1px solid var(--border-strong); background: var(--bg-alt); box-shadow: 0 .3rem 1rem rgba(0, 0, 0, .25); font-weight: 600; pointer-events: none; }
+
+/* ---- Narrow windows (DESK-WIN): the window works down to 800 px wide (and at 200% zoom, 400 CSS px) ---- */
+.visually-hidden { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+/* The context rail in a narrow window lies over the note instead of beside it, with its own switch (railNarrow). */
+.notes-area.narrow { position: relative; grid-template-columns: minmax(0, 1fr); }
+/* It starts under the tab strip (one line of tabs, 3.15rem), so the rail switch stays reachable. */
+.notes-area.narrow .note-rail { position: absolute; top: calc(3.15rem + 1px); right: 0; bottom: 0; width: min(22rem, 85%); z-index: 20; background: var(--bg); box-shadow: -.5rem 0 1.5rem rgba(0, 0, 0, .3); }
+@media (max-width: 960px) {
+  /* The sidebar keeps its icons; the labels stay for screen readers and show as tooltips. */
+  .shell { grid-template-columns: 4.2rem minmax(0, 1fr); }
+  .sidebar { padding: 1rem .45rem .9rem; }
+  .brand-block { justify-content: center; padding: 0 0 1rem; }
+  .brand-block img { width: 2.4rem; height: 2.4rem; }
+  .brand-block span, .sidebar .grow { position: absolute !important; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .sidebar .menu-button > svg:last-child:not(:first-child) { display: none; }
+  .project-switcher .menu-button, .project-switcher.static, .user-menu .menu-button, .nav-item { justify-content: center; padding: 0; gap: 0; position: relative; }
+  .nav-item .nav-count { position: absolute; top: .1rem; right: .1rem; min-width: 1.15rem; height: 1.15rem; padding: 0 .25rem; font-size: .75rem; }
+  .nav-item .nav-dot { position: absolute; top: .45rem; right: .55rem; }
+  .sidebar .menu-list.left { min-width: 16rem; }
+  .notes-page { grid-template-columns: 13rem minmax(0, 1fr); }
+  .agents { grid-template-columns: 11rem minmax(0, 1fr); }
+  .review { grid-template-columns: 12rem minmax(0, 1fr); }
+}

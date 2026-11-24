@@ -31,6 +31,8 @@ interface WorkspaceState {
   /** Whether the context rail beside the focused note is shown: with one pane, and with several (off at first, to make room). */
   rail: boolean;
   railSplit: boolean;
+  /** Whether the rail is shown over the note in a narrow window (DESK-WIN): off at first, never kept. */
+  railNarrow: boolean;
   dirty: Record<string, boolean>;          // tab id -> unsaved edits (not persisted)
   reveal: { tabId: string; line: number; col?: number; at: number } | null; // outline -> scroll request (col: where the cursor lands on the line)
   openNote: (ref: string, opts?: { split?: boolean; mode?: Mode; title?: string }) => void;
@@ -42,7 +44,7 @@ interface WorkspaceState {
   focus: (paneId: string) => void;
   updateTab: (tabId: string, patch: Partial<Tab>) => void;
   setDirty: (tabId: string, dirty: boolean) => void;
-  setRail: (rail: boolean) => void;
+  setRail: (rail: boolean, narrow?: boolean) => void;
   revealLine: (tabId: string, line: number, col?: number) => void;
   replaceRef: (from: string, to: string) => void;
   /** A page or folder of a notebook was renamed or moved: its tabs follow. */
@@ -81,6 +83,7 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
     focused: initial.id,
     rail: true,
     railSplit: false,
+    railNarrow: false,
     dirty: {},
     reveal: null,
 
@@ -153,7 +156,7 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
     updateTab: (tabId, patch) =>
       set((s) => ({ panes: s.panes.map((p) => ({ ...p, tabs: p.tabs.map((t) => (t.id === tabId ? { ...t, ...patch } : t)) })) })),
     setDirty: (tabId, dirty) => set((s) => (Boolean(s.dirty[tabId]) === dirty ? s : { dirty: { ...s.dirty, [tabId]: dirty } })),
-    setRail: (shown) => set((s) => (s.panes.length > 1 ? { railSplit: shown } : { rail: shown })),
+    setRail: (shown, narrow = false) => set((s) => (narrow ? { railNarrow: shown } : s.panes.length > 1 ? { railSplit: shown } : { rail: shown })),
     revealLine: (tabId, line, col) => set({ reveal: { tabId, line, ...(col ? { col } : {}), at: Date.now() } }),
     // After a new note is captured, its tab becomes a note tab.
     replaceRef: (from, to) =>
@@ -225,7 +228,10 @@ export function activeTab(s: Pick<WorkspaceState, "panes" | "focused">): Tab | u
 }
 
 /** Whether the context rail is shown for the current number of panes. */
-export const railShown = (s: Pick<WorkspaceState, "panes" | "rail" | "railSplit">) => (s.panes.length > 1 ? s.railSplit : s.rail);
+/** Whether the context rail shows. A narrow window has its own switch, so turning the rail on there does not cover the note
+ *  again once the window is wide (DESK-WIN). */
+export const railShown = (s: Pick<WorkspaceState, "panes" | "rail" | "railSplit"> & { railNarrow?: boolean }, narrow = false) =>
+  (narrow ? !!s.railNarrow : s.panes.length > 1 ? s.railSplit : s.rail);
 
 /** Whether any document is open. */
 export const hasTabs = (s: Pick<WorkspaceState, "panes">) => s.panes.some((p) => p.tabs.length > 0);

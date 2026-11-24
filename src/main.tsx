@@ -7,15 +7,19 @@ import App from "./App";
 import "./App.css";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { QuickCapture } from "./features/capture/QuickCapture";
+import { initDocSize } from "./lib/docSize";
 import { guardReload } from "./lib/keys";
 import { inTauri } from "./lib/native";
 import { initPaperDefault } from "./lib/paper";
 import { initTheme } from "./lib/theme";
+import { initZoom } from "./lib/zoom";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
 
 initTheme();
 initPaperDefault();
+initDocSize();
 guardReload();
+initZoom();
 
 /** After the whole window failed, the app's own close guard is gone: closing hides instead, so running terminals and agent
  *  sessions are not killed (tray Quit, clicked twice, still exits). */

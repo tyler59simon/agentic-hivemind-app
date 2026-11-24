@@ -23,6 +23,7 @@ import { Shell } from "./shell/Shell";
 import { openInbox, openSession, useApp } from "./store";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
 import { toast, Toasts } from "./ui/toast";
+import { ZoomBadge } from "./ui/ZoomBadge";
 import { unsavedUntitled, useWorkspace } from "./workspace/store";
 import { onDocsChanged, onFilesChanged, onPageAppended, startDocumentSync, type DocsChanged } from "./documents/sync";
 import { onIndexProgress } from "./features/search/indexState";
@@ -256,6 +257,7 @@ export default function App() {
         <ComparePicker />
       </ErrorBoundary>
       <Toasts />
+      <ZoomBadge />
       {dialogs}
     </>
   );

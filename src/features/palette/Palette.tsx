@@ -1,4 +1,6 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { isNarrow } from "../../lib/narrow";
+import { zoomBy } from "../../lib/zoom";
 import { useEffect, useMemo, useState } from "react";
 import { useProjectsEnabled, useSystemsEnabled, useWikiEnabled } from "../../lib/connection";
 import { domains, list } from "../../lib/lm";
@@ -106,6 +108,9 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "new-file", label: "New text file", run: () => { close(); ws.openTab({ kind: "new-file" }); } },
       { key: "compare", label: "Compare files…", run: () => { close(); useComparePicker.getState().show(tab?.kind === "file" ? tab.file : undefined); } },
       { key: "find-in-files", label: "Find in files…", detail: "search and replace across a notebook", run: () => { close(); openFindInFiles(); } },
+      { key: "zoom-in", label: "Zoom in", detail: "Ctrl+=", run: () => { close(); void zoomBy("in"); } },
+      { key: "zoom-out", label: "Zoom out", detail: "Ctrl+-", run: () => { close(); void zoomBy("out"); } },
+      { key: "zoom-reset", label: "Reset zoom", detail: "Ctrl+0", run: () => { close(); void zoomBy("reset"); } },
       ...power,
       { key: "home", label: "Home", run: page({ page: "home" }) },
       { key: "notes", label: "Notes", section: "notes" as Page, run: page({ page: "notes" }) },
@@ -139,7 +144,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       ] : []),
       ...EXTRA_COMMANDS.map((c) => ({ ...c, run: () => { close(); c.run(); } })),
       { key: "split", label: "Open the note side by side", detail: "Ctrl+\\", run: () => { ws.split(); close(); } },
-      { key: "rail", label: railShown(ws) ? "Hide the note's context rail" : "Show the note's context rail", run: () => { ws.setRail(!railShown(ws)); close(); } },
+      { key: "rail", label: railShown(ws, isNarrow()) ? "Hide the note's context rail" : "Show the note's context rail", run: () => { ws.setRail(!railShown(ws, isNarrow()), isNarrow()); close(); } },
       { key: "search", label: "Search notes and pages", detail: "Ctrl+K", run: () => { close(); useNotesSearch.getState().focus(); } },
       { key: "active", label: "Search active notes", run: () => { close(); useNotesSearch.getState().byStatus("active"); } },
       { key: "archive", label: "Search the archive", run: () => { close(); useNotesSearch.getState().byStatus("archived"); } },

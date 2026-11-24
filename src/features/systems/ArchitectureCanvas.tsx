@@ -145,7 +145,7 @@ export function ArchitectureCanvas({ slug, model, diagrams, version, caption, se
         )}
       </div>
       {diff && !notice && <Legend result={diff.result} label={diff.label} />}
-      <div className="canvas-view" ref={host}
+      <div className="canvas-view" data-own-zoom ref={host}
         onWheel={(e) => { if (!laid || source) return; const r = e.currentTarget.getBoundingClientRect(); zoom(e.deltaY < 0 ? ZOOM.step : 1 / ZOOM.step, { x: e.clientX - r.left, y: e.clientY - r.top }); }}
         onPointerDown={(e) => { if (!laid || source || e.button !== 0) return; drag.current = { x: e.clientX, y: e.clientY, moved: false }; e.currentTarget.setPointerCapture(e.pointerId); }}
         onPointerMove={(e) => {

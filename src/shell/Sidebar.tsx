@@ -66,7 +66,7 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
       <ProjectSwitcher />
       <nav className="nav" aria-label="Sections" ref={nav}>
         {available.filter((s) => !hidden.includes(s.page)).map(({ page: p, label, icon: Icon }) => (
-          <button key={p} className={`nav-item ${page === p ? "on" : ""}`} aria-current={page === p ? "page" : undefined} onClick={() => go({ page: p })}
+          <button key={p} className={`nav-item ${page === p ? "on" : ""}`} title={label} aria-current={page === p ? "page" : undefined} onClick={() => go({ page: p })}
             onContextMenu={(e) => { e.preventDefault(); setMenu(p === "home" ? null : { page: p, x: e.clientX, y: e.clientY, from: e.currentTarget }); }}>
             <Icon size="1.35em" aria-hidden /><span className="grow">{label}</span>
             {p === "inbox" && inboxTotal > 0 && <span className="nav-count" title={`${inboxTotal} waiting for you`} aria-label={`${inboxTotal} waiting for you`}>{inboxTotal}</span>}

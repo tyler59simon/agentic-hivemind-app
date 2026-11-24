@@ -163,7 +163,7 @@ export function DrawingDialog({ ctx, existing, apply, stillUsed, onClose }: Draw
 /** The full-screen frame: a title, Done and Cancel above the editor. */
 function Overlay({ children, onCancel, onDone, saving }: { children: React.ReactNode; onCancel: () => void; onDone?: () => void; saving?: boolean }) {
   return (
-    <div className="hm-drawing" role="dialog" aria-label="Drawing">
+    <div className="hm-drawing" data-own-zoom role="dialog" aria-label="Drawing">
       <header className="hm-drawing-head">
         <strong>Drawing</strong>
         <span className="fill" />

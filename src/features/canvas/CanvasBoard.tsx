@@ -349,7 +349,7 @@ export function CanvasBoard(props: CanvasBoardProps) {
   const world: CSSProperties = { transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})`, ["--k" as string]: view.k };
   const percent = `${Math.round(view.k * 100)}%`;
   return (
-    <div ref={root} className="canvas-board" tabIndex={0} role="application" aria-label="Canvas board" onPointerDown={down} onDoubleClick={doubleClick} onKeyDown={keys}>
+    <div ref={root} className="canvas-board" data-own-zoom tabIndex={0} role="application" aria-label="Canvas board" onPointerDown={down} onDoubleClick={doubleClick} onKeyDown={keys}>
       <EnvContext.Provider value={env}>
         <div className="canvas-world" style={world}>
           <EdgesLayer nodes={shown.nodes} edges={shown.edges} selected={edgeSelected} editing={editingEdge} onLabel={finishEdge} />

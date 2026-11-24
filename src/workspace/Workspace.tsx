@@ -15,6 +15,7 @@ import { announceDocumentLook, useWhitePaper } from "../lib/paper";
 import { useApp } from "../store";
 import { ErrorBoundary } from "../ui/ErrorBoundary";
 import { Confirm } from "../ui/Modal";
+import { useNarrow } from "../lib/narrow";
 import { MAX_PANES, railShown, useWorkspace, type Pane, type Tab } from "./store";
 
 /** What a tab shows. */
@@ -100,7 +101,8 @@ function PaneView({ pane, focused, last, onClose }: {
   pane: Pane; focused: boolean; last: boolean; onClose: (paneId: string, tabId: string) => void;
 }) {
   const { activate, focus, split, panes, setRail } = useWorkspace();
-  const rail = useWorkspace(railShown);
+  const narrow = useNarrow();
+  const rail = useWorkspace((s) => railShown(s, narrow));
   const active = pane.tabs.find((t) => t.id === pane.active) ?? pane.tabs[0];
   const strip = useRef<HTMLDivElement>(null);
   // The whole document area is white paper when the tab says so (App.css); views that draw dark or light colours redraw.
@@ -126,7 +128,7 @@ function PaneView({ pane, focused, last, onClose }: {
               <button className="icon-button" title="Open this note side by side (Ctrl+\)" aria-label="Split" onClick={() => { focus(pane.id); split(); }}><Columns2 size="1.2em" aria-hidden /></button>
             )}
             <button className={`icon-button ${rail ? "on" : ""}`} title={rail ? "Hide the context rail" : "Show connections, history and outline"} aria-label="Context rail" aria-pressed={rail}
-              onClick={() => setRail(!rail)}><PanelRight size="1.2em" aria-hidden /></button>
+              onClick={() => setRail(!rail, narrow)}><PanelRight size="1.2em" aria-hidden /></button>
           </>
         )}
       </div>

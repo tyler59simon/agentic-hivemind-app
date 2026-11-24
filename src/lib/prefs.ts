@@ -35,4 +35,8 @@ export const prefs = {
   paperKey: "hivemind.documentBackground",
   paper: (): PaperDefault => (get("hivemind.documentBackground") === "white" ? "white" : "theme"),
   setPaper: (paper: PaperDefault) => set("hivemind.documentBackground", paper),
+  docSizeKey: "hivemind.documentSize",
+  /** The document text size multiple; 1 when unset or not a number. */
+  docSize: (): number => { const n = Number(get("hivemind.documentSize")); return Number.isFinite(n) && n > 0 ? n : 1; },
+  setDocSize: (size: number) => set("hivemind.documentSize", String(size)),
 };
