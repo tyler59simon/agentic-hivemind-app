@@ -347,6 +347,78 @@ pub fn save(path: &Path, text: &str, pre: &Stamp, format: &FileFormat, convert: 
     Ok(SaveOutcome::Saved(done))
 }
 
+/// Save raw binary bytes (such as `.docx` or `.pdf`) over a file that still holds `pre.sha256`, using the same
+/// lock, exclusive hold, size cap, read-only check, and atomic replace as `save`.
+pub fn save_bytes(path: &Path, bytes: &[u8], pre: &Stamp) -> Result<SaveOutcome, String> {
+    let lock = lock_for(path);
+    let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let held = match atomic::hold(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && atomic::orphaned_aside(path).is_some() => {
+            if let Some(aside) = atomic::orphaned_aside(path) {
+                let _ = atomic::move_no_replace(&aside, path);
+            }
+            atomic::hold(path)
+        }
+        other => other,
+    };
+    let mut held = match held {
+        Ok(held) => held,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(SaveOutcome::Gone),
+        Err(e) if atomic::in_use(&e) => return Err(format!("{} is in use by another program; try again", path.display())),
+        Err(e) => return Err(format!("Could not read {}: {e}", path.display())),
+    };
+    let current = read_capped(&mut held.file)
+        .map_err(|e| format!("Could not read {}: {e}", path.display()))?
+        .ok_or_else(|| format!("{} is now larger than 64 MB, so Hivemind does not replace it", path.display()))?;
+    let sha = sha256(&current);
+    if sha != pre.sha256 {
+        return Ok(SaveOutcome::Stale { sha256: sha });
+    }
+    if held.file.metadata().map(|m| m.permissions().readonly()).unwrap_or(false) {
+        return Err(format!("{} is read-only on disk", path.display()));
+    }
+    held.replace(bytes)?;
+    let done = stamp(bytes, path);
+    remember_written(path, &done.sha256);
+    Ok(SaveOutcome::Saved(done))
+}
+
+/// Create a new binary file; refuses when anything already exists at `path`.
+pub fn create_bytes(path: &Path, bytes: &[u8]) -> Result<Stamp, String> {
+    let lock = lock_for(path);
+    let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+    if std::fs::symlink_metadata(path).is_ok() {
+        return Err(format!("{} already exists", path.display()));
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Could not create {}: {e}", parent.display()))?;
+    }
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|e| format!("Could not create {}: {e}", path.display()))?;
+    std::io::Write::write_all(&mut file, bytes).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+    file.sync_all().map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+    drop(file);
+    let done = stamp(bytes, path);
+    remember_written(path, &done.sha256);
+    Ok(done)
+}
+
+/// Read raw binary bytes up to `MAX_READ` along with their `Stamp` and on-disk read-only status.
+pub fn read_bytes(path: &Path) -> Result<(Vec<u8>, Stamp, bool), String> {
+    let meta = std::fs::metadata(path).map_err(|e| format!("Could not open {}: {e}", path.display()))?;
+    if meta.is_dir() {
+        return Err(format!("{} is a folder", path.display()));
+    }
+    if meta.len() > MAX_READ {
+        return Err(format!("{} is larger than 64 MB, too large to edit", path.display()));
+    }
+    let bytes = std::fs::File::open(path)
+        .and_then(|mut file| read_capped(&mut file))
+        .map_err(|e| format!("Could not read {}: {e}", path.display()))?
+        .ok_or_else(|| format!("{} is larger than 64 MB, too large to edit", path.display()))?;
+    let st = Stamp { sha256: sha256(&bytes), size: bytes.len() as u64, mtime_ms: mtime_ms(&meta) };
+    Ok((bytes, st, meta.permissions().readonly()))
+}
+
 /// Create a new file; refuses when anything is already there. Missing parent folders are created.
 pub fn create(path: &Path, text: &str) -> Result<Stamp, String> {
     let lock = lock_for(path);

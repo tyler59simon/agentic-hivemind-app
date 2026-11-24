@@ -41,6 +41,8 @@ unicode-general-category = "1"
 flate2 = "1"
 regex = "1"
 ignore = "0.4"
+quick-xml = "0.42"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies]
 tauri-winrt-notification = "=0.8.1"

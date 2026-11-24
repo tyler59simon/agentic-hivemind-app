@@ -74,6 +74,16 @@ export const folderOf = (path: string) => (path.includes("/") ? path.slice(0, pa
 export const isRichDoc = (path: string) => /\.hmdoc$/i.test(path);
 /** A canvas board (NS-7C): a JSON Canvas file, drawn as a board with its own editor and shown as source on request. */
 export const isCanvas = (path: string) => /\.canvas$/i.test(path);
+/** An SVG image/XML file: rendered safely in Preview/Split and editable as XML source. */
+export const isSvg = (path: string) => /\.svg$/i.test(path);
+/** A standalone Mermaid diagram file: live Split/Preview editor backed by `mermaid`. */
+export const isMermaid = (path: string) => /\.(mmd|mermaid)$/i.test(path);
+/** A Draw.io diagram file: native offline multi-page XML canvas editor. */
+export const isDrawio = (path: string) => /\.(drawio|dio)$/i.test(path);
+/** A Word OpenXML document: Layout Preview + Tiptap editor with surgical OOXML save. */
+export const isDocx = (path: string) => /\.docx$/i.test(path);
+/** A PDF document: multi-page viewer and offline annotation/page/form editor. */
+export const isPdf = (path: string) => /\.pdf$/i.test(path);
 /** A page's title: its file name without the Markdown or rich page extension. */
 export const pageTitle = (path: string) => fileName(path).replace(/\.(md|markdown|hmdoc)$/i, "");
 

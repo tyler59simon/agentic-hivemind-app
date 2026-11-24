@@ -7,7 +7,7 @@ import { classify } from "../../lib/errors";
 import { assetLink, attachFile, openAttachment, parseLm } from "../../documents/adapters/lmdoc";
 import { lmAssets, treeQuery } from "../../documents/io";
 import { lmNotebooksQuery } from "../../lib/lm";
-import { fileName, folderOf, isCanvas, isMarkdown, isRichDoc, notebooksQuery, pageTitle, revealFile, type Notebook } from "../../lib/notebooks";
+import { fileName, folderOf, isCanvas, isDocx, isDrawio, isMarkdown, isMermaid, isPdf, isRichDoc, isSvg, notebooksQuery, pageTitle, revealFile, type Notebook } from "../../lib/notebooks";
 import { assetBase, isLoose, recentQuery, recentRef } from "../../lib/opens";
 import { useWhitePaper } from "../../lib/paper";
 import { Menu } from "../../ui/Menu";
@@ -16,6 +16,10 @@ import { toast } from "../../ui/toast";
 import { useWorkspace, type Mode, type Tab } from "../../workspace/store";
 import { BigFileView } from "../bigfile/BigFileView";
 import { HexView } from "../bigfile/HexView";
+import { DocxTab } from "../docx/DocxTab";
+import { saveDocxSession, useDocxStore } from "../docx/store";
+import { PdfTab } from "../pdf/PdfTab";
+import { savePdfSession, usePdfStore } from "../pdf/store";
 import { CodeEditor } from "../editor/CodeEditor";
 import { DocumentHeader, HISTORY_MODE as HISTORY, MARKDOWN_MODES } from "../editor/DocumentHeader";
 import { FileHistory } from "../history/FileHistory";
@@ -42,8 +46,12 @@ const TEXT_MODES: { id: Mode; label: string }[] = [{ id: "source", label: "Sourc
 const RICH_MODES: { id: Mode; label: string }[] = [{ id: "live", label: "Page" }, HISTORY];
 /** A canvas (NS-7C) is a board, its JSON source and its history. */
 const CANVAS_MODES: { id: Mode; label: string }[] = [{ id: "board", label: "Board" }, { id: "source", label: "Source" }, HISTORY];
+/** An SVG file: isolated image preview, side-by-side XML split, source and history. */
+const SVG_MODES: { id: Mode; label: string }[] = [{ id: "preview", label: "Preview" }, { id: "split", label: "Split" }, { id: "source", label: "Source" }, HISTORY];
+/** A Mermaid file: live split editor, full preview, source and history. */
+const MERMAID_MODES: { id: Mode; label: string }[] = [{ id: "split", label: "Split" }, { id: "preview", label: "Preview" }, { id: "source", label: "Source" }, HISTORY];
 /** Files Windows has a real viewer for open in it from a file card, as they do from the tree. */
-const SYSTEM_VIEWED = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf)$/i;
+const SYSTEM_VIEWED = /\.(png|jpe?g|gif|webp|avif|bmp|ico)$/i;
 /** A file in the large file viewer (NS-6B): its lines, or its bytes. */
 const VIEWER_MODES: { id: Mode; label: string }[] = [{ id: "bigfile", label: "Large file viewer" }, { id: "hex", label: "Hex view" }];
 
@@ -51,6 +59,12 @@ const VIEWER_MODES: { id: Mode; label: string }[] = [{ id: "bigfile", label: "La
 const HmdocEditor = lazy(() => import("../hmdoc/HmdocEditor"));
 /** A canvas (NS-7C) loads its board editor only when one first opens in Board mode. */
 const CanvasEditor = lazy(() => import("../canvas/CanvasEditor"));
+/** An SVG viewer/split editor loads lazily on first SVG tab. */
+const SvgEditor = lazy(() => import("../svg/SvgEditor"));
+/** A standalone Mermaid diagram editor loads lazily on first `.mmd`/`.mermaid` tab. */
+const MermaidEditor = lazy(() => import("../mermaid/MermaidEditor"));
+/** A native offline Draw.io board editor loads lazily on first `.drawio`/`.dio` tab. */
+const DrawioEditor = lazy(() => import("../drawio/DrawioEditor"));
 
 /** The pages of the tab's notebook, for `[[link]]` completion and resolution. */
 function usePages(notebook: string) {
@@ -60,6 +74,18 @@ function usePages(notebook: string) {
 
 /** Save a page and say when it needs a merge first; Ctrl+S in any mode of a page tab comes here. */
 export async function saveFileTab(key: string) {
+  if (useDocxStore.getState().sessions[key]) {
+    const ok = await saveDocxSession(key);
+    if (ok) toast("Saved .docx");
+    else if (useDocxStore.getState().sessions[key]?.status === "stale") toast("This .docx changed on disk. Choose Keep mine or Reload.", "warn");
+    return;
+  }
+  if (usePdfStore.getState().sessions[key]) {
+    const ok = await savePdfSession(key);
+    if (ok) toast("Saved PDF");
+    else if (usePdfStore.getState().sessions[key]?.status === "stale") toast("This PDF changed on disk. Choose Keep mine or Reload.", "warn");
+    return;
+  }
   const after = await save(key);
   if (after?.status === "stale") toast("This page changed on disk. Merge your edits to save them.", "warn");
 }
@@ -229,8 +255,15 @@ function PageName({ tab, notebook }: { tab: Tab; notebook: Notebook | undefined 
   );
 }
 
-/** A notebook page: name, modes, save and actions, banners, then the reading view or the editor. */
+/** A notebook page: routes binary document types (`.docx`, `.pdf`) to their dedicated tab, and text files to `TextFileTab`. */
 export function FileTab({ tab }: { tab: Tab }) {
+  if (tab.file && isDocx(tab.file.path)) return <DocxTab tab={tab} />;
+  if (tab.file && isPdf(tab.file.path)) return <PdfTab tab={tab} />;
+  return <TextFileTab tab={tab} />;
+}
+
+/** A text notebook page: name, modes, save and actions, banners, then the reading view or the editor. */
+function TextFileTab({ tab }: { tab: Tab }) {
   const ref = tab.file!;
   const key = keyOf(ref);
   const doc = useDocuments((s) => s.docs[key]);
@@ -254,6 +287,10 @@ export function FileTab({ tab }: { tab: Tab }) {
   const richDoc = isRichDoc(ref.path);
   // A canvas board (NS-7C): a JSON Canvas file with Board, Source and History modes; a file it cannot hold opens as Source.
   const canvas = isCanvas(ref.path);
+  const drawio = isDrawio(ref.path);
+  const svg = isSvg(ref.path);
+  const mermaid = isMermaid(ref.path);
+  const [drawioIssue, setDrawioIssue] = useState<string | null>(null);
   const loose = isLoose(ref);
   const full = useLoosePath(ref);
   // Pictures load from the notebook's root (a page's folder inside it) or a loose file's folder.
@@ -262,13 +299,23 @@ export function FileTab({ tab }: { tab: Tab }) {
   // A parked page of another store shows no attachments: they would come from the store connected now (R3-P3).
   const own = inOwnStore(key);
   const pictures = useQuery({ queryKey: ["asset-base", ref.notebook, ref.path], queryFn: () => assetBase(ref.notebook, ref.path), refetchOnMount: "always", gcTime: 0, enabled: (markdown || richDoc || canvas) && own });
-  const mode: Mode = tab.mode === "history" ? "history" : markdown ? (MARKDOWN_MODES.some((m) => m.id === tab.mode) ? tab.mode! : "live") : canvas ? (tab.mode === "source" ? "source" : "board") : "source";
+  const mode: Mode = tab.mode === "history" ? "history"
+    : markdown ? (MARKDOWN_MODES.some((m) => m.id === tab.mode) ? tab.mode! : "live")
+    : canvas || drawio ? (tab.mode === "source" ? "source" : "board")
+    : svg ? (tab.mode === "split" || tab.mode === "source" ? tab.mode : "preview")
+    : mermaid ? (tab.mode === "preview" || tab.mode === "source" ? tab.mode : "split")
+    : "source";
   const titles = useCallback(() => pages.filter((p) => isMarkdown(p) || isRichDoc(p)).map(pageTitle), [pages]);
   // A canvas that cannot be held as a board opens as Source with the reason, and nothing is written (NS-7C). The tab stays
   // in Source until the user picks Board, so typing the fix does not flip the view under the cursor.
   const canvasText = canvas && mode !== "history" && doc && doc.status !== "loading" && doc.status !== "error" ? doc.text : null;
   const canvasIssue = useMemo(() => (canvasText === null ? null : canvasProblem(canvasText)), [canvasText]);
   useEffect(() => { if (canvas && mode === "board" && canvasIssue) updateTab(tab.id, { mode: "source" }); }, [canvas, mode, canvasIssue]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (drawio && mode === "board") setDrawioIssue(null); }, [drawio, mode, doc?.version]);
+  const onDrawioInvalid = useCallback((reason: string) => {
+    setDrawioIssue(reason);
+    updateTab(tab.id, { mode: "source" });
+  }, [tab.id, updateTab]);
   const boardPictures = useMemo(() => ({ base: own ? pictures.data : undefined, folder: "", files: pages }), [own, pictures.data, pages]);
   const openFileCard = useCallback((path: string) => {
     if (SYSTEM_VIEWED.test(path)) revealFile(ref.notebook, path, true).catch((e) => toast(classify(e).message, "error"));
@@ -422,8 +469,8 @@ export function FileTab({ tab }: { tab: Tab }) {
   );
   return (
     <div className="note-page file-page">
-      <DocumentHeader modes={markdown ? MODES : richDoc ? RICH_MODES : canvas ? CANVAS_MODES : TEXT_MODES}
-        mode={!markdown && !canvas && mode !== "history" ? (richDoc ? "live" : "source") : mode === "board" && canvasIssue ? "source" : mode}
+      <DocumentHeader modes={markdown ? MODES : richDoc ? RICH_MODES : canvas || drawio ? CANVAS_MODES : svg ? SVG_MODES : mermaid ? MERMAID_MODES : TEXT_MODES}
+        mode={!markdown && !canvas && !drawio && !svg && !mermaid && mode !== "history" ? (richDoc ? "live" : "source") : mode === "board" && (canvasIssue || (drawio && drawioIssue)) ? "source" : mode}
         label="Page view" onMode={(v) => updateTab(tab.id, { mode: v })} top={<>
           <PageName tab={tab} notebook={notebook} />
           <span className="fill" />
@@ -458,8 +505,9 @@ export function FileTab({ tab }: { tab: Tab }) {
             }}
           </Menu>
         </>} />
-      <Banners doc={doc} docKey={key} onMerge={merge} onRecreate={recreate} conflict={richDoc || canvas ? { mine: keepMine, both: loose ? undefined : saveBoth } : undefined} />
+      <Banners doc={doc} docKey={key} onMerge={merge} onRecreate={recreate} conflict={richDoc || canvas || drawio ? { mine: keepMine, both: loose ? undefined : saveBoth } : undefined} />
       {canvas && canvasIssue && mode !== "history" && <div className="banner warn note-banner">This canvas cannot be shown as a board: {canvasIssue}. It is open as source, and nothing was written.</div>}
+      {drawio && drawioIssue && mode !== "history" && <div className="banner warn note-banner">This Draw.io file cannot be shown as a board: {drawioIssue}. It is open as source, and nothing was written.</div>}
       {markdown && mode !== "history" && <PropertiesPanel docKey={key} readOnly={doc.status === "readOnly" || arriving || !own} onOpenLink={(target) => follow(target, false)} />}
       {markdown && mode === "live" && doc.text.length > RICH_LIMIT && (
         <div className="banner note-banner">This page is over 1 MB, so Live shows plain Markdown styling without tables, pictures or diagrams.</div>
@@ -472,6 +520,35 @@ export function FileTab({ tab }: { tab: Tab }) {
             <Suspense fallback={<div className="center muted">Loading the canvas…</div>}>
               <CanvasEditor key={key} text={doc.text} readOnly={doc.status === "readOnly" || arriving} onChange={(text) => edit(key, text)}
                 ctx={rich} pictures={boardPictures} notebook={ref.notebook} onOpenFile={openFileCard} />
+            </Suspense>
+          </div>
+        )
+        : drawio && mode === "board"
+        ? (
+          <div className="note file-editor">
+            <Suspense fallback={<div className="center muted">Loading Draw.io board…</div>}>
+              <DrawioEditor key={key} text={doc.text} readOnly={doc.status === "readOnly" || arriving} fileName={fileName(ref.path)}
+                onChange={(text) => edit(key, text)} onInvalid={onDrawioInvalid} />
+            </Suspense>
+          </div>
+        )
+        : svg && (mode === "preview" || mode === "split")
+        ? (
+          <div className="note file-editor">
+            <Suspense fallback={<div className="center muted">Loading SVG viewer…</div>}>
+              <SvgEditor key={key} doc={doc.text} docVersion={doc.version} mode={mode} readOnly={doc.status === "readOnly" || arriving}
+                fileName={fileName(ref.path)} tabId={tab.id} language={tab.language} onChange={(text) => edit(key, text)} onSave={doSave}
+                titles={titles} onOpenLink={follow} reveal={reveal} />
+            </Suspense>
+          </div>
+        )
+        : mermaid && (mode === "split" || mode === "preview")
+        ? (
+          <div className="note file-editor">
+            <Suspense fallback={<div className="center muted">Loading Mermaid editor…</div>}>
+              <MermaidEditor key={key} doc={doc.text} docVersion={doc.version} mode={mode} readOnly={doc.status === "readOnly" || arriving}
+                fileName={fileName(ref.path)} tabId={tab.id} language={tab.language} onChange={(text) => edit(key, text)} onSave={doSave}
+                titles={titles} onOpenLink={follow} reveal={reveal} />
             </Suspense>
           </div>
         )

@@ -443,6 +443,33 @@ pub(crate) fn save_kept(history: &Path, full: &Path, change: &Change) -> Result<
     Ok(outcome)
 }
 
+/// Save binary bytes (`.docx`, `.pdf`) with version-history snapshot before and after overwriting.
+/// Like `save_kept`, a non-`"you"` write (such as History restore) refuses to overwrite the file if the
+/// current version cannot be kept in History (e.g. > 16 MB or snapshot write failure).
+pub(crate) fn save_bytes_kept(history: &Path, full: &Path, bytes: &[u8], pre: &Stamp, source: &str) -> Result<SaveOutcome, String> {
+    if !history::SOURCES.contains(&source) {
+        return Err(format!("\"{source}\" is not a way Hivemind saves a file"));
+    }
+    if source != "you" && history::too_large(full) {
+        return Err("This file is over 16 MB, so its current version cannot be kept in History, and nothing was written".into());
+    }
+    if (!history::has_history(history, full) || source != "you")
+        && let Err(e) = history::snapshot_file(history, full, Some(&pre.sha256), "disk", history::now_ms())
+    {
+        if source != "you" {
+            return Err(format!("The current version could not be kept in History, so nothing was written: {e}"));
+        }
+        eprintln!("Hivemind: could not keep the previous version of {}: {e}", full.display());
+    }
+    let outcome = files::save_bytes(full, bytes, pre)?;
+    if matches!(&outcome, SaveOutcome::Saved(_))
+        && let Err(e) = history::snapshot(history, full, bytes, source, history::now_ms())
+    {
+        eprintln!("Hivemind: could not keep a version of {}: {e}", full.display());
+    }
+    Ok(outcome)
+}
+
 /// `save_kept` for the page `rel` of a notebook: inside it, outside every protected place, and not through a link.
 fn save_in(root: &Path, protected: &Protected, history: &Path, rel: &str, change: &Change) -> Result<SaveOutcome, String> {
     save_kept(history, &inside(root, protected, rel, true)?, change)

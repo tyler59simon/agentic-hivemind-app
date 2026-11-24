@@ -59,6 +59,24 @@
         "name": "JSON Canvas board",
         "description": "JSON Canvas board",
         "role": "Editor"
+      },
+      {
+        "ext": [
+          "mmd",
+          "mermaid"
+        ],
+        "name": "Mermaid diagram",
+        "description": "Mermaid diagram",
+        "role": "Editor"
+      },
+      {
+        "ext": [
+          "drawio",
+          "dio"
+        ],
+        "name": "Draw.io diagram",
+        "description": "Draw.io diagram",
+        "role": "Editor"
       }
     ],
     "windows": {
