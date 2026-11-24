@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import { useRestoreEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
-import { archiveNote, domainOf, plan, reopenNote, resolveNote, restoreNote, supersedeNote } from "../../lib/lm";
+import { archiveNote, deletePlan, domainOf, reopenNote, resolveNote, restoreNote, supersedeNote } from "../../lib/lm";
 import { resolvable, useNoteTypes } from "../../lib/noteTypes";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
@@ -65,7 +65,7 @@ export function NoteMenu({ refId, paper }: { refId: string; paper?: { white: boo
     { label: paper?.white ? "Theme background" : "White background", show: !!paper, act: () => { paper?.flip(); } },
     { label: "Copy reference", show: true, act: () => { navigator.clipboard.writeText(refId).then(() => toast(`Copied ${refId}`)); } },
     { label: "Delete…", show: true, danger: true, act: () => run(
-      <PlanDialog title={`Delete “${n.title}”`} make={() => plan("delete", refId)} applyLabel="Delete" danger onClose={close}
+      <PlanDialog title={`Delete “${n.title}”`} make={() => deletePlan(refId)} applyLabel="Delete" danger onClose={close}
         onApplied={() => closeTabsOf(refId)}
         intro={<p>The note file is removed. The change is journaled, so it can be undone from the Activity view.</p>} />) },
   ];

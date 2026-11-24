@@ -294,10 +294,9 @@ export const typeWrite = (action: "create" | "update" | "retire", payload: NoteT
 export interface Plan { ok: true; plan_id: string; digest: string; kind: string; summary: Record<string, unknown> }
 export interface PlanEffect { path: string; expected_revision: string | null; action: "write" | "delete"; diff: string; truncated: boolean }
 export interface PlanInspection extends Plan { effects: PlanEffect[] }
-export type PlanAction = "delete";
 
-export function plan(action: PlanAction, ref: string): Promise<Plan> {
-  return run<Plan>(["plan", action, ref, "--domain", domainOf(ref)]);
+export function deletePlan(ref: string): Promise<Plan> {
+  return run<Plan>(["delete-plan", ref, "--domain", domainOf(ref)]);
 }
 export const mergePlan = (payload: { target: string; sources: string[]; body: string }) =>
   run<Plan>(["merge-plan"], JSON.stringify(payload));
