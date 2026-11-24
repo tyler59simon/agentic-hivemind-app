@@ -448,10 +448,10 @@ pub fn ask_codex(
     if !saved.shows(Engine::Codex) {
         return Err("Codex is hidden in Settings. Show it there to ask it for a review.".into());
     }
-    if let Some(prev) = info.reviewed_by.as_deref() {
-        if agents.info(prev).is_ok_and(|r| matches!(r.status, Status::Running | Status::Waiting)) {
-            return Err("Codex is already reviewing this session.".into());
-        }
+    if let Some(prev) = info.reviewed_by.as_deref()
+        && agents.info(prev).is_ok_and(|r| matches!(r.status, Status::Running | Status::Waiting))
+    {
+        return Err("Codex is already reviewing this session.".into());
     }
     let AgentTask::Work { project, repo, .. } = &info.task else {
         return Err("Only a work session can be reviewed by Codex.".into());

@@ -201,18 +201,23 @@ function useLiveRefresh(enabled: boolean) {
   }, [enabled, client]);
 }
 
-export default function App() {
-  const app = useApp();
-  const client = useQueryClient();
+/** Settings while it is open. A link that opened it at a section (or at one automation) scrolls there once it has drawn. */
+export function useSettingsScroll() {
   const settings = useApp((s) => s.settings);
-  const setSettings = (open: boolean) => (open ? openSettings() : closeSettings());
-  // A link that opened Settings at a section scrolls there once the section has drawn.
   useEffect(() => {
     if (!settings?.section) return;
     const ids = [...(settings.automation ? [`automation-${settings.automation}`] : []), `settings-${settings.section}`];
     const frame = requestAnimationFrame(() => ids.map((id) => document.getElementById(id)).find(Boolean)?.scrollIntoView({ block: "start" }));
     return () => cancelAnimationFrame(frame);
   }, [settings]);
+  return settings;
+}
+
+export default function App() {
+  const app = useApp();
+  const client = useQueryClient();
+  const settings = useSettingsScroll();
+  const setSettings = (open: boolean) => (open ? openSettings() : closeSettings());
   const link = useQuery({ queryKey: ["connect"], queryFn: connect, retry: false, staleTime: Infinity });
   const known = useQuery({ queryKey: ["domains"], queryFn: domains, enabled: link.isSuccess });
   useShortcuts();

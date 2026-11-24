@@ -1137,7 +1137,7 @@ mod tests {
         let doer = Fake::default();
         let row = autos.fire(&a.id, "manual", None, &doer).unwrap();
         assert_eq!((row.state, row.detail.as_deref(), row.cost_usd), (RunState::Succeeded, Some("done"), Some(0.01)));
-        assert_eq!(doer.ran.lock().unwrap().iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(), [a.id.clone()]);
+        assert_eq!(doer.ran.lock().unwrap().iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(), std::slice::from_ref(&a.id));
         // The doer charges a rebuild's cost itself; a finished action's cost is not charged again here (a briefing's is the learning budget's).
         assert!(doer.charged.lock().unwrap().is_empty());
         let tight = Fake { room: Some(1.0), ..Default::default() };
