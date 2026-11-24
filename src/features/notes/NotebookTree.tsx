@@ -13,7 +13,10 @@ import { convertToRich, movePath, newCanvas, newPage, newRichPage, newSection, o
 import { openToday } from "./dailyActions";
 import { useTemplateIntent } from "./DailyViews";
 import { runExport } from "./richActions";
-import { ancestors, buildTree, dropTarget, loadOpen, saveOpen, visibleRows, type Node } from "./tree";
+import { ancestors, buildTree, dropTarget, loadOpen, nodeLabel, saveOpen, treeMove, visibleRows, type Node } from "./tree";
+import { MoveDialog } from "./MoveDialog";
+import { ContextMenu } from "../../ui/ContextMenu";
+import { contextMenuKey, menuPointFor } from "../../ui/focus";
 import { DeleteConfirm } from "./DeleteConfirm";
 import { REACH_TEXT, stricter } from "./reach";
 import { openFindInFiles } from "../search/FindInFiles";
@@ -22,7 +25,7 @@ const low = (s: string) => s.toLowerCase();
 const PAGE = /\.(md|markdown|hmdoc)$/i;
 /** Files Windows has a real viewer for: they still open in it. Any other file that is not text opens in a tab (the hex view). */
 const SYSTEM_VIEWED = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf)$/i;
-const label = (node: Node) => (node.kind === "page" ? node.name.replace(PAGE, "") : node.name);
+const label = nodeLabel;
 
 /** Pointer-event dragging (HTML5 drag and drop is unreliable in WebView2 with Tauri's own drop handling). `over` is a
  *  row's path, "" for the notebook's empty space (its top level), or null outside the tree (the drop is cancelled). */
@@ -100,7 +103,10 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
   const [collapsed, setCollapsed] = useState(false);
   const [renaming, setRenaming] = useState<{ path: string; value: string } | null>(null);
   const [naming, setNaming] = useState<{ folder: string; value: string } | null>(null);
-  const [menu, setMenu] = useState<{ node: Node; x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<{ node: Node; x: number; y: number; from: HTMLElement | null } | null>(null);
+  // The row Tab reaches in this tree (roving focus, DESK-6): the last one focused, else the open page, else the first.
+  const [focusPath, setFocusPath] = useState<string | null>(null);
+  const treeBox = useRef<HTMLDivElement>(null);
   const [dialog, setDialog] = useState<ReactNode>(null);
   const current = useWorkspace((s) => { const t = activeTab(s); return t?.kind === "file" && t.file?.notebook === notebook.id ? t.file.path : undefined; });
 
@@ -112,6 +118,9 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
     return map;
   }, [nodes]);
   const rows = visibleRows(nodes, open);
+  const tabbable = rows.find((r) => r.node.path === focusPath)?.node.path ?? rows.find((r) => r.node.path === current)?.node.path ?? rows[0]?.node.path;
+  const rowEl = (path: string) => [...(treeBox.current?.querySelectorAll<HTMLElement>("[role=treeitem]") ?? [])].find((el) => el.dataset.treePath === path) ?? null;
+  const focusRow = (path: string) => { setFocusPath(path); requestAnimationFrame(() => { const el = rowEl(path); el?.focus(); el?.scrollIntoView({ block: "nearest" }); }); };
   const fail = (e: unknown) => toast(classify(e).message, "error");
 
   const toggle = (path: string, on?: boolean) => setOpen((was) => {
@@ -135,7 +144,7 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
   };
   const { drag, down, justDragged } = useRowDrag(notebook.id, drop, byPath);
 
-  const pick = (node: Node, e: React.MouseEvent) => {
+  const pick = (node: Node, e: { ctrlKey: boolean; metaKey: boolean }) => {
     if (node.kind === "dir") return toggle(node.path);
     if (node.kind === "other" && (lm || SYSTEM_VIEWED.test(node.path))) return void revealFile(notebook.id, node.path, true).catch(fail);
     openPage({ notebook: notebook.id, path: node.path }, { split: e.ctrlKey || e.metaKey });
@@ -163,6 +172,7 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
   const commitRename = () => {
     const r = renaming;
     setRenaming(null);
+    if (r) focusRow(r.path);
     if (!r || !r.value.trim() || r.value.trim() === label(byPath.get(low(r.path))!)) return;
     movePath(client, notebook.id, r.path, renamed(r.path, r.value, byPath.get(low(r.path))?.kind === "dir")).catch(fail);
   };
@@ -172,6 +182,25 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
     if (!n?.value.trim()) return;
     newSection(client, notebook.id, n.folder, n.value).then((path) => { if (n.folder) toggle(n.folder, true); toggle(path, true); }, fail);
   };
+  /** Keys on a focused row (DESK-6). Fields inside the row (rename) keep their own keys. */
+  const rowKey = (e: React.KeyboardEvent<HTMLDivElement>, at: number) => {
+    if (e.target !== e.currentTarget) return;
+    const node = rows[at].node;
+    if (contextMenuKey(e)) { e.preventDefault(); setMenu({ node, ...menuPointFor(e.currentTarget), from: e.currentTarget }); return; }
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(node, e); return; }
+    if (e.key === "F2") { e.preventDefault(); setRenaming({ path: node.path, value: label(node) }); return; }
+    if (e.key === "Delete" && !(lm && node.kind === "dir")) { e.preventDefault(); remove(node); return; }
+    const move = treeMove(rows, at, e.key);
+    if (!move) return;
+    e.preventDefault();
+    if ("focus" in move) focusRow(rows[move.focus].node.path);
+    else toggle("expand" in move ? move.expand : move.collapse, "expand" in move);
+  };
+  /** Move a page or section without dragging (WCAG 2.5.7): pick the section it goes into. */
+  const moveTo = (node: Node) => setDialog(
+    <MoveDialog node={node} sections={[...byPath.values()].filter((n) => n.kind === "dir")} onClose={() => setDialog(null)}
+      onMove={(target) => { setDialog(null); drop(node.path, target); }} />,
+  );
   const remove = (node: Node) => setDialog(
     <DeleteConfirm notebook={notebook.id} path={node.path} section={node.kind === "dir"}
       onAnswer={(yes) => { setDialog(null); if (yes) trashPath(client, notebook.id, node.path).catch(fail); }} />,
@@ -213,7 +242,7 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
         </Menu>
       </div>
       {!collapsed && (
-        <div className={`notebook-tree ${drag?.over === "" ? "drop" : ""}`} role="tree" aria-label={notebook.title} data-tree-root={notebook.id}>
+        <div ref={treeBox} className={`notebook-tree ${drag?.over === "" ? "drop" : ""}`} role="tree" aria-label={notebook.title} data-tree-root={notebook.id}>
           {naming && naming.folder === "" && (
             <input className="tree-input" autoFocus placeholder="Section name" value={naming.value} aria-label="Section name"
               onChange={(e) => setNaming({ ...naming, value: e.target.value })} onBlur={commitSection}
@@ -222,20 +251,23 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
           {tree.isLoading && <p className="muted pad">Reading the folder…</p>}
           {tree.error && <p className="error pad">{classify(tree.error).message}</p>}
           {tree.data && !rows.length && !naming && <p className="muted pad">No pages yet. <button className="link" onClick={() => create(null)}>Create one</button></p>}
-          {rows.map(({ node, depth, open: isOpen }) => {
+          {rows.map(({ node, depth, open: isOpen, posinset, setsize }, at) => {
             // A rich page has its own icon, so it is told from the Markdown page of the same name (UI-2).
             const Icon = node.kind === "dir" ? Folder : node.kind === "page" ? (isRichDoc(node.path) ? LayoutPanelTop : FileText) : isCanvas(node.path) ? Workflow : File;
             const branch = node.kind === "dir" || node.children.length > 0;
             const target = drag && drag.over && low(drag.over) === low(node.path) && dropTarget(drag.path, node);
             return (
-              <div key={node.path}>
+              <div key={node.path} role="none">
                 <div role="treeitem" aria-expanded={branch ? isOpen : undefined} aria-selected={current === node.path} data-tree-path={node.path}
+                  aria-level={depth + 1} aria-posinset={posinset} aria-setsize={setsize} tabIndex={node.path === tabbable ? 0 : -1}
+                  onFocus={(e) => { if (e.target === e.currentTarget) setFocusPath(node.path); }}
+                  onKeyDown={(e) => rowKey(e, at)}
                   className={`tree-row ${current === node.path ? "on" : ""} ${target ? "drop" : ""} ${drag?.path === node.path ? "dragging" : ""}`}
                   style={{ paddingLeft: `${depth * 1.1 + 0.2}rem` }}
                   onPointerDown={(e) => down(node.path, e)}
                   onClick={(e) => { if (!justDragged()) pick(node, e); }}
                   onAuxClick={(e) => { if (e.button === 1 && node.kind !== "dir") openPage({ notebook: notebook.id, path: node.path }, { split: true }); }}
-                  onContextMenu={(e) => { e.preventDefault(); setMenu({ node, x: e.clientX, y: e.clientY }); }}>
+                  onContextMenu={(e) => { e.preventDefault(); setMenu({ node, x: e.clientX, y: e.clientY, from: e.currentTarget }); }}>
                   <button className="tree-toggle" tabIndex={-1} aria-hidden={!branch} style={{ visibility: branch ? "visible" : "hidden" }}
                     onClick={(e) => { e.stopPropagation(); toggle(node.path); }}>
                     {isOpen ? <ChevronDown size="1em" /> : <ChevronRight size="1em" />}
@@ -244,7 +276,7 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
                   {renaming?.path === node.path
                     ? <input className="tree-input" autoFocus value={renaming.value} aria-label="New name" onClick={(e) => e.stopPropagation()}
                       onChange={(e) => setRenaming({ ...renaming, value: e.target.value })} onBlur={commitRename}
-                      onKeyDown={(e) => { if (e.key === "Enter") commitRename(); else if (e.key === "Escape") setRenaming(null); }} />
+                      onKeyDown={(e) => { if (e.key === "Enter") commitRename(); else if (e.key === "Escape") { e.preventDefault(); setRenaming(null); focusRow(node.path); } }} />
                     : <span className="tree-label" title={node.path}>{label(node)}</span>}
                 </div>
                 {naming && naming.folder === node.path && (
@@ -259,10 +291,7 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
         </div>
       )}
       {menu && (
-        <ul className="menu-list context" role="menu" style={{ top: menu.y, left: menu.x }} ref={(el) => el?.querySelector("button")?.focus()}
-          onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
-          onKeyDown={(e) => { if (e.key === "Escape") setMenu(null); }}
-          onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setMenu(null); }}>
+        <ContextMenu at={menu} from={menu.from} label={`${label(menu.node)} actions`} onClose={() => setMenu(null)}>
           {(() => {
             const n = menu.node;
             const item = (text: string, act: () => void, cls = "") => (
@@ -280,13 +309,14 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
                 {n.kind === "dir" && item("New section here", () => { toggle(n.path, true); setNaming({ folder: n.path, value: "" }); })}
                 {!lm && n.kind === "dir" && item("Find in files…", () => openFindInFiles({ notebook: notebook.id, sub: n.path }))}
                 {item("Rename", () => setRenaming({ path: n.path, value: label(n) }))}
+                {item("Move to…", () => moveTo(n))}
                 {!lm && n.kind === "other" && item("Open with default app", () => revealFile(notebook.id, n.path, true).catch(fail))}
                 {!lm && item("Show in Explorer", () => revealFile(notebook.id, n.path).catch(fail))}
                 {!(lm && n.kind === "dir") && item(n.kind === "dir" ? "Delete section…" : "Delete…", () => remove(n), "danger-text")}
               </>
             );
           })()}
-        </ul>
+        </ContextMenu>
       )}
       {dialog}
     </section>

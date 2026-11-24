@@ -43,7 +43,8 @@ export class PictureWidget extends WidgetType {
     if (this.width) img.style.width = `${this.width}px`;
     img.addEventListener("error", missing);
     const handle = el("span", "cm-rich-resize");
-    handle.title = "Drag to resize";
+    // The keyboard way (WCAG 2.5.7) is the width in the source: ![alt|300](picture.png).
+    handle.title = "Drag to resize, or type the width in the source: ![alt|300](picture.png)";
     handle.addEventListener("pointerdown", (e) => {
       if (view.state.readOnly) return;
       e.preventDefault();

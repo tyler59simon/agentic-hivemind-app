@@ -14,6 +14,7 @@ import { fileName, isMarkdown, isRichDoc, pageTitle } from "../lib/notebooks";
 import { announceDocumentLook, useWhitePaper } from "../lib/paper";
 import { useApp } from "../store";
 import { ErrorBoundary } from "../ui/ErrorBoundary";
+import { tabKey } from "../ui/focus";
 import { Confirm } from "../ui/Modal";
 import { useNarrow } from "../lib/narrow";
 import { MAX_PANES, railShown, useWorkspace, type Pane, type Tab } from "./store";
@@ -74,12 +75,12 @@ export function useCloseTab() {
 function TabPill({ tab, active, onPick, onClose }: { tab: Tab; active: boolean; onPick: () => void; onClose: () => void }) {
   const dirty = useWorkspace((s) => !!s.dirty[tab.id]);
   return (
-    <div role="tab" aria-selected={active} className={`note-tab-pill ${active ? "on" : ""}`} title={label(tab)}
-      onClick={onPick} onAuxClick={(e) => { if (e.button === 1) onClose(); }}>
+    <div role="tab" aria-selected={active} tabIndex={active ? 0 : -1} className={`note-tab-pill ${active ? "on" : ""}`} title={label(tab)}
+      onClick={onPick} onAuxClick={(e) => { if (e.button === 1) onClose(); }} onKeyDown={(e) => tabKey(e, { open: onPick, close: onClose })}>
       {tab.kind === "file" && isRichDoc(tab.file?.path ?? "") && <LayoutPanelTop size="1em" aria-hidden className="tab-icon" />}
       <span className="tab-label">{label(tab)}</span>
       {dirty && <span className="dot" aria-label="unsaved">●</span>}
-      <button className="tab-close" aria-label="Close tab" onClick={(e) => { e.stopPropagation(); onClose(); }}><X size="1em" aria-hidden /></button>
+      <button className="tab-close" tabIndex={-1} aria-label="Close tab" onClick={(e) => { e.stopPropagation(); onClose(); }}><X size="1em" aria-hidden /></button>
     </div>
   );
 }
@@ -118,7 +119,7 @@ function PaneView({ pane, focused, last, onClose }: {
   }, [active?.id, pane.tabs.length]);
   return (
     <section className={`pane ${focused ? "focused" : ""}`} onMouseDown={() => !focused && focus(pane.id)}>
-      <div className="note-tabs" role="tablist" ref={strip} onWheel={(e) => { if (e.deltaY) e.currentTarget.scrollLeft += e.deltaY; }}>
+      <div className="note-tabs" role="tablist" aria-label="Open notes and pages" ref={strip} onWheel={(e) => { if (e.deltaY) e.currentTarget.scrollLeft += e.deltaY; }}>
         {pane.tabs.map((t) => <TabPill key={t.id} tab={t} active={t.id === active?.id} onPick={() => activate(pane.id, t.id)} onClose={() => onClose(pane.id, t.id)} />)}
         <NewButton onBefore={() => focus(pane.id)} />
         <span className="fill" />
@@ -132,7 +133,7 @@ function PaneView({ pane, focused, last, onClose }: {
           </>
         )}
       </div>
-      <div className="pane-body" data-paper={white ? "" : undefined}>
+      <div className="pane-body" data-paper={white ? "" : undefined} role="tabpanel" aria-label={active ? label(active) : "No tab open"}>
         {active ? <ErrorBoundary label="This tab" resetKey={active.id} onError={() => void flushAllDrafts()}>{TAB_VIEWS[active.kind](active)}</ErrorBoundary> : (
           <div className="center muted"><p>Open a note or page here: Ctrl+click a link, or press <kbd>Ctrl</kbd>+<kbd>O</kbd>.</p></div>
         )}

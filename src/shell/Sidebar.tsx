@@ -1,4 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ContextMenu } from "../ui/ContextMenu";
+import { contextMenuKey, menuPointFor } from "../ui/focus";
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, House, NotebookPen, Wrench, Sparkles, SquareCheck, Terminal, Workflow, type LucideIcon } from "lucide-react";
 import logo from "../assets/logo.png";
@@ -40,8 +42,8 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
   const available = useAvailableSections();
   const hidden = useHidden((s) => s.hidden);
   const setShown = useHidden((s) => s.setShown);
-  // The right-click menu, and the section button that opened it (focus goes back there on Escape). It closes on a click
-  // elsewhere, on Escape inside it, or when focus leaves it.
+  // The right-click menu (or Shift+F10), and the section button that opened it (focus goes back there on Escape). It
+  // closes on a click elsewhere, on Escape, or when focus leaves it.
   const [menu, setMenu] = useState<{ page: Page; x: number; y: number; from: HTMLButtonElement } | null>(null);
   const nav = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -67,7 +69,8 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
       <nav className="nav" aria-label="Sections" ref={nav}>
         {available.filter((s) => !hidden.includes(s.page)).map(({ page: p, label, icon: Icon }) => (
           <button key={p} className={`nav-item ${page === p ? "on" : ""}`} title={label} aria-current={page === p ? "page" : undefined} onClick={() => go({ page: p })}
-            onContextMenu={(e) => { e.preventDefault(); setMenu(p === "home" ? null : { page: p, x: e.clientX, y: e.clientY, from: e.currentTarget }); }}>
+            onContextMenu={(e) => { e.preventDefault(); setMenu(p === "home" ? null : { page: p, x: e.clientX, y: e.clientY, from: e.currentTarget }); }}
+            onKeyDown={(e) => { if (contextMenuKey(e) && p !== "home") { e.preventDefault(); setMenu({ page: p, ...menuPointFor(e.currentTarget), from: e.currentTarget }); } }}>
             <Icon size="1.35em" aria-hidden /><span className="grow">{label}</span>
             {p === "inbox" && inboxTotal > 0 && <span className="nav-count" title={`${inboxTotal} waiting for you`} aria-label={`${inboxTotal} waiting for you`}>{inboxTotal}</span>}
             {mark(p) && <span className={`nav-dot ${p === "agents" && waiting ? "waiting" : p === "agents" && attention === "done" ? "done" : p === "notes" ? "unsaved" : ""}`} title={mark(p)!} aria-label={mark(p)!} />}
@@ -75,19 +78,15 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
         ))}
       </nav>
       {menu && (
-        <ul className="menu-list context" role="menu" style={{ top: menu.y, left: menu.x }} onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
-          // preventDefault keeps focus in the menu on a click: WebKit (macOS) does not focus a clicked button, so the blur
-          // below would close the menu before the click runs.
-          onKeyDown={(e) => { if (e.key === "Escape") { setMenu(null); menu.from.focus(); } }}
-          onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setMenu(null); }}>
-          <li role="none"><button role="menuitem" autoFocus onClick={() => {
+        <ContextMenu at={menu} from={menu.from} label={`${SECTIONS.find((x) => x.page === menu.page)?.label ?? "Section"} actions`} onClose={() => setMenu(null)}>
+          <li role="none"><button role="menuitem" onClick={() => {
             setShown(menu.page, false); setMenu(null);
             // The section that had focus is gone: move it to the current section, or the first one.
             requestAnimationFrame(() => (nav.current?.querySelector<HTMLElement>(".nav-item.on") ?? nav.current?.querySelector<HTMLElement>(".nav-item"))?.focus());
           }}>
             <span className="grow">Hide from sidebar</span></button></li>
           <li className="menu-note" role="none">Show it again in Settings</li>
-        </ul>
+        </ContextMenu>
       )}
       <Menu className="user-menu" label="Account and settings" up
         button={<><span className="avatar" aria-hidden>{user.slice(0, 1).toUpperCase()}</span><span className="grow">{user}</span><ChevronDown size="1.1em" aria-hidden /></>}>

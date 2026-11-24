@@ -3,6 +3,7 @@
 // excalidraw.com are off, so nothing here reaches the network: its fonts come from Hivemind's own folder.
 import { useEffect, useRef, useState } from "react";
 import { currentTheme } from "../../../lib/theme";
+import { useLayer } from "../../../ui/layers";
 import { Confirm } from "../../../ui/Modal";
 import type { RichContext } from "../../editor/rich/context";
 import { commitDrawing, DrawingChanged, loadScene, type Drawing, type LoadedScene } from "./drawing";
@@ -162,6 +163,9 @@ export function DrawingDialog({ ctx, existing, apply, stillUsed, onClose }: Draw
 
 /** The full-screen frame: a title, Done and Cancel above the editor. */
 function Overlay({ children, onCancel, onDone, saving }: { children: React.ReactNode; onCancel: () => void; onDone?: () => void; saving?: boolean }) {
+  // A locked layer (DESK-4): Escape belongs to the drawing editor (it clears the selection), so it neither closes the
+  // drawing nor reaches a dialog under it. Cancel and Done close it.
+  useLayer(true, onCancel, true);
   return (
     <div className="hm-drawing" data-own-zoom role="dialog" aria-label="Drawing">
       <header className="hm-drawing-head">

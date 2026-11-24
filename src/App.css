@@ -1893,3 +1893,10 @@ button.icon { border: none; padding: .25rem; }
   .agents { grid-template-columns: 11rem minmax(0, 1fr); }
   .review { grid-template-columns: 12rem minmax(0, 1fr); }
 }
+
+/* ---- Keyboard focus (DESK-4, DESK-6, DESK-10) ---- */
+.modal:focus { outline: none; }
+.tree-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.note-tab-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* A card's handles show while the card has the keyboard focus, not only under the mouse. */
+.canvas-node:focus-within .canvas-handle { opacity: 1; }

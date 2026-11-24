@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useLayer } from "../../ui/layers";
 import { Bell, Box, Database, Maximize, Minimize, Minus, Plus, User } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { systemDiagramSource, type ArchModel } from "../../lib/architecture";
@@ -116,12 +117,7 @@ export function ArchitectureCanvas({ slug, model, diagrams, version, caption, se
   useEffect(() => { fit(); }, [fit, full]);
   // An older baseline has no pictures of its own, so its Deployment level is gone.
   useEffect(() => { if (level === "deployment" && !deployment) setLevel("containers"); }, [level, deployment]);
-  useEffect(() => {
-    if (!full) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setFull(false); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [full]);
+  useLayer(full, () => setFull(false));
 
   /** Zoom about a point of the viewport (the pointer, or its centre for the buttons). */
   const zoom = (factor: number, at?: { x: number; y: number }) => setView((v) => {

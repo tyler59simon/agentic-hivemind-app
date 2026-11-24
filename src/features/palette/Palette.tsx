@@ -1,5 +1,6 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isNarrow } from "../../lib/narrow";
+import { useLayer } from "../../ui/layers";
 import { zoomBy } from "../../lib/zoom";
 import { useEffect, useMemo, useState } from "react";
 import { useProjectsEnabled, useSystemsEnabled, useWikiEnabled } from "../../lib/connection";
@@ -172,6 +173,8 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
     return [...best, { key: "open-from-disk", label: "Open file from disk…", detail: "any file", run: () => { app.setPalette(null); void openFromDisk(); } }];
   }, [entries, query, app]);
 
+  // Escape closes the palette, and only the palette when it is open over a dialog (DESK-4).
+  useLayer(!!app.palette, () => app.setPalette(null));
   if (!app.palette) return null;
   const choose = (entry?: Entry) => entry?.run();
   return (
@@ -180,8 +183,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
         <input autoFocus value={query} placeholder={app.palette === "notes" ? "Go to note or page…" : "Run a command…"}
           onChange={(e) => { setQuery(e.target.value); setIndex(0); }}
           onKeyDown={(e) => {
-            if (e.key === "Escape") app.setPalette(null);
-            else if (e.key === "ArrowDown") { e.preventDefault(); setIndex((i) => Math.min(i + 1, shown.length - 1)); }
+            if (e.key === "ArrowDown") { e.preventDefault(); setIndex((i) => Math.min(i + 1, shown.length - 1)); }
             else if (e.key === "ArrowUp") { e.preventDefault(); setIndex((i) => Math.max(i - 1, 0)); }
             else if (e.key === "Enter") choose(shown[index]);
           }} />
