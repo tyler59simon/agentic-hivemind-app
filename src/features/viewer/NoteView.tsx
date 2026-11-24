@@ -20,6 +20,7 @@ import { projectsQuery } from "../projects/useProject";
 import { systemsQuery } from "../systems/useSystem";
 import { HoverPreview } from "../preview/HoverPreview";
 import { remarkWikilinks, WIKI_PREFIX } from "./remarkWikilinks";
+import { scrollBehavior } from "../../lib/motion";
 
 export const noteQuery = (ref: string) => ({ queryKey: ["note", ref], queryFn: () => read(ref) });
 
@@ -111,7 +112,7 @@ export function NoteView({ refId, tabId }: { refId: string; tabId: string }) {
   const n = note.data;
   useEffect(() => { if (n) updateTab(tabId, { title: n.title }); }, [n?.title, tabId, updateTab]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (reveal?.tabId === tabId) document.getElementById(`${tabId}-l${reveal.line}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (reveal?.tabId === tabId) document.getElementById(`${tabId}-l${reveal.line}`)?.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
   }, [reveal, tabId]);
   const components = useMemo<Components>(() => {
     if (!n) return {};

@@ -14,6 +14,8 @@ import { isLoose } from "../lib/opens";
 import { useNotebookTitle } from "../features/notes/notebookTitle";
 import { activeTab, tabLabel, useWorkspace } from "../workspace/store";
 import { SECTIONS } from "./Sidebar";
+import { useWindowTitle } from "./title";
+import { modalOpen } from "../ui/layers";
 
 interface Crumb { label: string; go?: () => void }
 
@@ -54,10 +56,13 @@ function useCrumbs(): Crumb[] {
 /** Breadcrumb on the left; one unified search box on the right (Ctrl+K / Ctrl+Shift+F) on every page (CON-11). */
 export function Topbar() {
   const crumbs = useCrumbs();
+  const unsaved = useWorkspace((s) => { const t = activeTab(s); return !!t && !!s.dirty[t.id]; });
+  const onNotes = useApp((s) => s.route.page === "notes");
+  useWindowTitle(crumbs.map((c) => c.label), onNotes && unsaved);
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
+      if (!(e.ctrlKey || e.metaKey) || modalOpen()) return;
       const key = e.key.toLowerCase();
       if ((key === "k" && !e.shiftKey) || (key === "f" && e.shiftKey)) {
         e.preventDefault();

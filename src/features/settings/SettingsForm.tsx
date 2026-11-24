@@ -1,4 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
+import { applyDocSize, DOC_SIZES, useDocSize } from "../../lib/docSize";
+import { setZoom, useZoom, ZOOM_STEPS, zoomPercent } from "../../lib/zoom";
 import { useEffect, useState } from "react";
 import { ENGINE_LABELS, ENGINES, enginesText, shownEngines, type Engine } from "../../lib/agent";
 import { pauseLmStore } from "../../documents/store";
@@ -6,7 +8,7 @@ import { useProjectsEnabled } from "../../lib/connection";
 import { captureStatus, getSettings, saveSettings, type CaptureStatus, type Settings } from "../../lib/lm";
 import { applyPaperDefault, PAPER_DEFAULTS, usePaperDefault, type PaperDefault } from "../../lib/paper";
 import { prefs } from "../../lib/prefs";
-import { applyTheme, THEMES, useTheme, type Theme } from "../../lib/theme";
+import { applyTheme, THEME_CHOICES, useThemeChoice, type ThemeChoice } from "../../lib/theme";
 import { useHidden } from "../../shell/hidden";
 import { useAvailableSections } from "../../shell/Sidebar";
 import type { Mode } from "../../workspace/store";
@@ -24,7 +26,9 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
   const [status, setStatus] = useState<CaptureStatus | null>(null);
   const [mode, setMode] = useState<Mode>(prefs.defaultMode());
   const [error, setError] = useState<string | null>(null);
-  const theme = useTheme();
+  const theme = useThemeChoice();
+  const zoom = useZoom();
+  const docSize = useDocSize();
   const paper = usePaperDefault();
   const sections = useAvailableSections().filter((s) => s.page !== "home");
   const hidden = useHidden((s) => s.hidden);
@@ -163,9 +167,22 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
 
       <h3>Appearance</h3>
       <label className="field">
+        <span>Zoom</span>
+        <select value={String(zoom)} onChange={(e) => { void setZoom(Number(e.target.value)); }}>
+          {[...new Set([...ZOOM_STEPS, zoom])].sort((a, b) => a - b).map((z) => <option key={z} value={String(z)}>{zoomPercent(z)}{z === 1 ? " (default)" : ""}</option>)}
+        </select>
+        <span className="muted small">Ctrl+= and Ctrl+- change it anywhere, and Ctrl+0 resets it.</span>
+      </label>
+      <label className="field">
+        <span>Document text size</span>
+        <select value={String(docSize)} onChange={(e) => applyDocSize(Number(e.target.value))}>
+          {DOC_SIZES.map((s) => <option key={s.value} value={String(s.value)}>{s.label}</option>)}
+        </select>
+      </label>
+      <label className="field">
         <span>Theme</span>
-        <select value={theme} onChange={(e) => applyTheme(e.target.value as Theme)}>
-          {THEMES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+        <select value={theme} onChange={(e) => applyTheme(e.target.value as ThemeChoice)}>
+          {THEME_CHOICES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
         </select>
       </label>
       <label className="field">

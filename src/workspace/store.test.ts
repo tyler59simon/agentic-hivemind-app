@@ -96,6 +96,15 @@ describe("workspace", () => {
     expect([ws().rail, ws().railSplit, railShown(ws())]).toEqual([false, true, false]);
   });
 
+  it("a narrow window has its own rail switch, off at first, so the rail never covers the note by itself (DESK-WIN)", () => {
+    ws().openNote("d:1");
+    expect([railShown(ws()), railShown(ws(), true)]).toEqual([true, false]);
+    ws().setRail(true, true);
+    expect([ws().rail, ws().railNarrow, railShown(ws(), true)]).toEqual([true, true, true]);
+    ws().setRail(false, true);
+    expect([ws().rail, railShown(ws()), railShown(ws(), true)]).toEqual([true, true, false]);
+  });
+
   it("a new note is always its own tab", () => {
     ws().openTab({ kind: "new-note" });
     ws().openTab({ kind: "new-note" });

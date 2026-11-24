@@ -1,4 +1,5 @@
 mod agent;
+mod appearance;
 mod append;
 mod automations;
 mod architecture;
@@ -850,14 +851,15 @@ fn architecture_rules_set(state: State<'_, AppState>, slug: String, path: Option
     if let Some(p) = &path {
         archsuite::check_rules(std::path::Path::new(p))?;
     }
-    let mut saved = settings::load(&state.settings_path);
-    let mut rules = saved.architecture_rules.take().unwrap_or_default();
-    match path {
-        Some(p) => rules.insert(slug, p),
-        None => rules.remove(&slug),
-    };
-    saved.architecture_rules = Some(rules);
-    settings::save(&state.settings_path, &saved)
+    settings::update(&state.settings_path, |saved| {
+        let mut rules = saved.architecture_rules.take().unwrap_or_default();
+        match path {
+            Some(p) => rules.insert(slug, p),
+            None => rules.remove(&slug),
+        };
+        saved.architecture_rules = Some(rules);
+        Ok(())
+    })
 }
 
 #[derive(Serialize)]
@@ -1328,12 +1330,24 @@ fn get_settings(state: State<'_, AppState>) -> Settings {
     settings::load(&state.settings_path)
 }
 
+/// The zoom of every window, 1.0 for 100%.
 #[tauri::command]
-fn save_settings(app: AppHandle, state: State<'_, AppState>, value: Settings) -> Result<(), String> {
-    let previous = settings::load(&state.settings_path);
-    // The folder list changes only through the native picker, and the rules files only through architecture_rules_set.
-    let mut value = folders::keep(&previous, value);
+fn ui_zoom(state: State<'_, AppState>) -> f64 {
+    settings::load(&state.settings_path).ui_zoom()
+}
+
+/// Zoom every window and keep it for the next start; returns the zoom kept (clamped to 50% to 200%).
+#[tauri::command]
+fn ui_zoom_set(app: AppHandle, state: State<'_, AppState>, zoom: f64) -> Result<f64, String> {
+    appearance::set(&app, &state.settings_path, zoom)
+}
+
+/// What a Settings form save keeps: the folder list changes only through the native picker, the rules files only through
+/// architecture_rules_set and the zoom only through ui_zoom_set, so a form opened earlier never undoes them.
+fn settings_to_save(previous: &Settings, value: Settings) -> Result<Settings, String> {
+    let mut value = folders::keep(previous, value);
     value.architecture_rules = previous.architecture_rules.clone();
+    value.ui_zoom = previous.ui_zoom;
     if !value.shows(agent::Engine::Claude) && !value.shows(agent::Engine::Codex) {
         return Err("Keep at least one engine shown.".into());
     }
@@ -1342,7 +1356,17 @@ fn save_settings(app: AppHandle, state: State<'_, AppState>, value: Settings) ->
             agent::scope::check_command(command).map_err(|e| format!("{project}: {e}"))?;
         }
     }
-    settings::save(&state.settings_path, &value)?;
+    Ok(value)
+}
+
+#[tauri::command]
+fn save_settings(app: AppHandle, state: State<'_, AppState>, value: Settings) -> Result<(), String> {
+    let (previous, value) = settings::update(&state.settings_path, |saved| {
+        let previous = saved.clone();
+        let value = settings_to_save(&previous, value)?;
+        *saved = value.clone();
+        Ok((previous, value))
+    })?;
     *state.shortcut_error.lock().unwrap() = capture::apply_shortcut(&app, value.capture_shortcut().as_deref()).err();
     // Only a change of interpreter, script or store needs a new Living Memory process.
     if (&previous.python, &previous.script, &previous.root) != (&value.python, &value.script, &value.root) {
@@ -1752,6 +1776,18 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // Size, position and maximised state come back at the next start (DESK-WIN). Never visibility: the window may
+        // have been hidden to the tray. The capture window always opens centred.
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
+                )
+                .with_denylist(&[capture::WINDOW])
+                .build(),
+        )
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -1790,6 +1826,11 @@ pub fn run() {
             let terminals_dir = app.path().app_data_dir()?.join("terminals");
             let snapshots_dir = architecture::snapshots_root(&sessions_dir);
             let saved = settings::load(&settings_path);
+            // The main window starts hidden (tauri.conf.json), so it is first seen at its restored size and zoom.
+            if let Some(main) = app.get_webview_window("main") {
+                appearance::apply_to(&main, saved.ui_zoom());
+                let _ = main.show();
+            }
             let launch = settings::resolve(&saved, |k| std::env::var(k).ok());
             // A taken or invalid hotkey must not stop the app; the settings screen shows why.
             let shortcut_error = capture::apply_shortcut(app.handle(), saved.capture_shortcut().as_deref()).err();
@@ -1924,7 +1965,7 @@ pub fn run() {
             exec_agent_start,
             exec_session_capture,
             exec_export,
-            lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
+            lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, ui_zoom, ui_zoom_set, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_roles, learning_status, learning_review, skills_list, skill_proposals, skill_decide, skill_action, skill_version, skill_history,
             skills_upkeep, skill_from_note,
             automation_list, automation_put, automation_delete, automation_spend, automation_act, architecture_drift, architecture_rules_set, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, uninstall_inventory, uninstall_remove_worktree, uninstall_delete_branch, repo_branches,
@@ -1955,6 +1996,18 @@ pub fn run() {
 mod tests {
     use super::*;
     use term::launch::{Cli, NO_CODEX};
+
+    #[test]
+    fn a_settings_form_save_keeps_the_zoom_and_rules_it_did_not_change() {   // DESK-ZOOM
+        let previous = Settings { ui_zoom: Some(1.25), architecture_rules: Some([("s".to_string(), "r.json".to_string())].into()), ..Default::default() };
+        let form = Settings { python: Some("py".into()), ui_zoom: Some(0.5), ..Default::default() };
+        let saved = settings_to_save(&previous, form).unwrap();
+        assert_eq!(saved.python.as_deref(), Some("py"));
+        assert_eq!(saved.ui_zoom, Some(1.25));
+        assert_eq!(saved.architecture_rules, previous.architecture_rules);
+        let hidden = Settings { hidden_engines: Some(vec!["claude".into(), "codex".into()]), ..Default::default() };
+        assert!(settings_to_save(&previous, hidden).is_err());
+    }
 
     #[test]
     fn sessions_of_automations_and_of_deleted_workflows_fire_no_event_automations() {   // Codex review of 99ceaea, C2

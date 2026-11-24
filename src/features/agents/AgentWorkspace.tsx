@@ -22,7 +22,9 @@ import { projectsQuery } from "../projects/useProject";
 import { systemsQuery } from "../systems/useSystem";
 import { noteQuery } from "../viewer/NoteView";
 import { ApprovalCard, Composer, FilesCard, RemoveWorktree } from "./Chat";
-import { apply, build, cost, duration, EMPTY, merge, type Finished, type Item, type Transcript as State } from "./events";
+import { announcement, apply, build, cost, duration, EMPTY, merge, type Finished, type Item, type Transcript as State } from "./events";
+import type { SeqEvent as LogEvent } from "../../lib/agent";
+import { announce } from "../../ui/announce";
 import { filesWord, reviewLabel } from "../review/review";
 import { ALLOWED_NOTE, CODEX_ALLOWED_NOTE, CODEX_COST_NOTE, CODEX_MODE_NOTE, codexPermissionLines, engineLabel, isCodex, isUnattended, resumeCommand, isEnded, permissionLines, POLICIES, repoName, usageText, VERDICT_LABELS, waitingForReview } from "./session";
 import { useSessionDraft } from "./draft";
@@ -325,6 +327,21 @@ export function useTranscript(id: string) {
   return { log, state };
 }
 
+/** Read out new permission requests and finished turns (DESK-7). What the log held when it first loaded is the baseline,
+ *  so opening a session does not read its history. The view is keyed by session, so the baseline is per session. */
+function useTranscriptAnnouncements(state: State, firstLog: LogEvent[] | undefined, agent: string) {
+  const seen = useRef<number | null>(null);
+  useEffect(() => {
+    if (!firstLog) return;
+    if (seen.current === null) seen.current = build(firstLog).items.length;
+    if (state.items.length > seen.current) {
+      const said = announcement(state.items, seen.current, agent);
+      if (said) announce(said.text, said.urgent ? "assertive" : "polite");
+    }
+    seen.current = Math.max(seen.current, state.items.length);
+  }, [state.items, firstLog, agent]);
+}
+
 /** One session: its log from disk, kept current by live events; and the rail that says what it may touch. */
 function Session({ id }: { id: string }) {
   const client = useQueryClient();
@@ -334,6 +351,7 @@ function Session({ id }: { id: string }) {
   const usage = useResources(id);
   const [capturing, setCapturing] = useState(false);
   const info = sessions.data?.find((s) => s.id === id) ?? log.data?.info;
+  useTranscriptAnnouncements(state, log.data?.events, info ? engineLabel(info) : "The agent");
 
   if (log.isLoading) return <p className="muted pad">Loading…</p>;
   if (log.error || !info) return <p className="error pad">{String(log.error ?? "This session is no longer in the history.")}</p>;

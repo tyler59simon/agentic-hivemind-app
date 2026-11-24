@@ -24,7 +24,9 @@ import { needsLmUpdate, useConnection } from "./lib/connection";
 import { refreshStore } from "./lib/refresh";
 import { Shell } from "./shell/Shell";
 import { closeSettings, openInbox, openSession, openSettings, useApp } from "./store";
+import { ErrorBoundary } from "./ui/ErrorBoundary";
 import { toast, Toasts } from "./ui/toast";
+import { ZoomBadge } from "./ui/ZoomBadge";
 import { unsavedUntitled, useWorkspace } from "./workspace/store";
 import { onDocsChanged, onFilesChanged, onPageAppended, startDocumentSync, type DocsChanged } from "./documents/sync";
 import { onIndexProgress } from "./features/search/indexState";
@@ -34,6 +36,7 @@ import { useOpenRequests } from "./features/notes/opening";
 import { ComparePicker } from "./features/power/ComparePicker";
 import { newPageHere } from "./features/notes/actions";
 import type { FilesChanged } from "./lib/notebooks";
+import { modalOpen } from "./ui/layers";
 
 /** Shortcuts that work on every page. Ctrl+K and Ctrl+Shift+F belong to the top bar's search; tab ones to the open notes. */
 function useShortcuts() {
@@ -41,6 +44,7 @@ function useShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const { setPalette, go, goBack } = useApp.getState();
+      if (modalOpen()) return; // a dialog is open: nothing behind it changes (DESK-4)
       if (e.altKey && e.key === "ArrowLeft") { e.preventDefault(); goBack(); return; }
       if (!(e.ctrlKey || e.metaKey)) return;
       const key = e.key.toLowerCase();
@@ -275,10 +279,14 @@ export default function App() {
 
   return (
     <>
-      <Shell info={link.data!} onSettings={() => setSettings(true)} onReconnect={reconnect} />
-      <Palette onSettings={() => setSettings(true)} onReconnect={reconnect} />
-      <ComparePicker />
+      {/* Inside App, so the close guard and tray Quit keep working when the shell fails (DESK-1). */}
+      <ErrorBoundary label="Hivemind" onError={() => void flushAllDrafts()} hint="Your unsaved edits are kept as drafts, and running terminals and agent sessions keep running.">
+        <Shell info={link.data!} onSettings={() => setSettings(true)} onReconnect={reconnect} />
+        <Palette onSettings={() => setSettings(true)} onReconnect={reconnect} />
+        <ComparePicker />
+      </ErrorBoundary>
       <Toasts />
+      <ZoomBadge />
       {dialogs}
     </>
   );

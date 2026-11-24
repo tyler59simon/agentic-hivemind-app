@@ -1,4 +1,7 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { isNarrow } from "../../lib/narrow";
+import { useLayer } from "../../ui/layers";
+import { zoomBy } from "../../lib/zoom";
 import { useEffect, useMemo, useState } from "react";
 import { useMaintenanceEnabled, useProjectsEnabled, useSystemsEnabled, useWikiEnabled } from "../../lib/connection";
 import { domains, list } from "../../lib/lm";
@@ -107,6 +110,9 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "new-file", label: "New text file", run: () => { close(); ws.openTab({ kind: "new-file" }); } },
       { key: "compare", label: "Compare files…", run: () => { close(); useComparePicker.getState().show(tab?.kind === "file" ? tab.file : undefined); } },
       { key: "find-in-files", label: "Find in files…", detail: "search and replace across a notebook", run: () => { close(); openFindInFiles(); } },
+      { key: "zoom-in", label: "Zoom in", detail: "Ctrl+=", run: () => { close(); void zoomBy("in"); } },
+      { key: "zoom-out", label: "Zoom out", detail: "Ctrl+-", run: () => { close(); void zoomBy("out"); } },
+      { key: "zoom-reset", label: "Reset zoom", detail: "Ctrl+0", run: () => { close(); void zoomBy("reset"); } },
       ...power,
       { key: "home", label: "Home", run: page({ page: "home" }) },
       { key: "notes", label: "Notes", section: "notes" as Page, run: page({ page: "notes" }) },
@@ -141,7 +147,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       ] : []),
       ...EXTRA_COMMANDS.map((c) => ({ ...c, run: () => { close(); c.run(); } })),
       { key: "split", label: "Open the note side by side", detail: "Ctrl+\\", run: () => { ws.split(); close(); } },
-      { key: "rail", label: railShown(ws) ? "Hide the note's context rail" : "Show the note's context rail", run: () => { ws.setRail(!railShown(ws)); close(); } },
+      { key: "rail", label: railShown(ws, isNarrow()) ? "Hide the note's context rail" : "Show the note's context rail", run: () => { ws.setRail(!railShown(ws, isNarrow()), isNarrow()); close(); } },
       { key: "search", label: "Search notes and pages", detail: "Ctrl+K", run: () => { close(); useNotesSearch.getState().focus(); } },
       { key: "active", label: "Search active notes", run: () => { close(); useNotesSearch.getState().byStatus("active"); } },
       { key: "archive", label: "Search the archive", run: () => { close(); useNotesSearch.getState().byStatus("archived"); } },
@@ -172,6 +178,8 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
     return [...best, { key: "open-from-disk", label: "Open file from disk…", detail: "any file", run: () => { app.setPalette(null); void openFromDisk(); } }];
   }, [entries, query, app]);
 
+  // Escape closes the palette, and only the palette when it is open over a dialog (DESK-4).
+  useLayer(!!app.palette, () => app.setPalette(null));
   if (!app.palette) return null;
   const choose = (entry?: Entry) => entry?.run();
   return (
@@ -180,8 +188,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
         <input autoFocus value={query} placeholder={app.palette === "notes" ? "Go to note or page…" : "Run a command…"}
           onChange={(e) => { setQuery(e.target.value); setIndex(0); }}
           onKeyDown={(e) => {
-            if (e.key === "Escape") app.setPalette(null);
-            else if (e.key === "ArrowDown") { e.preventDefault(); setIndex((i) => Math.min(i + 1, shown.length - 1)); }
+            if (e.key === "ArrowDown") { e.preventDefault(); setIndex((i) => Math.min(i + 1, shown.length - 1)); }
             else if (e.key === "ArrowUp") { e.preventDefault(); setIndex((i) => Math.max(i - 1, 0)); }
             else if (e.key === "Enter") choose(shown[index]);
           }} />
