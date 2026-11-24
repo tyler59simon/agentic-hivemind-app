@@ -7,14 +7,18 @@ import { FileTab, saveFileTab } from "../features/notes/FileTab";
 import { NewFileTab } from "../features/notes/NewFileTab";
 import { CompareTab } from "../features/power/Compare";
 import { FindInFilesTab } from "../features/search/FindInFiles";
-import { discard, keyOf, useDocuments } from "../documents/store";
+import { discard, flushAllDrafts, keyOf, useDocuments } from "../documents/store";
 import { isUnsaved } from "../documents/session";
 import { newPageHere } from "../features/notes/actions";
-import { fileName, isMarkdown, isRichDoc, pageTitle } from "../lib/notebooks";
+import { fileName, isMarkdown, isRichDoc } from "../lib/notebooks";
 import { announceDocumentLook, useWhitePaper } from "../lib/paper";
 import { useApp } from "../store";
+import { ErrorBoundary } from "../ui/ErrorBoundary";
+import { tabKey } from "../ui/focus";
 import { Confirm } from "../ui/Modal";
-import { MAX_PANES, railShown, useWorkspace, type Pane, type Tab } from "./store";
+import { useNarrow } from "../lib/narrow";
+import { MAX_PANES, railShown, tabLabel, useWorkspace, type Pane, type Tab } from "./store";
+import { modalOpen } from "../ui/layers";
 
 /** What a tab shows. */
 export const TAB_VIEWS: Record<Tab["kind"], (tab: Tab) => ReactNode> = {
@@ -26,9 +30,6 @@ export const TAB_VIEWS: Record<Tab["kind"], (tab: Tab) => ReactNode> = {
   find: (tab) => <FindInFilesTab key={tab.id} />,
 };
 
-const label = (tab: Tab) => (tab.kind === "note" ? tab.title || tab.ref?.split(":")[1]?.slice(0, 8) || "Note"
-  : tab.kind === "file" ? tab.title || pageTitle(tab.file?.path ?? "") || "Page"
-  : tab.kind === "new-file" ? tab.title || "Untitled" : tab.kind === "compare" ? tab.title || "Compare" : tab.kind === "find" ? "Find in files" : tab.title || "New note");
 
 /** Whether a tab other than `tabId` shows the page at `key` (a split), which then keeps the page open. */
 const shownAgain = (key: string, tabId: string) =>
@@ -72,12 +73,12 @@ export function useCloseTab() {
 function TabPill({ tab, active, onPick, onClose }: { tab: Tab; active: boolean; onPick: () => void; onClose: () => void }) {
   const dirty = useWorkspace((s) => !!s.dirty[tab.id]);
   return (
-    <div role="tab" aria-selected={active} className={`note-tab-pill ${active ? "on" : ""}`} title={label(tab)}
-      onClick={onPick} onAuxClick={(e) => { if (e.button === 1) onClose(); }}>
+    <div role="tab" aria-selected={active} tabIndex={active ? 0 : -1} className={`note-tab-pill ${active ? "on" : ""}`} title={tabLabel(tab)}
+      onClick={onPick} onAuxClick={(e) => { if (e.button === 1) onClose(); }} onKeyDown={(e) => tabKey(e, { open: onPick, close: onClose })}>
       {tab.kind === "file" && isRichDoc(tab.file?.path ?? "") && <LayoutPanelTop size="1em" aria-hidden className="tab-icon" />}
-      <span className="tab-label">{label(tab)}</span>
+      <span className="tab-label">{tabLabel(tab)}</span>
       {dirty && <span className="dot" aria-label="unsaved">●</span>}
-      <button className="tab-close" aria-label="Close tab" onClick={(e) => { e.stopPropagation(); onClose(); }}><X size="1em" aria-hidden /></button>
+      <button className="tab-close" tabIndex={-1} aria-label="Close tab" onClick={(e) => { e.stopPropagation(); onClose(); }}><X size="1em" aria-hidden /></button>
     </div>
   );
 }
@@ -99,7 +100,8 @@ function PaneView({ pane, focused, last, onClose }: {
   pane: Pane; focused: boolean; last: boolean; onClose: (paneId: string, tabId: string) => void;
 }) {
   const { activate, focus, split, panes, setRail } = useWorkspace();
-  const rail = useWorkspace(railShown);
+  const narrow = useNarrow();
+  const rail = useWorkspace((s) => railShown(s, narrow));
   const active = pane.tabs.find((t) => t.id === pane.active) ?? pane.tabs[0];
   const strip = useRef<HTMLDivElement>(null);
   // The whole document area is white paper when the tab says so (App.css); views that draw dark or light colours redraw.
@@ -114,8 +116,9 @@ function PaneView({ pane, focused, last, onClose }: {
     strip.current?.querySelector(".note-tab-pill.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [active?.id, pane.tabs.length]);
   return (
-    <section className={`pane ${focused ? "focused" : ""}`} onMouseDown={() => !focused && focus(pane.id)}>
-      <div className="note-tabs" role="tablist" ref={strip} onWheel={(e) => { if (e.deltaY) e.currentTarget.scrollLeft += e.deltaY; }}>
+    // The keyboard makes a pane the current one too (Tab into it), so Ctrl+W and Ctrl+S act on the pane with the focus.
+    <section className={`pane ${focused ? "focused" : ""}`} onMouseDown={() => !focused && focus(pane.id)} onFocus={() => !focused && focus(pane.id)}>
+      <div className="note-tabs" role="tablist" aria-label="Open notes and pages" ref={strip} onWheel={(e) => { if (e.deltaY) e.currentTarget.scrollLeft += e.deltaY; }}>
         {pane.tabs.map((t) => <TabPill key={t.id} tab={t} active={t.id === active?.id} onPick={() => activate(pane.id, t.id)} onClose={() => onClose(pane.id, t.id)} />)}
         <NewButton onBefore={() => focus(pane.id)} />
         <span className="fill" />
@@ -125,12 +128,12 @@ function PaneView({ pane, focused, last, onClose }: {
               <button className="icon-button" title="Open this note side by side (Ctrl+\)" aria-label="Split" onClick={() => { focus(pane.id); split(); }}><Columns2 size="1.2em" aria-hidden /></button>
             )}
             <button className={`icon-button ${rail ? "on" : ""}`} title={rail ? "Hide the context rail" : "Show connections, history and outline"} aria-label="Context rail" aria-pressed={rail}
-              onClick={() => setRail(!rail)}><PanelRight size="1.2em" aria-hidden /></button>
+              onClick={() => setRail(!rail, narrow)}><PanelRight size="1.2em" aria-hidden /></button>
           </>
         )}
       </div>
-      <div className="pane-body" data-paper={white ? "" : undefined}>
-        {active ? TAB_VIEWS[active.kind](active) : (
+      <div className="pane-body" data-paper={white ? "" : undefined} role="tabpanel" aria-label={active ? tabLabel(active) : "No tab open"}>
+        {active ? <ErrorBoundary label="This tab" resetKey={active.id} onError={() => void flushAllDrafts()}>{TAB_VIEWS[active.kind](active)}</ErrorBoundary> : (
           <div className="center muted"><p>Open a note or page here: Ctrl+click a link, or press <kbd>Ctrl</kbd>+<kbd>O</kbd>.</p></div>
         )}
       </div>
@@ -145,7 +148,7 @@ export function Workspace() {
   const close = useCloseTab();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
+      if (!(e.ctrlKey || e.metaKey) || modalOpen()) return;
       const ws = useWorkspace.getState();
       const pane = ws.panes.find((p) => p.id === ws.focused) ?? ws.panes[0];
       if (e.key.toLowerCase() === "w") { if (pane?.active) close.request(pane.id, pane.active); }
@@ -157,11 +160,12 @@ export function Workspace() {
       }
       else if (e.key === "Tab") { e.preventDefault(); ws.cycle(e.shiftKey ? -1 : 1); }
       else if (e.key === "\\") { e.preventDefault(); ws.split(); }
-      // An editor that used the key (Rich mode's inline code) has the last word (Codex review of 2392f6b, R1-9).
+      // An editor that used the key has the last word (Codex review of 2392f6b, R1-9). An editing mode (Live or Source)
+      // goes to Reading, anything else to Live, for notes and pages alike (CONR-16).
       else if (e.key.toLowerCase() === "e" && !e.defaultPrevented) {
         e.preventDefault();
         const tab = pane?.tabs.find((t) => t.id === pane.active);
-        if (tab?.kind === "note") ws.updateTab(tab.id, { mode: tab.mode === "live" ? "reading" : "live" });
+        if (tab?.kind === "note") ws.updateTab(tab.id, { mode: tab.mode === "live" || tab.mode === "source" ? "reading" : "live" });
         else if (tab?.kind === "file" && tab.file && isMarkdown(tab.file.path)) ws.updateTab(tab.id, { mode: (tab.mode ?? "live") === "reading" ? "live" : "reading" });
       }
     };

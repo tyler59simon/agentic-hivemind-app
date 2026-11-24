@@ -376,5 +376,8 @@ describe("build", () => {
     expect(buildOutcome({ ok: true, result: result({ failed: [{ page: "pg000002", reason: "bad" }], written: ["pg000001"] }) }, false).kind).toBe("warn");
     expect(buildOutcome({ ok: false, error: "claude is not signed in" }, false)).toEqual({ text: "Wiki build failed: claude is not signed in", kind: "error" });
     expect(buildOutcome({ ok: false, error: "Build cancelled." }, true).kind).toBe("info");
+    // A build that finished before the cancel reached it reads as finished (Codex review of 99ceaea, W3).
+    expect(buildOutcome({ ok: true, result: result() }, true).text).toBe("Wiki build finished: 2 pages written for $1.23.");
+    expect(buildOutcome({ ok: true, result: result({ stopped: "budget", pending: ["pg000003"] }) }, true).text).toMatch(/cancelled/);
   });
 });

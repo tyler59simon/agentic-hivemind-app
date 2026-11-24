@@ -1,4 +1,4 @@
-// Which terminals want the user: a dot on the tab and on the Agent Workspace item. The backend keeps the truth
+// Which terminals want the user: a dot on the tab and on the Agents item. The backend keeps the truth
 // (`term_list` has it, `term-attention` changes it); this store only mirrors it for the page.
 import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
@@ -24,7 +24,7 @@ export function dotOf(kinds: Iterable<Attention | null | undefined>): Attention 
 export const dotTitle = (kind: Attention): string => (kind === "waiting" ? "Waiting for you" : "Finished");
 
 /** Whether the user is already looking at a terminal that just asked for attention, so no dot is needed: the window
- *  has the focus, the Agent Workspace shows the terminal workspace (not the Start screen or a chat session), and the
+ *  has the focus, Agents shows the terminal workspace (not the Start screen or a chat session), and the
  *  terminal is the tab shown in one of the panes (`shown` lists each visible pane's active tab). */
 export function lookingAt(id: string, v: { windowFocused: boolean; page: string; workspace: boolean; shown: (string | null)[] }): boolean {
   return v.windowFocused && v.page === "agents" && v.workspace && v.shown.includes(id);

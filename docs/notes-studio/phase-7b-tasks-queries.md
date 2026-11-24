@@ -22,7 +22,7 @@ Claude surveyed main at `a7e267d` on 2026-11-22. Where the text below says other
   - `--payload-file` goes through `lm_body` with a new allowed flag, as `--settings-file` did in NS-7A.
 - **Living Memory action items** use the existing `open` and `check` wrappers in `src/lib/lm.ts` (`openArgs`, `check ... --index`).
 - **Writes to open pages** go through the document session (`src/documents/store.ts`), as NS-7A's append does for pages in the main window. Closed pages save with the indexed hash and refuse on a mismatch.
-- **Rich editors and frontmatter:** `src/features/rich/markdown.ts` and `fromMarkdown.ts` already carry a frontmatter block through. The properties panel edits the page text, and the open editor follows the document, so Rich, Live and Source stay in step.
+- **Rich editors and frontmatter:** `src/features/rich/markdown.ts` and `fromMarkdown.ts` already carry a frontmatter block through. The properties panel edits the page text, and the open editor follows the document, so Live and Source stay in step.
 
 ## 1. What the user sees
 
@@ -78,7 +78,7 @@ UI pass (Claude, dev app, scratch folder notebook plus the scratch Living Memory
 
 **Deviations**
 - Ticking a task changes only its box. The Tasks done date (`✅ 2026-12-01`) is not added, since the doc does not ask for it; clearing a box does remove an existing done date, which would otherwise say an open task was finished.
-- A `query` block is drawn by the Reading view only. Live, Rich and Source show the fence as code; the **Views** sub-view and **Copy as page block** make and check one.
+- A `query` block is drawn by the Reading view only. Live and Source show the fence as code; the **Views** sub-view and **Copy as page block** make and check one.
 - The index stores `due` but not the priority: the priority is read from the task text in the webview, for index rows and Living Memory rows alike (`doc tasks` has none).
 - The tag of a query is the index's tag set (frontmatter `tags` and `#tags` of the body) for folder notebooks and the `tags` property for Living Memory notebooks, as the survey says.
 - "Link" is a kind a field takes when its value is `[[Page]]`; it is not offered when adding a property.

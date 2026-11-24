@@ -1,18 +1,18 @@
-// Skills: what Hivemind has learned as procedures, where each is published, how sessions that used it went, its versions
-// and history; and the post-session reviewer's recent runs and spending.
+// Notes > Skills (CON-22): what Hivemind has learned as procedures, where each is published, how sessions that used it went, its
+// versions and history; and the post-session reviewer's recent runs. Its spending is in Settings, Spend.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookOpenCheck, History, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { classify } from "../../lib/errors";
 import { learningQuery, skillAction, skillHistory, skillProposalsQuery, skillsQuery, skillsUpkeep, type Skill } from "../../lib/skills";
-import { openInbox, openSession, useApp } from "../../store";
+import { openInbox, openSession, openSettings, useApp } from "../../store";
 import { Markdown } from "../../ui/Markdown";
 import { Confirm } from "../../ui/Modal";
-import { ArrowLink, PageHeader, Row, Section } from "../../ui/Page";
+import { ArrowLink, Row, Section } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { noteQuery } from "../viewer/NoteView";
 import { useWorkspace } from "../../workspace/store";
-import { COPY_WORDS, copyPlace, ledgerText, reliabilityText, runText, skillState, spendText } from "./skills";
+import { COPY_WORDS, copyPlace, ledgerText, reliabilityText, runText, skillState } from "./skills";
 
 const when = (ms: number) => new Date(ms).toLocaleString();
 
@@ -84,9 +84,9 @@ function SkillDetail({ skill }: { skill: Skill }) {
   );
 }
 
-export function SkillsPage() {
+export function SkillsPane() {
   const client = useQueryClient();
-  const picked = useApp((s) => (s.route.page === "skills" ? s.route.skill : undefined));
+  const picked = useApp((s) => (s.route.page === "notes" && s.route.view === "skills" ? s.route.skill : undefined));
   const go = useApp((s) => s.go);
   const skills = useQuery(skillsQuery());
   const proposals = useQuery(skillProposalsQuery());
@@ -101,13 +101,18 @@ export function SkillsPage() {
   }, (e) => toast(classify(e).message, "error"));
   const status = learning.data;
   return (
-    <div className="page fill-page">
-      <PageHeader title="Skills" subtitle="Procedures learned from approved work, published to Claude Code and Codex."
-        actions={<button onClick={upkeep} title="Propose archiving skills unused for 30 days, or whose sessions are mostly rejected">Check for stale skills</button>} />
+    <div className="skills-pane">
+      <div className="section-head">
+        <h2>Skills</h2>
+        <span className="fill" />
+        <button onClick={upkeep} title="Propose archiving skills unused for 30 days, or whose sessions are mostly rejected">Check for stale skills</button>
+      </div>
       <p className="muted small">
+        Procedures learned from approved work, published to Claude Code and Codex.{" "}
         {status ? (status.enabled
-          ? <>The reviewer reads finished sessions and proposes notes and skills; you approve them in the Inbox. Spending: {spendText(status.spentToday, status.dailyUsd)}, at most ${status.reviewUsd.toFixed(2)} per review.</>
-          : <>The post-session reviewer is off (Settings).</>) : null}
+          ? <>The reviewer reads finished sessions and proposes notes and skills; you approve them in the Inbox.</>
+          : <>The post-session reviewer is off.</>) : null}
+        {status && <> <ArrowLink onClick={() => openSettings("learning")}>Learning settings</ArrowLink></>}
         {waiting > 0 && <> <ArrowLink onClick={() => openInbox(undefined, undefined, "skills")}>{waiting} proposal{waiting === 1 ? "" : "s"} waiting in the Inbox</ArrowLink></>}
       </p>
       <div className="review">
@@ -119,7 +124,7 @@ export function SkillsPage() {
             const state = skillState(s);
             return (
               <button key={s.name} className={`review-item ${selected?.name === s.name ? "on" : ""}`} aria-current={selected?.name === s.name}
-                onClick={() => go({ page: "skills", skill: s.name }, { replace: true })}>
+                onClick={() => go({ page: "notes", view: "skills", skill: s.name }, { replace: true })}>
                 <Sparkles size="1.3em" aria-hidden />
                 <span className="grow">{s.name}<br /><span className={`small ${state.tone === "failed" ? "error" : "muted"}`}>{state.label}</span></span>
               </button>

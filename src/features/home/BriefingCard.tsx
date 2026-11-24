@@ -13,7 +13,7 @@ import { useApp } from "../../store";
 import { Confirm, Modal } from "../../ui/Modal";
 import { Section } from "../../ui/Page";
 import { toast } from "../../ui/toast";
-import { automationPut, automationsQuery, type Automation } from "../../lib/workflows";
+import { automationPut, automationsQuery, type Automation } from "../../lib/automations";
 import { useShownEngines } from "../agents/engines";
 import { domainOf, tagsFor } from "../executive/items";
 import { EvidenceList, Gaps } from "../executive/parts";
@@ -88,6 +88,12 @@ const MORNING = "Morning briefing";
 const morningOf = (automations: Automation[], project: string | null) =>
   automations.find((a) => a.name === MORNING && a.action.kind === "executive_briefing" && (a.project || null) === project);
 
+/** A new morning briefing for the scope (a project, or null for all active projects); also made from Settings > Schedules. */
+export const morningBriefing = (project: string | null, enabled: boolean): Automation => ({
+  id: "", name: MORNING, enabled, trigger: { kind: "daily", at: 8 * 60 }, action: { kind: "executive_briefing", briefing: "priorities", days: 1 },
+  project, repo: null, askFirst: false, notify: "failures", budgetUsd: 1, createdAt: 0, lastRun: null, nextDue: null, lastSeen: null,
+});
+
 /** Turn the scope's morning briefing on or off: the first time it makes the automation, after that it flips `enabled`. */
 function MorningToggle({ project }: { project: Project | undefined }) {
   const client = useQueryClient();
@@ -98,10 +104,7 @@ function MorningToggle({ project }: { project: Project | undefined }) {
     if (automations.isError) return;
     setBusy(true);
     try {
-      await automationPut(found ? { ...found, enabled: on } : {
-        id: "", name: MORNING, enabled: on, trigger: { kind: "daily", at: 8 * 60 }, action: { kind: "executive_briefing", briefing: "priorities", days: 1 },
-        project: project?.slug ?? null, repo: null, askFirst: false, notify: "failures", budgetUsd: 1, createdAt: 0, lastRun: null, nextDue: null, lastSeen: null,
-      });
+      await automationPut(found ? { ...found, enabled: on } : morningBriefing(project?.slug ?? null, on));
       await client.invalidateQueries({ queryKey: ["automations"] });
     } catch (e) { toast(classify(e).message, "error"); }
     finally { setBusy(false); }

@@ -8,6 +8,8 @@ import logo from "./assets/logo.png";
 import { Palette } from "./features/palette/Palette";
 import { BeforeUninstall } from "./features/settings/BeforeUninstall";
 import { SettingsForm } from "./features/settings/SettingsForm";
+import { SchedulesSection } from "./features/schedules/SchedulesSection";
+import { MaintenanceSection } from "./features/maintenance/MaintenanceSection";
 import { agentSessions } from "./lib/agent";
 import { captureStatus, connect, domains, setBridgeGeneration } from "./lib/lm";
 import { prefs } from "./lib/prefs";
@@ -15,13 +17,16 @@ import { appQuit, notifyTray, quitAck, termList } from "./lib/term";
 import { useAttentionEvents } from "./features/terminal/attention";
 import { QuitDialog } from "./features/terminal/QuitDialog";
 import { runningSummary } from "./features/terminal/running";
-import { useWikiBuild } from "./features/wiki/build";
+import { listenOnce, useWikiBuild } from "./features/wiki/build";
+import { wikiAgentRunning } from "./lib/wiki";
 import { invalidateWiki } from "./features/wiki/useWiki";
 import { needsLmUpdate, useConnection } from "./lib/connection";
 import { refreshStore } from "./lib/refresh";
 import { Shell } from "./shell/Shell";
-import { openInbox, openSession, useApp } from "./store";
+import { closeSettings, openInbox, openSession, openSettings, useApp } from "./store";
+import { ErrorBoundary } from "./ui/ErrorBoundary";
 import { toast, Toasts } from "./ui/toast";
+import { ZoomBadge } from "./ui/ZoomBadge";
 import { unsavedBinaryFiles, unsavedUntitled, useWorkspace } from "./workspace/store";
 import { onDocsChanged, onFilesChanged, onPageAppended, startDocumentSync, type DocsChanged } from "./documents/sync";
 import { onIndexProgress } from "./features/search/indexState";
@@ -31,6 +36,7 @@ import { useOpenRequests } from "./features/notes/opening";
 import { ComparePicker } from "./features/power/ComparePicker";
 import { newPageHere } from "./features/notes/actions";
 import type { FilesChanged } from "./lib/notebooks";
+import { modalOpen } from "./ui/layers";
 
 /** Shortcuts that work on every page. Ctrl+K and Ctrl+Shift+F belong to the top bar's search; tab ones to the open notes. */
 function useShortcuts() {
@@ -38,6 +44,7 @@ function useShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const { setPalette, go, goBack } = useApp.getState();
+      if (modalOpen()) return; // a dialog is open: nothing behind it changes (DESK-4)
       if (e.altKey && e.key === "ArrowLeft") { e.preventDefault(); goBack(); return; }
       if (!(e.ctrlKey || e.metaKey)) return;
       const key = e.key.toLowerCase();
@@ -59,7 +66,10 @@ function useShortcuts() {
 /** What runs now: terminals, chat turns and a wiki build, one line each. The terminal and chat lines are left out when their lists cannot be read. */
 async function running(): Promise<string[]> {
   const lists = await Promise.all([termList(), agentSessions()]).catch(() => null);
-  return runningSummary(lists?.[0] ?? [], lists?.[1] ?? [], useWikiBuild.getState().running);
+  // Rust's own view covers a rebuild the window has not heard of yet (Codex re-review of 55cfab2).
+  const native = useWikiBuild.getState().running ? null : await wikiAgentRunning().catch(() => null);
+  const wiki = useWikiBuild.getState().running ?? (native && { domain: native.domain, project: native.scope === "domain" ? "" : native.scope });
+  return runningSummary(lists?.[0] ?? [], lists?.[1] ?? [], wiki);
 }
 
 /** Before any quit: write every pending notebook page draft and wait for it. Edits that cannot be kept are named, and
@@ -173,6 +183,9 @@ function useLiveRefresh(enabled: boolean) {
   const client = useQueryClient();
   useEffect(() => {
     if (!enabled) return;
+    // The wiki build's listeners stay for the app's life: a scheduled rebuild then shows in the quit summary even when the wiki
+    // was never opened (Codex review of 99ceaea, W2).
+    listenOnce(client).catch(() => undefined);
     const stops = [
       listen("notes-changed", () => refreshStore(client)),
       listen("store-changed", () => {
@@ -193,9 +206,11 @@ function useLiveRefresh(enabled: boolean) {
         client.invalidateQueries({ queryKey: ["proposals"] });
       }),
       listen("architecture-drift", () => client.invalidateQueries({ queryKey: ["architecture", "drift"] })),
-      listen("workflows-changed", () => client.invalidateQueries({ queryKey: ["workflows"] })),
       listen("automations-changed", () => client.invalidateQueries({ queryKey: ["automations"] })),
-      listen<string>("executive-changed", (e) => client.invalidateQueries({ queryKey: ["executive", e.payload] })),
+      listen<string>("executive-changed", (e) => {
+        client.invalidateQueries({ queryKey: ["executive", e.payload] });
+        client.invalidateQueries({ queryKey: ["learning"] }); // a briefing spends the learning budget (Codex review of 99ceaea, B3)
+      }),
       listen<{ ref: string }>("open-note", (e) => useWorkspace.getState().openNote(e.payload.ref)),
       listen<{ notebook: string; path: string }>("page-appended", (e) => onPageAppended(client, e.payload)),
       listen<FilesChanged>("files-changed", (e) => onFilesChanged(client, e.payload)),
@@ -206,10 +221,23 @@ function useLiveRefresh(enabled: boolean) {
   }, [enabled, client]);
 }
 
+/** Settings while it is open. A link that opened it at a section (or at one automation) scrolls there once it has drawn. */
+export function useSettingsScroll() {
+  const settings = useApp((s) => s.settings);
+  useEffect(() => {
+    if (!settings?.section) return;
+    const ids = [...(settings.automation ? [`automation-${settings.automation}`] : []), `settings-${settings.section}`];
+    const frame = requestAnimationFrame(() => ids.map((id) => document.getElementById(id)).find(Boolean)?.scrollIntoView({ block: "start" }));
+    return () => cancelAnimationFrame(frame);
+  }, [settings]);
+  return settings;
+}
+
 export default function App() {
   const app = useApp();
   const client = useQueryClient();
-  const [settings, setSettings] = useState(false);
+  const settings = useSettingsScroll();
+  const setSettings = (open: boolean) => (open ? openSettings() : closeSettings());
   const link = useQuery({ queryKey: ["connect"], queryFn: connect, retry: false, staleTime: Infinity });
   const known = useQuery({ queryKey: ["domains"], queryFn: domains, enabled: link.isSuccess });
   useShortcuts();
@@ -236,7 +264,7 @@ export default function App() {
     if (first) app.setDomain(first.name);
   }, [known.data, app]);
 
-  const reconnect = useCallback(() => { setSettings(false); client.resetQueries(); }, [client]);
+  const reconnect = useCallback(() => { closeSettings(); client.resetQueries(); }, [client]);
 
   // The dialogs belong to every branch: tray Quit must show its dialog while Settings is open or the connection has failed.
   const dialogs = <>{closeGuard}{quitDialog}{folderOffer}</>;
@@ -251,12 +279,15 @@ export default function App() {
             {link.error && <p className="error">{String(link.error)}</p>}
             {outdated && <p className="error">This version of Living Memory is too old: Hivemind needs one with direct writes and unified proposals (<code>alm version</code> lists <code>direct_writes</code> and <code>proposals</code> under capabilities). Update Living Memory, then reconnect.</p>}
             <SettingsForm onSaved={reconnect} />
+            {link.isSuccess && !outdated && <><SchedulesSection /><MaintenanceSection /></>}
             <BeforeUninstall
               onOpenReview={link.isSuccess && !outdated ? (id) => { setSettings(false); openInbox(id); } : undefined}
               onOpenSession={link.isSuccess && !outdated ? (id) => { setSettings(false); openSession(id); } : undefined} />
             {link.isSuccess && !outdated && <button className="link" onClick={() => setSettings(false)}>Back</button>}
           </div>
         </main>
+        {/* Schedules and Maintenance report through toasts (Codex review of 857ec37, S1). */}
+        <Toasts />
         {dialogs}
       </>
     );
@@ -264,10 +295,14 @@ export default function App() {
 
   return (
     <>
-      <Shell info={link.data!} onSettings={() => setSettings(true)} onReconnect={reconnect} />
-      <Palette onSettings={() => setSettings(true)} onReconnect={reconnect} />
-      <ComparePicker />
+      {/* Inside App, so the close guard and tray Quit keep working when the shell fails (DESK-1). */}
+      <ErrorBoundary label="Hivemind" onError={() => void flushAllDrafts()} hint="Your unsaved edits are kept as drafts, and running terminals and agent sessions keep running.">
+        <Shell info={link.data!} onSettings={() => setSettings(true)} onReconnect={reconnect} />
+        <Palette onSettings={() => setSettings(true)} onReconnect={reconnect} />
+        <ComparePicker />
+      </ErrorBoundary>
       <Toasts />
+      <ZoomBadge />
       {dialogs}
     </>
   );

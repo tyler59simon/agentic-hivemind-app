@@ -5,15 +5,17 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { classify } from "../../lib/errors";
 import { toast } from "../../ui/toast";
-import { automationPut, automationsQuery, type Automation } from "../../lib/workflows";
+import { automationPut, automationsQuery, type Automation } from "../../lib/automations";
 import { usd } from "./wiki";
 
 export const WEEKLY_REBUILD = "Weekly wiki rebuild";
-const CAP_USD = 2;
+export const WIKI_REBUILD_CAP_USD = 2;
+const CAP_USD = WIKI_REBUILD_CAP_USD;
 
 /** The project's weekly rebuild, if one was made. */
 export const rebuildOf = (automations: Automation[], project: string) =>
-  automations.find((a) => a.name === WEEKLY_REBUILD && a.action.kind === "wiki_rebuild" && a.project === project);
+  // By kind and project, not by name: the name can be edited in Settings, Schedules (Codex re-review of 55cfab2).
+  automations.find((a) => a.action.kind === "wiki_rebuild" && a.project === project);
 
 const when = (ms: number) => new Date(ms).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 

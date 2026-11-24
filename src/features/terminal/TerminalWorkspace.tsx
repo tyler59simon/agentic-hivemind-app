@@ -5,6 +5,8 @@ import { agentRename, agentTranscript, agentUsage, engineOf, enginesText, review
 import { getSettings } from "../../lib/lm";
 import { OTHER_FOLDERS, otherFolders, realProject } from "../../lib/folders";
 import { openInbox, openSession, openSystem, startSession, useApp } from "../../store";
+import { ContextMenu } from "../../ui/ContextMenu";
+import { tabKey } from "../../ui/focus";
 import { Menu } from "../../ui/Menu";
 import { Confirm } from "../../ui/Modal";
 import { ArrowLink, Row, Section, Tabs } from "../../ui/Page";
@@ -167,6 +169,8 @@ function PaneView({ index, tabs, activeId, views, onView, focused, split, over, 
   const session = active && !isShell(active) ? active : undefined;
   const shell = active && isShell(active) ? active : undefined;
   const [renaming, setRenaming] = useState<string | null>(null);
+  // The menu of one tab (right-click, Shift+F10 or the Menu key), with the tab's own actions (DESK-6).
+  const [tabMenu, setTabMenu] = useState<{ s: (typeof tabs)[number]; x: number; y: number; from: HTMLElement } | null>(null);
   const attention = useAttention((a) => a.byId);
   const live = registry.useLive(active?.id ?? "");
   const running = registry.useRunning(session ?? (shell ? { id: shell.id, status: shell.running ? "running" : "ended" } : { id: "", status: "idle" }));
@@ -209,21 +213,35 @@ function PaneView({ index, tabs, activeId, views, onView, focused, split, over, 
           const dot = dotOf([attention[s.id]]);
           const title = isShell(s) ? shellTitle(s) : `${s.title} · ${whereLabel(s)}`;
           return (
-            <div key={s.id} role="tab" aria-selected={on} className={`note-tab-pill ${on ? "on" : ""}`} title={title}
+            <div key={s.id} role="tab" aria-selected={on} tabIndex={on ? 0 : -1} className={`note-tab-pill ${on ? "on" : ""}`} title={title}
               onPointerDown={(e) => onDragStart(e, s)}
-              onClick={() => { if (!clicked()) onTab(s); }} onAuxClick={(e) => { if (e.button === 1) onClose(s); }}>
+              onClick={() => { if (!clicked()) onTab(s); }} onAuxClick={(e) => { if (e.button === 1) onClose(s); }}
+              onContextMenu={(e) => { e.preventDefault(); setTabMenu({ s, x: e.clientX, y: e.clientY, from: e.currentTarget }); }}
+              onKeyDown={(e) => {
+                if (e.key === "F2" && !isShell(s) && e.target === e.currentTarget) { e.preventDefault(); setRenaming(s.id); return; }
+                const from = e.currentTarget;
+                tabKey(e, { open: () => onTab(s), close: () => onClose(s), menu: (at) => setTabMenu({ s, ...at, from }) });
+              }}>
               {dot && <span className={`tab-attention ${dot}`} role="img" title={dotTitle(dot)} aria-label={dotTitle(dot)} />}
               {isShell(s) ? <span className="tab-label">{shellLabel(s)}</span>
                 : renaming === s.id
                   ? <RenameInput s={s} onDone={() => setRenaming(null)} />
                   : <span className="tab-label" onDoubleClick={() => setRenaming(s.id)}>{tabLabel(s)}</span>}
-              {!isShell(s) && <button className="tab-close tab-move" aria-label="Open PowerShell here" title="Open PowerShell here" onClick={(e) => { e.stopPropagation(); onShell({ session: s.id }); }}><SquareTerminal size="1em" aria-hidden /></button>}
-              {split && <button className="tab-close tab-move" aria-label="Move to other pane" title="Move to other pane" onClick={(e) => { e.stopPropagation(); onMove(s); }}><ArrowRightLeft size="1em" aria-hidden /></button>}
-              <button className="tab-close" aria-label="Close terminal" onClick={(e) => { e.stopPropagation(); onClose(s); }}><X size="1em" aria-hidden /></button>
+              {!isShell(s) && <button className="tab-close tab-move" tabIndex={-1} aria-label="Open PowerShell here" title="Open PowerShell here" onClick={(e) => { e.stopPropagation(); onShell({ session: s.id }); }}><SquareTerminal size="1em" aria-hidden /></button>}
+              {split && <button className="tab-close tab-move" tabIndex={-1} aria-label="Move to other pane" title="Move to other pane" onClick={(e) => { e.stopPropagation(); onMove(s); }}><ArrowRightLeft size="1em" aria-hidden /></button>}
+              <button className="tab-close" tabIndex={-1} aria-label="Close terminal" onClick={(e) => { e.stopPropagation(); onClose(s); }}><X size="1em" aria-hidden /></button>
             </div>
           );
         })}
       </div>
+      {tabMenu && (
+        <ContextMenu at={tabMenu} from={tabMenu.from} label={`${isShell(tabMenu.s) ? shellLabel(tabMenu.s) : tabLabel(tabMenu.s)} actions`} onClose={() => setTabMenu(null)}>
+          {!isShell(tabMenu.s) && <li role="none"><button role="menuitem" onClick={() => { const id = tabMenu.s.id; setTabMenu(null); setRenaming(id); }}>Rename</button></li>}
+          {!isShell(tabMenu.s) && <li role="none"><button role="menuitem" onClick={() => { const id = tabMenu.s.id; setTabMenu(null); onShell({ session: id }); }}>Open PowerShell here</button></li>}
+          {split && <li role="none"><button role="menuitem" onClick={() => { const t = tabMenu.s; setTabMenu(null); onMove(t); }}>Move to other pane</button></li>}
+          <li role="none"><button role="menuitem" className="danger-text" onClick={() => { const t = tabMenu.s; setTabMenu(null); onClose(t); }}>Close</button></li>
+        </ContextMenu>
+      )}
         <Menu className="icon-menu" label="New terminal" button={<Plus size="1.2em" aria-hidden />}>
           {(close) => (
             <>

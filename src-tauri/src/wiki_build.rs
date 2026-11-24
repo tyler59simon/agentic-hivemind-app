@@ -22,6 +22,9 @@ pub const CANCELLED: &str = "Build cancelled.";
 struct Running {
     pid: Option<u32>,
     cancelled: bool,
+    /// What is being built, for `active`: the domain and the scope (a project, or "domain").
+    domain: String,
+    scope: String,
 }
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
 
@@ -128,6 +131,11 @@ pub fn summary(result: &Value) -> (String, f64) {
         text.push_str(&format!(", {pending} left"));
     }
     (text, cost)
+}
+
+/// Whether a finished build left pages failed or unbuilt; a scheduled rebuild then ends as a failure (WIKI-R2).
+pub fn incomplete(result: &Value) -> bool {
+    ["failed", "pending"].iter().any(|key| result.get(*key).and_then(Value::as_array).is_some_and(|a| !a.is_empty()))
 }
 
 /// A domain or project goes to Living Memory as one argument; one that starts with `-` would read as a flag.
@@ -249,6 +257,12 @@ fn mark_cancelled() -> Option<u32> {
     r.pid
 }
 
+/// The build running now, as `{ domain, scope }`, whoever started it: the frontend asks when it cannot rely on the events it
+/// saw (a rebuild that started before it listened, or one whose done event was lost; Codex re-review of 55cfab2).
+pub fn active() -> Option<Value> {
+    running().as_ref().map(|r| json!({ "domain": r.domain, "scope": r.scope }))
+}
+
 /// Stop the running build, if any. The edition keeps the pages it already wrote. It returns at once; on Unix the stop can take up
 /// to `TERM_GRACE`, on a thread of its own.
 pub fn cancel() {
@@ -307,7 +321,7 @@ pub fn run(emit: &dyn Fn(&str, Value), launch: &Launch, domain: &str, project: O
         if slot.is_some() {
             return Err("A wiki build is already running.".into());
         }
-        *slot = Some(Running { pid: None, cancelled: false });
+        *slot = Some(Running { pid: None, cancelled: false, domain: domain.into(), scope: scope.into() });
         Some(Clear)
     };
     let claude = if dry_run { None } else { claude() };
@@ -477,6 +491,14 @@ mod tests {
     }
 
     #[test]
+    fn a_build_with_failed_or_unbuilt_pages_is_incomplete() {   // WIKI-R2
+        assert!(!incomplete(&json!({ "ok": true, "written": ["pg000001"], "failed": [], "pending": [] })));
+        assert!(!incomplete(&json!({ "ok": true })));
+        assert!(incomplete(&json!({ "written": [], "failed": [{ "page": "pg000002", "reason": "x" }], "pending": [] })));
+        assert!(incomplete(&json!({ "written": [], "failed": [], "pending": ["pg000003"] })));
+    }
+
+    #[test]
     fn a_name_that_reads_as_a_flag_is_refused() {
         assert!(check_name("domain", "demo").is_ok());
         assert!(check_name("domain", "--help").is_err());
@@ -541,7 +563,8 @@ mod tests {
         seen.lock().unwrap().clear();
 
         // A cancel that came before the child existed (the slot is taken, no pid yet) keeps the child from starting.
-        *running() = Some(Running { pid: None, cancelled: true });
+        *running() = Some(Running { pid: None, cancelled: true, domain: "demo".into(), scope: "domain".into() });
+        assert_eq!(active(), Some(json!({ "domain": "demo", "scope": "domain" })));
         assert_eq!(spawn(&launch, &build_argv("demo", None, None, false, false), None, true).err(), Some(CANCELLED.to_string()));
         *running() = None;
         assert_eq!(mark_cancelled(), None); // nothing to cancel when no build runs

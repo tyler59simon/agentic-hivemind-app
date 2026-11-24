@@ -62,20 +62,51 @@ export function buildTree(entries: Entry[], meta?: NotebookMeta): Node[] {
   return build("");
 }
 
-export interface Row { node: Node; depth: number; open: boolean }
+/** What a tree row shows: a page without its extension, anything else by its name. */
+export const nodeLabel = (node: Node) => (node.kind === "page" ? node.name.replace(PAGE, "") : node.name);
+
+/** A row on screen. `parent` is the path of the row it sits under (null at the top), and `posinset` and `setsize` are its
+ *  place among its siblings, from 1, for screen readers (DESK-6). */
+export interface Row { node: Node; depth: number; open: boolean; parent: string | null; posinset: number; setsize: number }
 
 /** The rows on screen: every node whose ancestors are all open. */
 export function visibleRows(tree: Node[], open: Set<string>): Row[] {
   const rows: Row[] = [];
-  const walk = (nodes: Node[], depth: number) => {
-    for (const node of nodes) {
+  const walk = (nodes: Node[], depth: number, parent: string | null) => {
+    nodes.forEach((node, i) => {
       const isOpen = open.has(low(node.path));
-      rows.push({ node, depth, open: isOpen });
-      if (isOpen && node.children.length) walk(node.children, depth + 1);
-    }
+      rows.push({ node, depth, open: isOpen, parent, posinset: i + 1, setsize: nodes.length });
+      if (isOpen && node.children.length) walk(node.children, depth + 1, node.path);
+    });
   };
-  walk(tree, 0);
+  walk(tree, 0, null);
   return rows;
+}
+
+export type TreeMove = { focus: number } | { expand: string } | { collapse: string } | null;
+
+/** What an arrow key, Home or End does on row `at` (WAI-ARIA tree pattern): move up or down, Right opens a closed branch or
+ *  goes to its first child, Left closes an open branch or goes to the parent. */
+export function treeMove(rows: Row[], at: number, key: string): TreeMove {
+  const row = rows[at];
+  if (!row) return rows.length ? { focus: 0 } : null;
+  const branch = row.node.kind === "dir" || row.node.children.length > 0;
+  switch (key) {
+    case "ArrowDown": return at + 1 < rows.length ? { focus: at + 1 } : null;
+    case "ArrowUp": return at > 0 ? { focus: at - 1 } : null;
+    case "Home": return { focus: 0 };
+    case "End": return { focus: rows.length - 1 };
+    case "ArrowRight":
+      if (!branch) return null;
+      if (!row.open) return { expand: row.node.path };
+      return rows[at + 1]?.parent === row.node.path ? { focus: at + 1 } : null;
+    case "ArrowLeft": {
+      if (branch && row.open) return { collapse: row.node.path };
+      const parent = row.parent === null ? -1 : rows.findIndex((r) => r.node.path === row.parent);
+      return parent >= 0 ? { focus: parent } : null;
+    }
+    default: return null;
+  }
 }
 
 /** Where a dragged path goes when dropped on `target`: into a section, under a page as a subpage, or null when the

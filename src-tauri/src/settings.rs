@@ -38,7 +38,7 @@ pub struct Settings {
     /// in one day, in US dollars; None means the default.
     #[serde(default)]
     pub learning_daily_usd: Option<f64>,
-    /// The most the sessions and workflows automations start may spend in one day, in US dollars; None means the default.
+    /// The most the sessions and wiki rebuilds automations start may spend in one day, in US dollars; None means the default.
     #[serde(default)]
     pub automation_daily_usd: Option<f64>,
     /// The most one reviewer call may spend, in US dollars; None means the default.
@@ -61,6 +61,9 @@ pub struct Settings {
     /// and the one-shot calls are refused otherwise. Managed hooks then run in them.
     #[serde(default)]
     pub claude_under_managed_policy: Option<bool>,
+    /// Zoom of every window, 1.0 for 100% (DESK-ZOOM). Changed only by `ui_zoom_set`.
+    #[serde(default)]
+    pub ui_zoom: Option<f64>,
 }
 
 pub const DEFAULT_CAPTURE_SHORTCUT: &str = "CommandOrControl+Alt+M";
@@ -100,12 +103,17 @@ impl Settings {
         self.learning_reviewer.unwrap_or(true)
     }
 
+    /// The window zoom, 1.0 when unset or out of range.
+    pub fn ui_zoom(&self) -> f64 {
+        self.ui_zoom.map(clamp_zoom).unwrap_or(1.0)
+    }
+
     /// The daily cap for the reviewer and the executive calls; zero turns them off.
     pub fn learning_daily_usd(&self) -> f64 {
         daily(self.learning_daily_usd, DEFAULT_LEARNING_DAILY_USD)
     }
 
-    /// The daily cap for the sessions and workflows automations start; zero turns them off. Before this cap existed, a
+    /// The daily cap for the sessions and wiki rebuilds automations start; zero turns them off. Before this cap existed, a
     /// learning cap of zero also stopped these automations, so a settings file from then keeps them stopped.
     pub fn automation_daily_usd(&self) -> f64 {
         let off_before = self.automation_daily_usd.is_none() && self.learning_daily_usd == Some(0.0);
@@ -160,6 +168,29 @@ pub struct Launch {
     pub args: Vec<String>,
     pub script: PathBuf,
     pub root: Option<PathBuf>,
+}
+
+/// The smallest and largest window zoom.
+pub const ZOOM_MIN: f64 = 0.5;
+pub const ZOOM_MAX: f64 = 2.0;
+
+/// A zoom inside the allowed range; anything that is not a number is 100%.
+pub fn clamp_zoom(zoom: f64) -> f64 {
+    if zoom.is_finite() { zoom.clamp(ZOOM_MIN, ZOOM_MAX) } else { 1.0 }
+}
+
+/// Serialises read, change and write of the settings file, so two commands that each change one field never undo
+/// each other's change.
+static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Load the settings, let `change` edit them, and save them, with no other writer in between. Nothing is saved when
+/// `change` fails.
+pub fn update<T>(path: &Path, change: impl FnOnce(&mut Settings) -> Result<T, String>) -> Result<T, String> {
+    let _held = WRITE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut saved = load(path);
+    let out = change(&mut saved)?;
+    save(path, &saved)?;
+    Ok(out)
 }
 
 pub fn load(path: &Path) -> Settings {
@@ -217,6 +248,35 @@ pub fn resolve(saved: &Settings, env: impl Fn(&str) -> Option<String>) -> Launch
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zoom_is_clamped_and_defaults_to_100_percent() {   // DESK-ZOOM
+        assert_eq!(Settings::default().ui_zoom(), 1.0);
+        assert_eq!(Settings { ui_zoom: Some(1.25), ..Default::default() }.ui_zoom(), 1.25);
+        assert_eq!(Settings { ui_zoom: Some(9.0), ..Default::default() }.ui_zoom(), ZOOM_MAX);
+        assert_eq!(Settings { ui_zoom: Some(0.1), ..Default::default() }.ui_zoom(), ZOOM_MIN);
+        assert_eq!(clamp_zoom(f64::NAN), 1.0);
+        assert_eq!(clamp_zoom(f64::INFINITY), 1.0);
+        // A file from before the field still loads, and one with it keeps it.
+        let old: Settings = serde_json::from_str(r#"{"python": "py"}"#).unwrap();
+        assert_eq!((old.python.as_deref(), old.ui_zoom), (Some("py"), None));
+        let new: Settings = serde_json::from_str(r#"{"ui_zoom": 1.5}"#).unwrap();
+        assert_eq!(new.ui_zoom(), 1.5);
+    }
+
+    #[test]
+    fn update_saves_the_change_and_saves_nothing_when_it_fails() {
+        let dir = std::env::temp_dir().join(format!("hivemind-settings-update-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        save(&path, &Settings { python: Some("py".into()), ..Default::default() }).unwrap();
+        let kept = update(&path, |s| { s.ui_zoom = Some(1.1); Ok(7) }).unwrap();
+        assert_eq!(kept, 7);
+        assert_eq!(load(&path), Settings { python: Some("py".into()), ui_zoom: Some(1.1), ..Default::default() });
+        let failed: Result<(), String> = update(&path, |s| { s.python = None; Err("no".into()) });
+        assert_eq!(failed, Err("no".to_string()));
+        assert_eq!(load(&path).python.as_deref(), Some("py"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn env_beats_saved_beats_default() {

@@ -1,4 +1,4 @@
-// Keeps the documents store and the workspace in step: a tab showing an unsaved page gets the unsaved dot, and a page
+// Keeps the documents store, the note sessions and the workspace in step: a tab showing an unsaved page or note gets the unsaved dot, and a page
 // no tab shows any more is let go (its draft stays). Also routes the notebook watcher's events.
 import type { QueryClient } from "@tanstack/react-query";
 import { movedPath } from "./keys";
@@ -10,6 +10,8 @@ import { useWorkspace } from "../workspace/store";
 import { toast } from "../ui/toast";
 import { keyOf, onReleaseRefused, refresh, release, retarget, useDocuments } from "./store";
 import { isUnsaved } from "./session";
+import { currentStore, sessionKey, useNoteSessions } from "../features/editor/noteSessions";
+import { isDirty } from "../features/editor/save";
 
 let paused = false;
 
@@ -21,6 +23,8 @@ function apply() {
     !!ref && held.some((h) => h.notebook === ref.notebook && movedPath(ref.path, h.from, h.from) !== null);
   const docxSessions = useDocxStore.getState().sessions;
   const pdfSessions = usePdfStore.getState().sessions;
+  const { sessions } = useNoteSessions.getState();
+  const store = currentStore();
   const shown = new Set<string>();
   const shownDocx = new Set<string>();
   const shownPdf = new Set<string>();
@@ -32,6 +36,17 @@ function apply() {
         keys.forEach((k) => shown.add(k));
         const dirty = keys.some((k) => isUnsaved(docs[k]));
         if (!!ws.dirty[tab.id] !== dirty) ws.setDirty(tab.id, dirty);
+        continue;
+      }
+      // A note tab follows the note's shared editing session while one is open, so a twin in Reading or History, or an
+      // inactive one, loses its dot when the other pane saves (CONR-16). With no session the dot stays as it was: it then
+      // marks edits kept as a draft.
+      if (tab.kind === "note" && tab.ref) {
+        const session = store === undefined ? undefined : sessions[sessionKey(store, tab.ref)];
+        if (session?.st) {
+          const dirty = isDirty(session.st.base, session.st.mine);
+          if (!!ws.dirty[tab.id] !== dirty) ws.setDirty(tab.id, dirty);
+        }
         continue;
       }
       if (tab.kind !== "file" || !tab.file) continue;
@@ -67,6 +82,7 @@ export function startDocumentSync() {
   const stops = [
     useWorkspace.subscribe(apply),
     useDocuments.subscribe(apply),
+    useNoteSessions.subscribe(apply),
     useDocxStore.subscribe(apply),
     usePdfStore.subscribe(apply),
   ];

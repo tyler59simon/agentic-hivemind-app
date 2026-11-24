@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, GitFork, Hash, Kanban, ListChecks, NotebookPen, Plus } from "lucide-react";
+import { BookOpen, GitFork, Hash, Kanban, ListChecks, NotebookPen, Plus, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { lmContainer } from "../../documents/adapters/lmdoc";
 import { useConnection, useDocsEnabled, useFolderProposalsEnabled, useWikiEnabled } from "../../lib/connection";
@@ -9,6 +9,7 @@ import { addNotebook, notebooksQuery, type Notebook } from "../../lib/notebooks"
 import { openInbox, useApp } from "../../store";
 import { toast } from "../../ui/toast";
 import { ContextRail } from "../../workspace/RightSidebar";
+import { useNarrow } from "../../lib/narrow";
 import { hasTabs, railShown, useWorkspace } from "../../workspace/store";
 import { statusQuery } from "../../lib/noteindex";
 import { GraphView } from "../graph/GraphView";
@@ -16,6 +17,7 @@ import { RewriteDialog } from "../links/RewriteDialog";
 import { useCurrentProject } from "../projects/useProject";
 import { progressLine, useIndexState } from "../search/indexState";
 import { TaxonomyView } from "../taxonomy/TaxonomyView";
+import { SkillsPane } from "../skills/SkillsPane";
 import { WikiPane } from "../wiki/WikiPane";
 import { Workspace } from "../../workspace/Workspace";
 import { newPageHere, openPage } from "./actions";
@@ -94,7 +96,8 @@ export function NotesPage() {
   const go = useApp((s) => s.go);
   const { project } = useCurrentProject();
   const open = useWorkspace(hasTabs);
-  const rail = useWorkspace(railShown);
+  const narrow = useNarrow();
+  const rail = useWorkspace((s) => railShown(s, narrow));
   const add = useAddNotebook();
   const [settings, setSettings] = useState<Notebook | null>(null);
   const [lmSettings, setLmSettings] = useState<DocNotebook | null>(null);
@@ -135,6 +138,7 @@ export function NotesPage() {
           <button type="button" className={`link-row${route.page === "notes" && route.view === "tags" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "tags" })}><Hash size="1em" aria-hidden /> Tags</button>
           <button type="button" className={`link-row${route.page === "notes" && route.view === "graph" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "graph" })}><GitFork size="1em" aria-hidden /> Graph</button>
           {wikiOn && <button type="button" className={`link-row${route.page === "notes" && route.view === "wiki" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "wiki" })}><BookOpen size="1em" aria-hidden /> Wiki</button>}
+          <button type="button" className={`link-row${route.page === "notes" && route.view === "skills" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "skills" })}><Sparkles size="1em" aria-hidden /> Skills</button>
         </div>
         <MemoryTree tree={memory} />
         {notebooks.isLoading && <p className="muted small pad" role="status">Loading notebooks…</p>}
@@ -164,17 +168,18 @@ export function NotesPage() {
       </nav>
       {route.page === "notes" && route.view
         ? (
-          <div className={`notes-lists${route.view === "graph" ? " notes-graph" : ""}`}>
+          <div className={`notes-lists${route.view === "graph" ? " notes-graph" : route.view === "skills" ? " notes-skills" : ""}`}>
             {route.view === "tasks" ? <TasksView />
               : route.view === "views" ? <ViewsPage />
               : route.view === "tags" ? <TaxonomyView />
               : route.view === "wiki" ? <WikiPane />
+              : route.view === "skills" ? <SkillsPane />
               : route.view === "graph" ? <GraphView key={project?.tag ?? ""} projectTag={project?.tag} projectName={project?.name} />
               : null}
           </div>
         )
         : open
-        ? <div className="notes-area"><Workspace />{rail && <ContextRail />}</div>
+        ? <div className={`notes-area${narrow ? " narrow" : ""}`}><Workspace />{rail && <ContextRail />}</div>
         : empty ? <Empty onAdd={add} onNew={newNotebook} />
         : (
           <div className="center muted">

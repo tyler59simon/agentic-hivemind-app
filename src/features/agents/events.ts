@@ -88,3 +88,21 @@ export function duration(ms: number | null | undefined): string {
 }
 
 export const cost = (usd: number | null | undefined) => (usd == null ? "" : `$${usd.toFixed(2)}`);
+
+/** What a screen reader hears about the transcript items from `from` on (DESK-7): a permission request, which waits and
+ *  is urgent, and the end of a turn. Tool calls and text are not read out: they come too fast. Null when nothing is. */
+export function announcement(items: Item[], from: number, agent: string): { text: string; urgent: boolean } | null {
+  const said: string[] = [];
+  let urgent = false;
+  for (const item of items.slice(from)) {
+    if (item.kind === "approval" && !item.decision) { said.push(`${agent} asks to use ${item.tool}: ${item.summary}`); urgent = true; }
+    else if (item.kind === "turn") {
+      said.push(item.outcome === "completed" ? `${agent} finished its turn.`
+        : item.outcome === "stopped" ? `${agent} stopped.`
+        : item.outcome === "budget" ? `${agent} stopped: the budget is used up.`
+        : `${agent}'s turn failed${item.reason ? `: ${item.reason}` : "."}`);
+      if (item.outcome === "error") urgent = true;
+    }
+  }
+  return said.length ? { text: said.join(" "), urgent } : null;
+}

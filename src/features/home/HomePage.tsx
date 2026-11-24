@@ -40,6 +40,7 @@ import { MilestonesDialog } from "./MilestonesDialog";
 import { EntryRows, OpenList, useTick } from "./OpenList";
 import { AgentActivity, NeedsReview, SystemContext } from "./panels";
 import { Since, useVisit } from "./Since";
+import { modalOpen } from "../../ui/layers";
 
 const oneLine = (text?: string) => (text ?? "").replace(/\s+/g, " ").trim();
 
@@ -49,7 +50,7 @@ function useCapture(projects: Project[], project: Project | undefined): { start:
   const go = useApp((s) => s.go);
   const [capturing, setCapturing] = useState(false);
   useEffect(() => {
-    const key = (e: KeyboardEvent) => { if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "c") { e.preventDefault(); setCapturing(true); } };
+    const key = (e: KeyboardEvent) => { if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "c" && !modalOpen()) { e.preventDefault(); setCapturing(true); } };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, []);

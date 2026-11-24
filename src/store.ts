@@ -6,7 +6,8 @@ import { createJSONStorage, persist, type StateStorage } from "zustand/middlewar
 /** The Inbox's groups: each is a tab of the page. */
 export type InboxKind = "code" | "memory" | "pages" | "captures" | "maintenance" | "architecture" | "skills";
 
-/** One page per sidebar section. Notes holds the notebook and memory trees and the open documents; `view: "wiki"` shows the wiki of the
+/** One page per sidebar section. Notes holds the notebook and memory trees and the open documents; `view: "skills"` shows the
+ *  skills library (on `skill` when given); `view: "wiki"` shows the wiki of the
  *  picked project, at the page `at` of `domain` and in the agent-written `edition`, or with `whole` the wiki of the whole domain.
  *  Home shows the picked project (or all of them); `view: "briefings"` opens its
  *  list of briefings, `briefing` one briefing, and `capture` the review of one capture batch; `tab: "architecture"` shows the
@@ -14,12 +15,12 @@ export type InboxKind = "code" | "memory" | "pages" | "captures" | "maintenance"
 export type Route =
   | { page: "home"; view?: "briefings"; briefing?: string; capture?: string; tab?: "architecture"; system?: string }
   | { page: "agents"; session?: string; view?: "new" }
-  | { page: "notes"; notebook?: string; path?: string; view?: "tasks" | "views" | "tags" | "graph" | "wiki"; ref?: string; domain?: string; at?: string; edition?: "agent"; whole?: true }
-  | { page: "maintenance" }
-  | { page: "inbox"; session?: string; file?: string; kind?: InboxKind }
-  | { page: "skills"; skill?: string }
-  | { page: "workflows"; tab?: "runs" | "automations"; run?: string; automation?: string };
+  | { page: "notes"; notebook?: string; path?: string; view?: "tasks" | "views" | "tags" | "graph" | "wiki" | "skills"; ref?: string; domain?: string; at?: string; edition?: "agent"; whole?: true; skill?: string }
+  | { page: "inbox"; session?: string; file?: string; kind?: InboxKind };
 export type Page = Route["page"];
+
+/** The Settings sections a link can open at. Settings is not a route: it replaces the whole shell while it is open. */
+export type SettingsSection = "learning" | "spend" | "schedules" | "maintenance";
 
 export const safeStorage: StateStorage = {
   getItem: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
@@ -38,6 +39,9 @@ interface AppState {
   route: Route;
   /** Earlier routes, oldest first, for Back. */
   back: Route[];
+  /** Settings while it is open, at a section when a link asked for one; null when closed. Not kept over a restart. */
+  /** Settings while it is open: the section a link opened it at, and with `automation` the automation to show in Schedules. */
+  settings: { section?: SettingsSection; automation?: string } | null;
   setProject: (project: string | null) => void;
   setDomain: (domain: string) => void;
   setPalette: (palette: AppState["palette"]) => void;
@@ -67,11 +71,16 @@ const whenFree = (move: () => void) => { if (!stopped(move)) move(); };
  *  Version 5 moves the old Memory workspace to Notes (CON-10). Version 6 removes `q` from the Memory route (CON-11).
  *  Version 7 moves Memory Graph and Tags into Notes (CON-12) and retires the Memory section and Activity/History pages (CON-21).
  *  Version 8 moves Dashboards into Notes > Views (CON-13): `ref` is the view the route names.
- *  Version 9 moves the Wiki into Notes (CON-14): the project it named becomes the picked project. */
+ *  Version 9 moves the Wiki into Notes (CON-14): the project it named becomes the picked project.
+ *  Version 10 removes the Workflows page (CON-20): its schedules are in Settings, so a saved Workflows route opens Home.
+ *  Version 11 moves Skills into Notes > Skills and Maintenance into Settings (CON-22); a saved Maintenance route opens Home. */
 export function migrateNav(persisted: unknown, version = 1): unknown {
-  const saved = persisted as { route?: { page?: string; view?: string; q?: string; capture?: string; briefing?: string; system?: string; ref?: string; domain?: string; at?: string; edition?: string; project?: string } } | null;
+  const saved = persisted as { route?: { page?: string; view?: string; q?: string; capture?: string; briefing?: string; system?: string; ref?: string; domain?: string; at?: string; edition?: string; project?: string; skill?: string } } | null;
   const route = saved?.route;
   if (!route) return persisted;
+  if (version < 11 && route.page === "skills") return { ...saved, route: { page: "notes", view: "skills", ...(route.skill ? { skill: route.skill } : {}) } };
+  if (version < 11 && route.page === "maintenance") return { ...saved, route: { page: "home" } };
+  if (version < 10 && route.page === "workflows") return { ...saved, route: { page: "home" } };
   if (version < 9 && route.page === "wiki") {
     const { domain, at, edition, project } = route;
     return { ...saved, ...(project ? { project } : {}), route: { page: "notes", view: "wiki", ...(domain ? { domain } : {}), ...(at ? { at } : {}), ...(edition === "agent" ? { edition } : {}),
@@ -104,12 +113,14 @@ export const useApp = create<AppState>()(persist((set) => ({
   palette: null,
   route: { page: "home" },
   back: [],
+  settings: null,
   setProject: (project) => set({ project }),
   setDomain: (domain) => set({ domain }),
   setPalette: (palette) => set({ palette }),
   go: (route, opts = {}) => {
     if (!opts.force && stopped(() => useApp.getState().go(route, { ...opts, force: true }))) return;
-    set((s) => (same(s.route, route) ? s : { route, back: opts.replace ? s.back : [...s.back, s.route].slice(-BACK_LIMIT) }));
+    // Settings covers the shell, so going anywhere closes it: a link in Settings shows where it leads (Codex review of 857ec37, S2).
+    set((s) => (same(s.route, route) ? (s.settings ? { settings: null } : s) : { route, back: opts.replace ? s.back : [...s.back, s.route].slice(-BACK_LIMIT), settings: null }));
   },
   goBack: (force) => {
     if (!useApp.getState().back.length) return;
@@ -118,7 +129,7 @@ export const useApp = create<AppState>()(persist((set) => ({
   },
 }), {
   name: "hivemind.nav",
-  version: 9,
+  version: 11,
   storage: createJSONStorage(() => safeStorage),
   migrate: (persisted, version) => migrateNav(persisted, version) as AppState,
   partialize: (s) => ({ project: s.project, domain: s.domain, route: s.route }),
@@ -132,7 +143,10 @@ export const openSystem = (slug: string) => app().go({ page: "home", tab: "archi
 export const openSession = (session: string) => app().go({ page: "agents", session });
 /** Show the Inbox: on one session's edits (and one file) when given, or on one group. */
 export const openInbox = (session?: string, file?: string, kind?: InboxKind) => app().go({ page: "inbox", session, file, kind });
-export const openSkills = (skill?: string) => app().go({ page: "skills", skill });
-export const openWorkflows = (to: { tab?: "runs" | "automations"; run?: string; automation?: string } = {}) =>
-  app().go({ page: "workflows", ...to, tab: to.automation ? "automations" : to.run ? "runs" : to.tab }, { replace: app().route.page === "workflows" });
+export const openSkills = (skill?: string) => app().go({ page: "notes", view: "skills", ...(skill ? { skill } : {}) });
+/** Open Settings, at a section when one is given (Schedules, Spend, Maintenance, Learning). */
+export const openSettings = (section?: SettingsSection) => useApp.setState({ settings: section ? { section } : {} });
+/** Open Settings > Schedules at one automation, shown even when it is a custom one and those are hidden. */
+export const openAutomation = (automation: string) => useApp.setState({ settings: { section: "schedules", automation } });
+export const closeSettings = () => useApp.setState({ settings: null });
 export const startSession = () => app().go({ page: "agents", view: "new" });

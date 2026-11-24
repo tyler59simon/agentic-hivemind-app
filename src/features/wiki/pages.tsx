@@ -9,6 +9,7 @@ import { PageHeader, Split } from "../../ui/Page";
 import { Infobox, More, NoteRows, PageRow, Toc, TypeBadge, WikiMarkdown, WikiSection as Sec, cap, plural, useNav, type TocItem } from "./parts";
 import { CitedOn } from "./agent";
 import { azGroups, byUpdated, CHRONO, citedOn, dayGroups, isAgent, isSource, monthGroups, neighbours, noteAt, pathPrefix, projectAt, sectionAt, sectionNotes, shortTitle } from "./wiki";
+import { scrollBehavior } from "../../lib/motion";
 
 const Lead = ({ note, children }: { note: WikiNote; children?: React.ReactNode }) => (
   <div className="wiki-lead-block">
@@ -213,7 +214,7 @@ export function AzPage() {
     <>
       <PageHeader eyebrow="Browse" title="A to Z index" subtitle={`${plural(ix.model.notes.length, "page")} in alphabetical order.`} />
       <div className="wiki-letters">
-        {groups.map((g) => <button key={g.letter} type="button" onClick={() => document.getElementById(`az-${g.letter}`)?.scrollIntoView({ behavior: "smooth" })}>{g.letter}</button>)}
+        {groups.map((g) => <button key={g.letter} type="button" onClick={() => document.getElementById(`az-${g.letter}`)?.scrollIntoView({ behavior: scrollBehavior() })}>{g.letter}</button>)}
       </div>
       {groups.map((g) => <Sec key={g.letter} id={`az-${g.letter}`} title={g.letter} count={g.notes.length}><NoteRows notes={g.notes} where noLead /></Sec>)}
     </>

@@ -1,6 +1,9 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { isNarrow } from "../../lib/narrow";
+import { useLayer } from "../../ui/layers";
+import { zoomBy } from "../../lib/zoom";
 import { useEffect, useMemo, useState } from "react";
-import { useProjectsEnabled, useSystemsEnabled, useWikiEnabled } from "../../lib/connection";
+import { useMaintenanceEnabled, useProjectsEnabled, useSystemsEnabled, useWikiEnabled } from "../../lib/connection";
 import { domains, list } from "../../lib/lm";
 import { folderOf, notebooksQuery, pageTitle, treeQuery } from "../../lib/notebooks";
 import { pagesQuery } from "../../lib/noteindex";
@@ -15,7 +18,7 @@ import { fuzzy } from "../../lib/text";
 import { classify } from "../../lib/errors";
 import { useHidden } from "../../shell/hidden";
 import { toast } from "../../ui/toast";
-import { openProject, openSystem, useApp, type Page, type Route } from "../../store";
+import { openProject, openSettings, openSystem, useApp, type Page, type Route } from "../../store";
 import { activeTab, railShown, useWorkspace } from "../../workspace/store";
 import { useComparePicker } from "../power/ComparePicker";
 import { openFindInFiles } from "../search/FindInFiles";
@@ -47,6 +50,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
   const registry = useQuery({ ...projectsQuery(), enabled: projectsOn && app.palette === "commands" });
   const systemsOn = useSystemsEnabled();
   const wikiOn = useWikiEnabled();
+  const maintenanceOn = useMaintenanceEnabled();
   const hidden = useHidden((s) => s.hidden);
   const systems = useQuery({ ...systemsQuery(), enabled: systemsOn && app.palette === "commands" });
   const notebooks = useQuery({ ...notebooksQuery(), enabled: app.palette === "notes" });
@@ -106,6 +110,9 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "new-file", label: "New text file", run: () => { close(); ws.openTab({ kind: "new-file" }); } },
       { key: "compare", label: "Compare files…", run: () => { close(); useComparePicker.getState().show(tab?.kind === "file" ? tab.file : undefined); } },
       { key: "find-in-files", label: "Find in files…", detail: "search and replace across a notebook", run: () => { close(); openFindInFiles(); } },
+      { key: "zoom-in", label: "Zoom in", detail: "Ctrl+=", run: () => { close(); void zoomBy("in"); } },
+      { key: "zoom-out", label: "Zoom out", detail: "Ctrl+-", run: () => { close(); void zoomBy("out"); } },
+      { key: "zoom-reset", label: "Reset zoom", detail: "Ctrl+0", run: () => { close(); void zoomBy("reset"); } },
       ...power,
       { key: "home", label: "Home", run: page({ page: "home" }) },
       { key: "notes", label: "Notes", section: "notes" as Page, run: page({ page: "notes" }) },
@@ -117,6 +124,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "today", label: "Today", detail: "open today's daily page", section: "notes" as Page, run: () => { close(); void onNotebook((notebook) => openToday(client, notebook)); } },
       { key: "new-from-template", label: "New page from template…", section: "notes" as Page, run: () => { close(); void onNotebook((notebook, folder) => { useTemplateIntent.getState().open(notebook, folder); app.go({ page: "notes" }); }); } },
       { key: "add-notebook", label: "Add a notebook…", section: "notes" as Page, run: () => { close(); void addNotebook(); } },
+      { key: "skills", label: "Skills", detail: "procedures learned from approved work", section: "notes" as Page, run: page({ page: "notes", view: "skills" }) },
       { key: "inbox", label: "Inbox", section: "inbox" as Page, run: page({ page: "inbox" }) },
       ...(wikiOn ? [{ key: "wiki", label: "Wiki", detail: "the picked project's memory as a wiki", section: "notes" as Page, run: page({ page: "notes", view: "wiki" }) }] : []),
       ...(projectsOn ? [
@@ -131,7 +139,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       ...(systemsOn ? [
         { key: "architecture", label: "Architecture", run: page({ page: "home", tab: "architecture" }) },
         { key: "new-system", label: "New system…", run: () => { close(); app.go({ page: "home", tab: "architecture" }); useSystemIntent.getState().openWizard(); } },
-        { key: "sessions", label: "Agent Workspace (sessions)", section: "agents" as Page, run: page({ page: "agents" }) },
+        { key: "sessions", label: "Agents (sessions)", section: "agents" as Page, run: page({ page: "agents" }) },
         ...(systems.data?.systems ?? []).filter((s) => s.status !== "retired").map((s) => ({
           key: "system:" + s.slug, label: `Open system: ${s.name}`, detail: s.tag,
           run: () => { close(); openSystem(s.slug); },
@@ -139,7 +147,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       ] : []),
       ...EXTRA_COMMANDS.map((c) => ({ ...c, run: () => { close(); c.run(); } })),
       { key: "split", label: "Open the note side by side", detail: "Ctrl+\\", run: () => { ws.split(); close(); } },
-      { key: "rail", label: railShown(ws) ? "Hide the note's context rail" : "Show the note's context rail", run: () => { ws.setRail(!railShown(ws)); close(); } },
+      { key: "rail", label: railShown(ws, isNarrow()) ? "Hide the note's context rail" : "Show the note's context rail", run: () => { ws.setRail(!railShown(ws, isNarrow()), isNarrow()); close(); } },
       { key: "search", label: "Search notes and pages", detail: "Ctrl+K", run: () => { close(); useNotesSearch.getState().focus(); } },
       { key: "active", label: "Search active notes", run: () => { close(); useNotesSearch.getState().byStatus("active"); } },
       { key: "archive", label: "Search the archive", run: () => { close(); useNotesSearch.getState().byStatus("archived"); } },
@@ -147,13 +155,16 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "refresh", label: "Refresh", run: () => { refreshStore(client); close(); } },
       { key: "reconnect", label: "Reconnect to Living Memory", run: () => { onReconnect(); close(); } },
       { key: "settings", label: "Settings", run: () => { onSettings(); close(); } },
+      { key: "schedules", label: "Schedules", detail: "Settings: briefings, maintenance, rebuilds and automations", run: () => { close(); openSettings("schedules"); } },
+      { key: "spend", label: "Spend", detail: "Settings: budgets and today's spending", run: () => { close(); openSettings("spend"); } },
+      ...(maintenanceOn ? [{ key: "maintenance", label: "Maintenance", detail: "Settings: automatic note review", run: () => { close(); openSettings("maintenance"); } }] : []),
       ...(known.data?.domains ?? []).map((d) => ({
         key: "domain:" + d.name, label: `Switch domain: ${d.name}`, detail: `${d.active} notes`,
         run: () => { app.setDomain(d.name); close(); },
       })),
     ];
     return all.filter((e) => !e.section || !hidden.includes(e.section));
-  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, wikiOn, hidden, client, onSettings, onReconnect, notebooks.data, trees, indexed.data, addNotebook, recent.data]);
+  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, wikiOn, maintenanceOn, hidden, client, onSettings, onReconnect, notebooks.data, trees, indexed.data, addNotebook, recent.data]);
 
   const shown = useMemo(() => {
     const best = entries
@@ -167,6 +178,8 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
     return [...best, { key: "open-from-disk", label: "Open file from disk…", detail: "any file", run: () => { app.setPalette(null); void openFromDisk(); } }];
   }, [entries, query, app]);
 
+  // Escape closes the palette, and only the palette when it is open over a dialog (DESK-4).
+  useLayer(!!app.palette, () => app.setPalette(null));
   if (!app.palette) return null;
   const choose = (entry?: Entry) => entry?.run();
   return (
@@ -175,8 +188,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
         <input autoFocus value={query} placeholder={app.palette === "notes" ? "Go to note or page…" : "Run a command…"}
           onChange={(e) => { setQuery(e.target.value); setIndex(0); }}
           onKeyDown={(e) => {
-            if (e.key === "Escape") app.setPalette(null);
-            else if (e.key === "ArrowDown") { e.preventDefault(); setIndex((i) => Math.min(i + 1, shown.length - 1)); }
+            if (e.key === "ArrowDown") { e.preventDefault(); setIndex((i) => Math.min(i + 1, shown.length - 1)); }
             else if (e.key === "ArrowUp") { e.preventDefault(); setIndex((i) => Math.max(i - 1, 0)); }
             else if (e.key === "Enter") choose(shown[index]);
           }} />

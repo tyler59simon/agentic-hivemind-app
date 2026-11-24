@@ -1,48 +1,6 @@
+// Settings > Schedules helpers (CON-20; the task-graph helpers went with Workflows).
 import { describe, expect, it } from "vitest";
-import type { TaskSpec } from "../../lib/workflows";
-import { ACTION_HELP, ACTION_LABELS, actionOf, blankAutomation, clock, columns, minutesOf, needsProject, nextText, scoped, progressText, taskActions, taskId, toggleDependency, triggerOf, withoutTask } from "./workflows";
-
-const spec = (id: string, dependsOn: string[] = [], from: string | null = null): TaskSpec =>
-  ({ id, role: "developer", engine: "claude", title: id, prompt: "p", dependsOn, from });
-
-describe("columns", () => {
-  it("puts each task one column right of its deepest dependency", () => {
-    const cols = columns([spec("plan"), spec("build", ["plan"]), spec("review", ["build"]), spec("test", ["build", "plan"])]);
-    expect(cols.map((c) => c.map((t) => t.id))).toEqual([["plan"], ["build"], ["review", "test"]]);
-  });
-  it("puts parallel tasks together and unresolvable ones last", () => {
-    expect(columns([spec("a"), spec("b")]).map((c) => c.length)).toEqual([2]);
-    expect(columns([spec("a"), spec("x", ["y"]), spec("y", ["x"])]).map((c) => c.map((t) => t.id))).toEqual([["a"], ["x", "y"]]);
-  });
-});
-
-describe("task editing", () => {
-  it("makes unique ids from titles", () => {
-    expect(taskId("Review the change!", [])).toBe("review-the-change");
-    expect(taskId("Plan", ["plan", "plan-2"])).toBe("plan-3");
-    expect(taskId("???", [])).toBe("task");
-  });
-  it("removes a task and its references", () => {
-    const left = withoutTask([spec("a"), spec("b", ["a"], "a")], "a");
-    expect(left).toEqual([spec("b")]);
-  });
-  it("drops the start point with its dependency", () => {
-    expect(toggleDependency(spec("b", ["a"], "a"), "a")).toEqual(spec("b"));
-    expect(toggleDependency(spec("b"), "a").dependsOn).toEqual(["a"]);
-  });
-});
-
-describe("run words", () => {
-  it("counts done and skipped tasks", () => {
-    const t = (state: string) => ({ state }) as never;
-    expect(progressText({ tasks: [t("succeeded"), t("skipped"), t("failed")] })).toBe("2 of 3 tasks done");
-  });
-  it("offers retry and skip on failed or blocked tasks of a started run", () => {
-    expect(taskActions({ state: "failed" }, { state: "blocked" })).toEqual(["retry", "skip"]);
-    expect(taskActions({ state: "running" }, { state: "running" })).toEqual([]);
-    expect(taskActions({ state: "cancelled" }, { state: "failed" })).toEqual([]);
-  });
-});
+import { ACTION_HELP, ACTION_LABELS, actionOf, blankAutomation, builtIn, clock, minutesOf, needsProject, nextText, scoped, triggerOf } from "./schedules";
 
 describe("schedules", () => {
   it("reads and writes times of day", () => {
@@ -92,7 +50,7 @@ describe("actions", () => {
   it("keeps an action of the same kind", () => {
     const a = { kind: "role" as const, role: "tester" as const, engine: "claude" as const, prompt: "x" };
     expect(actionOf("role", a)).toBe(a);
-    expect(actionOf("workflow", a)).toEqual({ kind: "workflow", template: "review", goal: "" });
+    expect(actionOf("skill_upkeep", a)).toEqual({ kind: "skill_upkeep" });
   });
   it("starts a role action on the engine it is given, Claude Code by default", () => {
     const from = { kind: "skill_upkeep" as const };
@@ -100,5 +58,15 @@ describe("actions", () => {
     expect(actionOf("role", from, "codex")).toEqual({ kind: "role", role: "reviewer", engine: "codex", prompt: "" });
     expect(blankAutomation(null, null).action).toMatchObject({ engine: "claude" });
     expect(blankAutomation(null, null, "codex").action).toMatchObject({ engine: "codex" });
+  });
+});
+
+describe("built-in schedules", () => {
+  it("are the briefings, memory maintenance and wiki rebuilds; everything else is custom", () => {
+    expect(builtIn({ action: { kind: "executive_briefing", briefing: "priorities", days: 1 } })).toBe(true);
+    expect(builtIn({ action: { kind: "memory_maintenance" } })).toBe(true);
+    expect(builtIn({ action: { kind: "wiki_rebuild", domain: "d" } })).toBe(true);
+    expect(builtIn({ action: { kind: "skill_upkeep" } })).toBe(false);
+    expect(builtIn({ action: { kind: "role", role: "reviewer", engine: "claude", prompt: "p" } })).toBe(false);
   });
 });

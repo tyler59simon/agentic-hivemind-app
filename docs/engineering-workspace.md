@@ -1,6 +1,6 @@
-# Engineering workspace: roles, learning, skills, workflows, automations and drift
+# Engineering workspace: roles, learning, skills, automations and drift
 
-This document covers what Hivemind added on top of single agent sessions in November 2026: sessions in roles with permission profiles, a post-session reviewer that drafts notes and skills, a skills library published to Claude Code and Codex, workflows that run several agents in order, automations that start work on their own, and architecture drift from the Architecture Suite's command line. It describes how each part works, where its files are, what keeps it safe, and what it cannot do.
+This document covers what Hivemind added on top of single agent sessions in November 2026: sessions in roles with permission profiles, a post-session reviewer that drafts notes and skills, a skills library published to Claude Code and Codex, automations that start work on their own, and architecture drift from the Architecture Suite's command line. It describes how each part works, where its files are, what keeps it safe, and what it cannot do. Workflows (a goal run as a task graph of sessions) were deleted on 2026-11-24 (CON-20); their run files in `workflows/` are no longer read.
 
 Living Memory still owns knowledge and the Architecture Suite still owns architecture output. Hivemind uses their command lines and never writes their files.
 
@@ -11,14 +11,13 @@ Living Memory still owns knowledge and the Architecture Suite still owns archite
 | Roles and profiles | `src-tauri/src/agent/roles.rs`, `agent/scope.rs` (`profile_policy`, `deny_rules`) | `features/agents/start.ts` (`PROFILE_HELP`) | none |
 | Session reports | `src-tauri/src/conductor.rs`, `agent/mod.rs` (`Lifecycle`) | | none |
 | Resource use | `src-tauri/src/resources.rs` | `AgentWorkspace.tsx` (`useResources`) | none |
-| Post-session reviewer | `src-tauri/src/learning.rs` | `features/review/LearnedCards.tsx`, `features/skills/SkillsPage.tsx` | `learning/runs.jsonl`, `learning/spend.json` |
+| Post-session reviewer | `src-tauri/src/learning.rs` | `features/review/LearnedCards.tsx`, `features/skills/SkillsPane.tsx` (Notes, Skills) | `learning/runs.jsonl`, `learning/spend.json` |
 | Skills | `src-tauri/src/skills.rs` | `features/skills/` | `skills/library/<name>/`, `skills/proposals/`, `skills/ledger.jsonl`, `skills/usage.jsonl`, `skills/outcomes.jsonl` |
-| Workflows | `src-tauri/src/workflow.rs` | `features/workflows/WorkflowsPage.tsx` (Runs tab) | `workflows/<id>.json` |
-| Automations | `src-tauri/src/automations.rs` | `features/workflows/WorkflowsPage.tsx` (Automations tab) | `automations.json`, `automation-runs/<id>.json` |
+| Automations | `src-tauri/src/automations.rs` | `features/schedules/SchedulesSection.tsx` (Settings, Schedules) | `automations.json`, `automation-runs/<id>.json`, `automation-spend.json` |
 | Architecture drift | `src-tauri/src/archsuite.rs` | `features/systems/DriftPanel.tsx` | `architecture-runs/<system>/` |
 | Overview | | `features/projects/agentwork.ts`, `OverviewPage.tsx` | none |
 
-`src-tauri/src/lib.rs` holds the Tauri commands and the glue: `AppHost` (how workflows start sessions), `AppDoer` (what automations do), and the conductor handlers `learning_reports` and `orchestration_reports`.
+`src-tauri/src/lib.rs` holds the Tauri commands and the glue: `AppDoer` (what automations do), and the conductor handlers `learning_reports` and `orchestration_reports`.
 
 ## Roles and permission profiles
 
@@ -32,11 +31,11 @@ A chat session can start in a role: architect, developer, reviewer, researcher o
 
 A tester edits its worktree so it can run the project's test commands and add tests; like any session's edits, they wait in the Inbox.
 
-Every session, whatever its profile, is denied Living Memory's governed commands and `git push`, `git reset --hard`, `git clean` and `git branch -D`. An attended `edit_worktree` session accepts edits and asks about everything else. An unattended one (the user ticked it, or a workflow or automation started it) refuses what is not allowed instead of asking.
+Every session, whatever its profile, is denied Living Memory's governed commands and `git push`, `git reset --hard`, `git clean` and `git branch -D`. An attended `edit_worktree` session accepts edits and asks about everything else. An unattended one (the user ticked it, or an automation started it) refuses what is not allowed instead of asking.
 
 A session that never asks (read only, research, or unattended) starts Claude with `--setting-sources user`: the repository's `.claude` settings cannot add allow rules or hooks to it. The user's own settings, Living Memory's hooks and the repository's `CLAUDE.md` still load.
 
-Reviewers and testers end their reply with a verdict line (pass or changes needed), shown on the session and in workflow reports. An architect or reviewer whose repository belongs to a registered system gets an Architecture section in its briefing (model, report, how far the output is behind) and the system's architecture folder as an extra folder it may read but not edit: a deny rule on the folder wins over any allow rule, the user's own included. The folder is given again when the session resumes. An attended editing session would accept edits there, so it gets only the paths.
+Reviewers and testers end their reply with a verdict line (pass or changes needed), shown on the session. An architect or reviewer whose repository belongs to a registered system gets an Architecture section in its briefing (model, report, how far the output is behind) and the system's architecture folder as an extra folder it may read but not edit: a deny rule on the folder wins over any allow rule, the user's own included. The folder is given again when the session resumes. An attended editing session would accept edits there, so it gets only the paths.
 
 **Ask Codex.** On a code diff in the Inbox, Ask Codex has Codex review the session's edits. Hivemind commits them as a checkpoint on the session's branch (a later approval finds that commit), then starts a read-only Codex reviewer in a worktree at the checkpoint. The reviewer is told the session's base commit, so `git diff <base>..HEAD` shows the same edits. It runs only when asked, and only for a session in its own worktree that is between turns. The session records the reviewer, and the diff links to it with its state and verdict.
 
@@ -46,7 +45,7 @@ When a chat work session ends in a way worth learning from, Hivemind asks a sepa
 
 - **When it runs:** after the user approves a session's edits (notes and skills), after the user dismisses them (notes only), and after a session without edits that made at least 15 tool calls (notes only). Each session is reviewed once; a failed review can be run again from the session's rail.
 - **What it produces:** note drafts staged with Living Memory's `propose` (the user saves or rejects them in the Inbox, Memory group), and at most one skill proposal. "Nothing" is a normal answer.
-- **Daily cap:** Settings, Budgets, sets the most the reviewer, the executive calls, and the commit reviews and briefings automations ask for may spend per UTC day (default $1). Each review reserves its limit per call ($0.25 by default) first and settles at its real cost; a crash leaves the reservation counted. Sessions and workflows started by automations have their own daily budget (default $5).
+- **Daily cap:** Settings, Spend, sets the most the reviewer, the executive calls, and the commit reviews and briefings automations ask for may spend per UTC day (default $1). Each review reserves its limit per call ($0.25 by default) first and settles at its real cost; a crash leaves the reservation counted. Sessions and wiki rebuilds started by automations have their own daily budget (default $5).
 
 ## Skills
 
@@ -58,27 +57,16 @@ A skill is a `SKILL.md` procedure Claude Code and Codex load by name. Hivemind k
 - Upkeep proposes archiving skills unused for 30 days, or with reliability under 50% over 4 or more uses. Archiving unpublishes and keeps every version.
 - `skills/ledger.jsonl` records who changed what, and every change can be undone by restoring a version.
 
-## Workflows
-
-A workflow runs a goal as tasks, each an agent session in a role, with dependencies between them. The built-in templates are Feature (architect, then developer, then reviewer and tester in parallel), Review (reviewer and architect in parallel) and Investigate a failure (researcher, then developer). The user can edit any task before starting.
-
-- A task starts when every task it depends on has succeeded or was skipped. At most three sessions run at once (`MAX_RUNNING`); a task that finds no free slot waits for the next report.
-- When an editing task succeeds, Hivemind commits its edits as a checkpoint on the task's own `hivemind/<id8>` branch. A task with "worktree starts from" set gets a new worktree branched from that checkpoint, so parallel and sequential agents never share a working tree. If that branch no longer points at the checkpoint (the user discarded or committed meanwhile), the task fails instead of starting from a different revision. A skipped task leaves nothing to start from, so its dependents start from the base branch.
-- Each task's briefing has the goal, its own task, and for each task it depends on: the role, branch, files changed, verdict and summary (up to 2,000 characters).
-- A failed task blocks what depends on it until the user retries or skips it; a task that needs two failed tasks stays blocked until both are dealt with. Cancelling stops running sessions. A run that was running when Hivemind stopped comes back with its running tasks failed, ready to retry.
-- Nothing is merged or pushed. Each editing task's branch waits in the Inbox like any session's; approving it adopts the checkpoint commit.
-- The run report (Markdown, Copy report) lists each task's state, branch, checkpoint, verdict and summary.
-
 ## Automations
 
-An automation starts work on its own while Hivemind runs (the tray keeps it running with the window closed).
+An automation starts work on its own while Hivemind runs (the tray keeps it running with the window closed). They are listed in Settings, Schedules: the built-in schedules (briefings, memory maintenance, weekly wiki rebuilds) always show, and other automations show while "Show custom automations" is on, a per-computer choice that does not stop them running. `automations.json` is read entry by entry: an entry that no longer reads (such as an automation that started a workflow) is dropped, after the file is copied to `automations.json.bak-<ms>`.
 
 - **Triggers:** every N hours, daily or weekly at a local time, when a session fails (it ends with an error, or a chat turn crashes or errors; a turn the user stopped does not count), when the user approves a session's edits, after new commits on a project repository (HEAD is checked once a minute), or only by hand. An automation set to a project hears only that project's events (and only its repository's, when it names one).
-- **Actions:** an unattended session in a role (not developer), a workflow from a template, Living Memory's own maintenance run, skill upkeep, the reviewer over new commits (note drafts for Review), and an architecture drift check.
-- **Policy per automation:** ask before each run (the run waits on the Automations tab with a notification), a Claude budget per session (never above the session budget in Settings), and notifications for every run, failures only, or never. A drift check notifies when it finds drift.
-- **Limits:** one run per automation at a time; a trigger that fires meanwhile is dropped, and a scheduled time that comes while a run is still open is skipped. A queued trigger is checked again against the definition when it is admitted: an automation turned off or moved to another project meanwhile does not run, and a waiting event run whose automation moved to another project is cancelled when approved. Each due automation runs on its own thread, so a slow one delays no other. Role and workflow runs count against the automation budget in Settings, Budgets ($5 a day by default), and start (or, when they waited for approval, can be approved) only when their budget per session fits in what is left today; a workflow is checked for one session's budget. A Codex role session is not checked or counted, since Codex bills the user's ChatGPT plan, not dollars. Follow-up turns the user sends to an automation's session, and retries of a task in its workflow, count as the user's own spending, not the automation's; each is still capped per run. Commit-capture and briefing runs count against the learning and executive budget, shared with the reviewer, and do not start when it is spent. A session or workflow starts without holding up other automations; a report that comes before its run has recorded it is kept until the run has. A cancelled run still counts what its session cost. A schedule missed while Hivemind was closed runs once at the next start; a run still marked running from before is marked failed.
+- **Actions:** an unattended session in a role (not developer), Living Memory's own maintenance run, a briefing, a weekly rebuild of a project's agent wiki, skill upkeep, the reviewer over new commits (note drafts for Review), and an architecture drift check.
+- **Policy per automation:** ask before each run (the run waits in Settings, Schedules with a notification), a Claude budget per session (never above the session budget in Settings), and notifications for every run, failures only, or never. A drift check notifies when it finds drift.
+- **Limits:** one run per automation at a time; a trigger that fires meanwhile is dropped, and a scheduled time that comes while a run is still open is skipped. A queued trigger is checked again against the definition when it is admitted: an automation turned off or moved to another project meanwhile does not run, and a waiting event run whose automation moved to another project is cancelled when approved. Each due automation runs on its own thread, so a slow one delays no other. Role runs and wiki rebuilds count against the automation budget in Settings, Spend ($5 a day by default), and start (or, when they waited for approval, can be approved) only when their budget fits in what is left today. The budget checked is the one the run gets: its own, never above the spend cap per agent run (`run_budget` in `lib.rs`); a wiki rebuild passes that figure as `--budget`. A rebuild that leaves pages failed or unbuilt ends as failed, keeping its cost. A Codex role session is not checked or counted, since Codex bills the user's ChatGPT plan, not dollars. Follow-up turns the user sends to an automation's session count as the user's own spending, not the automation's; each is still capped per run. Commit-capture and briefing runs count against the learning and executive budget, shared with the reviewer, and do not start when it is spent. A session starts without holding up other automations; a report that comes before its run has recorded it is kept until the run has. A cancelled run still counts what its session cost. A schedule missed while Hivemind was closed runs once at the next start; a run still marked running from before is marked failed.
 - **Repositories:** an automation's repository must be registered for its project in Living Memory. Commit capture reads `git log -p` with external diff and text conversion helpers off.
-- **No loops:** event triggers ignore work an automation started (its sessions and its workflows). Approving a task of a workflow the user started does fire them.
+- **No loops:** event triggers ignore work an automation started (its sessions).
 
 ## Architecture drift
 
@@ -95,7 +83,7 @@ Regenerating the output stays a user action (Generate with agent), because the p
 
 ## Overview
 
-"Needs your review" also lists learned drafts, automation runs waiting or failed today, workflows that failed in the last three days, architecture drift beyond the commits it already shows, and stale or duplicate notes. "Agent activity" merges finished sessions, workflow runs, automation runs and skill changes, newest first.
+"Needs your review" also lists learned drafts, automation runs waiting or failed today, architecture drift beyond the commits it already shows, and stale or duplicate notes. "Agent activity" merges finished sessions, automation runs and skill changes, newest first.
 
 ## How this differs from Hermes Agent, and why
 
@@ -104,21 +92,16 @@ Hermes Agent learns skills with a forked reviewer after turns, prefers patching,
 - **Skills need an outcome and an approval.** Living Memory's own evaluation retired learned runbooks on 2026-11-16 because they were no better than notes and were applied to lookalike cases. So skills come only from approved work, must say when not to use them, and need the user's approval by default.
 - **Memory stays in Living Memory.** The reviewer stages `propose` drafts; Hivemind keeps no memory file of its own.
 - **The reviewer is a separate headless call.** Hivemind drives external CLIs, so it cannot fork their agent loop. A tool-free call over a digest is cheaper and cannot act.
-- **Delegation is a visible task graph** of real sessions with their own worktrees, not a tool the model calls.
 - **Left out:** a messaging gateway, container backends, and model-judged command approval. Approvals stay with the user or with rules Rust builds.
 
 ## Known limits
 
 - Sessions stop when Hivemind exits; automations run only while it runs.
-- A role or workflow run is admitted only when its budget per session fits in what is left of the automation budget, but nothing is reserved: runs that start together all see the same balance, and a workflow can spend its session budget once per task.
-- A workflow task stopped by a cancel before its turn ended counts toward its automation what its session had reported by then; a cost the session reports later is not added.
+- A role run or wiki rebuild is admitted only when its budget fits in what is left of the automation budget, but nothing is reserved: runs that start together all see the same balance.
 - Credential removal before the reviewer call is a pattern match; a secret of an unknown shape in a session or commit still reaches Claude.
 - Every session is denied `--output`, `--ext-diff` and `--textconv` with any git command, but a diff helper or text conversion the repository's own git config sets up still runs for a plain `git diff`, as it does for the user.
 - Role sessions load the user's own Claude Code settings, for Living Memory's hooks, so the user's allow rules apply in them too; only the deny rules Hivemind adds (destructive git, governed Living Memory commands, unsafe git options, the architecture folder) win over them.
-- A workflow file that cannot be saved is reported on the run's page, but its progress since the last good save is lost if Hivemind restarts before a save works.
 - Claude deny rules match command text and can be bypassed through another shell; worktree isolation and ask-by-default are the real guard.
 - Codex has no deny-rule flag, so profiles are weaker there. On Windows Codex's sandbox refuses many shell commands in unattended sessions; automations default to Claude.
 - Skill reliability counts correlations from review outcomes.
-- Parallel editing tasks are not merged. Each branch is approved on its own.
-- Approving a workflow task adopts its checkpoint commit; the commit message typed at approval is not used.
 - The terminal (CLI) sessions keep no event log, so the reviewer and skill-use tracking cover chat sessions only.

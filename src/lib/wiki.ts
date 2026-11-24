@@ -47,3 +47,5 @@ export function wikiAgentBuild(domain: string, project: string | undefined, rest
 }
 /** Stop the running build. The pages it already wrote are kept. */
 export const wikiAgentCancel = () => invoke<void>("wiki_agent_cancel");
+/** The wiki build running now, whoever started it, or null. */
+export const wikiAgentRunning = () => invoke<{ domain: string; scope: string } | null>("wiki_agent_running");

@@ -1,4 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
+import { applyDocSize, DOC_SIZES, useDocSize } from "../../lib/docSize";
+import { setZoom, useZoom, ZOOM_STEPS, zoomPercent } from "../../lib/zoom";
 import { useEffect, useState } from "react";
 import { ENGINE_LABELS, ENGINES, enginesText, shownEngines, type Engine } from "../../lib/agent";
 import { pauseLmStore } from "../../documents/store";
@@ -6,12 +8,13 @@ import { useProjectsEnabled } from "../../lib/connection";
 import { captureStatus, getSettings, saveSettings, type CaptureStatus, type Settings } from "../../lib/lm";
 import { applyPaperDefault, PAPER_DEFAULTS, usePaperDefault, type PaperDefault } from "../../lib/paper";
 import { prefs } from "../../lib/prefs";
-import { applyTheme, THEMES, useTheme, type Theme } from "../../lib/theme";
+import { applyTheme, THEME_CHOICES, useThemeChoice, type ThemeChoice } from "../../lib/theme";
 import { useHidden } from "../../shell/hidden";
 import { useAvailableSections } from "../../shell/Sidebar";
 import type { Mode } from "../../workspace/store";
 import { projectsQuery } from "../projects/useProject";
 import { amount, BUDGET_DEFAULTS, EXECUTIVE_CALLS, withCallLimit } from "./budgets";
+import { SpendToday } from "./SpendToday";
 import { withCommands } from "./commands";
 
 const DEFAULT_SHORTCUT = "CommandOrControl+Alt+M";
@@ -23,7 +26,9 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
   const [status, setStatus] = useState<CaptureStatus | null>(null);
   const [mode, setMode] = useState<Mode>(prefs.defaultMode());
   const [error, setError] = useState<string | null>(null);
-  const theme = useTheme();
+  const theme = useThemeChoice();
+  const zoom = useZoom();
+  const docSize = useDocSize();
   const paper = usePaperDefault();
   const sections = useAvailableSections().filter((s) => s.page !== "home");
   const hidden = useHidden((s) => s.hidden);
@@ -115,25 +120,26 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
           ))}
         </>
       )}
-      <p className="muted small">Hivemind starts {enginesText(shown, "or")} for you; {shown.length > 1 ? "each uses its own" : "it uses its"} saved sign-in.{claudeOn && <> A background task, such as generating a system's architecture, may only read the system's repositories, run Architecture Suite and write to the system's architecture folder.</>} An interactive session works in its own git worktree.{claudeOn && <> It asks before it edits files or runs commands, except where you chose “Accept edits” or your own Claude Code settings already allow the action. The spend cap per agent run (under Budgets) applies to each run of the agent; continuing a session after the cap starts a new run. The cap does not apply in the terminal{shown.includes("codex") ? " or to Codex" : ""}.</>}</p>
+      <p className="muted small">Hivemind starts {enginesText(shown, "or")} for you; {shown.length > 1 ? "each uses its own" : "it uses its"} saved sign-in.{claudeOn && <> A background task, such as generating a system's architecture, may only read the system's repositories, run Architecture Suite and write to the system's architecture folder.</>} An interactive session works in its own git worktree.{claudeOn && <> It asks before it edits files or runs commands, except where you chose “Accept edits” or your own Claude Code settings already allow the action. The spend cap per agent run (under Spend) applies to each run of the agent; continuing a session after the cap starts a new run. The cap does not apply in the terminal{shown.includes("codex") ? " or to Codex" : ""}.</>}</p>
 
-      <h3>Learning</h3>
+      <h3 id="settings-learning">Learning</h3>
       {claudeOn ? (
         <>
           <label className="check"><input type="checkbox" checked={value.learning_reviewer ?? true}
             onChange={(e) => setValue({ ...value, learning_reviewer: e.target.checked })} /> Review finished sessions for notes and skills worth keeping</label>
-          <p className="muted small">When you approve or discard a chat session's edits, or a long session ends, Hivemind sends a summary of the session to Claude (Sonnet, no tools, within the limits under Budgets). Notes it proposes wait in the Inbox and are saved only when you accept them; skills are proposed only from sessions you approved.</p>
+          <p className="muted small">When you approve or discard a chat session's edits, or a long session ends, Hivemind sends a summary of the session to Claude (Sonnet, no tools, within the limits under Spend). Notes it proposes wait in the Inbox and are saved only when you accept them; skills are proposed only from sessions you approved.</p>
           <label className="check"><input type="checkbox" checked={value.skills_auto_patch ?? false}
             onChange={(e) => setValue({ ...value, skills_auto_patch: e.target.checked })} /> Apply reviewer changes to a skill without asking when sessions using it were approved at least 3 times</label>
           <p className="muted small">New skills always wait for you. Every change is in the skill's history and can be undone with Restore.</p>
         </>
       ) : <p className="muted small">Learning reviews use Claude Code, which is hidden.</p>}
 
-      <h3>Budgets</h3>
+      <h3 id="settings-spend">Spend</h3>
       <p className="muted small">Amounts are in US dollars. Leave a field empty for its default (shown in grey). Daily budgets start again at midnight UTC, and 0 turns that kind of spending off.</p>
+      <SpendToday />
       {claudeOn && money("agent_budget_usd", "Spend cap per agent run, Claude Code chat", BUDGET_DEFAULTS.agentRun, 0.01)}
       {money("automation_daily_usd", "Automations per day", BUDGET_DEFAULTS.automationsDaily)}
-      <p className="muted small">Sessions and workflows that automations start. A run starts only when its own budget (set on each automation) fits in what is left today. A workflow is checked for one session's budget and can spend up to that much per task. Only Claude Code sessions are counted: Codex uses your ChatGPT plan. Follow-up messages you send to an automation's session, and tasks you retry in its workflow, count as your own spending.</p>
+      <p className="muted small">Sessions and wiki rebuilds that automations start (Settings, Schedules). A run starts only when its own budget, set on each automation and never above the spend cap per agent run, fits in what is left today. Only Claude Code sessions are counted: Codex uses your ChatGPT plan. Follow-up messages you send to an automation's session count as your own spending.</p>
       {money("learning_daily_usd", "Learning and executive per day", BUDGET_DEFAULTS.learningDaily)}
       <p className="muted small">The session reviewer, the briefings and capture on Home, and the commit reviews and briefings that automations ask for.</p>
       <details>
@@ -161,9 +167,22 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
 
       <h3>Appearance</h3>
       <label className="field">
+        <span>Zoom</span>
+        <select value={String(zoom)} onChange={(e) => { void setZoom(Number(e.target.value)); }}>
+          {[...new Set([...ZOOM_STEPS, zoom])].sort((a, b) => a - b).map((z) => <option key={z} value={String(z)}>{zoomPercent(z)}{z === 1 ? " (default)" : ""}</option>)}
+        </select>
+        <span className="muted small">Ctrl+= and Ctrl+- change it anywhere, and Ctrl+0 resets it.</span>
+      </label>
+      <label className="field">
+        <span>Document text size</span>
+        <select value={String(docSize)} onChange={(e) => applyDocSize(Number(e.target.value))}>
+          {DOC_SIZES.map((s) => <option key={s.value} value={String(s.value)}>{s.label}</option>)}
+        </select>
+      </label>
+      <label className="field">
         <span>Theme</span>
-        <select value={theme} onChange={(e) => applyTheme(e.target.value as Theme)}>
-          {THEMES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+        <select value={theme} onChange={(e) => applyTheme(e.target.value as ThemeChoice)}>
+          {THEME_CHOICES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
         </select>
       </label>
       <label className="field">

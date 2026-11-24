@@ -46,16 +46,19 @@ pub fn show_capture(app: &AppHandle) -> tauri::Result<()> {
         window.unminimize()?;
         return window.set_focus();
     }
+    // The capture window is zoomed like the main one, and grows with it so its form still fits (DESK-ZOOM).
+    let zoom = app.path().app_config_dir().map(|dir| crate::settings::load(&dir.join("settings.json")).ui_zoom()).unwrap_or(1.0);
     // The hash tells the shared frontend bundle to render the capture form instead of the app.
-    WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("index.html#capture".into()))
+    let window = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("index.html#capture".into()))
         .title("Hivemind · Quick capture")
-        .inner_size(560.0, 500.0)
-        .min_inner_size(420.0, 380.0)
+        .inner_size(560.0 * zoom, 500.0 * zoom)
+        .min_inner_size(420.0 * zoom.min(1.0), 380.0 * zoom.min(1.0))
         .always_on_top(true)
         .skip_taskbar(true)
         .center()
         .focused(true)
         .build()?;
+    crate::appearance::apply_to(&window, zoom);
     Ok(())
 }
 

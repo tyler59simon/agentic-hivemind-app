@@ -1,4 +1,5 @@
 mod agent;
+mod appearance;
 mod append;
 mod automations;
 mod architecture;
@@ -37,7 +38,6 @@ mod term;
 mod uninstall;
 mod watcher;
 mod wiki_build;
-mod workflow;
 mod worktree;
 
 use bridge::{Bridge, Reply};
@@ -61,10 +61,9 @@ struct AppState {
     agents: agent::Manager,
     terminals: term::Manager,
     learning: learning::Learning,
-    /// Today's spending by the sessions and workflows automations start, against `Settings::automation_daily_usd`.
+    /// Today's spending by the sessions and wiki rebuilds automations start, against `Settings::automation_daily_usd`.
     automation_spend: learning::Ledger,
     skills: skills::Skills,
-    workflows: Arc<workflow::Workflows>,
     automations: Arc<automations::Automations>,
     executive: executive::Store,
     /// Executive conversations being captured now.
@@ -521,29 +520,6 @@ async fn skill_from_note(state: State<'_, AppState>, note: String) -> Result<ski
     )
 }
 
-/// Workflows start real sessions through the same path as the Start screen.
-struct AppHost(AppHandle);
-
-impl workflow::Host for AppHost {
-    fn start(&self, task: agent::scope::AgentTask, prompt: &str, options: agent::StartOptions) -> Result<agent::SessionInfo, String> {
-        let state = self.0.state::<AppState>();
-        agent::start_task(&state.agents, &state.bridge, &settings::load(&state.settings_path), &state.worktrees_dir, &state.terminals_dir, task, prompt, options)
-    }
-    fn info(&self, session: &str) -> Option<agent::SessionInfo> {
-        self.0.state::<AppState>().agents.info(session).ok()
-    }
-    fn checkpoint(&self, session: &str, message: &str) -> Result<Option<String>, String> {
-        let state = self.0.state::<AppState>();
-        review::checkpoint(&state.agents, &state.worktrees_dir, session, message)
-    }
-    fn stop(&self, session: &str) {
-        let _ = self.0.state::<AppState>().agents.end(session);
-    }
-    fn branch_tip(&self, repo: &str, branch: &str) -> Option<String> {
-        worktree::branch_tip(std::path::Path::new(repo), branch)
-    }
-}
-
 /// An automation's repository, checked when it runs: it must still be one of the project's, since it may have left Living
 /// Memory after the automation was saved. `entry` reads the project's registry entry.
 fn checked_repo(project: &str, repo: &str, entry: impl FnOnce(&str) -> Result<Value, String>) -> Result<String, String> {
@@ -573,19 +549,6 @@ impl automations::Doer for AppDoer {
                 let task = agent::scope::AgentTask::Work { project, repo, branch: None };
                 let info = agent::start_task(&state.agents, &state.bridge, &saved, &state.worktrees_dir, &state.terminals_dir, task, &automations::fill(prompt, vars), options)?;
                 Ok(Started::Session(info.id))
-            }
-            Action::Workflow { template, goal } => {
-                let tasks = workflow::templates().into_iter().find(|t| t.id == template).ok_or_else(|| format!("Unknown workflow template: {template}"))?.tasks;
-                let tasks = workflow::on_shown(tasks, &saved);
-                let new = workflow::NewRun { goal: automations::fill(goal, vars), project, repo, template: Some(template.clone()), unattended: true, budget_usd: a.budget_usd, tasks, ..Default::default() };
-                let run = state.workflows.create(new, Some(origin))?;
-                let run = state.workflows.start(&run.id, &AppHost(self.0.clone()))?;
-                // No session report follows a workflow whose every task failed to start, so it ends here.
-                match run.state {
-                    workflow::RunState::Running => Ok(Started::Workflow(run.id)),
-                    workflow::RunState::Succeeded => Ok(Started::Done { detail: "The workflow succeeded".into(), cost: None }),
-                    _ => Err(run.tasks.iter().find_map(|t| t.error.clone()).unwrap_or_else(|| "The workflow could not start".into())),
-                }
             }
             Action::MemoryMaintenance => {
                 let reply = state.bridge.call(&["maintenance".into(), "run".into()], None)?;
@@ -649,7 +612,9 @@ impl automations::Doer for AppDoer {
                             std::thread::sleep(std::time::Duration::from_millis(250));
                         }
                     });
-                    let outcome = wiki_build::run(&emit, &launch, domain, Some(&project), a.budget_usd, false, false, &claude);
+                    // The build gets the budget the fit check counted (WIKI-R3).
+                    let budget = rebuild_budget(a.budget_usd, saved.agent_budget_usd());
+                    let outcome = wiki_build::run(&emit, &launch, domain, Some(&project), Some(budget), false, false, &claude);
                     finished.store(true, std::sync::atomic::Ordering::Relaxed);
                     outcome
                 });
@@ -660,7 +625,17 @@ impl automations::Doer for AppDoer {
                 if cost > 0.0 {
                     automations::Doer::charge(self, cost);
                 }
-                let (detail, _) = wiki_build::summary(&outcome?);
+                // A build that failed or was cancelled part way keeps what it spent on its run (Codex review of 99ceaea, B2).
+                let outcome = match outcome {
+                    Ok(outcome) => outcome,
+                    Err(e) if cost > 0.0 => return Ok(Started::Failed { detail: e, cost: Some(cost) }),
+                    Err(e) => return Err(e),
+                };
+                let (detail, _) = wiki_build::summary(&outcome);
+                // Pages that failed or were left fail the run, so a failure notification fires; it keeps its cost (WIKI-R2).
+                if wiki_build::incomplete(&outcome) {
+                    return Ok(Started::Failed { detail, cost: Some(cost) });
+                }
                 Ok(Started::Done { detail, cost: Some(cost) })
             }
             Action::SkillUpkeep => {
@@ -743,8 +718,8 @@ impl automations::Doer for AppDoer {
     fn budget_fits(&self, budget_usd: Option<f64>) -> bool {
         let state = self.0.state::<AppState>();
         let saved = settings::load(&state.settings_path);
-        // The budget the session gets: the run's own, never above the settings' cap per agent run (agent::start_task).
-        let need = budget_usd.filter(|b| b.is_finite() && *b > 0.0).map_or(saved.agent_budget_usd(), |b| b.min(saved.agent_budget_usd()));
+        // The budget the session or build gets: the run's own, never above the settings' cap per agent run (run_budget).
+        let need = run_budget(budget_usd, saved.agent_budget_usd());
         let cap = saved.automation_daily_usd();
         cap > 0.0 && state.automation_spend.used(agent::now_ms()) + need <= cap + 1e-9
     }
@@ -760,12 +735,7 @@ impl automations::Doer for AppDoer {
             automations::Started::Session(id) => {
                 let _ = state.agents.end(id);
             }
-            automations::Started::Workflow(id) => {
-                let _ = state.workflows.cancel(id, &AppHost(self.0.clone()));
-                // A workflow with no session running ends with no report to say so (Codex review F15-3).
-                automation_workflows_ended(&self.0);
-            }
-            automations::Started::Done { .. } => {}
+            automations::Started::Done { .. } | automations::Started::Failed { .. } => {}
         }
     }
     fn notify(&self, title: &str, text: &str) {
@@ -779,15 +749,26 @@ impl automations::Doer for AppDoer {
     }
 }
 
-/// End the automation runs whose workflows have ended (`Automations::workflows_ended`).
-fn automation_workflows_ended(app: &AppHandle) {
-    let state = app.state::<AppState>();
-    let cost_of = |session: &str| state.agents.info(session).ok().and_then(|i| i.cost_usd);
-    state.automations.workflows_ended(state.workflows.list(), cost_of, &AppDoer(app.clone()));
+/// Sessions whose events never fire event automations: an automation's own, and the task sessions of deleted workflows.
+fn fires_no_events(origin: &str) -> bool {
+    origin.starts_with("automation:") || origin.starts_with("workflow:")
 }
 
-/// Workflows advance and automations finish on session reports; failed and approved sessions the user started fire
-/// event automations. Work that starts sessions runs on its own thread so the conductor never waits on a worktree.
+/// An automation run's budget: its own when it has a valid one, never above the settings' cap per agent run
+/// (agent::start_task caps a session the same way). The fit check counts this unrounded, so admission never approves less than
+/// a run can spend (WIKI-R3; Codex re-review of 55cfab2).
+fn run_budget(own: Option<f64>, agent_cap: f64) -> f64 {
+    own.filter(|b| b.is_finite() && *b > 0.0).map_or(agent_cap, |b| b.min(agent_cap))
+}
+
+/// A wiki rebuild's `--budget`: `run_budget` in whole cents, rounded down, since the flag is written with two decimals and
+/// rounding up there would pass more than was admitted or than the cap allows (Codex review of 99ceaea, B1). The epsilon keeps
+/// 0.29 from becoming 0.28.
+fn rebuild_budget(own: Option<f64>, agent_cap: f64) -> f64 {
+    ((run_budget(own, agent_cap) * 100.0 + 1e-9).floor() / 100.0).max(0.0)
+}
+
+/// Automations finish on session reports; failed and approved sessions the user started fire event automations. Work that starts sessions runs on its own thread so the conductor never waits on a worktree.
 fn orchestration_reports(app: AppHandle) -> conductor::Handler {
     Box::new(move |report| {
         let Some(state) = app.try_state::<AppState>() else { return };
@@ -796,10 +777,7 @@ fn orchestration_reports(app: AppHandle) -> conductor::Handler {
         let info = state.agents.info(report.id()).ok();
         std::thread::spawn(move || {
             let state = app.state::<AppState>();
-            let host = AppHost(app.clone());
             let doer = AppDoer(app.clone());
-            state.workflows.on_report(&report, &host);
-            let _ = app.emit("workflows-changed", ());
             let Some(info) = info else { return };
             let origin = info.origin.clone().unwrap_or_default();
             let ended = match &report {
@@ -809,14 +787,12 @@ fn orchestration_reports(app: AppHandle) -> conductor::Handler {
             };
             if let (Some(ok), true) = (ended, origin.starts_with("automation:")) {
                 let detail = info.summary.clone().or(info.error.clone()).map(|t| agent::events::clip(&t, 300)).unwrap_or_else(|| "Session finished".into());
-                state.automations.finished(Some(&info.id), None, ok, detail, info.cost_usd, &doer);
+                state.automations.finished(Some(&info.id), ok, detail, info.cost_usd, &doer);
             }
-            automation_workflows_ended(&app);
-            // Work an automation started never fires event automations (no loops); a workflow the user started does.
-            let by_automation = origin.starts_with("automation:")
-                || origin.strip_prefix("workflow:").and_then(|rest| rest.split(':').next()).and_then(|run| state.workflows.get(run).ok())
-                    .is_some_and(|run| run.origin.as_deref().is_some_and(|o| o.starts_with("automation:")));
-            if by_automation {
+            // Work an automation started never fires event automations (no loops). A task session of a deleted Workflows run
+            // (`workflow:<run>:<task>`, CON-20) cannot be traced to whoever started the run any more, so it fires none either
+            // (Codex review of 99ceaea, C2).
+            if fires_no_events(&origin) {
                 return;
             }
             let (project, repo) = match &info.task {
@@ -877,64 +853,15 @@ fn architecture_rules_set(state: State<'_, AppState>, slug: String, path: Option
     if let Some(p) = &path {
         archsuite::check_rules(std::path::Path::new(p))?;
     }
-    let mut saved = settings::load(&state.settings_path);
-    let mut rules = saved.architecture_rules.take().unwrap_or_default();
-    match path {
-        Some(p) => rules.insert(slug, p),
-        None => rules.remove(&slug),
-    };
-    saved.architecture_rules = Some(rules);
-    settings::save(&state.settings_path, &saved)
-}
-
-#[tauri::command]
-fn workflow_templates() -> Vec<workflow::Template> {
-    workflow::templates()
-}
-
-#[tauri::command]
-fn workflow_list(state: State<'_, AppState>) -> Vec<workflow::Run> {
-    state.workflows.list()
-}
-
-#[tauri::command]
-fn workflow_create(state: State<'_, AppState>, run: workflow::NewRun) -> Result<workflow::Run, String> {
-    state.workflows.create(run, Some("user".into()))
-}
-
-#[tauri::command]
-fn workflow_edit(state: State<'_, AppState>, id: String, tasks: Vec<workflow::TaskSpec>) -> Result<workflow::Run, String> {
-    state.workflows.edit(&id, tasks)
-}
-
-/// Start, cancel, retry or skip; each may start sessions, so it runs off the UI thread.
-#[tauri::command]
-async fn workflow_act(app: AppHandle, id: String, action: String, task: Option<String>) -> Result<workflow::Run, String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        let host = AppHost(app.clone());
-        let run = match action.as_str() {
-            "start" => state.workflows.start(&id, &host),
-            "cancel" => state.workflows.cancel(&id, &host),
-            "retry" | "skip" => state.workflows.retry_or_skip(&id, task.as_deref().ok_or("Which task?")?, action == "skip", &host),
-            _ => Err(format!("Unknown workflow action: {action}")),
+    settings::update(&state.settings_path, |saved| {
+        let mut rules = saved.architecture_rules.take().unwrap_or_default();
+        match path {
+            Some(p) => rules.insert(slug, p),
+            None => rules.remove(&slug),
         };
-        // A cancel or skip can end an automation's workflow with no session report to say so.
-        automation_workflows_ended(&app);
-        let _ = app.emit("workflows-changed", ());
-        run
+        saved.architecture_rules = Some(rules);
+        Ok(())
     })
-    .await
-}
-
-#[tauri::command]
-fn workflow_delete(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    state.workflows.delete(&id)
-}
-
-#[tauri::command]
-fn workflow_report(state: State<'_, AppState>, id: String) -> Result<String, String> {
-    state.workflows.get(&id).map(|r| r.report())
 }
 
 #[derive(Serialize)]
@@ -976,17 +903,24 @@ async fn automation_put(app: AppHandle, automation: automations::Automation) -> 
             let entry = git::project_entry(&state.bridge, project)?;
             automation.repo = Some(agent::scope::project_repo(&entry, repo)?.display().to_string());
         }
-        // A workflow automation runs its template on the engines shown now; refuse one that could never run unattended.
-        if let (true, automations::Action::Workflow { template, .. }) = (automation.enabled, &automation.action)
-            && let Some(t) = workflow::templates().into_iter().find(|t| t.id == *template)
-        {
-            workflow::check_unattended(&workflow::on_shown(t.tasks, &settings::load(&state.settings_path)), true)?;
-        }
         let saved = state.automations.put(automation, agent::now_ms());
         let _ = app.emit("automations-changed", ());
         saved
     })
     .await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationSpend {
+    daily_usd: f64,
+    spent_today: f64,
+}
+
+/// Today's automation spending against its daily budget, for Settings > Spend.
+#[tauri::command]
+fn automation_spend(state: State<'_, AppState>) -> AutomationSpend {
+    AutomationSpend { daily_usd: settings::load(&state.settings_path).automation_daily_usd(), spent_today: state.automation_spend.used(agent::now_ms()) }
 }
 
 #[tauri::command]
@@ -996,7 +930,7 @@ fn automation_delete(app: AppHandle, state: State<'_, AppState>, id: String) -> 
     done
 }
 
-/// Run now, start a waiting run, or cancel a run (stopping its session or workflow).
+/// Run now, start a waiting run, or cancel a run (stopping its session).
 #[tauri::command]
 async fn automation_act(app: AppHandle, action: String, id: String) -> Result<Option<automations::RunRow>, String> {
     blocking(move || {
@@ -1009,10 +943,6 @@ async fn automation_act(app: AppHandle, action: String, id: String) -> Result<Op
                 let row = state.automations.cancel(&id)?;
                 if let Some(s) = &row.session {
                     let _ = state.agents.end(s);
-                }
-                if let Some(w) = &row.workflow {
-                    let _ = state.workflows.cancel(w, &AppHost(app.clone()));
-                    automation_workflows_ended(&app);
                 }
                 Ok(Some(row))
             }
@@ -1402,12 +1332,24 @@ fn get_settings(state: State<'_, AppState>) -> Settings {
     settings::load(&state.settings_path)
 }
 
+/// The zoom of every window, 1.0 for 100%.
 #[tauri::command]
-fn save_settings(app: AppHandle, state: State<'_, AppState>, value: Settings) -> Result<(), String> {
-    let previous = settings::load(&state.settings_path);
-    // The folder list changes only through the native picker, and the rules files only through architecture_rules_set.
-    let mut value = folders::keep(&previous, value);
+fn ui_zoom(state: State<'_, AppState>) -> f64 {
+    settings::load(&state.settings_path).ui_zoom()
+}
+
+/// Zoom every window and keep it for the next start; returns the zoom kept (clamped to 50% to 200%).
+#[tauri::command]
+fn ui_zoom_set(app: AppHandle, state: State<'_, AppState>, zoom: f64) -> Result<f64, String> {
+    appearance::set(&app, &state.settings_path, zoom)
+}
+
+/// What a Settings form save keeps: the folder list changes only through the native picker, the rules files only through
+/// architecture_rules_set and the zoom only through ui_zoom_set, so a form opened earlier never undoes them.
+fn settings_to_save(previous: &Settings, value: Settings) -> Result<Settings, String> {
+    let mut value = folders::keep(previous, value);
     value.architecture_rules = previous.architecture_rules.clone();
+    value.ui_zoom = previous.ui_zoom;
     if !value.shows(agent::Engine::Claude) && !value.shows(agent::Engine::Codex) {
         return Err("Keep at least one engine shown.".into());
     }
@@ -1416,7 +1358,17 @@ fn save_settings(app: AppHandle, state: State<'_, AppState>, value: Settings) ->
             agent::scope::check_command(command).map_err(|e| format!("{project}: {e}"))?;
         }
     }
-    settings::save(&state.settings_path, &value)?;
+    Ok(value)
+}
+
+#[tauri::command]
+fn save_settings(app: AppHandle, state: State<'_, AppState>, value: Settings) -> Result<(), String> {
+    let (previous, value) = settings::update(&state.settings_path, |saved| {
+        let previous = saved.clone();
+        let value = settings_to_save(&previous, value)?;
+        *saved = value.clone();
+        Ok((previous, value))
+    })?;
     *state.shortcut_error.lock().unwrap() = capture::apply_shortcut(&app, value.capture_shortcut().as_deref()).err();
     // Only a change of interpreter, script or store needs a new Living Memory process.
     if (&previous.python, &previous.script, &previous.root) != (&value.python, &value.script, &value.root) {
@@ -1518,6 +1470,12 @@ async fn wiki_agent_build(app: AppHandle, state: State<'_, AppState>, domain: St
         wiki_build::run(&emit, &launch, &domain, project.as_deref(), None, restructure, dry_run, &claude)
     })
     .await
+}
+
+/// The wiki build running now (`{ domain, scope }`), or null.
+#[tauri::command]
+fn wiki_agent_running() -> Option<Value> {
+    wiki_build::active()
 }
 
 /// Stop the running wiki build. The pages it already wrote are kept.
@@ -1820,6 +1778,18 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // Size, position and maximised state come back at the next start (DESK-WIN). Never visibility: the window may
+        // have been hidden to the tray. The capture window always opens centred.
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
+                )
+                .with_denylist(&[capture::WINDOW])
+                .build(),
+        )
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -1858,6 +1828,11 @@ pub fn run() {
             let terminals_dir = app.path().app_data_dir()?.join("terminals");
             let snapshots_dir = architecture::snapshots_root(&sessions_dir);
             let saved = settings::load(&settings_path);
+            // The main window starts hidden (tauri.conf.json), so it is first seen at its restored size and zoom.
+            if let Some(main) = app.get_webview_window("main") {
+                appearance::apply_to(&main, saved.ui_zoom());
+                let _ = main.show();
+            }
             let launch = settings::resolve(&saved, |k| std::env::var(k).ok());
             // A taken or invalid hotkey must not stop the app; the settings screen shows why.
             let shortcut_error = capture::apply_shortcut(app.handle(), saved.capture_shortcut().as_deref()).err();
@@ -1912,7 +1887,6 @@ pub fn run() {
                 terminals,
                 learning: learning::Learning::new(app.path().app_data_dir()?.join("learning")),
                 automation_spend: learning::Ledger::new(app.path().app_data_dir()?.join("automation-spend.json")),
-                workflows: Arc::new(workflow::Workflows::new(app.path().app_data_dir()?.join("workflows"))),
                 automations: Arc::new(automations::Automations::new(app.path().app_data_dir()?)),
                 skills: skills::Skills::new(app.path().app_data_dir()?.join("skills"), skills::default_targets()),
                 executive: executive::Store::new(app.path().app_data_dir()?.join("executive")),
@@ -1993,12 +1967,12 @@ pub fn run() {
             exec_agent_start,
             exec_session_capture,
             exec_export,
-            lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
+            lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, ui_zoom, ui_zoom_set, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_roles, learning_status, learning_review, skills_list, skill_proposals, skill_decide, skill_action, skill_version, skill_history,
-            skills_upkeep, skill_from_note, workflow_templates, workflow_list, workflow_create, workflow_edit, workflow_act, workflow_delete, workflow_report,
-            automation_list, automation_put, automation_delete, automation_act, architecture_drift, architecture_rules_set, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, uninstall_inventory, uninstall_remove_worktree, uninstall_delete_branch, repo_branches,
+            skills_upkeep, skill_from_note,
+            automation_list, automation_put, automation_delete, automation_spend, automation_act, architecture_drift, architecture_rules_set, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, uninstall_inventory, uninstall_remove_worktree, uninstall_delete_branch, repo_branches,
             agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_stop_and_approve, review_ask_codex, review_request_changes, review_request_terminal_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
-            system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export, wiki_agent_build, wiki_agent_cancel,
+            system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export, wiki_agent_build, wiki_agent_cancel, wiki_agent_running,
             studio::notebooks_list, studio::notebook_add, studio::notebook_remove, studio::notebook_rename, studio::notebook_tree, studio::notebook_meta_get,
             studio::notebook_meta_set, studio::notebook_append, studio::obsidian_setting, studio::file_read, studio::file_reopen, studio::file_save, studio::file_create, studio::file_mkdir, studio::file_rename, studio::file_delete,
             studio::file_reveal, studio::asset_base, studio::lmdoc_assets, studio::notebook_add_dropped, studio::file_attach_bytes, studio::file_attach_dropped, opens::open_dropped, opens::claim_drop, opens::unclaimed_drops, studio::notebook_reach_record, lm_body, lmdoc_move, lmdoc_attach, studio::lmdoc_open_asset, opens::open_dialog, opens::open_pending, opens::open_recent,
@@ -2026,6 +2000,43 @@ pub fn run() {
 mod tests {
     use super::*;
     use term::launch::{Cli, NO_CODEX};
+
+    #[test]
+    fn a_settings_form_save_keeps_the_zoom_and_rules_it_did_not_change() {   // DESK-ZOOM
+        let previous = Settings { ui_zoom: Some(1.25), architecture_rules: Some([("s".to_string(), "r.json".to_string())].into()), ..Default::default() };
+        let form = Settings { python: Some("py".into()), ui_zoom: Some(0.5), ..Default::default() };
+        let saved = settings_to_save(&previous, form).unwrap();
+        assert_eq!(saved.python.as_deref(), Some("py"));
+        assert_eq!(saved.ui_zoom, Some(1.25));
+        assert_eq!(saved.architecture_rules, previous.architecture_rules);
+        let hidden = Settings { hidden_engines: Some(vec!["claude".into(), "codex".into()]), ..Default::default() };
+        assert!(settings_to_save(&previous, hidden).is_err());
+    }
+
+    #[test]
+    fn sessions_of_automations_and_of_deleted_workflows_fire_no_event_automations() {   // Codex review of 99ceaea, C2
+        assert!(fires_no_events("automation:a1"));
+        assert!(fires_no_events("workflow:r1:t1"));
+        assert!(!fires_no_events(""));
+        assert!(!fires_no_events("review:s1"));
+    }
+
+    #[test]
+    fn a_run_budget_is_its_own_but_never_above_the_cap_per_agent_run() {   // WIKI-R3
+        assert_eq!(run_budget(Some(2.0), 1.0), 1.0);
+        assert_eq!(run_budget(Some(10.0), 5.0), 5.0);
+        assert_eq!(run_budget(Some(2.0), 5.0), 2.0);
+        assert_eq!(run_budget(None, 5.0), 5.0);
+        assert_eq!(run_budget(Some(0.0), 5.0), 5.0);
+        assert_eq!(run_budget(Some(f64::NAN), 5.0), 5.0);
+        // Admission counts what a role session gets, unrounded (Codex re-review of 55cfab2).
+        assert_eq!(run_budget(Some(3.0), 1.009), 1.009);
+        // A rebuild's --budget is whole cents, rounded down, so it never exceeds what was admitted (Codex review, B1).
+        assert_eq!(rebuild_budget(Some(1.006), 5.0), 1.0);
+        assert_eq!(rebuild_budget(Some(3.0), 1.009), 1.0);
+        assert_eq!(rebuild_budget(Some(0.29), 5.0), 0.29);
+        assert_eq!(rebuild_budget(None, 5.0), 5.0);
+    }
 
     /// Codex review of dd4c1b0, R3-D8: a store written in another letter case or with another separator gets the name
     /// the filesystem gives it, without the `\\?\` prefix; a root that does not exist keeps its text.

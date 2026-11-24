@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Entry } from "../../lib/notebooks";
-import { ancestors, buildTree, dropTarget, visibleRows, type Node } from "./tree";
+import { ancestors, buildTree, dropTarget, treeMove, visibleRows, type Node } from "./tree";
 
 const e = (path: string, kind: Entry["kind"] = path.endsWith(".md") ? "page" : "dir"): Entry => ({ path, kind, size: 0, mtimeMs: 0 });
 const entries = [
@@ -50,5 +50,34 @@ describe("notebook tree", () => {
   it("lists the rows to open to reveal a page", () => {
     // A page holding subpages may be Markdown or a rich page (NS-3C).
     expect(ancestors("Plan/Sub/Page.md")).toEqual(["plan", "plan.md", "plan.hmdoc", "plan/sub", "plan/sub.md", "plan/sub.hmdoc"]);
+  });
+});
+
+describe("tree rows for the keyboard and screen readers (DESK-6)", () => {
+  const rows = () => visibleRows(buildTree(entries), new Set(["alpha", "plan.md"]));
+  const at = (path: string) => rows().findIndex((r) => r.node.path === path);
+
+  it("say each row's parent and its place among its siblings", () => {
+    const shown = rows().map((r) => [r.node.path, r.parent, r.posinset, r.setsize]);
+    expect(shown).toEqual([
+      ["Alpha", null, 1, 5], ["Alpha/notes.txt", "Alpha", 1, 2], ["Alpha/x.md", "Alpha", 2, 2], ["Zeta", null, 2, 5],
+      ["A.md", null, 3, 5], ["b.md", null, 4, 5], ["Plan.md", null, 5, 5], ["Plan/Step 2.md", "Plan.md", 1, 2], ["Plan/Step 10.md", "Plan.md", 2, 2],
+    ]);
+  });
+
+  it("move up and down, open and close branches with Right and Left, and go to a parent", () => {
+    const r = rows();
+    expect(treeMove(r, 0, "ArrowDown")).toEqual({ focus: 1 });
+    expect(treeMove(r, 0, "ArrowUp")).toBeNull();
+    expect(treeMove(r, r.length - 1, "ArrowDown")).toBeNull();
+    expect(treeMove(r, 3, "End")).toEqual({ focus: r.length - 1 });
+    expect(treeMove(r, 3, "Home")).toEqual({ focus: 0 });
+    expect(treeMove(r, at("Alpha"), "ArrowRight")).toEqual({ focus: at("Alpha/notes.txt") });
+    expect(treeMove(r, at("Alpha"), "ArrowLeft")).toEqual({ collapse: "Alpha" });
+    expect(treeMove(r, at("Zeta"), "ArrowRight")).toEqual({ expand: "Zeta" });
+    expect(treeMove(r, at("Zeta"), "ArrowLeft")).toBeNull();
+    expect(treeMove(r, at("Plan/Step 10.md"), "ArrowLeft")).toEqual({ focus: at("Plan.md") });
+    expect(treeMove(r, at("A.md"), "ArrowRight")).toBeNull();
+    expect(treeMove(r, 0, "x")).toBeNull();
   });
 });

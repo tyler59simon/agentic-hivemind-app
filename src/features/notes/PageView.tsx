@@ -12,6 +12,7 @@ import { remarkWikilinks, WIKI_PREFIX } from "../viewer/remarkWikilinks";
 import { findFile, pictureUrl, relativeTarget } from "./pictures";
 import { QueryBlock } from "./QueryView";
 import { folderOf } from "../../lib/notebooks";
+import { scrollBehavior } from "../../lib/motion";
 
 const PLUGINS = [remarkGfm, remarkEmbeds, remarkWikilinks, remarkHighlights, remarkCallouts];
 const keepUrl = (url: string) => (url.startsWith(WIKI_PREFIX) || url.startsWith(WIKI_PICTURE) ? url : defaultUrlTransform(url));
@@ -64,7 +65,7 @@ export function PageView({ text, tabId, onLink, onFile, pictures, embed, nested 
 }) {
   const reveal = useWorkspace((s) => s.reveal);
   useEffect(() => {
-    if (!nested && reveal?.tabId === tabId) document.getElementById(`${tabId}-l${reveal.line}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (!nested && reveal?.tabId === tabId) document.getElementById(`${tabId}-l${reveal.line}`)?.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
   }, [reveal, tabId, nested]);
   const prepared = useMemo(() => prepare(text), [text]);
   // Headings read the line map through a ref, so a text change does not make new component types, which would remount

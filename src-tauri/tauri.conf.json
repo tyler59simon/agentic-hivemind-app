@@ -15,8 +15,9 @@
         "title": "Hivemind",
         "width": 1440,
         "height": 900,
-        "minWidth": 1040,
-        "minHeight": 680
+        "minWidth": 800,
+        "minHeight": 600,
+        "visible": false
       }
     ],
     "security": {

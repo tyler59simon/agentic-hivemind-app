@@ -1,3 +1,5 @@
+import { reloadKey } from "../../lib/keys";
+
 export interface Key { type: string; key: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }
 export type KeyAction = "copy" | "paste" | "leave" | "search" | "newline" | "pass";
 
@@ -14,11 +16,7 @@ export function keyAction(e: Key, hasSelection: boolean): KeyAction {
   return "pass";
 }
 
-/** F5 (any modifiers), Ctrl+R and Ctrl+Shift+R (Ctrl or Meta, no Alt): the keys that reload the page. */
-export function reloadKey(e: Key): boolean {
-  if (e.key === "F5") return true;
-  return (e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "r";
-}
+export { reloadKey };
 
 /** Whether the browser's own action for this key must be stopped. Never for AltGr (Ctrl+Alt) or for paste. F5 and Ctrl+R reload the page, so they are stopped too. */
 export function swallow(e: Key): boolean {

@@ -58,11 +58,72 @@ describe("Modal", () => {
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
-  it("Confirm focuses its action button and answers", async () => {
+  it("Confirm focuses Cancel when the action is dangerous, so a stray Enter does not confirm it (DESK-4)", async () => {
     const onAnswer = vi.fn();
     await mount(<Confirm title="Delete page" message="Sure?" action="Delete" danger onAnswer={onAnswer} />);
-    expect(document.activeElement?.textContent).toBe("Delete");
+    expect(document.activeElement?.textContent).toBe("Cancel");
+    await act(async () => { (document.activeElement as HTMLElement).click(); });
+    expect(onAnswer).toHaveBeenCalledWith(false);
+  });
+
+  it("a plain Confirm focuses its action button and answers yes", async () => {
+    const onAnswer = vi.fn();
+    await mount(<Confirm title="Open" message="Open it?" action="Open" onAnswer={onAnswer} />);
+    expect(document.activeElement?.textContent).toBe("Open");
     await act(async () => { (document.activeElement as HTMLElement).click(); });
     expect(onAnswer).toHaveBeenCalledWith(true);
+  });
+
+  it("is modal: it takes the focus, Tab stays inside, and one Escape closes only the top dialog (DESK-4)", async () => {
+    const outer = vi.fn();
+    const inner = vi.fn();
+    function Host() {
+      const [more, setMore] = useState(false);
+      return (
+        <Modal title="Outer" onClose={outer}>
+          <button id="more" onClick={() => setMore(true)}>More</button>
+          {more && <Modal title="Inner" onClose={inner}><button>one</button><button>two</button></Modal>}
+        </Modal>
+      );
+    }
+    await mount(<Host />);
+    await act(async () => document.getElementById("more")!.click());
+    const top = document.querySelector<HTMLElement>('[role="dialog"][aria-label="Inner"]')!;
+    expect(top.getAttribute("aria-modal")).toBe("true");
+    expect(top.contains(document.activeElement)).toBe(true);
+    const buttons = [...top.querySelectorAll("button")];
+    const last = buttons[buttons.length - 1];
+    last.focus();
+    const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    await act(async () => { last.dispatchEvent(tab); });
+    expect(tab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(buttons[0]);
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true })); });
+    expect([inner.mock.calls.length, outer.mock.calls.length]).toEqual([1, 0]);
+  });
+
+  it("brings Tab back into the dialog when the focus fell to the page body (a button disabled during a write)", async () => {
+    await mount(<><button id="behind">Behind</button><Modal title="Archive" onClose={() => {}} locked><button>Archive</button></Modal></>);
+    (document.activeElement as HTMLElement).blur();
+    expect(document.activeElement).toBe(document.body);
+    const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    await act(async () => { document.body.dispatchEvent(tab); });
+    expect(tab.defaultPrevented).toBe(true);
+    expect(dialog().contains(document.activeElement)).toBe(true);
+  });
+
+  it("gives the focus back to the button that opened it", async () => {
+    function Host() {
+      const [open, setOpen] = useState(false);
+      return <><button id="opener" onClick={() => setOpen(true)}>Open</button>{open && <Modal title="T" onClose={() => setOpen(false)}><p>x</p></Modal>}</>;
+    }
+    await mount(<Host />);
+    const opener = document.getElementById("opener")!;
+    opener.focus();
+    await act(async () => opener.click());
+    expect(dialog().contains(document.activeElement)).toBe(true);
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true })); });
+    await act(async () => { await Promise.resolve(); });
+    expect(document.activeElement).toBe(opener);
   });
 });

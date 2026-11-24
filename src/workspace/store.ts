@@ -2,12 +2,12 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { movedPath, sameDoc, type FileRef } from "../documents/keys";
-import { isCanvas, isDocx, isDrawio, isMarkdown, isMermaid, isPdf, isSvg } from "../lib/notebooks";
+import { isCanvas, isDocx, isDrawio, isMarkdown, isMermaid, isPdf, isSvg, pageTitle } from "../lib/notebooks";
 import type { NoteType } from "../lib/lm";
 import { prefs } from "../lib/prefs";
 import { safeStorage, useApp } from "../store";
 
-export type Mode = "reading" | "live" | "rich" | "source" | "history" | "bigfile" | "hex" | "board" | "preview" | "split" | "edit";
+export type Mode = "reading" | "live" | "source" | "history" | "bigfile" | "hex" | "board" | "preview" | "split" | "edit";
 export type TabKind = "note" | "new-note" | "file" | "new-file" | "compare" | "find";
 const KINDS: readonly string[] = ["note", "new-note", "file", "new-file", "compare", "find"];
 export type { FileRef };
@@ -31,6 +31,8 @@ interface WorkspaceState {
   /** Whether the context rail beside the focused note is shown: with one pane, and with several (off at first, to make room). */
   rail: boolean;
   railSplit: boolean;
+  /** Whether the rail is shown over the note in a narrow window (DESK-WIN): off at first, never kept. */
+  railNarrow: boolean;
   dirty: Record<string, boolean>;          // tab id -> unsaved edits (not persisted)
   reveal: { tabId: string; line: number; col?: number; at: number } | null; // outline -> scroll request (col: where the cursor lands on the line)
   openNote: (ref: string, opts?: { split?: boolean; mode?: Mode; title?: string }) => void;
@@ -42,7 +44,7 @@ interface WorkspaceState {
   focus: (paneId: string) => void;
   updateTab: (tabId: string, patch: Partial<Tab>) => void;
   setDirty: (tabId: string, dirty: boolean) => void;
-  setRail: (rail: boolean) => void;
+  setRail: (rail: boolean, narrow?: boolean) => void;
   revealLine: (tabId: string, line: number, col?: number) => void;
   replaceRef: (from: string, to: string) => void;
   /** A page or folder of a notebook was renamed or moved: its tabs follow. */
@@ -97,6 +99,7 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
     focused: initial.id,
     rail: true,
     railSplit: false,
+    railNarrow: false,
     dirty: {},
     reveal: null,
 
@@ -169,7 +172,7 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
     updateTab: (tabId, patch) =>
       set((s) => ({ panes: s.panes.map((p) => ({ ...p, tabs: p.tabs.map((t) => (t.id === tabId ? { ...t, ...patch } : t)) })) })),
     setDirty: (tabId, dirty) => set((s) => (Boolean(s.dirty[tabId]) === dirty ? s : { dirty: { ...s.dirty, [tabId]: dirty } })),
-    setRail: (shown) => set((s) => (s.panes.length > 1 ? { railSplit: shown } : { rail: shown })),
+    setRail: (shown, narrow = false) => set((s) => (narrow ? { railNarrow: shown } : s.panes.length > 1 ? { railSplit: shown } : { rail: shown })),
     revealLine: (tabId, line, col) => set({ reveal: { tabId, line, ...(col ? { col } : {}), at: Date.now() } }),
     // After a new note is captured, its tab becomes a note tab.
     replaceRef: (from, to) =>
@@ -223,16 +226,22 @@ export function notesOnly(stored: { panes?: Pane[]; focused?: string; panel?: st
   return { panes: all, focused: all.some((p) => p.id === stored.focused) ? stored.focused! : all[0].id, rail: stored.panel !== null };
 }
 
-/** A stored layout without tabs of unknown kinds. */
+/** A stored layout without tabs of unknown kinds. A tab saved in Rich mode, which was deleted (CON-19), opens in Live. */
 export function knownKinds(stored: Partial<WorkspaceState> | undefined): Partial<WorkspaceState> {
   if (!stored?.panes) return stored ?? {};
   const panes = stored.panes.map((p) => {
     const tabs = p.tabs.filter((t) => KINDS.includes(t.kind) && (t.kind !== "file" || !!t.file))
-      .map((t) => (t.paper === undefined || typeof t.paper === "boolean" ? t : { ...t, paper: undefined }));
+      .map((t) => (t.paper === undefined || typeof t.paper === "boolean" ? t : { ...t, paper: undefined }))
+      .map((t) => ((t.mode as string) === "rich" ? { ...t, mode: "live" as const } : t));
     return { ...p, tabs, active: tabs.some((t) => t.id === p.active) ? p.active : tabs[0]?.id ?? null };
   });
   return { ...stored, panes };
 }
+
+/** A tab's name in the tab strip and the top bar's last crumb. */
+export const tabLabel = (tab: Tab) => (tab.kind === "note" ? tab.title || tab.ref?.split(":")[1]?.slice(0, 8) || "Note"
+  : tab.kind === "file" ? tab.title || pageTitle(tab.file?.path ?? "") || "Page"
+  : tab.kind === "new-file" ? tab.title || "Untitled" : tab.kind === "compare" ? tab.title || "Compare" : tab.kind === "find" ? "Find in files" : tab.title || "New note");
 
 /** The tab shown in the focused pane. */
 export function activeTab(s: Pick<WorkspaceState, "panes" | "focused">): Tab | undefined {
@@ -241,7 +250,10 @@ export function activeTab(s: Pick<WorkspaceState, "panes" | "focused">): Tab | u
 }
 
 /** Whether the context rail is shown for the current number of panes. */
-export const railShown = (s: Pick<WorkspaceState, "panes" | "rail" | "railSplit">) => (s.panes.length > 1 ? s.railSplit : s.rail);
+/** Whether the context rail shows. A narrow window has its own switch, so turning the rail on there does not cover the note
+ *  again once the window is wide (DESK-WIN). */
+export const railShown = (s: Pick<WorkspaceState, "panes" | "rail" | "railSplit"> & { railNarrow?: boolean }, narrow = false) =>
+  (narrow ? !!s.railNarrow : s.panes.length > 1 ? s.railSplit : s.rail);
 
 /** Whether any document is open. */
 export const hasTabs = (s: Pick<WorkspaceState, "panes">) => s.panes.some((p) => p.tabs.length > 0);
