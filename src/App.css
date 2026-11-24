@@ -1502,7 +1502,7 @@ sup.wiki-cite .removed { color: var(--muted); text-decoration: line-through; }
 .item-row.on { background: var(--bg-active); }
 button.icon { border: none; padding: .25rem; }
 
-/* Rich mode of a Markdown page (NS-3B): the page drawn without its Markdown syntax. */
+/* The rich editor (from NS-3B), used by .hmdoc pages: a page drawn without Markdown syntax. */
 .rich-editor { display: flex; flex-direction: column; min-height: 22rem; }
 /* Node views hide parts with the hidden attribute; their own display rules must not show them (UI pass of NS-3B). */
 .rich-editor [hidden] { display: none !important; }

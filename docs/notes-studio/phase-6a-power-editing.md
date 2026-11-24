@@ -6,7 +6,7 @@ Read [README.md](README.md) and [phase-1b-open-any-file.md](phase-1b-open-any-fi
 
 Claude surveyed main on 2026-11-22 (after NS-5). Where the sections below say otherwise, these win. At the user's request this phase has no Codex review; Claude reviews the diff.
 
-- **Where it applies.** Source mode of Markdown pages and every plain text file tab. Memory notes and Live, Rich and Reading modes are unchanged: `editorExtensions` in `src/features/editor/CodeEditor.tsx` promises a note the same extension list as always, so the power extensions sit behind a prop the file tab sets.
+- **Where it applies.** Source mode of Markdown pages and every plain text file tab. Memory notes and Live and Reading modes are unchanged: `editorExtensions` in `src/features/editor/CodeEditor.tsx` promises a note the same extension list as always, so the power extensions sit behind a prop the file tab sets.
 - **Multi-cursor.** `searchKeymap` already binds Ctrl+D (select next occurrence) and Ctrl+Shift+L (select all occurrences); what is missing is `EditorState.allowMultipleSelections`, `rectangularSelection()` and `crosshairCursor()` (Alt), plus folding and bracket matching for code languages only.
 - **Macros.** Ctrl+Shift+R can reload the page in WebView2. The editor's keymap takes it with `preventDefault`; Claude checks in the dev app that the page does not reload, and if it does the binding moves to Ctrl+Alt+R. Ctrl+Shift+P is free (the app's palette takes Ctrl+P only without Shift).
 - **Line tools** are in the editor toolbar's menu and in the palette while a file tab is active; each runs as one transaction, so one Undo reverts it.

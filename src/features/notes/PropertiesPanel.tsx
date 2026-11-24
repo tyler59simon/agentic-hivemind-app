@@ -1,5 +1,5 @@
 // The properties panel above a page (NS-7B): the frontmatter as typed fields. An edit changes the page's text through its
-// document session (the open editor follows it, in Rich, Live and Source alike), and only the value of that key: `frontmatter.ts`
+// document session (the open editor follows it, in Live and Source alike), and only the value of that key: `frontmatter.ts`
 // copies every other byte of the block as it was. The page is then saved the way any edit is.
 import { ChevronRight, Plus, X } from "lucide-react";
 import { useMemo, useState } from "react";

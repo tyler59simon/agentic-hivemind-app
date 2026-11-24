@@ -1,6 +1,6 @@
-// Editing helpers of the Rich editor (NS-3B): typing `[[...]]`, `![[...]]` and `$...$` makes links, embeds and math;
-// the slash menu's state; moving blocks; markers where pictures being saved will be linked; and Markdown on the
-// clipboard. Nothing here writes to the document except in answer to the user.
+// Editing helpers of the .hmdoc editor (from NS-3B): typing `[[...]]`, `![[...]]` and `$...$` makes links, embeds and math;
+// the slash menu's state; moving blocks; markers where pictures being saved will be linked; and Markdown pasted from
+// the clipboard. Nothing here writes to the document except in answer to the user.
 import { Extension, InputRule, type Editor } from "@tiptap/core";
 import { Fragment, Slice, type Node as PMNode, type Schema } from "@tiptap/pm/model";
 import { NodeSelection, Plugin, PluginKey, Selection, type EditorState } from "@tiptap/pm/state";
@@ -8,8 +8,6 @@ import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
 import { lost } from "../editor/rich/attach";
 import type { RichContext } from "../editor/rich/context";
 import { markdownNodes } from "./fromMarkdown";
-import type { Style } from "./markdown";
-import { writeBlock } from "./toMarkdown";
 
 /** Typing that becomes an atom: `[[Page]]`, `![[Page]]`, and `$x$` by Obsidian's rules (no space inside the marks). */
 export const RichInputRules = Extension.create({
@@ -242,32 +240,3 @@ export function pastedSlice(schema: Schema, text: string): Slice | null {
   if (nodes.length === 1 && nodes[0].type.name === "paragraph") return new Slice(nodes[0].content, 0, 0);
   return new Slice(Fragment.from(nodes), 0, 0);
 }
-
-/** Copied content as Markdown, written in the page's style. */
-export function sliceMarkdown(slice: Slice, style: Style, definitions: readonly string[]): string {
-  const { schema } = slice.content.firstChild?.type ?? { schema: null };
-  if (!schema) return "";
-  const blocks: PMNode[] = [];
-  let inline: PMNode[] = [];
-  const flush = () => { if (inline.length) { blocks.push(schema.nodes.paragraph.create(null, inline)); inline = []; } };
-  slice.content.forEach((n) => {
-    if (n.isInline) inline.push(n);
-    else { flush(); blocks.push(n.type.name === "calloutTitle" ? schema.nodes.paragraph.create(null, n.content) : n); }
-  });
-  flush();
-  return blocks.map((b) => {
-    try { return writeBlock(b.type.create({ ...b.attrs, ...(b.type.spec.attrs?.srcId ? { srcId: null } : {}) }, b.content, b.marks), style, definitions); } catch { return b.textContent; }
-  }).filter(Boolean).join("\n\n");
-}
-
-/** Put the cursor at the start of top-level block `index` and scroll it into view. */
-export function revealBlock(view: EditorView, index: number) {
-  const { doc } = view.state;
-  if (!doc.childCount) return;
-  const i = Math.max(0, Math.min(index, doc.childCount - 1));
-  let pos = 0;
-  for (let k = 0; k < i; k++) pos += doc.child(k).nodeSize;
-  view.dispatch(view.state.tr.setSelection(Selection.near(view.state.doc.resolve(pos + (doc.child(i).isAtom ? 0 : 1)))).scrollIntoView());
-  view.focus();
-}
-

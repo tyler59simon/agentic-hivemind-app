@@ -1,4 +1,4 @@
-// Markdown to mdast and back for Rich mode (NS-3B): GFM, frontmatter and Obsidian syntax, with the Obsidian nodes'
+// Markdown to mdast and back for the rich editor (NS-3B, now used by .hmdoc pages): GFM, frontmatter and Obsidian syntax, with the Obsidian nodes'
 // shapes. Parsing keeps positions; writing follows the style found in the page.
 import type { Literal, Parent, PhrasingContent, Root, RootContent } from "mdast";
 import { fromMarkdown, type Extension as FromExtension, type CompileContext, type Token } from "mdast-util-from-markdown";

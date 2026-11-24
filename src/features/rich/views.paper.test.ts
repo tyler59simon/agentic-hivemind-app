@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Rich mode and rich pages draw Mermaid previews and code ranges in the colours of the document they are in, and again when
+// Rich pages draw Mermaid previews and code ranges in the colours of the document they are in, and again when
 // the pane's background or the theme changes, in the same editor.
 import { Editor } from "@tiptap/core";
 import { EditorView as CodeView } from "@codemirror/view";
@@ -51,7 +51,7 @@ afterEach(() => { editors.splice(0).forEach((e) => e.destroy()); document.body.i
 
 const mermaid = { type: "codeBlock", attrs: { language: "mermaid" }, content: [{ type: "text", text: "flowchart LR\n  A --> B" }] };
 
-describe("a Mermaid preview in Rich mode", () => {
+describe("a Mermaid preview in the rich editor", () => {
   it("draws dark under a dark theme and light inside a white pane", async () => {
     mount([mermaid]);
     await settle();

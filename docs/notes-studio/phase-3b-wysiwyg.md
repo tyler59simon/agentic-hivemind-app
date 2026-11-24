@@ -1,5 +1,7 @@
 # NS-3B: WYSIWYG mode on Tiptap
 
+> **Removed on 2026-11-24 (CON-19).** The user decided to delete Rich mode for Markdown pages; Markdown pages keep Reading, Live, Source and History. The Tiptap editor, schema, toolbar, slash menu and Markdown reader and writer built in this phase stay, because the `.hmdoc` editor (NS-3C) is built from them. The byte-preserving serializer (`preserve.ts`) and the Rich mode tab are gone. A tab saved in Rich mode opens in Live. This document is kept as the design record.
+
 Read [README.md](README.md) and the S3 spike verdict first. This phase adds a fourth mode to Markdown pages, **Rich**, where no Markdown syntax is visible. The file stays Markdown: blocks the user did not touch are written back byte for byte, and only edited blocks are re-serialised.
 
 ## Changes from the NS-0 review

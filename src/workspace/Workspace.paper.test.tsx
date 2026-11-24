@@ -61,7 +61,6 @@ beforeEach(() => {
     panes: [{ id: "p0", tabs: [
       { id: "read", kind: "file", file: file("A.md"), mode: "reading" },
       { id: "live", kind: "file", file: file("A.md"), mode: "live" },
-      { id: "rich", kind: "file", file: file("A.md"), mode: "rich" },
       { id: "src", kind: "file", file: file("A.md"), mode: "source" },
       { id: "text", kind: "file", file: file("B.txt") },
       { id: "page", kind: "file", file: file("P.hmdoc") },
@@ -83,7 +82,7 @@ afterEach(async () => {
   applyPaperDefault("theme", false);
 });
 
-const KINDS = ["read", "live", "rich", "src", "text", "page", "note", "new", "newfile"];
+const KINDS = ["read", "live", "src", "text", "page", "note", "new", "newfile"];
 
 describe("the pane of a document tab", () => {
   it("is plain under the theme's background", async () => {

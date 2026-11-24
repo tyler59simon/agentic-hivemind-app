@@ -20,7 +20,7 @@ Claude surveyed main at `f88e919` on 2026-11-22. Where the sections below say ot
 - **Size.** Files over 16 MB are not snapshotted (the timeline says so); retention is per file as in section 2.
 - **Living Memory pages** take no Hivemind snapshots: their timeline is `docHistory` in `src/lib/lm.ts` (`alm doc history`) and Restore writes through the existing page save with its revision precondition.
 - **Git.** The timeline and Commit apply to any file inside a git work tree (found with `git rev-parse --show-toplevel` from the file's folder through `git.rs run_captured` with a timeout). Commit asks for a message in a dialog, never pushes, and shows `review.rs NO_IDENTITY` when git has no identity.
-- **Where it shows.** File tabs gain a History mode beside Reading, Live, Rich and Source (today `FileTab.tsx` maps `history` to Reading); plain text files get it too. The page rail gains a History section with the last five versions. The new components go in `src/features/history/` beside Memory's existing `HistoryViews.tsx`, `LogView.tsx` and `activity.ts`, without changing them.
+- **Where it shows.** File tabs gain a History mode beside Reading, Live and Source (Rich was deleted in CON-19) (today `FileTab.tsx` maps `history` to Reading); plain text files get it too. The page rail gains a History section with the last five versions. The new components go in `src/features/history/` beside Memory's existing `HistoryViews.tsx`, `LogView.tsx` and `activity.ts`, without changing them.
 
 ## 1. What the user sees
 
@@ -53,7 +53,7 @@ Code landed on 2026-11-22: Hivemind `cf4fe96` (decisions in `0ccb353`), with the
 
 **Webview**
 - `src/lib/history.ts` (wrappers), `src/features/history/timeline.ts` (merge and order of snapshots, commits and Living Memory operations; labels), `src/features/history/FileHistory.tsx` (`FileHistory` mode, `HistoryRail`, `CommitDialog`, compare with `@codemirror/merge`, restore, pin). Memory's `HistoryViews.tsx`, `LogView.tsx` and `activity.ts` are unchanged.
-- `FileTab.tsx`: a History tab for every file tab (markdown: Reading, Live, Rich, Source, History; other text files: Source, History; rich pages: Page, History). `RightSidebar.tsx PageRail`: a History section with the five newest versions and an All link.
+- `FileTab.tsx`: a History tab for every file tab (markdown: Reading, Live, Source, History; other text files: Source, History; rich pages: Page, History). `RightSidebar.tsx PageRail`: a History section with the five newest versions and an All link.
 - `documents/store.ts`: `save(key, source?)` and `restore(key, text)`; `saveFile` and `saveDoc` pass `source` only when given. The link rewrite (`RewriteDialog.tsx`) saves with source `links`.
 - Living Memory pages: the timeline is `docHistory`, a version is `docVersion`, and Restore goes through the normal page save, so it writes with `doc write --expected-revision`.
 
