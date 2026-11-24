@@ -185,11 +185,12 @@ describe("saved navigation", () => {
   it("moves a saved Wiki route to Notes > Wiki and picks the project it named", () => {
     expect(migrate({ page: "wiki", domain: "demo", at: "n-pg0a1b2c", edition: "agent", project: "core" }, 8))
       .toEqual({ project: "core", domain: "demo", route: { page: "notes", view: "wiki", domain: "demo", at: "n-pg0a1b2c", edition: "agent" } });
-    expect(migrate({ page: "wiki", domain: "demo", at: "p-core" }, 8)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "wiki", domain: "demo", at: "p-core" } });
-    expect(migrate({ page: "wiki" }, 8)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "wiki" } });
+    // A route that named no project showed a whole domain: it keeps that view (whole) when no project is picked.
+    expect(migrate({ page: "wiki", domain: "demo", at: "p-core" }, 8)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "wiki", domain: "demo", at: "p-core", whole: true } });
+    expect(migrate({ page: "wiki" }, 8)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "wiki", whole: true } });
     expect(migrate({ page: "wiki", domain: "demo", project: "core" }, 1)).toMatchObject({ project: "core", route: { page: "notes", view: "wiki", domain: "demo" } });
     // The whole-domain scope of the agent edition ("") names no project.
-    expect(migrate({ page: "wiki", domain: "demo", edition: "agent", project: "" }, 8)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "wiki", domain: "demo", edition: "agent" } });
+    expect(migrate({ page: "wiki", domain: "demo", edition: "agent", project: "" }, 8)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "wiki", domain: "demo", edition: "agent", whole: true } });
   });
 
   it("leaves a version 9 save alone", () => {

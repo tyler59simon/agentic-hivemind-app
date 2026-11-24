@@ -624,17 +624,41 @@ impl automations::Doer for AppDoer {
                     return Err(why);
                 }
                 let launch = state.bridge.launch();
+                // The build's progress lines carry its cost so far, so a build that fails or is cancelled part way is still charged.
+                let spent = Mutex::new(0.0_f64);
                 let emit = |name: &str, payload: Value| {
+                    if let Some(cost) = (name == wiki_build::PROGRESS_EVENT).then(|| payload.get("cost_usd").and_then(Value::as_f64)).flatten() {
+                        let mut spent = spent.lock().unwrap_or_else(|e| e.into_inner());
+                        *spent = spent.max(cost);
+                    }
                     let _ = self.0.emit(name, payload);
                 };
                 let claude = || wiki_build::claude_override(&agent::claude::available(&saved)).map(String::from);
+                let finished = std::sync::atomic::AtomicBool::new(false);
+                let outcome = std::thread::scope(|scope| {
+                    // Cancelling the run stops the build process, as the Wiki's own Cancel does. Only one real build runs at a time,
+                    // so the running build is this one.
+                    scope.spawn(|| {
+                        while !finished.load(std::sync::atomic::Ordering::Relaxed) {
+                            if cancel.is_set() {
+                                wiki_build::cancel();
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(250));
+                        }
+                    });
+                    let outcome = wiki_build::run(&emit, &launch, domain, Some(&project), a.budget_usd, false, false, &claude);
+                    finished.store(true, std::sync::atomic::Ordering::Relaxed);
+                    outcome
+                });
                 // The run's budget caps the build. Its cost counts against today's automation budget here, and not in `execute`:
                 // a Done cost is not charged there, since a briefing's cost is the learning budget's.
-                let result = wiki_build::run(&emit, &launch, domain, Some(&project), a.budget_usd, false, false, &claude)?;
-                let (detail, cost) = wiki_build::summary(&result);
+                let spent = *spent.lock().unwrap_or_else(|e| e.into_inner());
+                let cost = outcome.as_ref().map_or(spent, |r| wiki_build::summary(r).1.max(spent));
                 if cost > 0.0 {
                     automations::Doer::charge(self, cost);
                 }
+                let (detail, _) = wiki_build::summary(&outcome?);
                 Ok(Started::Done { detail, cost: Some(cost) })
             }
             Action::SkillUpkeep => {

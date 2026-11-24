@@ -74,7 +74,9 @@ export function migrateNav(persisted: unknown, version = 1): unknown {
   if (!route) return persisted;
   if (version < 9 && route.page === "wiki") {
     const { domain, at, edition, project } = route;
-    return { ...saved, ...(project ? { project } : {}), route: { page: "notes", view: "wiki", ...(domain ? { domain } : {}), ...(at ? { at } : {}), ...(edition === "agent" ? { edition } : {}) } };
+    return { ...saved, ...(project ? { project } : {}), route: { page: "notes", view: "wiki", ...(domain ? { domain } : {}), ...(at ? { at } : {}), ...(edition === "agent" ? { edition } : {}),
+      // A route that named no project showed a whole domain's wiki: keep that view when no project is picked.
+      ...(project ? {} : { whole: true }) } };
   }
   if (version < 8 && route.page === "dashboards") return { ...saved, route: { page: "notes", view: "views", ...(route.ref ? { ref: route.ref } : {}) } };
   if (version < 7 && route.page === "memory") {
