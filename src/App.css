@@ -1285,9 +1285,9 @@ span.chip { display: inline-block; border: 1px solid var(--border-strong); }
 .resume-row { display: flex; gap: 1rem; width: 100%; text-align: left; align-items: baseline; }
 
 /* Wiki: a domain read as projects, sections and articles. */
-.page.wiki-page { max-width: 96rem; }
+.page.wiki-page { max-width: 96rem; padding: 0; }
 .wiki-bar { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem 1rem; }
-.wiki-title { margin: 0; font-size: 2.55rem; font-weight: 700; letter-spacing: -.015em; line-height: 1.1; }
+.wiki-scope { font-size: 1.25rem; }
 .wiki-bar select { height: 2.4rem; padding: 0 .8rem; }
 .wiki-layout { display: grid; grid-template-columns: 15.5rem minmax(0, 1fr); gap: 1.4rem 2rem; align-items: start; }
 .wiki-side { position: sticky; top: 4.8rem; display: flex; flex-direction: column; gap: .7rem; max-height: calc(100vh - 6.4rem); min-width: 0; }
@@ -1400,7 +1400,6 @@ sup.wiki-cite .removed { color: var(--muted); text-decoration: line-through; }
   .wiki-tree-box.open { display: block; }
 }
 @media (max-width: 760px) {
-  .wiki-title { font-size: 1.8rem; }
   .wiki-pager { grid-template-columns: 1fr; }
   .wiki-pager .next { grid-column: 1; }
 }

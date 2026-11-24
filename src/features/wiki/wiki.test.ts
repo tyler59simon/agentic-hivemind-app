@@ -3,7 +3,7 @@ import type { WikiModel, WikiNote } from "../../lib/lm";
 import type { WikiBuildResult } from "../../lib/wiki";
 import {
   agentSections, applyProgress, azGroups, buildBlocked, buildOutcome, callsNote, callsText, citeIndex, CITE_PREFIX, citeLinks, citedOn, crumbs, dayGroups, folderChain, indexModel, isAgent, isSource, isStale,
-  monthGroups, monthLabel, neighbours, noteAt, pageCounts, pageStatus, pathPrefix, resolveLink, resolvePage, searchNotes, shortTitle, sourceState, treeKeys, treeOpen, treeRows, usd, wikiRoute,
+  monthGroups, monthLabel, neighbours, noteAt, pageCounts, pageStatus, pathPrefix, projectRows, resolveLink, resolvePage, searchNotes, shortTitle, sourceState, treeKeys, treeOpen, treeRows, usd, wikiRoute,
 } from "./wiki";
 
 const note = (id: string, over: Partial<WikiNote> = {}): WikiNote => ({
@@ -329,13 +329,28 @@ describe("build", () => {
     expect(buildBlocked(false)).toBe("Claude Code is hidden in Settings. Show it again to build the wiki.");
   });
 
-  it("puts the edition and scope in the route, and leaves the defaults out", () => {
-    expect(wikiRoute("demo")).toEqual({ page: "wiki", domain: "demo" });
-    expect(JSON.stringify(wikiRoute("demo", { at: "p-core" }))).toBe('{"page":"wiki","domain":"demo","at":"p-core"}');
-    expect(JSON.stringify(wikiRoute("demo", { at: "", agent: true }))).toBe('{"page":"wiki","domain":"demo","edition":"agent"}');
-    expect(JSON.stringify(wikiRoute("demo", { at: "n-pg0a1b2c", agent: true, project: "core" }))).toBe('{"page":"wiki","domain":"demo","at":"n-pg0a1b2c","edition":"agent","project":"core"}');
-    // The scope belongs to the agent edition only.
-    expect(JSON.stringify(wikiRoute("demo", { project: "core" }))).toBe('{"page":"wiki","domain":"demo"}');
+  it("builds a Notes route with the edition in it, and leaves the defaults out", () => {
+    expect(wikiRoute("demo")).toEqual({ page: "notes", view: "wiki", domain: "demo" });
+    expect(JSON.stringify(wikiRoute("demo", { at: "p-core" }))).toBe('{"page":"notes","view":"wiki","domain":"demo","at":"p-core"}');
+    expect(JSON.stringify(wikiRoute("demo", { at: "", agent: true }))).toBe('{"page":"notes","view":"wiki","domain":"demo","edition":"agent"}');
+    expect(JSON.stringify(wikiRoute("demo", { at: "n-pg0a1b2c", agent: true }))).toBe('{"page":"notes","view":"wiki","domain":"demo","at":"n-pg0a1b2c","edition":"agent"}');
+    // "Whole domain" is the project list's first row; the project itself is the picked one, never in the route.
+    expect(JSON.stringify(wikiRoute("demo", { agent: true, whole: true }))).toBe('{"page":"notes","view":"wiki","domain":"demo","edition":"agent","whole":true}');
+    expect(wikiRoute(undefined)).toEqual({ page: "notes", view: "wiki" });
+  });
+
+  it("lists the projects with their notes where the loaded wiki is their domain's", () => {
+    const projects = [
+      { slug: "core", name: "Core", charter: "demo:abc", status: "active" as const },
+      { slug: "pay", name: "Pay", charter: "other:def", status: "active" as const },
+      { slug: "gone", name: "Gone", charter: null, status: "archived" as const },
+      { slug: "loose", name: "Loose", charter: null, status: "paused" as const },
+    ];
+    expect(projectRows(projects, model, "demo")).toEqual([
+      { slug: "core", name: "Core", count: 7 }, { slug: "pay", name: "Pay" }, { slug: "loose", name: "Loose", count: 0 },
+    ]);
+    expect(projectRows(projects, undefined, "demo").map((r) => r.count)).toEqual([undefined, undefined, undefined]);
+    expect(projectRows(projects, model, "elsewhere").map((r) => r.count)).toEqual([7, undefined, undefined]);
   });
 
   it("follows the progress lines", () => {

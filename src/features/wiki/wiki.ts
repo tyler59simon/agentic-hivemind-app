@@ -3,15 +3,25 @@
 // same as the exported file's hash names: "" (main page), p-<slug>, s-<slug>-<section>, c-<id>, n-<ref>, az, recent.
 // The agent-written edition has the same model shape (sections a1.., one article per page, its cited notes in the hidden
 // `sources` section), so the same addresses work; the helpers at the end are specific to it.
-import type { WikiFolder, WikiModel, WikiNote, WikiPageInfo, WikiPageSource, WikiProject, WikiSection } from "../../lib/lm";
+import type { Project, WikiFolder, WikiModel, WikiNote, WikiPageInfo, WikiPageSource, WikiProject, WikiSection } from "../../lib/lm";
 import type { WikiBuildDone, WikiBuildEvent, WikiBuildPlan } from "../../lib/wiki";
 import type { Route } from "../../store";
+import { domainOf } from "../executive/items";
 
-/** The route of a wiki page. The edition and the agent edition's scope live in the route with the address, so Back returns to
- *  the edition a page was in; a route without them (an older saved one) is the structured edition. Defaults are left out and
- *  the key order is fixed, because routes are compared as text. `project` ("" is the whole domain) only exists in the agent edition. */
-export function wikiRoute(domain: string | undefined, o: { at?: string; agent?: boolean; project?: string } = {}): Route {
-  return { page: "wiki", domain, at: o.at || undefined, ...(o.agent ? { edition: "agent" as const, project: o.project || undefined } : {}) };
+/** The route of a wiki page, in Notes. The edition lives in the route with the address, so Back returns to the edition a page was
+ *  in; a route without it is the structured edition. `whole` is the wiki of the whole domain (the project list's first row); with a
+ *  project picked the wiki is that project's. Defaults are left out and the key order is fixed, because routes are compared as text. */
+export function wikiRoute(domain: string | undefined, o: { at?: string; agent?: boolean; whole?: boolean } = {}): Route {
+  return { page: "notes", view: "wiki", domain, at: o.at || undefined, ...(o.agent ? { edition: "agent" as const } : {}), ...(o.whole ? { whole: true as const } : {}) };
+}
+
+/** The rows of the project list: each registered project that is not archived, with its note count when the wiki loaded is the one of its
+ *  own domain (its charter's, else `fallback`). A project with no notes there has none of its own pages, which reads as 0. */
+export function projectRows(projects: Pick<Project, "slug" | "name" | "charter" | "status">[], loaded: Pick<WikiModel, "domain" | "projects"> | undefined, fallback: string): { slug: string; name: string; count?: number }[] {
+  return projects.filter((p) => p.status !== "archived").map((p) => ({
+    slug: p.slug, name: p.name,
+    ...(loaded && loaded.domain === domainOf(p as Project, fallback) ? { count: loaded.projects.find((x) => x.slug === p.slug)?.count ?? 0 } : {}),
+  }));
 }
 
 export interface WikiIndex {

@@ -163,7 +163,7 @@ export function NotePage({ note: n }: { note: WikiNote }) {
     ...(cited.length ? [{ text: "Cited on", id: "cited-on" }] : []),
     { text: "See also", id: "see-also" },
   ], [n.body, cited]);
-  const openInNotes = () => useWorkspace.getState().openNote(`${ix.model.domain}:${n.id}`, { title: n.title });
+  const openNote = () => useWorkspace.getState().openNote(`${ix.model.domain}:${n.id}`, { title: n.title });
   const related = (title: string, ids: string[]) => {
     const notes = ids.map((id) => ix.notes.get(id)).filter((m): m is WikiNote => !!m);
     return (
@@ -176,7 +176,7 @@ export function NotePage({ note: n }: { note: WikiNote }) {
   return (
     <>
       <PageHeader eyebrow={isSource(n) ? "Source note" : `${p?.name} · ${section?.label}`} title={shortTitle(n)} meta={path ? <PathLine text={path} /> : undefined}
-        actions={<button className="outline" onClick={openInNotes}>Open in Notes</button>} />
+        actions={<button className="outline" onClick={openNote}>Open note</button>} />
       {n.retired && <div className="wiki-banner">This page is {n.status}. It is kept for history and may be out of date.</div>}
       <Split rail={<>
         <Infobox title="Page details" icon={<Package size="1.2em" aria-hidden />} pairs={[

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TaskSpec } from "../../lib/workflows";
-import { actionOf, blankAutomation, clock, columns, minutesOf, needsProject, nextText, scoped, progressText, taskActions, taskId, toggleDependency, triggerOf, withoutTask } from "./workflows";
+import { ACTION_HELP, ACTION_LABELS, actionOf, blankAutomation, clock, columns, minutesOf, needsProject, nextText, scoped, progressText, taskActions, taskId, toggleDependency, triggerOf, withoutTask } from "./workflows";
 
 const spec = (id: string, dependsOn: string[] = [], from: string | null = null): TaskSpec =>
   ({ id, role: "developer", engine: "claude", title: id, prompt: "p", dependsOn, from });
@@ -72,6 +72,22 @@ describe("actions", () => {
     expect([scoped(brief).project, scoped(brief).repo]).toEqual(["pay", null]);
     expect(scoped({ ...brief, action: { kind: "memory_maintenance" } }).project).toBeNull();
     expect(needsProject({ action: { kind: "commit_capture" }, trigger: { kind: "manual" } })).toBe(true);
+  });
+  // CON-14: the Rebuild weekly switch on a project's wiki makes this action; the editor shows and edits it without losing its fields.
+  it("keeps a wiki rebuild's domain and project through scoping and editing", () => {
+    const rebuild = {
+      ...blankAutomation("core", null), name: "Weekly wiki rebuild", trigger: { kind: "weekly" as const, days: [6], at: 180 },
+      action: { kind: "wiki_rebuild" as const, domain: "demo" }, budgetUsd: 2,
+    };
+    expect(needsProject(rebuild)).toBe(false);
+    expect(scoped(rebuild)).toEqual(rebuild);
+    expect(scoped({ ...rebuild, repo: "C:/r" }).repo).toBeNull();
+    const edited = scoped({ ...rebuild, enabled: false, trigger: { kind: "weekly", days: [5, 6], at: 240 }, budgetUsd: 1.5 });
+    expect(edited).toMatchObject({ project: "core", action: { kind: "wiki_rebuild", domain: "demo" }, budgetUsd: 1.5, trigger: { days: [5, 6], at: 240 } });
+    expect(actionOf("wiki_rebuild", rebuild.action)).toBe(rebuild.action);
+    expect(actionOf("wiki_rebuild", { kind: "skill_upkeep" })).toEqual({ kind: "wiki_rebuild", domain: "" });
+    expect(ACTION_LABELS.wiki_rebuild).toMatch(/agent wiki/);
+    expect(ACTION_HELP.wiki_rebuild).toBeTruthy();
   });
   it("keeps an action of the same kind", () => {
     const a = { kind: "role" as const, role: "tester" as const, engine: "claude" as const, prompt: "x" };

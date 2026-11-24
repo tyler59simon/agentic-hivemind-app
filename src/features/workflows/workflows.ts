@@ -107,7 +107,7 @@ export function triggerOf(kind: TriggerKind, from: Trigger): Trigger {
 export const ACTION_LABELS: Record<ActionKind, string> = {
   role: "Start a session in a role", workflow: "Start a workflow", memory_maintenance: "Living Memory maintenance",
   skill_upkeep: "Skill upkeep", commit_capture: "Knowledge from new commits", architecture_check: "Architecture drift check",
-  executive_briefing: "Executive briefing",
+  executive_briefing: "Executive briefing", wiki_rebuild: "Rebuild the agent wiki of a project",
 };
 export const ACTION_HELP: Record<ActionKind, string> = {
   role: "An unattended chat session with the role's own permissions. {event} and {commits} in the instructions are filled in.",
@@ -117,6 +117,7 @@ export const ACTION_HELP: Record<ActionKind, string> = {
   commit_capture: "The reviewer reads the new commits and drafts notes for Review. Counts against the learning budget.",
   architecture_check: "Runs the Architecture Suite's diff, check and verify on a system and notifies you when its output has drifted. Regenerating stays your decision.",
   executive_briefing: "Writes a briefing from Living Memory and your executive records, about the project picked below or all active projects, and keeps it on Home. Counts against the learning budget.",
+  wiki_rebuild: "Rewrites the pages of a project's agent-written wiki whose notes changed, and writes nothing when none did. Made by the Rebuild weekly switch on the project's wiki. The run's budget caps the build and counts against the daily automation budget.",
 };
 
 /** An action of another kind with sensible defaults. */
@@ -127,6 +128,7 @@ export function actionOf(kind: ActionKind, from: Action, engine: Engine = "claud
     case "workflow": return { kind, template: "review", goal: "" };
     case "architecture_check": return { kind, system: "" };
     case "executive_briefing": return { kind, briefing: "weekly", days: 7 };
+    case "wiki_rebuild": return { kind, domain: "" };
     default: return { kind };
   }
 }
@@ -135,9 +137,9 @@ export function actionOf(kind: ActionKind, from: Action, engine: Engine = "claud
 export const needsProject = (a: Pick<Automation, "action" | "trigger">) =>
   a.action.kind === "role" || a.action.kind === "workflow" || a.action.kind === "commit_capture" || a.trigger.kind === "commit";
 
-/** The automation as saved: a project and repository only where the action uses them; a briefing keeps its project alone. */
+/** The automation as saved: a project and repository only where the action uses them; a briefing and a wiki rebuild keep their project alone. */
 export const scoped = (a: Automation): Automation =>
-  needsProject(a) ? a : a.action.kind === "executive_briefing" ? { ...a, project: a.project || null, repo: null } : { ...a, project: null, repo: null };
+  needsProject(a) ? a : a.action.kind === "executive_briefing" || a.action.kind === "wiki_rebuild" ? { ...a, project: a.project || null, repo: null } : { ...a, project: null, repo: null };
 
 /** Roles an automation may start: never a developer (edits with nobody watching). */
 export const AUTOMATION_ROLES: Role[] = ["reviewer", "tester", "researcher", "architect"];

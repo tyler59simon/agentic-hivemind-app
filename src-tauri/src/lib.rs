@@ -619,6 +619,24 @@ impl automations::Doer for AppDoer {
                 let title = record.get("title").and_then(Value::as_str).unwrap_or("Your briefing").to_string();
                 Ok(Started::Done { detail: format!("{title} is ready on Home"), cost: record.get("costUsd").and_then(Value::as_f64) })
             }
+            Action::WikiRebuild { domain } => {
+                if let Some(why) = automations::Doer::paused(self, a) {
+                    return Err(why);
+                }
+                let launch = state.bridge.launch();
+                let emit = |name: &str, payload: Value| {
+                    let _ = self.0.emit(name, payload);
+                };
+                let claude = || wiki_build::claude_override(&agent::claude::available(&saved)).map(String::from);
+                // The run's budget caps the build. Its cost counts against today's automation budget here, and not in `execute`:
+                // a Done cost is not charged there, since a briefing's cost is the learning budget's.
+                let result = wiki_build::run(&emit, &launch, domain, Some(&project), a.budget_usd, false, false, &claude)?;
+                let (detail, cost) = wiki_build::summary(&result);
+                if cost > 0.0 {
+                    automations::Doer::charge(self, cost);
+                }
+                Ok(Started::Done { detail, cost: Some(cost) })
+            }
             Action::SkillUpkeep => {
                 let made = state.skills.upkeep(agent::now_ms());
                 Ok(Started::Done { detail: format!("{} archive proposal{} added to Review", made.len(), if made.len() == 1 { "" } else { "s" }), cost: None })
@@ -687,6 +705,8 @@ impl automations::Doer for AppDoer {
                 .then(|| "Paused: Claude Code is hidden in Settings. Show it again to review these commits.".into()),
             automations::Action::ExecutiveBriefing { .. } => (!saved.shows(agent::Engine::Claude))
                 .then(|| "Paused: Claude Code is hidden in Settings. Show it again to write briefings.".into()),
+            automations::Action::WikiRebuild { .. } => (!saved.shows(agent::Engine::Claude))
+                .then(|| "Paused: Claude Code is hidden in Settings. Show it again to rebuild the wiki.".into()),
             _ => None,
         }
     }
@@ -1468,7 +1488,8 @@ async fn wiki_agent_build(app: AppHandle, state: State<'_, AppState>, domain: St
         };
         // Looked up inside `run`, once the build holds its slot (`claude --version` can take seconds), and not at all for a dry run.
         let claude = || wiki_build::claude_override(&agent::claude::available(&saved)).map(String::from);
-        wiki_build::run(&emit, &launch, &domain, project.as_deref(), restructure, dry_run, &claude)
+        // A manual build passes no budget, so Living Memory's own default applies.
+        wiki_build::run(&emit, &launch, &domain, project.as_deref(), None, restructure, dry_run, &claude)
     })
     .await
 }

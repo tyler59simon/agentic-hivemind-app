@@ -118,7 +118,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "new-from-template", label: "New page from template…", section: "notes" as Page, run: () => { close(); void onNotebook((notebook, folder) => { useTemplateIntent.getState().open(notebook, folder); app.go({ page: "notes" }); }); } },
       { key: "add-notebook", label: "Add a notebook…", section: "notes" as Page, run: () => { close(); void addNotebook(); } },
       { key: "inbox", label: "Inbox", section: "inbox" as Page, run: page({ page: "inbox" }) },
-      ...(wikiOn ? [{ key: "wiki", label: "Wiki", section: "wiki" as Page, run: page({ page: "wiki" }) }] : []),
+      ...(wikiOn ? [{ key: "wiki", label: "Wiki", detail: "the picked project's memory as a wiki", section: "notes" as Page, run: page({ page: "notes", view: "wiki" }) }] : []),
       ...(projectsOn ? [
         { key: "new-project", label: "New project…", run: () => { close(); useProjectIntent.getState().openWizard(); } },
         { key: "new-session", label: "Start an agent session", run: page({ page: "agents", view: "new" }) },

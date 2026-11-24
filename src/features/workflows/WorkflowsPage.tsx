@@ -353,8 +353,8 @@ function AutomationForm({ initial, onDone }: { initial: Automation; onDone: (sav
       <label className="field">
         <span>What it does</span>
         <select value={a.action.kind} onChange={(e) => setA({ ...a, action: actionOf(e.target.value as Automation["action"]["kind"], a.action, engines.first) })}>
-          {/* Knowledge from new commits and briefings run on Claude Code. */}
-          {Object.entries(ACTION_LABELS).filter(([k]) => (k !== "commit_capture" && k !== "executive_briefing") || engines.shows("claude") || initial.action.kind === k)
+          {/* Knowledge from new commits and briefings run on Claude Code. A wiki rebuild is made by the wiki's own switch, so only an existing one is listed. */}
+          {Object.entries(ACTION_LABELS).filter(([k]) => k === "wiki_rebuild" ? initial.action.kind === k : (k !== "commit_capture" && k !== "executive_briefing") || engines.shows("claude") || initial.action.kind === k)
             .map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
       </label>
@@ -435,15 +435,15 @@ function AutomationForm({ initial, onDone }: { initial: Automation; onDone: (sav
             <option value="none">Never</option>
           </select>
         </label>
-        {(a.action.kind === "role" || a.action.kind === "workflow") && (
-          <label className="field"><span>Budget per session (USD)</span>
+        {(a.action.kind === "role" || a.action.kind === "workflow" || a.action.kind === "wiki_rebuild") && (
+          <label className="field"><span>{a.action.kind === "wiki_rebuild" ? "Budget per run (USD)" : "Budget per session (USD)"}</span>
             <input type="number" min="0.1" step="0.1" value={a.budgetUsd ?? ""} placeholder="Settings" onChange={(e) => setA({ ...a, budgetUsd: e.target.value ? Number(e.target.value) : null })} />
           </label>
         )}
       </div>
       <label className="check"><input type="checkbox" checked={a.askFirst} onChange={(e) => setA({ ...a, askFirst: e.target.checked })} /> Ask before each run (it waits here until you start it)</label>
       <label className="check"><input type="checkbox" checked={a.enabled} onChange={(e) => setA({ ...a, enabled: e.target.checked })} /> On</label>
-      <p className="muted small">Automations run while Hivemind is open or in the tray. A scheduled run missed while it was closed runs once at the next start. Sessions and workflows count against the daily automation budget in Settings, Budgets, and start only when their budget per session fits in what is left (Codex sessions use your ChatGPT plan and are not counted); commit reviews and briefings count against the learning and executive budget.</p>
+      <p className="muted small">Automations run while Hivemind is open or in the tray. A scheduled run missed while it was closed runs once at the next start. Sessions, workflows and wiki rebuilds count against the daily automation budget in Settings, Budgets, and start only when their budget per session fits in what is left (Codex sessions use your ChatGPT plan and are not counted); commit reviews and briefings count against the learning and executive budget.</p>
       <div className="work-actions">
         <button className="primary" disabled={busy || !a.name.trim() || !timeOk} onClick={save}>Save</button>
         <button onClick={() => onDone()}>Cancel</button>

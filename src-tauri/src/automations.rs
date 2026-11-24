@@ -56,6 +56,9 @@ pub enum Action {
     /// Write an executive briefing (`briefing` is weekly, project, priorities, commitments or risks) over the last `days`
     /// days, about the automation's project or all active projects, and keep it on Home.
     ExecutiveBriefing { briefing: String, days: u32 },
+    /// Rebuild the agent-written wiki of the automation's project in `domain`. The run's budget caps the build (`--budget`),
+    /// and its cost counts against today's automation budget.
+    WikiRebuild { domain: String },
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -314,6 +317,7 @@ pub fn check(a: &Automation) -> Result<(), String> {
         Action::ArchitectureCheck { system } if system.trim().is_empty() => Err("Pick the system to check".into()),
         Action::ExecutiveBriefing { briefing, .. } if !crate::executive::BRIEF_KINDS.contains(&briefing.as_str()) => Err("Pick the kind of briefing".into()),
         Action::ExecutiveBriefing { days, .. } if !(1..=90).contains(days) => Err("A briefing covers 1 to 90 days".into()),
+        Action::WikiRebuild { domain } if domain.trim().is_empty() || a.project.as_deref().is_none_or(str::is_empty) => Err("Pick the domain and the project whose wiki to rebuild".into()),
         Action::Role { role: Role::Developer, .. } => Err("An automation may not start a developer: it would edit code with nobody watching. Use a workflow you start yourself.".into()),
         // Turning such an automation off is always allowed.
         Action::Role { role, engine: Engine::Codex, .. } if a.enabled && role.profile() == Profile::EditWorktree =>
@@ -375,14 +379,14 @@ fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
-/// Why a run that spends money may not start now, or None. A session or workflow must fit, with its whole budget, in what
-/// is left of today's automation budget; commit reviews and briefings draw on the learning budget.
+/// Why a run that spends money may not start now, or None. A session, workflow or wiki rebuild must fit, with its whole budget,
+/// in what is left of today's automation budget; commit reviews and briefings draw on the learning budget.
 fn unaffordable(a: &Automation, doer: &dyn Doer) -> Option<String> {
     match a.action {
         // Codex bills the user's ChatGPT plan, not dollars, so a Codex session neither needs nor uses the automation
         // budget (Codex review R7-4). A workflow is checked: its tasks may use Claude.
         Action::Role { engine: Engine::Codex, .. } => None,
-        Action::Role { .. } | Action::Workflow { .. } if !doer.budget_fits(a.budget_usd) => {
+        Action::Role { .. } | Action::Workflow { .. } | Action::WikiRebuild { .. } if !doer.budget_fits(a.budget_usd) => {
             Some("Today's automation budget has no room left for this run's budget".into())
         }
         Action::CommitCapture | Action::ExecutiveBriefing { .. } if !doer.budget_left() => Some("Today's learning budget is used".into()),
@@ -1053,6 +1057,63 @@ mod tests {
         assert!(check(&brief).unwrap_err().contains("kind of briefing"));
         brief.action = Action::ExecutiveBriefing { briefing: "risks".into(), days: 0 };
         assert!(check(&brief).unwrap_err().contains("1 to 90"));
+    }
+
+    /// The weekly wiki rebuild the Wiki's switch makes: Sunday 03:00, $2, for one project.
+    fn wiki_rebuild() -> Automation {
+        Automation {
+            id: String::new(), name: "Weekly wiki rebuild".into(), enabled: true, trigger: Trigger::Weekly { days: vec![6], at: 3 * 60 },
+            action: Action::WikiRebuild { domain: "demo".into() }, project: Some("core".into()), repo: None, ask_first: false,
+            notify: Notify::Failures, budget_usd: Some(2.0), created_at: 0, last_run: None, next_due: None, last_seen: None,
+        }
+    }
+
+    #[test]
+    fn a_wiki_rebuild_needs_a_domain_and_a_project_and_no_repository() {
+        assert!(check(&wiki_rebuild()).is_ok());
+        let mut a = wiki_rebuild();
+        a.project = None;
+        assert!(check(&a).unwrap_err().contains("project"));
+        a.project = Some(String::new());
+        assert!(check(&a).is_err());
+        a = wiki_rebuild();
+        a.action = Action::WikiRebuild { domain: " ".into() };
+        assert!(check(&a).unwrap_err().contains("domain"));
+        // The wire form the UI sends and reads back.
+        let json = serde_json::to_value(wiki_rebuild().action).unwrap();
+        assert_eq!(json, serde_json::json!({ "kind": "wiki_rebuild", "domain": "demo" }));
+        // It must fit its budget in what is left of today's automation budget.
+        assert_eq!(unaffordable(&wiki_rebuild(), &Fake { room: Some(1.5), ..Default::default() }).as_deref(), Some("Today's automation budget has no room left for this run's budget"));
+        assert_eq!(unaffordable(&wiki_rebuild(), &Fake { room: Some(2.0), ..Default::default() }), None);
+    }
+
+    #[test]
+    fn the_weekly_rebuild_runs_on_sunday_at_three() {
+        // 2026-11-18 is a Wednesday; the next Sunday is the 22nd.
+        let now = at("2026-11-18T10:30:00+01:00");
+        assert_eq!(next_due(&wiki_rebuild().trigger, &now, None).unwrap().to_rfc3339(), "2026-11-22T03:00:00+01:00");
+        // On Sunday morning before 03:00 it is the same day; after 03:00 a week on.
+        assert_eq!(next_due(&wiki_rebuild().trigger, &at("2026-11-22T02:59:00+01:00"), None).unwrap().to_rfc3339(), "2026-11-22T03:00:00+01:00");
+        assert_eq!(next_due(&wiki_rebuild().trigger, &at("2026-11-22T03:00:00+01:00"), None).unwrap().to_rfc3339(), "2026-11-29T03:00:00+01:00");
+        assert_eq!(trigger_text(&wiki_rebuild().trigger), "Sun at 03:00");
+    }
+
+    #[test]
+    fn a_wiki_rebuild_runs_through_the_doer_and_is_refused_when_its_budget_does_not_fit() {
+        let (dir, autos) = store();
+        let a = autos.put(wiki_rebuild(), now_ms()).unwrap();
+        assert!(a.next_due.unwrap() > now_ms());
+        let doer = Fake::default();
+        let row = autos.fire(&a.id, "manual", None, &doer).unwrap();
+        assert_eq!((row.state, row.detail.as_deref(), row.cost_usd), (RunState::Succeeded, Some("done"), Some(0.01)));
+        assert_eq!(doer.ran.lock().unwrap().iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(), [a.id.clone()]);
+        // The doer charges a rebuild's cost itself; a finished action's cost is not charged again here (a briefing's is the learning budget's).
+        assert!(doer.charged.lock().unwrap().is_empty());
+        let tight = Fake { room: Some(1.0), ..Default::default() };
+        let refused = autos.fire(&a.id, "manual", None, &tight).unwrap();
+        assert_eq!((refused.state, refused.detail.as_deref()), (RunState::Failed, Some("Today's automation budget has no room left for this run's budget")));
+        assert!(tight.ran.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// A batch next_batch answers: the commits and the tips after them.

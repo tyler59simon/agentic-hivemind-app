@@ -1,21 +1,25 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Clock, Download, House, List, ListTree, Package, RefreshCw, Search } from "lucide-react";
-import { Fragment, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useAgentWikiEnabled, useWikiEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
+import { realProject } from "../../lib/folders";
 import { domains } from "../../lib/lm";
 import { exportWiki } from "../../lib/wiki";
 import { useApp } from "../../store";
-import { PageHeader } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useShownEngines } from "../agents/engines";
+import { domainOf } from "../executive/items";
+import { useCurrentProject } from "../projects/useProject";
 import { AgentMainPage, AgentPage } from "./agent";
-import { startWikiBuild, useWikiBuild } from "./build";
+import { listenOnce, startWikiBuild, useWikiBuild } from "./build";
 import { BuildDialog, BuildStrip, EmptyEdition } from "./BuildUi";
 import { AzPage, FolderPage, MainPage, MissingPage, NotePage, ProjectPage, RecentPage, SearchPage, SectionPage } from "./pages";
 import { NavProvider } from "./parts";
 import { useAgentWiki, useWiki } from "./useWiki";
-import { buildBlocked, crumbs, resolvePage, searchNotes, treeKeys, treeOpen, treeRows, wikiRoute, type TreeIcon, type WikiIndex, type WikiView } from "./wiki";
+import { WeeklyRebuildToggle } from "./WeeklyRebuildToggle";
+import { NoNotes, WikiProjects } from "./WikiProjects";
+import { buildBlocked, crumbs, projectAt, projectRows, resolvePage, searchNotes, treeKeys, treeOpen, treeRows, wikiRoute, type TreeIcon, type WikiIndex, type WikiView } from "./wiki";
 
 const TREE_ICONS: Record<TreeIcon, typeof House> = { home: House, box: Package, list: List, clock: Clock };
 
@@ -82,117 +86,125 @@ function Body({ view, query, hits, agent }: { view: WikiView; query: string; hit
   }
 }
 
-/** Wiki: a domain read as a structured wiki (projects, sections, a code reference tree and articles), built from its notes by Living
- *  Memory. The page tree is on the left; "Export HTML…" saves the same wiki as one file. Where Living Memory can, a second edition
- *  is offered: the agent-written wiki, whose sections and pages an agent chose and wrote from the notes, with citations. */
-export function WikiPage() {
+/** Notes > Wiki: the picked project's memory read as a wiki, built from its notes by Living Memory. The page tree is on the left;
+ *  "Export HTML…" saves the same wiki as one file. Where Living Memory can, a second edition is offered: the agent-written wiki,
+ *  whose sections and pages an agent chose and wrote from the notes, with citations (for a project, with a weekly rebuild switch).
+ *  With All projects picked it lists the projects, and "Whole domain" opens the wiki of a whole domain with its domain picker. */
+export function WikiPane() {
   const enabled = useWikiEnabled();
   const agentEnabled = useAgentWikiEnabled();
   const client = useQueryClient();
   const building = useWikiBuild((s) => s.running);
-  const route = useApp((s) => (s.route.page === "wiki" ? s.route : null));
+  const route = useApp((s) => (s.route.page === "notes" && s.route.view === "wiki" ? s.route : null));
   const appDomain = useApp((s) => s.domain);
   const go = useApp((s) => s.go);
+  const setProject = useApp((s) => s.setProject);
+  const slug = useApp((s) => realProject(s.project));
+  const { project, registry } = useCurrentProject();
   const known = useQuery({ queryKey: ["domains"], queryFn: domains, enabled });
-  const domain = route?.domain ?? appDomain ?? known.data?.domains[0]?.name ?? null;
-  const at = route?.at;
+  const fallback = route?.domain ?? appDomain ?? known.data?.domains[0]?.name ?? null;
+  // A picked project reads in its own domain (its charter's); with none picked the domain is the route's or the app's.
+  const waiting = !!slug && !project && registry.isLoading;
+  const domain = waiting ? null : slug ? domainOf(project, fallback ?? "") || null : fallback;
+  const whole = !slug && !!route?.whole;
+  const list = !slug && !whole;
+  const scope = slug ?? ""; // the agent edition's scope: "" is the whole domain
   const [archived, setArchived] = useState(false);
-  const project = route?.project ?? ""; // the agent edition's scope: "" is the whole domain
   const blocked = buildBlocked(useShownEngines().shows("claude"));
   const [planning, setPlanning] = useState(false);
   const [q, setQ] = useState("");
   const [navOpen, setNavOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const structured = useWiki(domain, archived);
-  const agentMode = agentEnabled && route?.edition === "agent";
-  const agent = useAgentWiki(domain, project, agentMode);
+  const agentMode = agentEnabled && route?.edition === "agent" && !list;
+  // A project with no notes in its domain has no wiki to show in either edition.
+  const noNotes = !!slug && !!domain && structured.query.isSuccess && !structured.ix?.projects.has(slug);
+  const agent = useAgentWiki(domain, scope, agentMode && !noNotes);
   const { query, ix } = agentMode ? agent : structured;
   const noEdition = agentMode && agent.query.isSuccess && agent.query.data === null;
+  // A project's structured wiki opens on its own page.
+  const at = route?.at || (slug && !agentMode ? projectAt(slug) : undefined);
   const view = useMemo<WikiView>(() => (ix ? resolvePage(ix, at) : { kind: "main" }), [ix, at]);
   const asked = useDeferredValue(q.trim());
   const hits = useMemo(() => (ix && asked ? searchNotes(ix.model.notes, asked) : []), [ix, asked]);
+  // A build this view did not start (the weekly rebuild) still refreshes it when it ends.
+  useEffect(() => { listenOnce(client).catch(() => undefined); }, [client]);
 
-  // The edition and scope are part of the route, so Back returns to the edition a page was in.
-  const open = useCallback((o: { at?: string; agent: boolean; project?: string }) => {
+  // The edition is part of the route, so Back returns to the edition a page was in.
+  const open = useCallback((o: { at?: string; agent: boolean }) => {
     setQ(""); setNavOpen(false);
-    go(wikiRoute(domain ?? undefined, o));
-  }, [go, domain]);
-  const goTo = useCallback((at: string) => open({ at, agent: agentMode, project }), [open, agentMode, project]);
+    go(wikiRoute(domain ?? undefined, { ...o, whole }));
+  }, [go, domain, whole]);
+  const goTo = useCallback((at: string) => open({ at, agent: agentMode }), [open, agentMode]);
   const nav = useMemo(() => (ix ? { ix, goTo } : null), [ix, goTo]);
   // A new page starts at the top.
-  useEffect(() => { document.querySelector("main.page-host")?.scrollTo({ top: 0 }); }, [at, asked]);
+  useEffect(() => { document.querySelector(".notes-lists")?.scrollTo({ top: 0 }); }, [at, asked]);
 
-  // The agent edition's scope per domain, so Structured and back returns to the project that was open.
-  const agentProjects = useRef(new Map<string, string>());
-  if (agentMode && domain) agentProjects.current.set(domain, project);
+  // An address of one edition names nothing in the other, so switching edition starts at its main page.
   const pickEdition = (next: "structured" | "agent") => {
     if ((next === "agent") === agentMode) return;
-    // An address of one edition names nothing in the other; only the scope comes back, and only while that project still has
-    // notes in the wiki (otherwise Whole domain, since a build of an empty project would be refused).
-    const kept = next === "agent" && domain ? agentProjects.current.get(domain) : undefined;
-    const live = kept && structured.query.data?.projects.some((p) => p.slug === kept) ? kept : undefined;
-    open({ agent: next === "agent", project: live });
+    open({ agent: next === "agent" });
   };
 
   const exportHtml = async () => {
     if (!domain) return;
     setExporting(true);
     try {
-      const path = await exportWiki(domain, archived, { agent: agentMode, project: agentMode ? project || undefined : undefined });
+      const path = await exportWiki(domain, archived, { agent: agentMode, project: agentMode ? scope || undefined : undefined });
       if (path) toast(`Saved the ${domain} wiki to ${path}`);
     } catch (e) { toast(classify(e).message, "error"); }
     finally { setExporting(false); }
   };
 
-  if (!enabled) {
-    return (
-      <div className="page">
-        <PageHeader title="Wiki" subtitle="A domain as a structured wiki." />
-        <p className="muted">This version of Living Memory has no <code>wiki</code> command. Update Living Memory to use the wiki.</p>
-      </div>
-    );
-  }
+  if (!enabled) return <p className="muted">This version of Living Memory has no <code>wiki</code> command. Update Living Memory to use the wiki.</p>;
   return (
     <div className="page wiki-page">
-      <div className="wiki-bar">
-        <h1 className="wiki-title">Wiki</h1>
-        <select value={domain ?? ""} onChange={(e) => go(wikiRoute(e.target.value, { agent: agentMode }))} aria-label="Domain">
-          {!domain && <option value="">Choose a domain…</option>}
-          {known.data?.domains.map((d) => <option key={d.name} value={d.name}>{d.name} ({d.active})</option>)}
-          {domain && !known.data?.domains.some((d) => d.name === domain) && <option value={domain}>{domain}</option>}
-        </select>
-        {agentEnabled && (
-          <div className="segmented compact" role="radiogroup" aria-label="Edition">
-            <button role="radio" aria-checked={!agentMode} className={agentMode ? "" : "on"} onClick={() => pickEdition("structured")} title="Organised by fixed rules: projects, sections by note type, one page per note">Structured</button>
-            <button role="radio" aria-checked={agentMode} className={agentMode ? "on" : ""} onClick={() => pickEdition("agent")} title="An agent chooses the sections and writes each page from several notes, with citations">Agent-written</button>
-          </div>
-        )}
-        {agentMode ? (
-          <select value={project} onChange={(e) => open({ agent: true, project: e.target.value })} aria-label="Scope">
-            <option value="">Whole domain</option>
-            {structured.query.data?.projects.map((p) => <option key={p.slug} value={p.slug}>{p.name}</option>)}
-            {project && !structured.query.data?.projects.some((p) => p.slug === project) && <option value={project}>{project}</option>}
-          </select>
-        ) : <label className="check"><input type="checkbox" checked={archived} onChange={(e) => setArchived(e.target.checked)} />Show retired</label>}
-        <span className="fill" />
-        {agentMode && !noEdition && (
-          <button className="outline" onClick={() => setPlanning(true)} disabled={!domain || !!building || !ix || !!blocked} title={blocked ?? "Rewrite the pages whose sources changed, and place new notes"}>
-            <RefreshCw size="1.1em" aria-hidden />Refresh
+      {!list && (
+        <div className="wiki-bar">
+          {slug ? <b className="wiki-scope">{project?.name ?? slug}</b> : (
+            <>
+              <button className="text" onClick={() => go(wikiRoute(domain ?? undefined))}>All projects</button>
+              <select value={domain ?? ""} onChange={(e) => go(wikiRoute(e.target.value, { agent: agentMode, whole: true }))} aria-label="Domain">
+                {!domain && <option value="">Choose a domain…</option>}
+                {known.data?.domains.map((d) => <option key={d.name} value={d.name}>{d.name} ({d.active})</option>)}
+                {domain && !known.data?.domains.some((d) => d.name === domain) && <option value={domain}>{domain}</option>}
+              </select>
+            </>
+          )}
+          {agentEnabled && (
+            <div className="segmented compact" role="radiogroup" aria-label="Edition">
+              <button role="radio" aria-checked={!agentMode} className={agentMode ? "" : "on"} onClick={() => pickEdition("structured")} title="Organised by fixed rules: projects, sections by note type, one page per note">Structured</button>
+              <button role="radio" aria-checked={agentMode} className={agentMode ? "on" : ""} onClick={() => pickEdition("agent")} title="An agent chooses the sections and writes each page from several notes, with citations">Agent-written</button>
+            </div>
+          )}
+          {!agentMode && <label className="check"><input type="checkbox" checked={archived} onChange={(e) => setArchived(e.target.checked)} />Show retired</label>}
+          <span className="fill" />
+          {agentMode && !!slug && !!domain && !noNotes && !blocked && <WeeklyRebuildToggle domain={domain} project={slug} />}
+          {agentMode && !noEdition && !noNotes && (
+            <button className="outline" onClick={() => setPlanning(true)} disabled={!domain || !!building || !ix || !!blocked} title={blocked ?? "Rewrite the pages whose sources changed, and place new notes"}>
+              <RefreshCw size="1.1em" aria-hidden />Refresh
+            </button>
+          )}
+          <button className="outline" onClick={exportHtml} disabled={!domain || exporting || noEdition || noNotes} title="Save this wiki as one HTML file that opens offline">
+            <Download size="1.1em" aria-hidden />{exporting ? "Exporting…" : "Export HTML…"}
           </button>
-        )}
-        <button className="outline" onClick={exportHtml} disabled={!domain || exporting || noEdition} title="Save this wiki as one HTML file that opens offline">
-          <Download size="1.1em" aria-hidden />{exporting ? "Exporting…" : "Export HTML…"}
-        </button>
-      </div>
+        </div>
+      )}
       <BuildStrip />
       {planning && domain && (
-        <BuildDialog domain={domain} project={project} hasEdition={!noEdition} onClose={() => setPlanning(false)}
-          onStart={(restructure) => { setPlanning(false); void startWikiBuild(client, domain, project, restructure); }} />
+        <BuildDialog domain={domain} project={scope} hasEdition={!noEdition} onClose={() => setPlanning(false)}
+          onStart={(restructure) => { setPlanning(false); void startWikiBuild(client, domain, scope, restructure); }} />
       )}
-      {query.isLoading ? <p className="muted">{agentMode ? "Reading the agent-written wiki…" : "Building the wiki…"}</p>
+      {list ? (
+        registry.isLoading ? <p className="muted">Loading projects…</p>
+          : <WikiProjects rows={projectRows(registry.data?.projects ?? [], structured.query.data, fallback ?? "")} domain={domain}
+            onWhole={() => go(wikiRoute(domain ?? undefined, { whole: true }))}
+            onPick={(picked) => { setProject(picked); go(wikiRoute(undefined)); }} />
+      ) : waiting || query.isLoading ? <p className="muted">{agentMode ? "Reading the agent-written wiki…" : "Building the wiki…"}</p>
+        : noNotes ? <NoNotes domain={domain!} name={project?.name ?? slug!} tag={project?.tag ?? `project/${slug}`} />
         : query.error && !ix ? <p className="error">{classify(query.error).message}</p>
         : !domain ? <p className="muted">Choose a domain to read as a wiki.</p>
-        : noEdition ? <EmptyEdition domain={domain} project={project} busy={!!building} blocked={blocked} onBuild={() => setPlanning(true)} />
+        : noEdition ? <EmptyEdition domain={domain} project={scope} busy={!!building} blocked={blocked} onBuild={() => setPlanning(true)} />
         : ix && nav && (
           <div className="wiki-layout">
             <aside className="wiki-side">

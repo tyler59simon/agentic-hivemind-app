@@ -1,12 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, ChevronDown, House, NotebookPen, Wrench, Sparkles, SquareCheck, Terminal, Workflow, type LucideIcon } from "lucide-react";
+import { ChevronDown, House, NotebookPen, Wrench, Sparkles, SquareCheck, Terminal, Workflow, type LucideIcon } from "lucide-react";
 import logo from "../assets/logo.png";
 import { ProjectSwitcher } from "../features/projects/ProjectSwitcher";
 import { useInboxItems } from "../features/review/useInboxItems";
 import { dotOf, useAttention } from "../features/terminal/attention";
 import { sessionsQuery } from "../lib/agent";
-import { useMaintenanceEnabled, useSystemsEnabled, useWikiEnabled } from "../lib/connection";
+import { useMaintenanceEnabled, useSystemsEnabled } from "../lib/connection";
 import type { ConnectInfo } from "../lib/lm";
 import { refreshStore } from "../lib/refresh";
 import { useApp, type Page } from "../store";
@@ -19,7 +19,6 @@ export const SECTIONS: { page: Page; label: string; icon: LucideIcon }[] = [
   { page: "home", label: "Home", icon: House },
   { page: "agents", label: "Agent Workspace", icon: Terminal },
   { page: "notes", label: "Notes", icon: NotebookPen },
-  { page: "wiki", label: "Wiki", icon: BookOpen },
   { page: "maintenance", label: "Maintenance", icon: Wrench },
   { page: "inbox", label: "Inbox", icon: SquareCheck },
   { page: "skills", label: "Skills", icon: Sparkles },
@@ -28,9 +27,7 @@ export const SECTIONS: { page: Page; label: string; icon: LucideIcon }[] = [
 
 /** The sections this store offers (some need a newer Living Memory), whether or not the user hid them. */
 export function useAvailableSections() {
-  const on: Partial<Record<Page, boolean>> = {
-    wiki: useWikiEnabled(), maintenance: useMaintenanceEnabled(),
-  };
+  const on: Partial<Record<Page, boolean>> = { maintenance: useMaintenanceEnabled() };
   return SECTIONS.filter((s) => on[s.page] ?? true);
 }
 

@@ -6,15 +6,15 @@ import { createJSONStorage, persist, type StateStorage } from "zustand/middlewar
 /** The Inbox's groups: each is a tab of the page. */
 export type InboxKind = "code" | "memory" | "pages" | "captures" | "maintenance" | "architecture" | "skills";
 
-/** One page per sidebar section. Notes holds the notebook and memory trees and the open documents.
+/** One page per sidebar section. Notes holds the notebook and memory trees and the open documents; `view: "wiki"` shows the wiki of the
+ *  picked project, at the page `at` of `domain` and in the agent-written `edition`, or with `whole` the wiki of the whole domain.
  *  Home shows the picked project (or all of them); `view: "briefings"` opens its
  *  list of briefings, `briefing` one briefing, and `capture` the review of one capture batch; `tab: "architecture"` shows the
  *  Architecture tab, on one system when `system` is given. */
 export type Route =
   | { page: "home"; view?: "briefings"; briefing?: string; capture?: string; tab?: "architecture"; system?: string }
   | { page: "agents"; session?: string; view?: "new" }
-  | { page: "notes"; notebook?: string; path?: string; view?: "tasks" | "views" | "tags" | "graph"; ref?: string }
-  | { page: "wiki"; domain?: string; at?: string; edition?: "agent"; project?: string }
+  | { page: "notes"; notebook?: string; path?: string; view?: "tasks" | "views" | "tags" | "graph" | "wiki"; ref?: string; domain?: string; at?: string; edition?: "agent"; whole?: true }
   | { page: "maintenance" }
   | { page: "inbox"; session?: string; file?: string; kind?: InboxKind }
   | { page: "skills"; skill?: string }
@@ -66,11 +66,16 @@ const whenFree = (move: () => void) => { if (!stopped(move)) move(); };
  *  the Review page became the Inbox (CON-6), so a saved Review route opens it on the same session and file.
  *  Version 5 moves the old Memory workspace to Notes (CON-10). Version 6 removes `q` from the Memory route (CON-11).
  *  Version 7 moves Memory Graph and Tags into Notes (CON-12) and retires the Memory section and Activity/History pages (CON-21).
- *  Version 8 moves Dashboards into Notes > Views (CON-13): `ref` is the view the route names. */
+ *  Version 8 moves Dashboards into Notes > Views (CON-13): `ref` is the view the route names.
+ *  Version 9 moves the Wiki into Notes (CON-14): the project it named becomes the picked project. */
 export function migrateNav(persisted: unknown, version = 1): unknown {
-  const saved = persisted as { route?: { page?: string; view?: string; q?: string; capture?: string; briefing?: string; system?: string; ref?: string } } | null;
+  const saved = persisted as { route?: { page?: string; view?: string; q?: string; capture?: string; briefing?: string; system?: string; ref?: string; domain?: string; at?: string; edition?: string; project?: string } } | null;
   const route = saved?.route;
   if (!route) return persisted;
+  if (version < 9 && route.page === "wiki") {
+    const { domain, at, edition, project } = route;
+    return { ...saved, ...(project ? { project } : {}), route: { page: "notes", view: "wiki", ...(domain ? { domain } : {}), ...(at ? { at } : {}), ...(edition === "agent" ? { edition } : {}) } };
+  }
   if (version < 8 && route.page === "dashboards") return { ...saved, route: { page: "notes", view: "views", ...(route.ref ? { ref: route.ref } : {}) } };
   if (version < 7 && route.page === "memory") {
     if (route.view === "graph" || route.view === "tags") return { ...saved, route: { page: "notes", view: route.view } };
@@ -111,7 +116,7 @@ export const useApp = create<AppState>()(persist((set) => ({
   },
 }), {
   name: "hivemind.nav",
-  version: 8,
+  version: 9,
   storage: createJSONStorage(() => safeStorage),
   migrate: (persisted, version) => migrateNav(persisted, version) as AppState,
   partialize: (s) => ({ project: s.project, domain: s.domain, route: s.route }),

@@ -42,7 +42,8 @@ export type Action =
   | { kind: "workflow"; template: string; goal: string }
   | { kind: "memory_maintenance" } | { kind: "skill_upkeep" } | { kind: "commit_capture" }
   | { kind: "architecture_check"; system: string }
-  | { kind: "executive_briefing"; briefing: BriefingKind; days: number };
+  | { kind: "executive_briefing"; briefing: BriefingKind; days: number }
+  | { kind: "wiki_rebuild"; domain: string };
 export type ActionKind = Action["kind"];
 export type Notify = "all" | "failures" | "none";
 

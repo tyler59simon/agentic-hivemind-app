@@ -6,7 +6,6 @@ import { MaintenancePage } from "../features/maintenance/MaintenancePage";
 import { InboxPage } from "../features/review/InboxPage";
 import { SkillsPage } from "../features/skills/SkillsPage";
 import { WorkflowsPage } from "../features/workflows/WorkflowsPage";
-import { WikiPage } from "../features/wiki/WikiPage";
 import type { ConnectInfo } from "../lib/lm";
 import { useApp, type Page } from "../store";
 import { Sidebar } from "./Sidebar";
@@ -17,7 +16,6 @@ const PAGES: Record<Page, () => ReactNode> = {
   home: () => <HomePage />,
   agents: () => <AgentWorkspace />,
   notes: () => <NotesPage />,
-  wiki: () => <WikiPage />,
   maintenance: () => <MaintenancePage />,
   inbox: () => <InboxPage />,
   skills: () => <SkillsPage />,

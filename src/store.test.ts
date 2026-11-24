@@ -69,18 +69,18 @@ describe("navigation", () => {
   });
 
   it("shows a wiki page by its address, in one domain", () => {
-    app().go({ page: "wiki", domain: "demo", at: "p-core" });
-    app().go({ page: "wiki", domain: "demo", at: "n-0a1b2c3d" });
-    expect(app().route).toEqual({ page: "wiki", domain: "demo", at: "n-0a1b2c3d" });
-    expect(app().back).toEqual([{ page: "home" }, { page: "wiki", domain: "demo", at: "p-core" }]);
+    app().go(wikiRoute("demo", { at: "p-core" }));
+    app().go(wikiRoute("demo", { at: "n-0a1b2c3d" }));
+    expect(app().route).toEqual({ page: "notes", view: "wiki", domain: "demo", at: "n-0a1b2c3d" });
+    expect(app().back).toEqual([{ page: "home" }, { page: "notes", view: "wiki", domain: "demo", at: "p-core" }]);
   });
 
-  it("Back from the structured edition returns to the agent edition and its scope", () => {
-    app().go(wikiRoute("demo", { at: "n-pg0a1b2c", agent: true, project: "core" }));
+  it("Back from the structured edition returns to the agent edition", () => {
+    app().go(wikiRoute("demo", { at: "n-pg0a1b2c", agent: true }));
     app().go(wikiRoute("demo", { at: "p-core" }));
-    expect(app().route).toEqual({ page: "wiki", domain: "demo", at: "p-core" });
+    expect(app().route).toEqual({ page: "notes", view: "wiki", domain: "demo", at: "p-core" });
     app().goBack();
-    expect(app().route).toEqual({ page: "wiki", domain: "demo", at: "n-pg0a1b2c", edition: "agent", project: "core" });
+    expect(app().route).toEqual({ page: "notes", view: "wiki", domain: "demo", at: "n-pg0a1b2c", edition: "agent" });
   });
 
   // EXEC-R3a: Alt+Left and the palette Back left a capture review without its close check.
@@ -127,8 +127,8 @@ describe("navigation", () => {
 describe("saved navigation", () => {
   const migrate = (route: object, version = 1) => useApp.persist.getOptions().migrate!({ project: "pay", domain: "demo", route }, version);
 
-  it("is version 8, and moves the Overview, Executive and Recap pages to Home", () => {
-    expect(useApp.persist.getOptions().version).toBe(8);
+  it("is version 9, and moves the Overview, Executive and Recap pages to Home", () => {
+    expect(useApp.persist.getOptions().version).toBe(9);
     for (const page of ["overview", "executive", "recap"]) expect(migrate({ page })).toEqual({ project: "pay", domain: "demo", route: { page: "home" } });
     expect(migrate({ page: "overview", view: "work" })).toMatchObject({ route: { page: "home" } });
   });
@@ -179,6 +179,21 @@ describe("saved navigation", () => {
     expect(migrate({ page: "dashboards", ref: "demo:3a562a09-2b34-4a43-8901-c7a1801168e6" }, 7)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "views", ref: "demo:3a562a09-2b34-4a43-8901-c7a1801168e6" } });
     expect(migrate({ page: "dashboards" }, 7)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "views" } });
     expect(migrate({ page: "dashboards", ref: "demo:x" }, 1)).toMatchObject({ route: { page: "notes", view: "views", ref: "demo:x" } });
+  });
+
+  // CON-14: the Wiki page became Notes > Wiki, and the project it named became the picked project.
+  it("moves a saved Wiki route to Notes > Wiki and picks the project it named", () => {
+    expect(migrate({ page: "wiki", domain: "demo", at: "n-pg0a1b2c", edition: "agent", project: "core" }, 8))
+      .toEqual({ project: "core", domain: "demo", route: { page: "notes", view: "wiki", domain: "demo", at: "n-pg0a1b2c", edition: "agent" } });
+    expect(migrate({ page: "wiki", domain: "demo", at: "p-core" }, 8)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "wiki", domain: "demo", at: "p-core" } });
+    expect(migrate({ page: "wiki" }, 8)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "wiki" } });
+    expect(migrate({ page: "wiki", domain: "demo", project: "core" }, 1)).toMatchObject({ project: "core", route: { page: "notes", view: "wiki", domain: "demo" } });
+    // The whole-domain scope of the agent edition ("") names no project.
+    expect(migrate({ page: "wiki", domain: "demo", edition: "agent", project: "" }, 8)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "wiki", domain: "demo", edition: "agent" } });
+  });
+
+  it("leaves a version 9 save alone", () => {
+    expect(migrate({ page: "notes", view: "wiki", domain: "demo", at: "az", whole: true }, 9)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "wiki", domain: "demo", at: "az", whole: true } });
   });
 
   it("leaves a version 8 save, and the Notes routes of older ones, alone", () => {

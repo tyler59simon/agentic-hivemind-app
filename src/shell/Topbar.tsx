@@ -17,14 +17,13 @@ import { SECTIONS } from "./Sidebar";
 
 interface Crumb { label: string; go?: () => void }
 
-const NOTES_VIEWS = { tasks: "Tasks", views: "Views", tags: "Tags", graph: "Graph" } as const;
+const NOTES_VIEWS = { tasks: "Tasks", views: "Views", tags: "Tags", graph: "Graph", wiki: "Wiki" } as const;
 
 function useCrumbs(): Crumb[] {
   const route = useApp((s) => s.route);
   const go = useApp((s) => s.go);
   const { project } = useCurrentProject();
   const other = useApp((s) => s.project === OTHER_FOLDERS);
-  const domain = useApp((s) => s.domain);
   const noteTitle = useWorkspace((s) => {
     const tab = activeTab(s);
     return tab?.kind === "note" ? tab.title : undefined;
@@ -47,7 +46,6 @@ function useCrumbs(): Crumb[] {
   }
   const leaf = route.page === "notes" ? noteTitle
     : route.page === "agents" ? (route.view === "new" ? "New session" : sessions.data?.find((s) => s.id === route.session)?.title)
-    : route.page === "wiki" ? route.domain ?? domain ?? undefined
     : undefined;
   return leaf ? [root, section, { label: leaf }] : [root, section];
 }

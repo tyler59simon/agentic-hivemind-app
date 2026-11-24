@@ -1,8 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { GitFork, Hash, Kanban, ListChecks, NotebookPen, Plus } from "lucide-react";
+import { BookOpen, GitFork, Hash, Kanban, ListChecks, NotebookPen, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { lmContainer } from "../../documents/adapters/lmdoc";
-import { useConnection, useDocsEnabled, useFolderProposalsEnabled } from "../../lib/connection";
+import { useConnection, useDocsEnabled, useFolderProposalsEnabled, useWikiEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { allProposalsQuery, lmNotebooksQuery, type DocNotebook } from "../../lib/lm";
 import { addNotebook, notebooksQuery, type Notebook } from "../../lib/notebooks";
@@ -16,6 +16,7 @@ import { RewriteDialog } from "../links/RewriteDialog";
 import { useCurrentProject } from "../projects/useProject";
 import { progressLine, useIndexState } from "../search/indexState";
 import { TaxonomyView } from "../taxonomy/TaxonomyView";
+import { WikiPane } from "../wiki/WikiPane";
 import { Workspace } from "../../workspace/Workspace";
 import { newPageHere, openPage } from "./actions";
 import { NewNotebook } from "./NewNotebook";
@@ -84,6 +85,7 @@ export function NotesPage() {
   const notebooks = useQuery(notebooksQuery());
   const docs = useDocsEnabled();
   const connected = useConnection((s) => s.commands.length > 0);
+  const wikiOn = useWikiEnabled();
   const memory = useMemoryTree();
   const lm = useQuery({ ...lmNotebooksQuery(), enabled: docs });
   // Page edits agents proposed to folder notebooks: each notebook says how many wait, and the Inbox's Pages group decides them (CON-9).
@@ -132,6 +134,7 @@ export function NotesPage() {
           <button type="button" className={`link-row${route.page === "notes" && route.view === "views" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "views" })}><Kanban size="1em" aria-hidden /> Views</button>
           <button type="button" className={`link-row${route.page === "notes" && route.view === "tags" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "tags" })}><Hash size="1em" aria-hidden /> Tags</button>
           <button type="button" className={`link-row${route.page === "notes" && route.view === "graph" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "graph" })}><GitFork size="1em" aria-hidden /> Graph</button>
+          {wikiOn && <button type="button" className={`link-row${route.page === "notes" && route.view === "wiki" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "wiki" })}><BookOpen size="1em" aria-hidden /> Wiki</button>}
         </div>
         <MemoryTree tree={memory} />
         {notebooks.isLoading && <p className="muted small pad" role="status">Loading notebooks…</p>}
@@ -165,7 +168,9 @@ export function NotesPage() {
             {route.view === "tasks" ? <TasksView />
               : route.view === "views" ? <ViewsPage />
               : route.view === "tags" ? <TaxonomyView />
-              : <GraphView key={project?.tag ?? ""} projectTag={project?.tag} projectName={project?.name} />}
+              : route.view === "wiki" ? <WikiPane />
+              : route.view === "graph" ? <GraphView key={project?.tag ?? ""} projectTag={project?.tag} projectName={project?.name} />
+              : null}
           </div>
         )
         : open

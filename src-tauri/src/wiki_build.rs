@@ -37,11 +37,15 @@ impl Drop for Clear {
     }
 }
 
-/// `wiki --agent --build --domain D [--project P] [--restructure] [--dry-run] --progress`. No `--actor`: a build is the main actor's.
-pub fn build_argv(domain: &str, project: Option<&str>, restructure: bool, dry_run: bool) -> Vec<String> {
+/// `wiki --agent --build --domain D [--project P] [--budget USD] [--restructure] [--dry-run] --progress`. No `--actor`: a build is
+/// the main actor's. A manual build passes no budget and gets Living Memory's default; a scheduled one passes its own cap.
+pub fn build_argv(domain: &str, project: Option<&str>, budget: Option<f64>, restructure: bool, dry_run: bool) -> Vec<String> {
     let mut argv: Vec<String> = ["wiki", "--agent", "--build", "--domain", domain].map(String::from).into();
     if let Some(project) = project {
         argv.extend(["--project".into(), project.into()]);
+    }
+    if let Some(budget) = budget {
+        argv.extend(["--budget".into(), format!("{budget:.2}")]);
     }
     if restructure {
         argv.push("--restructure".into());
@@ -105,6 +109,25 @@ pub fn finish(code: Option<i32>, stdout: &str, tail: &[String], cancelled: bool)
         Some(v) => Ok(v),
         None => Err(tail_message(tail, code)),
     }
+}
+
+/// What a finished build says in an automation's run list, and what it cost. A build with no changed notes writes nothing, asks
+/// for no page and costs $0.
+pub fn summary(result: &Value) -> (String, f64) {
+    let count = |key: &str| result.get(key).and_then(Value::as_array).map_or(0, Vec::len);
+    let cost = result.get("cost_usd").and_then(Value::as_f64).unwrap_or(0.0);
+    let (written, failed, pending) = (count("written"), count("failed"), count("pending"));
+    if written + failed + pending == 0 {
+        return ("Nothing changed".into(), cost);
+    }
+    let mut text = format!("{written} page{} written, ${cost:.2}", if written == 1 { "" } else { "s" });
+    if failed > 0 {
+        text.push_str(&format!(", {failed} failed"));
+    }
+    if pending > 0 {
+        text.push_str(&format!(", {pending} left"));
+    }
+    (text, cost)
 }
 
 /// A domain or project goes to Living Memory as one argument; one that starts with `-` would read as a flag.
@@ -270,7 +293,8 @@ fn report(emit: &dyn Fn(&str, Value), domain: &str, scope: &str, outcome: &Resul
 /// A second real build while one runs fails at once, without events. A dry run does not use that slot, so previews can overlap
 /// each other and a build. `claude` finds the path for `LIVING_MEMORY_CLAUDE` (see `claude_override`); it can be slow (it runs
 /// `claude --version`), so it is called only after the real build holds the slot, where a cancel is kept, and never for a dry run.
-pub fn run(emit: &dyn Fn(&str, Value), launch: &Launch, domain: &str, project: Option<&str>, restructure: bool, dry_run: bool, claude: &dyn Fn() -> Option<String>) -> Result<Value, String> {
+#[allow(clippy::too_many_arguments)] // each argument is one independent part of the build
+pub fn run(emit: &dyn Fn(&str, Value), launch: &Launch, domain: &str, project: Option<&str>, budget: Option<f64>, restructure: bool, dry_run: bool, claude: &dyn Fn() -> Option<String>) -> Result<Value, String> {
     check_name("domain", domain)?;
     if let Some(project) = project {
         check_name("project", project)?;
@@ -287,7 +311,7 @@ pub fn run(emit: &dyn Fn(&str, Value), launch: &Launch, domain: &str, project: O
         Some(Clear)
     };
     let claude = if dry_run { None } else { claude() };
-    let mut child = match spawn(launch, &build_argv(domain, project, restructure, dry_run), claude.as_deref(), !dry_run) {
+    let mut child = match spawn(launch, &build_argv(domain, project, budget, restructure, dry_run), claude.as_deref(), !dry_run) {
         Ok(child) => child,
         Err(e) => {
             if e == CANCELLED {
@@ -347,12 +371,22 @@ mod tests {
 
     #[test]
     fn the_build_argv_follows_the_contract() {
-        assert_eq!(build_argv("demo", None, false, false), ["wiki", "--agent", "--build", "--domain", "demo", "--progress"]);
+        assert_eq!(build_argv("demo", None, None, false, false), ["wiki", "--agent", "--build", "--domain", "demo", "--progress"]);
         assert_eq!(
-            build_argv("demo", Some("core"), true, true),
+            build_argv("demo", Some("core"), None, true, true),
             ["wiki", "--agent", "--build", "--domain", "demo", "--project", "core", "--restructure", "--dry-run", "--progress"]
         );
-        assert!(!build_argv("demo", None, false, false).iter().any(|a| a == "--actor"));
+        assert!(!build_argv("demo", None, None, false, false).iter().any(|a| a == "--actor"));
+    }
+
+    #[test]
+    fn a_scheduled_build_passes_its_budget_and_a_manual_one_none() {
+        assert_eq!(
+            build_argv("demo", Some("core"), Some(2.0), false, false),
+            ["wiki", "--agent", "--build", "--domain", "demo", "--project", "core", "--budget", "2.00", "--progress"]
+        );
+        assert_eq!(build_argv("demo", None, Some(0.5), false, false)[5..7], ["--budget", "0.50"]);
+        assert!(!build_argv("demo", Some("core"), None, true, false).iter().any(|a| a == "--budget"));
     }
 
     #[test]
@@ -434,6 +468,15 @@ mod tests {
     }
 
     #[test]
+    fn a_finished_build_is_told_in_a_line_and_its_cost() {
+        let done = json!({ "ok": true, "written": ["pg000001", "pg000002"], "failed": [], "pending": [], "cost_usd": 0.456 });
+        assert_eq!(summary(&done), ("2 pages written, $0.46".to_string(), 0.456));
+        assert_eq!(summary(&json!({ "written": ["pg000001"], "failed": [{ "page": "pg000002", "reason": "x" }], "pending": ["pg000003", "pg000004"], "cost_usd": 1.0 })).0, "1 page written, $1.00, 1 failed, 2 left");
+        assert_eq!(summary(&json!({ "ok": true, "written": [], "failed": [], "pending": [], "cost_usd": 0 })), ("Nothing changed".to_string(), 0.0));
+        assert_eq!(summary(&json!({ "ok": true })), ("Nothing changed".to_string(), 0.0));
+    }
+
+    #[test]
     fn a_name_that_reads_as_a_flag_is_refused() {
         assert!(check_name("domain", "demo").is_ok());
         assert!(check_name("domain", "--help").is_err());
@@ -468,9 +511,11 @@ mod tests {
         let seen = Mutex::new(Vec::<(String, Value)>::new());
         let emit = |name: &str, payload: Value| seen.lock().unwrap().push((name.to_string(), payload));
 
-        let result = run(&emit, &launch, "demo", Some("core"), false, false, &|| Some("C:/x/claude.exe".to_string())).unwrap();
+        let result = run(&emit, &launch, "demo", Some("core"), Some(2.0), false, false, &|| Some("C:/x/claude.exe".to_string())).unwrap();
         assert_eq!(result["written"][0], "pg000001");
         assert_eq!(result["claude"], "C:/x/claude.exe");
+        let argv = result["argv"].as_array().unwrap();
+        assert!(argv.windows(2).any(|w| w[0] == "--budget" && w[1] == "2.00"));
         assert!(result["argv"].as_array().unwrap().iter().any(|a| a == "--progress"));
         let events = seen.lock().unwrap().clone();
         assert_eq!(events.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), [PROGRESS_EVENT, PROGRESS_EVENT, DONE_EVENT]);
@@ -480,13 +525,13 @@ mod tests {
         assert_eq!(events[2].1["result"]["written"][0], "pg000001");
 
         seen.lock().unwrap().clear();
-        let dry = run(&emit, &launch, "demo", None, false, true, &|| panic!("a dry run does not look for Claude")).unwrap();
+        let dry = run(&emit, &launch, "demo", None, None, false, true, &|| panic!("a dry run does not look for Claude")).unwrap();
         assert_eq!(dry["dry_run"], true);
         assert_eq!(dry["claude"], std::env::var(CLAUDE_ENV).map_or(Value::Null, Value::from)); // inherited, not set by the run
         assert!(seen.lock().unwrap().is_empty());
 
         // A cancel that comes while Claude is being looked for (the slot is already taken) is kept: the child never starts.
-        let probing = run(&emit, &launch, "demo", None, false, false, &|| {
+        let probing = run(&emit, &launch, "demo", None, None, false, false, &|| {
             cancel();
             Some("C:/x/claude.exe".to_string())
         });
@@ -497,7 +542,7 @@ mod tests {
 
         // A cancel that came before the child existed (the slot is taken, no pid yet) keeps the child from starting.
         *running() = Some(Running { pid: None, cancelled: true });
-        assert_eq!(spawn(&launch, &build_argv("demo", None, false, false), None, true).err(), Some(CANCELLED.to_string()));
+        assert_eq!(spawn(&launch, &build_argv("demo", None, None, false, false), None, true).err(), Some(CANCELLED.to_string()));
         *running() = None;
         assert_eq!(mark_cancelled(), None); // nothing to cancel when no build runs
         assert!(running().is_none());
@@ -515,15 +560,15 @@ mod tests {
         let cancelling = |name: &str, payload: Value| {
             if name == PROGRESS_EVENT {
                 // The child is running; a second real build is refused, a dry run is not, then cancel.
-                assert_eq!(run(&|_: &str, _: Value| {}, &launch, "demo", None, false, false, &|| None), Err("A wiki build is already running.".into()));
-                assert_eq!(run(&|_: &str, _: Value| {}, &preview, "demo", None, true, true, &|| None).unwrap()["dry_run"], true);
+                assert_eq!(run(&|_: &str, _: Value| {}, &launch, "demo", None, None, false, false, &|| None), Err("A wiki build is already running.".into()));
+                assert_eq!(run(&|_: &str, _: Value| {}, &preview, "demo", None, None, true, true, &|| None).unwrap()["dry_run"], true);
                 assert!(running().is_some(), "the preview left the build's slot alone");
                 cancel();
             }
             seen.lock().unwrap().push((name.to_string(), payload));
         };
         let started = std::time::Instant::now();
-        assert_eq!(run(&cancelling, &launch, "demo", None, false, false, &|| None), Err(CANCELLED.into()));
+        assert_eq!(run(&cancelling, &launch, "demo", None, None, false, false, &|| None), Err(CANCELLED.into()));
         assert!(started.elapsed() < std::time::Duration::from_secs(60));
         let events = seen.lock().unwrap().clone();
         assert_eq!(events.last().unwrap().0, DONE_EVENT);

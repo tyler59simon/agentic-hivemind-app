@@ -1,4 +1,4 @@
-// The agent-written wiki's build that is running now, kept outside the page so progress survives leaving the Wiki page. One build
+// The agent-written wiki's build that is running now, kept outside the view so progress survives leaving Notes > Wiki. One build
 // runs at a time (Rust refuses a second). The build's own events drive the progress and the end; the result of the command is a
 // fallback for the same end, so the page never stays "building" if an event is lost.
 import type { QueryClient } from "@tanstack/react-query";
@@ -20,9 +20,14 @@ interface BuildState {
 }
 export const useWikiBuild = create<BuildState>(() => ({ running: null, progress: null, cancelling: false }));
 
-function finish(client: QueryClient, done: Pick<WikiBuildDone, "ok" | "result" | "error">) {
+/** `foreign`: the done event came with nothing running here, so another build ended (a scheduled rebuild). Its pages are fetched
+ *  again with no toast, since the user did not ask for it. */
+function finish(client: QueryClient, done: Pick<WikiBuildDone, "ok" | "result" | "error">, foreign = false) {
   const { running, cancelling } = useWikiBuild.getState();
-  if (!running) return; // the other of event and result got here first
+  if (!running) { // the other of event and result got here first, or a build this page did not start ended
+    if (foreign) client.invalidateQueries({ queryKey: ["wiki", "agent"] });
+    return;
+  }
   useWikiBuild.setState({ running: null, progress: null, cancelling: false });
   const outcome = buildOutcome(done, cancelling);
   toast(outcome.text, outcome.kind);
@@ -30,9 +35,10 @@ function finish(client: QueryClient, done: Pick<WikiBuildDone, "ok" | "result" |
 }
 
 let listening: Promise<unknown> | null = null;
-const listenOnce = (client: QueryClient) => (listening ??= Promise.all([
+/** Listen for the build's events (once). The wiki view calls this when it opens, so a build it did not start still refreshes it. */
+export const listenOnce = (client: QueryClient) => (listening ??= Promise.all([
   listen<WikiBuildEvent>("wiki-build-progress", (e) => useWikiBuild.setState((s) => (s.running ? { progress: applyProgress(s.progress, e.payload) } : s))),
-  listen<WikiBuildDone>("wiki-build-done", (e) => finish(client, e.payload)),
+  listen<WikiBuildDone>("wiki-build-done", (e) => finish(client, e.payload, true)),
 ]));
 
 /** Build or refresh the agent-written wiki; resolves when it is over (the toast and refetch have happened by then). */
