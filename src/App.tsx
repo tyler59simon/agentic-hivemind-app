@@ -21,6 +21,7 @@ import { needsLmUpdate, useConnection } from "./lib/connection";
 import { refreshStore } from "./lib/refresh";
 import { Shell } from "./shell/Shell";
 import { openInbox, openSession, useApp } from "./store";
+import { ErrorBoundary } from "./ui/ErrorBoundary";
 import { toast, Toasts } from "./ui/toast";
 import { unsavedUntitled, useWorkspace } from "./workspace/store";
 import { onDocsChanged, onFilesChanged, onPageAppended, startDocumentSync, type DocsChanged } from "./documents/sync";
@@ -248,9 +249,12 @@ export default function App() {
 
   return (
     <>
-      <Shell info={link.data!} onSettings={() => setSettings(true)} onReconnect={reconnect} />
-      <Palette onSettings={() => setSettings(true)} onReconnect={reconnect} />
-      <ComparePicker />
+      {/* Inside App, so the close guard and tray Quit keep working when the shell fails (DESK-1). */}
+      <ErrorBoundary label="Hivemind" onError={() => void flushAllDrafts()} hint="Your unsaved edits are kept as drafts, and running terminals and agent sessions keep running.">
+        <Shell info={link.data!} onSettings={() => setSettings(true)} onReconnect={reconnect} />
+        <Palette onSettings={() => setSettings(true)} onReconnect={reconnect} />
+        <ComparePicker />
+      </ErrorBoundary>
       <Toasts />
       {dialogs}
     </>

@@ -5,12 +5,27 @@ import "@fontsource-variable/plus-jakarta-sans";
 import "@fontsource-variable/jetbrains-mono";
 import App from "./App";
 import "./App.css";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { QuickCapture } from "./features/capture/QuickCapture";
+import { guardReload } from "./lib/keys";
+import { inTauri } from "./lib/native";
 import { initPaperDefault } from "./lib/paper";
 import { initTheme } from "./lib/theme";
+import { ErrorBoundary } from "./ui/ErrorBoundary";
 
 initTheme();
 initPaperDefault();
+guardReload();
+
+/** After the whole window failed, the app's own close guard is gone: closing hides instead, so running terminals and agent
+ *  sessions are not killed (tray Quit, clicked twice, still exits). */
+let hideOnClose = false;
+function keepRunningOnClose(): void {
+  if (hideOnClose || !inTauri()) return;
+  hideOnClose = true;
+  const win = getCurrentWindow();
+  void win.onCloseRequested(async (e) => { e.preventDefault(); await win.hide(); });
+}
 
 const client = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1, staleTime: 30_000 } },
@@ -21,8 +36,12 @@ const isCapture = window.location.hash === "#capture";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <QueryClientProvider client={client}>
-      {isCapture ? <QuickCapture /> : <App />}
-    </QueryClientProvider>
+    <ErrorBoundary label={isCapture ? "Quick capture" : "Hivemind"} onError={keepRunningOnClose}
+      hint="Running terminals and agent sessions keep running. Reload the window to go on."
+      retry={{ label: "Reload window", run: () => window.location.reload() }}>
+      <QueryClientProvider client={client}>
+        {isCapture ? <QuickCapture /> : <App />}
+      </QueryClientProvider>
+    </ErrorBoundary>
   </React.StrictMode>,
 );

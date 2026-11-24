@@ -1,7 +1,9 @@
 // The colour theme: Purple (the default, no attribute), Emerald Enterprise Dark (<html data-theme="emerald">)
 // or Emerald Enterprise Light (<html data-theme="emerald-light">).
 // App.css holds the palettes as tokens; code that reads tokens at runtime listens with onThemeChange.
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useSyncExternalStore } from "react";
+import { inTauri } from "./native";
 import { prefs } from "./prefs";
 
 export type Theme = "purple" | "emerald" | "emerald-light";
@@ -20,7 +22,17 @@ export function applyTheme(theme: Theme, save = true): void {
   if (theme === "purple") delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = theme;
   if (save) prefs.setTheme(theme);
+  syncNativeTheme(theme);
   listeners.forEach((l) => l());
+}
+
+/** The theme the window's own title bar is drawn in (DESK-9). Emerald Light is the only light theme. */
+export const nativeTheme = (theme: Theme): "light" | "dark" => (theme === "emerald-light" ? "light" : "dark");
+
+/** Draw this window's title bar to match. Outside the app (tests, a plain browser) there is no window to tell. */
+function syncNativeTheme(theme: Theme): void {
+  if (!inTauri()) return;
+  try { getCurrentWindow().setTheme(nativeTheme(theme)).catch(() => undefined); } catch { /* no window */ }
 }
 
 export function onThemeChange(listener: () => void): () => void {

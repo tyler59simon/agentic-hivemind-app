@@ -7,12 +7,13 @@ import { FileTab, saveFileTab } from "../features/notes/FileTab";
 import { NewFileTab } from "../features/notes/NewFileTab";
 import { CompareTab } from "../features/power/Compare";
 import { FindInFilesTab } from "../features/search/FindInFiles";
-import { discard, keyOf, useDocuments } from "../documents/store";
+import { discard, flushAllDrafts, keyOf, useDocuments } from "../documents/store";
 import { isUnsaved } from "../documents/session";
 import { newPageHere } from "../features/notes/actions";
 import { fileName, isMarkdown, isRichDoc, pageTitle } from "../lib/notebooks";
 import { announceDocumentLook, useWhitePaper } from "../lib/paper";
 import { useApp } from "../store";
+import { ErrorBoundary } from "../ui/ErrorBoundary";
 import { Confirm } from "../ui/Modal";
 import { MAX_PANES, railShown, useWorkspace, type Pane, type Tab } from "./store";
 
@@ -130,7 +131,7 @@ function PaneView({ pane, focused, last, onClose }: {
         )}
       </div>
       <div className="pane-body" data-paper={white ? "" : undefined}>
-        {active ? TAB_VIEWS[active.kind](active) : (
+        {active ? <ErrorBoundary label="This tab" resetKey={active.id} onError={() => void flushAllDrafts()}>{TAB_VIEWS[active.kind](active)}</ErrorBoundary> : (
           <div className="center muted"><p>Open a note or page here: Ctrl+click a link, or press <kbd>Ctrl</kbd>+<kbd>O</kbd>.</p></div>
         )}
       </div>

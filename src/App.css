@@ -1861,3 +1861,8 @@ button.icon { border: none; padding: .25rem; }
 .canvas-zoom { min-width: 3rem; text-align: center; font-size: .82rem; }
 .canvas-tools .canvas-swatch { width: 1.2rem; height: 1.2rem; padding: 0; border-radius: 50%; background: var(--canvas-c); border: 1px solid var(--border-strong); }
 .canvas-note { position: absolute; left: .6rem; bottom: .6rem; z-index: 5; background: var(--bg-alt); border: 1px solid var(--border); border-radius: .4rem; padding: .25rem .5rem; }
+
+/* ---- Error boundary fallback (DESK-1) ---- */
+.error-boundary { max-width: 40rem; margin: 2rem auto; padding: 1.3rem; border: 1px solid var(--border-strong); border-radius: .6rem; background: var(--bg-alt); display: flex; flex-direction: column; gap: .6rem; }
+.error-boundary h2 { margin: 0; font-size: 1.3rem; }
+.error-boundary p { margin: 0; }

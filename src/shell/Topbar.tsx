@@ -14,6 +14,7 @@ import { isLoose } from "../lib/opens";
 import { useNotebookTitle } from "../features/notes/notebookTitle";
 import { activeTab, useWorkspace } from "../workspace/store";
 import { SECTIONS } from "./Sidebar";
+import { useWindowTitle } from "./title";
 
 interface Crumb { label: string; go?: () => void }
 
@@ -53,6 +54,9 @@ function useCrumbs(): Crumb[] {
 /** Breadcrumb on the left; one unified search box on the right (Ctrl+K / Ctrl+Shift+F) on every page (CON-11). */
 export function Topbar() {
   const crumbs = useCrumbs();
+  const unsaved = useWorkspace((s) => { const t = activeTab(s); return !!t && !!s.dirty[t.id]; });
+  const onNotes = useApp((s) => s.route.page === "notes");
+  useWindowTitle(crumbs.map((c) => c.label), onNotes && unsaved);
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
