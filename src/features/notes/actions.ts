@@ -17,6 +17,8 @@ import { NEW_SVG_TEXT } from "../svg/svg";
 import { newPageText } from "../hmdoc/envelope";
 import { planFor, useRewritePlan } from "../links/plan";
 import { createDocx } from "../../lib/docx";
+import { discardDocxUnder, docxKey, unsavedDocxUnder, useDocxStore, waitDocxSaves } from "../docx/store";
+import { discardPdfUnder, pdfKey, unsavedPdfUnder, usePdfStore, waitPdfSaves } from "../pdf/store";
 import { fileName, folderOf, isCanvas, isDocx, isDrawio, isMarkdown, isMermaid, isPdf, isRichDoc, isSvg, notebooksQuery, pageTitle } from "../../lib/notebooks";
 import { isLoose, saveAs } from "../../lib/opens";
 import { untitledText } from "./untitled";
@@ -203,8 +205,16 @@ export async function movePath(client: QueryClient, notebook: string, from: stri
   const doneTo = await hold(notebook, to, "into");
   let plan: Awaited<ReturnType<typeof planFor>> = null;
   try {
+    await Promise.all([
+      waitDocxSaves(notebook, from),
+      waitPdfSaves(notebook, from),
+      waitDocxSaves(notebook, to),
+      waitPdfSaves(notebook, to),
+    ]);
     // A page at the destination with unsaved edits would be overwritten by the move (Codex re-review of fa08348, F2).
-    if (unsavedUnder(notebook, to).length) throw new Error(`${to} has unsaved edits; save or discard them first`);
+    if (unsavedUnder(notebook, to).length || unsavedDocxUnder(notebook, to).length || unsavedPdfUnder(notebook, to).length) {
+      throw new Error(`${to} has unsaved edits; save or discard them first`);
+    }
     plan = await planFor(client, notebook, from, to);
     await moveDoc(notebook, from, to, at);
     forgetMoved(notebook, from);
@@ -298,18 +308,25 @@ export async function trashPath(client: QueryClient, notebook: string, path: str
   const at = bridgeGeneration(), store = connectedStore();
   const done = await hold(notebook, path, "delete");
   try {
-    const doc = useDocuments.getState().docs[keyOf({ notebook, path })];
+    await Promise.all([waitDocxSaves(notebook, path), waitPdfSaves(notebook, path)]);
+    const ref = { notebook, path };
+    const doc = useDocuments.getState().docs[keyOf(ref)];
+    const binStamp = useDocxStore.getState().sessions[docxKey(ref)]?.stamp
+      ?? usePdfStore.getState().sessions[pdfKey(ref)]?.stamp
+      ?? undefined;
     const closed = closeTabsUnder(notebook, path);
     try {
-      await deleteDoc(notebook, path, doc?.base?.stamp, at);
+      await deleteDoc(notebook, path, doc?.base?.stamp ?? binStamp, at);
     } catch (e) {
-      for (const ref of closed.values()) openPage(ref);
+      for (const closedRef of closed.values()) openPage(closedRef);
       throw e;
     }
     closeTabsUnder(notebook, path);
-    for (const [key, ref] of Object.entries(useDocuments.getState().refs)) {
-      if (ref.notebook === notebook && movedPath(ref.path, path, path) !== null) discard(key, store);
+    for (const [key, r] of Object.entries(useDocuments.getState().refs)) {
+      if (r.notebook === notebook && movedPath(r.path, path, path) !== null) discard(key, store);
     }
+    discardDocxUnder(notebook, path);
+    discardPdfUnder(notebook, path);
   } finally {
     done();
   }

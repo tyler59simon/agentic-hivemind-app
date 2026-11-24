@@ -18,6 +18,13 @@ export const pdfBytes = async (notebook: string, path: string): Promise<Uint8Arr
   return new Uint8Array(res);
 };
 
+export const pdfRange = async (notebook: string, path: string, offset: number, length: number): Promise<Uint8Array> => {
+  const res = await invoke<ArrayBuffer | Uint8Array | number[]>("pdf_range", { notebook, path, offset, length });
+  if (res instanceof Uint8Array) return new Uint8Array(res);
+  if (res instanceof ArrayBuffer) return new Uint8Array(res);
+  return new Uint8Array(res);
+};
+
 export const savePdfBytes = (notebook: string, path: string, bytes: Uint8Array, pre: Stamp, source = "you") =>
   invoke<SaveOutcome>("pdf_save", bytes, {
     headers: {

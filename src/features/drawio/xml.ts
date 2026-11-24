@@ -9,6 +9,7 @@ export type ParsedDrawio = { ok: true; doc: DrawioDoc } | { ok: false; reason: s
 
 const KNOWN_CELL_ATTRS = new Set(["id", "parent", "value", "style", "vertex", "edge", "source", "target"]);
 const KNOWN_DIAGRAM_ATTRS = new Set(["id", "name"]);
+const KNOWN_GEOMETRY_ATTRS = new Set(["x", "y", "width", "height", "relative", "as"]);
 
 function escapeXml(text: string): string {
   return text
@@ -95,24 +96,30 @@ function parsePoint(el: Element): DrawioPoint {
 }
 
 function parseGeometry(el: Element): DrawioGeometry {
+  const serializer = new XMLSerializer();
+  const extraAttrs = attrsToRecord(el, KNOWN_GEOMETRY_ATTRS);
   const geo: DrawioGeometry = {
     x: Number(el.getAttribute("x") ?? 0) || 0,
     y: Number(el.getAttribute("y") ?? 0) || 0,
     width: Number(el.getAttribute("width") ?? 0) || 0,
     height: Number(el.getAttribute("height") ?? 0) || 0,
     relative: el.getAttribute("relative") === "1" ? true : undefined,
+    ...(Object.keys(extraAttrs).length ? { extraAttrs } : {}),
   };
+  const extraChildren: string[] = [];
   for (const child of [...el.children]) {
     const tag = child.localName;
     if (tag === "mxPoint") {
       const role = child.getAttribute("as");
-      if (role === "sourcePoint") geo.sourcePoint = parsePoint(child);
-      else if (role === "targetPoint") geo.targetPoint = parsePoint(child);
+      if (role === "sourcePoint") { geo.sourcePoint = parsePoint(child); continue; }
+      if (role === "targetPoint") { geo.targetPoint = parsePoint(child); continue; }
     } else if (tag === "Array" && child.getAttribute("as") === "points") {
       const pts = [...child.children].filter((c) => c.localName === "mxPoint").map(parsePoint);
-      if (pts.length) geo.points = pts;
+      if (pts.length) { geo.points = pts; continue; }
     }
+    extraChildren.push(serializer.serializeToString(child));
   }
+  if (extraChildren.length) geo.extraChildrenXml = extraChildren.join("");
   return geo;
 }
 
@@ -242,12 +249,16 @@ function serializeGeometry(g: DrawioGeometry): string {
   if (g.height) attrs.height = String(g.height);
   if (g.relative) attrs.relative = "1";
   attrs.as = "geometry";
+  if (g.extraAttrs) {
+    for (const [k, v] of Object.entries(g.extraAttrs)) attrs[k] = v;
+  }
   const children: string[] = [];
   if (g.sourcePoint) children.push(`<mxPoint x="${g.sourcePoint.x}" y="${g.sourcePoint.y}" as="sourcePoint" />`);
   if (g.targetPoint) children.push(`<mxPoint x="${g.targetPoint.x}" y="${g.targetPoint.y}" as="targetPoint" />`);
   if (g.points?.length) {
     children.push(`<Array as="points">${g.points.map((p) => `<mxPoint x="${p.x}" y="${p.y}" />`).join("")}</Array>`);
   }
+  if (g.extraChildrenXml) children.push(g.extraChildrenXml);
   return children.length ? `<mxGeometry${formatAttrs(attrs)}>${children.join("")}</mxGeometry>` : `<mxGeometry${formatAttrs(attrs)} />`;
 }
 

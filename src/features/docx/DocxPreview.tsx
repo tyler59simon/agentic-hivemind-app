@@ -1,5 +1,6 @@
 // Lazy-loaded high-fidelity `.docx` layout preview using `docx-preview` directly into the DOM (zero iframes).
 // Uses `useBase64URL: true` so embedded Word images render via `data:` URIs under Hivemind's strict CSP.
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useRef, useState } from "react";
 import type { FileRef } from "../../documents/keys";
 import { rawDocx } from "../../lib/docx";
@@ -69,7 +70,29 @@ export default function DocxPreview({ file, version, dirty }: DocxPreviewProps) 
       <div className="docx-preview-scroll">
         <div ref={styleHost} />
         <div className="docx-preview-scale" style={{ transform: `scale(${zoom})`, transformOrigin: "top center" }}>
-          <div ref={container} className="docx-preview-host" />
+          <div
+            ref={container}
+            className="docx-preview-host"
+            onClick={(e) => {
+              const anchor = (e.target as HTMLElement | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
+              if (!anchor) return;
+              const href = anchor.getAttribute("href")?.trim() ?? "";
+              e.preventDefault();
+              if (!href) return;
+              if (href.startsWith("#")) {
+                const targetId = decodeURIComponent(href.slice(1));
+                if (targetId && container.current) {
+                  const target = [...container.current.querySelectorAll<HTMLElement>("[id], [name]")]
+                    .find((el) => el.id === targetId || el.getAttribute("name") === targetId);
+                  target?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }
+                return;
+              }
+              if (/^(https?:|mailto:)/i.test(href)) {
+                openUrl(href).catch(() => undefined);
+              }
+            }}
+          />
         </div>
       </div>
     </div>

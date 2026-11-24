@@ -1,5 +1,7 @@
 // Virtualized multi-page PDF viewer & offline interactive annotator/page-organizer built on `pdfjs-dist` (zero iframes).
-import type { PDFDocumentProxy } from "pdfjs-dist";
+// Annotations and form overlays use PDF.js viewport transforms (`convertToPdfPoint` / `convertToViewportPoint`) so
+// coordinates stay exact across rotated pages, non-default crop boxes, and zoom levels.
+import type { PDFDocumentProxy, PageViewport, RenderTask } from "pdfjs-dist";
 import {
   ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Eraser, FilePlus, Files, Highlighter, ImagePlus,
   Layers, Minus, PenTool, Plus, Redo2, RotateCcw, RotateCw, Search, Square, StickyNote, Strikethrough,
@@ -10,10 +12,10 @@ import type { FileRef } from "../../documents/keys";
 import { classify } from "../../lib/errors";
 import { fileName, folderOf } from "../../lib/notebooks";
 import { isLoose } from "../../lib/opens";
-import { createPdfBytes, pickPdfForMerge } from "../../lib/pdf";
-import { loadPdfjs } from "../../lib/pdfjs";
+import { createPdfBytes, pdfRange, pickPdfForMerge } from "../../lib/pdf";
+import { loadPdfjs, openPdfJsDocument } from "../../lib/pdfjs";
 import { toast } from "../../ui/toast";
-import { extractPdfPages, type NormPoint, type NormRect, type PdfAnnotation, type PdfFormFieldInfo, type PdfPageSpec } from "./pdfWriter";
+import { extractPdfPageSpecs, type PdfAnnotation, type PdfFormFieldInfo, type PdfPageSpec, type PdfPoint, type PdfRect } from "./pdfWriter";
 import { SignatureModal } from "./SignatureModal";
 import {
   addPdfAnnotation, deletePdfPage, insertBlankPdfPage, mergePdfBytes, pdfKey, redoPdf, removePdfAnnotation,
@@ -23,6 +25,7 @@ import {
 type Tool = "select" | "highlight" | "underline" | "strikeout" | "note" | "textbox" | "whiteout" | "ink" | "rect" | "arrow" | "line";
 
 const COLORS = ["#fef08a", "#bbf7d0", "#bfdbfe", "#fecaca", "#dc2626", "#1a73e8", "#111827"];
+const RANGE_CHUNK = 256 * 1024;
 
 interface OutlineItem { title: string; pageIndex: number }
 
@@ -30,22 +33,90 @@ export interface PdfViewerProps {
   file: FileRef;
   session: PdfSession;
   editing: boolean;
-  /** Optional `hmfile` URL for >64 MB read-only PDFs that stay on disk. */
-  streamUrl?: string;
+}
+
+interface CoordMapper {
+  width: number;
+  height: number;
+  toPdf: (vx: number, vy: number) => PdfPoint;
+  toView: (px: number, py: number) => { x: number; y: number };
+}
+
+function makeMapperFromViewport(vp: PageViewport): CoordMapper {
+  return {
+    width: Math.floor(vp.width),
+    height: Math.floor(vp.height),
+    toPdf: (vx, vy) => {
+      const [x, y] = vp.convertToPdfPoint(vx, vy);
+      return { x, y };
+    },
+    toView: (px, py) => {
+      const [x, y] = vp.convertToViewportPoint(px, py);
+      return { x, y };
+    },
+  };
+}
+
+/** Synthetic coordinate mapper for an unsaved blank US Letter page (612 x 792 pt) at any rotation/scale. */
+function makeBlankMapper(scale: number, rotation: 0 | 90 | 180 | 270): CoordMapper {
+  const pw = 612, ph = 792;
+  const rot = rotation % 180 !== 0;
+  const width = Math.floor((rot ? ph : pw) * scale);
+  const height = Math.floor((rot ? pw : ph) * scale);
+  return {
+    width,
+    height,
+    toPdf: (vx, vy) => {
+      const ux = vx / scale, uy = vy / scale;
+      switch (rotation) {
+        case 90: return { x: uy, y: ux };
+        case 180: return { x: pw - ux, y: uy };
+        case 270: return { x: pw - uy, y: ph - ux };
+        default: return { x: ux, y: ph - uy };
+      }
+    },
+    toView: (px, py) => {
+      switch (rotation) {
+        case 90: return { x: py * scale, y: px * scale };
+        case 180: return { x: (pw - px) * scale, y: py * scale };
+        case 270: return { x: (ph - py) * scale, y: (pw - px) * scale };
+        default: return { x: px * scale, y: (ph - py) * scale };
+      }
+    },
+  };
+}
+
+function pdfRectToViewBox(rect: PdfRect, mapper: CoordMapper) {
+  const a = mapper.toView(rect.x, rect.y);
+  const b = mapper.toView(rect.x + rect.width, rect.y + rect.height);
+  const left = Math.min(a.x, b.x);
+  const top = Math.min(a.y, b.y);
+  return { left, top, width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y) };
+}
+
+function viewBoxToPdfRect(x1: number, y1: number, x2: number, y2: number, mapper: CoordMapper): PdfRect {
+  const p1 = mapper.toPdf(x1, y1);
+  const p2 = mapper.toPdf(x2, y2);
+  return {
+    x: Math.min(p1.x, p2.x),
+    y: Math.min(p1.y, p2.y),
+    width: Math.abs(p2.x - p1.x),
+    height: Math.abs(p2.y - p1.y),
+  };
 }
 
 function uid(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
-/** Sample RGB hex from a rendered canvas at normalized `(nx, ny)`, defaulting to `#ffffff`. */
-function sampleCanvasBg(canvas: HTMLCanvasElement | null, nx: number, ny: number): string {
+/** Sample RGB hex from a rendered canvas at CSS pixel `(vx, vy)`, defaulting to `#ffffff`. */
+function sampleCanvasBg(canvas: HTMLCanvasElement | null, vx: number, vy: number, cssW: number, cssH: number): string {
   if (!canvas || canvas.width < 2 || canvas.height < 2) return "#ffffff";
   try {
     const ctx = canvas.getContext("2d");
     if (!ctx) return "#ffffff";
-    const x = Math.min(canvas.width - 1, Math.max(0, Math.round(nx * canvas.width)));
-    const y = Math.min(canvas.height - 1, Math.max(0, Math.round(ny * canvas.height)));
+    const x = Math.min(canvas.width - 1, Math.max(0, Math.round((vx / Math.max(1, cssW)) * canvas.width)));
+    const y = Math.min(canvas.height - 1, Math.max(0, Math.round((vy / Math.max(1, cssH)) * canvas.height)));
     const d = ctx.getImageData(x, y, 1, 1).data;
     if (d[3] === 0) return "#ffffff";
     return `#${[d[0], d[1], d[2]].map((c) => c.toString(16).padStart(2, "0")).join("")}`;
@@ -79,10 +150,12 @@ function PdfPageCard({
 }: PageCardProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const renderTaskRef = useRef<RenderTask | null>(null);
+  const renderChainRef = useRef<Promise<void>>(Promise.resolve());
   const [visible, setVisible] = useState(index < 3);
-  const [dims, setDims] = useState({ width: Math.round(612 * scale), height: Math.round(792 * scale) });
+  const [mapper, setMapper] = useState<CoordMapper>(() => makeBlankMapper(scale, spec.rotation));
   const [textItems, setTextItems] = useState<{ str: string; left: number; top: number; height: number }[]>([]);
-  const [draftInk, setDraftInk] = useState<NormPoint[] | null>(null);
+  const [draftInk, setDraftInk] = useState<{ x: number; y: number }[] | null>(null);
   const [draftBox, setDraftBox] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const [selectedAnn, setSelectedAnn] = useState<string | null>(null);
 
@@ -102,23 +175,27 @@ function PdfPageCard({
   useEffect(() => {
     if (!visible) return;
     if (spec.source === "blank") {
-      const rot = spec.rotation % 180 !== 0;
-      const w = Math.round((rot ? 792 : 612) * scale);
-      const h = Math.round((rot ? 612 : 792) * scale);
-      setDims({ width: w, height: h });
+      renderTaskRef.current?.cancel();
+      const next = makeBlankMapper(scale, spec.rotation);
+      setMapper(next);
       setTextItems([]);
       const c = canvasRef.current;
       if (c) {
-        c.width = w;
-        c.height = h;
+        c.width = next.width;
+        c.height = next.height;
+        c.style.width = `${next.width}px`;
+        c.style.height = `${next.height}px`;
         const ctx = c.getContext("2d");
-        if (ctx) { ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, w, h); }
+        if (ctx) { ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, next.width, next.height); }
       }
       return;
     }
     if (!srcDoc || spec.sourcePageIndex === undefined) return;
     let cancelled = false;
-    void (async () => {
+    // Cancel any in-flight render on this canvas and wait for it to settle before reusing the canvas.
+    renderTaskRef.current?.cancel();
+    renderChainRef.current = renderChainRef.current.catch(() => {}).then(async () => {
+      if (cancelled) return;
       try {
         const page = await srcDoc.getPage(spec.sourcePageIndex! + 1);
         if (cancelled) return;
@@ -126,15 +203,22 @@ function PdfPageCard({
         const vp = page.getViewport({ scale, rotation: totalRot });
         const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
         const renderVp = page.getViewport({ scale: scale * dpr, rotation: totalRot });
-        setDims({ width: Math.floor(vp.width), height: Math.floor(vp.height) });
+        setMapper(makeMapperFromViewport(vp));
         const c = canvasRef.current;
-        if (c) {
+        if (c && !cancelled) {
           c.width = Math.floor(renderVp.width);
           c.height = Math.floor(renderVp.height);
           c.style.width = `${Math.floor(vp.width)}px`;
           c.style.height = `${Math.floor(vp.height)}px`;
-          await page.render({ canvas: c, viewport: renderVp }).promise;
+          const task = page.render({ canvas: c, viewport: renderVp });
+          renderTaskRef.current = task;
+          try {
+            await task.promise;
+          } finally {
+            if (renderTaskRef.current === task) renderTaskRef.current = null;
+          }
         }
+        if (cancelled) return;
         const tc = await page.getTextContent();
         if (cancelled) return;
         const spans: { str: string; left: number; top: number; height: number }[] = [];
@@ -149,17 +233,20 @@ function PdfPageCard({
         }
         setTextItems(spans);
       } catch {
-        // Render error handled gracefully; blank canvas stays.
+        // Cancelled renders and transient page errors are handled cleanly.
       }
-    })();
-    return () => { cancelled = true; };
+    });
+    return () => {
+      cancelled = true;
+      renderTaskRef.current?.cancel();
+    };
   }, [visible, srcDoc, spec.source, spec.sourcePageIndex, spec.rotation, scale]);
 
-  const normPos = (e: React.PointerEvent): NormPoint => {
+  const viewPos = (e: React.PointerEvent) => {
     const r = wrapRef.current!.getBoundingClientRect();
     return {
-      x: Math.min(1, Math.max(0, (e.clientX - r.left) / Math.max(1, r.width))),
-      y: Math.min(1, Math.max(0, (e.clientY - r.top) / Math.max(1, r.height))),
+      x: Math.min(r.width, Math.max(0, e.clientX - r.left)),
+      y: Math.min(r.height, Math.max(0, e.clientY - r.top)),
     };
   };
 
@@ -167,26 +254,39 @@ function PdfPageCard({
     if (!editing || tool === "select" || e.button !== 0) return;
     if ((e.target as HTMLElement).closest(".pdf-ann-interactive, input, textarea, select, button")) return;
     e.preventDefault();
-    const p = normPos(e);
+    const vp = viewPos(e);
     if (tool === "note") {
+      const pt = mapper.toPdf(vp.x, vp.y);
       const id = uid("note");
-      onAddAnn({ id, pageId: spec.id, kind: "note", x: p.x, y: p.y, text: "Note", color: "#fef08a" });
+      onAddAnn({ id, pageId: spec.id, kind: "note", x: pt.x, y: pt.y, text: "Note", color: "#fef08a" });
       setSelectedAnn(id);
     } else if (tool === "textbox") {
+      const rect = viewBoxToPdfRect(vp.x, vp.y, vp.x + 170 * scale, vp.y + 42 * scale, mapper);
       const id = uid("txt");
-      onAddAnn({ id, pageId: spec.id, kind: "textbox", x: p.x, y: p.y, width: 0.28, height: 0.06, text: "Text", fontSize: 13, color: color === "#fef08a" ? "#111827" : color });
+      onAddAnn({
+        id,
+        pageId: spec.id,
+        kind: "textbox",
+        x: rect.x,
+        y: rect.y,
+        width: Math.max(40, rect.width),
+        height: Math.max(20, rect.height),
+        text: "Text",
+        fontSize: 13,
+        color: color === "#fef08a" ? "#111827" : color,
+      });
       setSelectedAnn(id);
     } else if (tool === "ink") {
-      setDraftInk([p]);
+      setDraftInk([vp]);
     } else {
-      setDraftBox({ x1: p.x, y1: p.y, x2: p.x, y2: p.y });
+      setDraftBox({ x1: vp.x, y1: vp.y, x2: vp.x, y2: vp.y });
     }
   };
 
   const onOverlayMove = (e: React.PointerEvent) => {
-    if (draftInk) setDraftInk((pts) => (pts ? [...pts, normPos(e)] : null));
+    if (draftInk) setDraftInk((pts) => (pts ? [...pts, viewPos(e)] : null));
     else if (draftBox) {
-      const p = normPos(e);
+      const p = viewPos(e);
       setDraftBox((b) => (b ? { ...b, x2: p.x, y2: p.y } : null));
     }
   };
@@ -194,25 +294,44 @@ function PdfPageCard({
   const onOverlayUp = () => {
     if (draftInk) {
       if (draftInk.length >= 2) {
-        onAddAnn({ id: uid("ink"), pageId: spec.id, kind: "ink", points: draftInk, color: color === "#fef08a" ? "#dc2626" : color, width: 2.5 });
+        const pdfPts = draftInk.map((pt) => mapper.toPdf(pt.x, pt.y));
+        onAddAnn({ id: uid("ink"), pageId: spec.id, kind: "ink", points: pdfPts, color: color === "#fef08a" ? "#dc2626" : color, width: 2.5 });
       }
       setDraftInk(null);
     } else if (draftBox) {
-      const x = Math.min(draftBox.x1, draftBox.x2);
-      const y = Math.min(draftBox.y1, draftBox.y2);
-      const w = Math.abs(draftBox.x2 - draftBox.x1);
-      const h = Math.abs(draftBox.y2 - draftBox.y1);
-      if (w > 0.008 || h > 0.006) {
+      const vw = Math.abs(draftBox.x2 - draftBox.x1);
+      const vh = Math.abs(draftBox.y2 - draftBox.y1);
+      if (vw > 4 || vh > 4) {
+        const pdfRect = viewBoxToPdfRect(draftBox.x1, draftBox.y1, draftBox.x2, draftBox.y2, mapper);
         if (tool === "highlight" || tool === "underline" || tool === "strikeout") {
-          const rect: NormRect = { x, y, width: Math.max(0.01, w), height: Math.max(0.012, h) };
+          const rect: PdfRect = {
+            x: pdfRect.x,
+            y: pdfRect.y,
+            width: Math.max(6, pdfRect.width),
+            height: Math.max(8, pdfRect.height),
+          };
           onAddAnn({ id: uid(tool), pageId: spec.id, kind: tool, rects: [rect], color });
         } else if (tool === "whiteout") {
-          const bgColor = sampleCanvasBg(canvasRef.current, x, y);
+          const bgColor = sampleCanvasBg(canvasRef.current, Math.min(draftBox.x1, draftBox.x2), Math.min(draftBox.y1, draftBox.y2), mapper.width, mapper.height);
           const id = uid("wo");
-          onAddAnn({ id, pageId: spec.id, kind: "whiteout", x, y, width: Math.max(0.05, w), height: Math.max(0.025, h), bgColor, text: "", fontSize: 12, color: "#111827" });
+          onAddAnn({
+            id,
+            pageId: spec.id,
+            kind: "whiteout",
+            x: pdfRect.x,
+            y: pdfRect.y,
+            width: Math.max(24, pdfRect.width),
+            height: Math.max(14, pdfRect.height),
+            bgColor,
+            text: "",
+            fontSize: 12,
+            color: "#111827",
+          });
           setSelectedAnn(id);
         } else if (tool === "rect" || tool === "line" || tool === "arrow") {
-          onAddAnn({ id: uid("shp"), pageId: spec.id, kind: "shape", shape: tool, x1: draftBox.x1, y1: draftBox.y1, x2: draftBox.x2, y2: draftBox.y2, color: color === "#fef08a" ? "#dc2626" : color, width: 2 });
+          const p1 = mapper.toPdf(draftBox.x1, draftBox.y1);
+          const p2 = mapper.toPdf(draftBox.x2, draftBox.y2);
+          onAddAnn({ id: uid("shp"), pageId: spec.id, kind: "shape", shape: tool, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, color: color === "#fef08a" ? "#dc2626" : color, width: 2 });
         }
       }
       setDraftBox(null);
@@ -226,7 +345,7 @@ function PdfPageCard({
       ref={wrapRef}
       data-pdf-page={index + 1}
       className="pdf-page-card"
-      style={{ width: dims.width, height: dims.height }}
+      style={{ width: mapper.width, height: mapper.height }}
       onPointerDown={onOverlayDown}
       onPointerMove={onOverlayMove}
       onPointerUp={onOverlayUp}
@@ -249,46 +368,54 @@ function PdfPageCard({
         })}
       </div>
 
-      {/* Vector annotations (highlights, underlines, strikeouts, ink, shapes) */}
-      <svg className="pdf-ann-svg" viewBox="0 0 1000 1000" preserveAspectRatio="none">
+      {/* Vector annotations (projected from PDF user-space points through current viewport transform) */}
+      <svg className="pdf-ann-svg" viewBox={`0 0 ${Math.max(1, mapper.width)} ${Math.max(1, mapper.height)}`}>
         {annotations.map((ann) => {
           if (ann.kind === "highlight") {
-            return ann.rects.map((r, i) => (
-              <rect key={`${ann.id}-${i}`} x={r.x * 1000} y={r.y * 1000} width={r.width * 1000} height={r.height * 1000} fill={ann.color} fillOpacity={0.35} />
-            ));
+            return ann.rects.map((r, i) => {
+              const b = pdfRectToViewBox(r, mapper);
+              return <rect key={`${ann.id}-${i}`} x={b.left} y={b.top} width={b.width} height={b.height} fill={ann.color} fillOpacity={0.35} />;
+            });
           }
           if (ann.kind === "underline") {
-            return ann.rects.map((r, i) => (
-              <line key={`${ann.id}-${i}`} x1={r.x * 1000} y1={(r.y + r.height) * 1000} x2={(r.x + r.width) * 1000} y2={(r.y + r.height) * 1000} stroke={ann.color} strokeWidth={3} />
-            ));
+            return ann.rects.map((r, i) => {
+              const p1 = mapper.toView(r.x, r.y);
+              const p2 = mapper.toView(r.x + r.width, r.y);
+              return <line key={`${ann.id}-${i}`} x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke={ann.color} strokeWidth={Math.max(1.5, 1.5 * scale)} />;
+            });
           }
           if (ann.kind === "strikeout") {
-            return ann.rects.map((r, i) => (
-              <line key={`${ann.id}-${i}`} x1={r.x * 1000} y1={(r.y + r.height / 2) * 1000} x2={(r.x + r.width) * 1000} y2={(r.y + r.height / 2) * 1000} stroke={ann.color} strokeWidth={3} />
-            ));
+            return ann.rects.map((r, i) => {
+              const p1 = mapper.toView(r.x, r.y + r.height / 2);
+              const p2 = mapper.toView(r.x + r.width, r.y + r.height / 2);
+              return <line key={`${ann.id}-${i}`} x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke={ann.color} strokeWidth={Math.max(1.5, 1.5 * scale)} />;
+            });
           }
           if (ann.kind === "ink") {
-            return <polyline key={ann.id} points={ann.points.map((p) => `${p.x * 1000},${p.y * 1000}`).join(" ")} fill="none" stroke={ann.color} strokeWidth={ann.width * 1.5} strokeLinecap="round" strokeLinejoin="round" />;
+            const pts = ann.points.map((p) => { const v = mapper.toView(p.x, p.y); return `${v.x},${v.y}`; }).join(" ");
+            return <polyline key={ann.id} points={pts} fill="none" stroke={ann.color} strokeWidth={ann.width * scale} strokeLinecap="round" strokeLinejoin="round" />;
           }
           if (ann.kind === "shape") {
+            const p1 = mapper.toView(ann.x1, ann.y1);
+            const p2 = mapper.toView(ann.x2, ann.y2);
             if (ann.shape === "rect") {
-              return <rect key={ann.id} x={Math.min(ann.x1, ann.x2) * 1000} y={Math.min(ann.y1, ann.y2) * 1000} width={Math.abs(ann.x2 - ann.x1) * 1000} height={Math.abs(ann.y2 - ann.y1) * 1000} fill="none" stroke={ann.color} strokeWidth={ann.width * 1.5} />;
+              return <rect key={ann.id} x={Math.min(p1.x, p2.x)} y={Math.min(p1.y, p2.y)} width={Math.abs(p2.x - p1.x)} height={Math.abs(p2.y - p1.y)} fill="none" stroke={ann.color} strokeWidth={ann.width * scale} />;
             }
-            return <line key={ann.id} x1={ann.x1 * 1000} y1={ann.y1 * 1000} x2={ann.x2 * 1000} y2={ann.y2 * 1000} stroke={ann.color} strokeWidth={ann.width * 1.5} />;
+            return <line key={ann.id} x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke={ann.color} strokeWidth={ann.width * scale} />;
           }
           return null;
         })}
-        {draftInk && <polyline points={draftInk.map((p) => `${p.x * 1000},${p.y * 1000}`).join(" ")} fill="none" stroke={color === "#fef08a" ? "#dc2626" : color} strokeWidth={3} />}
+        {draftInk && <polyline points={draftInk.map((p) => `${p.x},${p.y}`).join(" ")} fill="none" stroke={color === "#fef08a" ? "#dc2626" : color} strokeWidth={2.5 * scale} />}
         {draftBox && (
           <rect
-            x={Math.min(draftBox.x1, draftBox.x2) * 1000}
-            y={Math.min(draftBox.y1, draftBox.y2) * 1000}
-            width={Math.abs(draftBox.x2 - draftBox.x1) * 1000}
-            height={Math.abs(draftBox.y2 - draftBox.y1) * 1000}
+            x={Math.min(draftBox.x1, draftBox.x2)}
+            y={Math.min(draftBox.y1, draftBox.y2)}
+            width={Math.abs(draftBox.x2 - draftBox.x1)}
+            height={Math.abs(draftBox.y2 - draftBox.y1)}
             fill={tool === "whiteout" ? "#ffffff" : color}
             fillOpacity={tool === "whiteout" ? 0.9 : 0.25}
             stroke="var(--accent)"
-            strokeWidth={2}
+            strokeWidth={1.5}
             strokeDasharray="6 4"
           />
         )}
@@ -297,8 +424,9 @@ function PdfPageCard({
       {/* Interactive overlay annotations (notes, textboxes, whiteout-replace, images/signatures) */}
       {annotations.map((ann) => {
         if (ann.kind === "note") {
+          const pos = mapper.toView(ann.x, ann.y);
           return (
-            <div key={ann.id} className="pdf-ann-interactive pdf-note-box" style={{ left: `${ann.x * 100}%`, top: `${ann.y * 100}%`, background: ann.color }}>
+            <div key={ann.id} className="pdf-ann-interactive pdf-note-box" style={{ left: pos.x, top: pos.y, background: ann.color }}>
               {editing ? (
                 <>
                   <textarea value={ann.text} rows={2} onChange={(e) => onUpdateAnn(ann.id, { text: e.target.value })} />
@@ -311,15 +439,16 @@ function PdfPageCard({
           );
         }
         if (ann.kind === "textbox" || ann.kind === "whiteout") {
+          const box = pdfRectToViewBox(ann, mapper);
           return (
             <div
               key={ann.id}
               className={`pdf-ann-interactive ${ann.kind === "whiteout" ? "pdf-whiteout-box" : "pdf-text-box"}${selectedAnn === ann.id ? " on" : ""}`}
               style={{
-                left: `${ann.x * 100}%`,
-                top: `${ann.y * 100}%`,
-                width: `${ann.width * 100}%`,
-                minHeight: `${ann.height * 100}%`,
+                left: box.left,
+                top: box.top,
+                width: Math.max(36, box.width),
+                minHeight: Math.max(20, box.height),
                 background: ann.kind === "whiteout" ? ann.bgColor : "transparent",
                 color: ann.color,
                 fontSize: ann.fontSize * scale,
@@ -343,11 +472,12 @@ function PdfPageCard({
           );
         }
         if (ann.kind === "image") {
+          const box = pdfRectToViewBox(ann, mapper);
           return (
             <div
               key={ann.id}
               className="pdf-ann-interactive pdf-img-stamp"
-              style={{ left: `${ann.x * 100}%`, top: `${ann.y * 100}%`, width: `${ann.width * 100}%`, height: `${ann.height * 100}%` }}
+              style={{ left: box.left, top: box.top, width: Math.max(24, box.width), height: Math.max(16, box.height) }}
             >
               <img src={ann.dataUrl} alt="Stamped image" draggable={false} />
               {editing && <button type="button" className="pdf-ann-del" onClick={() => onDeleteAnn(ann.id)} title="Remove image">×</button>}
@@ -359,12 +489,13 @@ function PdfPageCard({
 
       {/* Interactive AcroForm fields overlay in Edit mode */}
       {editing && spec.source === "base" && formFields.map((field) => {
-        const val = formValues[field.name] ?? field.value;
+        const val = field.name in formValues ? formValues[field.name] : field.value;
+        const box = pdfRectToViewBox(field.rect, mapper);
         const style = {
-          left: `${field.rect.x * 100}%`,
-          top: `${field.rect.y * 100}%`,
-          width: `${Math.max(0.03, field.rect.width) * 100}%`,
-          height: `${Math.max(0.02, field.rect.height) * 100}%`,
+          left: box.left,
+          top: box.top,
+          width: Math.max(18, box.width),
+          height: Math.max(16, box.height),
         };
         if (field.kind === "checkbox") {
           return (
@@ -377,6 +508,22 @@ function PdfPageCard({
               checked={Boolean(val)}
               onChange={(e) => onFormChange(field.name, e.target.checked)}
             />
+          );
+        }
+        if (field.kind === "optionList" && field.options?.length) {
+          const selected = Array.isArray(val) ? val : val ? [String(val)] : [];
+          return (
+            <select
+              key={field.name}
+              multiple
+              aria-label={field.name}
+              className="pdf-form-field pdf-form-list"
+              style={{ ...style, height: Math.max(48, box.height) }}
+              value={selected}
+              onChange={(e) => onFormChange(field.name, Array.from(e.target.selectedOptions, (o) => o.value))}
+            >
+              {field.options.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+            </select>
           );
         }
         if ((field.kind === "dropdown" || field.kind === "radio") && field.options?.length) {
@@ -412,7 +559,7 @@ function PdfPageCard({
   );
 }
 
-export default function PdfViewer({ file, session, editing, streamUrl }: PdfViewerProps) {
+export default function PdfViewer({ file, session, editing }: PdfViewerProps) {
   const key = pdfKey(file);
   const scrollRef = useRef<HTMLDivElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
@@ -435,14 +582,36 @@ export default function PdfViewer({ file, session, editing, streamUrl }: PdfView
   const loadBase = useCallback(async (pwd?: string) => {
     setLoadError(null);
     try {
-      const pdfjs = await loadPdfjs();
-      const src = session.baseBytes
-        ? { data: session.baseBytes.slice(), useWasm: false, enableXfa: false, ...(pwd ? { password: pwd } : {}) }
-        : streamUrl
-          ? { url: streamUrl, useWasm: false, enableXfa: false, ...(pwd ? { password: pwd } : {}) }
-          : null;
-      if (!src) return;
-      const task = pdfjs.getDocument(src);
+      let task;
+      if (session.baseBytes) {
+        task = await openPdfJsDocument({
+          data: session.baseBytes.slice(),
+          useWasm: false,
+          enableXfa: false,
+          ...(pwd ? { password: pwd } : {}),
+        });
+      } else if (session.tooLarge && session.stamp && session.stamp.size > 0) {
+        // Large (>64 MB) read-only PDFs stream via bounded `pdf_range` IPC chunks instead of `hmfile`'s 50 MB cap.
+        const pdfjs = await loadPdfjs();
+        const totalSize = session.stamp.size;
+        const firstChunk = await pdfRange(file.notebook, file.path, 0, Math.min(RANGE_CHUNK, totalSize));
+        const transport = new pdfjs.PDFDataRangeTransport(totalSize, firstChunk);
+        transport.requestDataRange = (begin: number, end: number) => {
+          void pdfRange(file.notebook, file.path, begin, Math.max(0, end - begin))
+            .then((chunk) => transport.onDataRange(begin, chunk))
+            .catch(() => { transport.abort(); });
+        };
+        task = await openPdfJsDocument({
+          range: transport,
+          rangeChunkSize: RANGE_CHUNK,
+          useWasm: false,
+          enableXfa: false,
+          ...(pwd ? { password: pwd } : {}),
+        });
+      } else {
+        return;
+      }
+
       const doc = await task.promise;
       setNeedPassword(false);
       setBaseDoc(doc);
@@ -473,12 +642,16 @@ export default function PdfViewer({ file, session, editing, streamUrl }: PdfView
         setLoadError(classify(e).message);
       }
     }
-  }, [session.baseBytes, streamUrl]);
+  }, [session.baseBytes, session.tooLarge, session.stamp, file.notebook, file.path]);
 
   useEffect(() => {
     let cleanup: (() => void) | undefined;
-    void loadBase().then((fn) => { cleanup = fn; });
-    return () => { cleanup?.(); };
+    let disposed = false;
+    void loadBase().then((fn) => {
+      if (disposed) fn?.();
+      else cleanup = fn;
+    });
+    return () => { disposed = true; cleanup?.(); };
   }, [loadBase]);
 
   useEffect(() => {
@@ -486,10 +659,10 @@ export default function PdfViewer({ file, session, editing, streamUrl }: PdfView
     let live = true;
     const tasks: { destroy(): Promise<void> }[] = [];
     void (async () => {
-      const pdfjs = await loadPdfjs();
       const loaded: (PDFDocumentProxy | null)[] = [];
       for (const bytes of session.mergedSources) {
-        const task = pdfjs.getDocument({ data: bytes.slice(), useWasm: false, enableXfa: false });
+        const task = await openPdfJsDocument({ data: bytes.slice(), useWasm: false, enableXfa: false });
+        if (!live) { void task.destroy(); return; }
         tasks.push(task);
         loaded.push(await task.promise.catch(() => null));
       }
@@ -523,7 +696,7 @@ export default function PdfViewer({ file, session, editing, streamUrl }: PdfView
     });
     const targetPage = pages[activePage] ?? pages[0];
     if (!targetPage) return;
-    addPdfAnnotation(key, { id: uid("img"), pageId: targetPage.id, kind: "image", x: 0.15, y: 0.15, width: 0.3, height: 0.18, dataUrl });
+    addPdfAnnotation(key, { id: uid("img"), pageId: targetPage.id, kind: "image", x: 90, y: 540, width: 180, height: 120, dataUrl });
   };
 
   const handleMergePdf = async () => {
@@ -546,22 +719,19 @@ export default function PdfViewer({ file, session, editing, streamUrl }: PdfView
     const indices = selectedPages.size
       ? [...selectedPages].sort((a, b) => a - b)
       : [activePage];
-    const baseIndices = indices
-      .map((i) => pages[i])
-      .filter((p): p is PdfPageSpec => !!p && p.source === "base" && p.sourcePageIndex !== undefined)
-      .map((p) => p.sourcePageIndex!);
-    if (!baseIndices.length) {
-      toast("Save merged/blank pages first before extracting them.", "warn");
+    const specs = indices.map((i) => pages[i]).filter((p): p is PdfPageSpec => !!p);
+    if (!specs.length) {
+      toast("Select at least one page to extract.", "warn");
       return;
     }
     try {
-      const extracted = await extractPdfPages(session.baseBytes, baseIndices);
+      const extracted = await extractPdfPageSpecs(session.baseBytes, session.mergedSources, specs, session.edits.annotations);
       const folder = folderOf(file.path);
       const stem = fileName(file.path).replace(/\.pdf$/i, "");
       const outName = `${stem} (extracted ${Date.now().toString(36).slice(-4)}).pdf`;
       const outPath = folder ? `${folder}/${outName}` : outName;
       await createPdfBytes(file.notebook, outPath, extracted);
-      toast(`Extracted ${baseIndices.length} ${baseIndices.length === 1 ? "page" : "pages"} to ${outName}`);
+      toast(`Extracted ${specs.length} ${specs.length === 1 ? "page" : "pages"} to ${outName}`);
     } catch (e) {
       toast(classify(e).message, "error");
     }
@@ -749,7 +919,7 @@ export default function PdfViewer({ file, session, editing, streamUrl }: PdfView
             setShowSig(false);
             const targetPage = pages[activePage] ?? pages[0];
             if (!targetPage) return;
-            addPdfAnnotation(key, { id: uid("sig"), pageId: targetPage.id, kind: "image", x: 0.55, y: 0.72, width: 0.28, height: 0.1, dataUrl });
+            addPdfAnnotation(key, { id: uid("sig"), pageId: targetPage.id, kind: "image", x: 330, y: 120, width: 170, height: 70, dataUrl });
             toast("Signature placed on page. Press Ctrl+S to save.");
           }}
         />

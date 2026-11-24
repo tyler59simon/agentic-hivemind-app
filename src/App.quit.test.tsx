@@ -48,5 +48,28 @@ describe("tray Quit", () => {
     await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     expect(invoked).toContain("app_quit");
     await act(async () => root.unmount());
+    el.remove();
+  });
+
+  it("asks before quitting when a Word (.docx) or PDF file has unsaved edits", async () => {
+    invoked.length = 0;
+    useWorkspace.setState({ panes: [{ id: "p0", tabs: [], active: null }], focused: "p0", dirty: {}, reveal: null });
+    useWorkspace.getState().openTab({ kind: "file", file: { notebook: "nb-1", path: "Contract.pdf" } });
+    const tab = useWorkspace.getState().panes[0].tabs[0];
+    useWorkspace.getState().setDirty(tab.id, true);
+    const el = document.createElement("div");
+    document.body.append(el);
+    const root = createRoot(el);
+    await act(async () => { root.render(<Host />); });
+    await act(async () => { await handlers.get("quit-requested")!(); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(invoked).not.toContain("app_quit");
+    expect(document.body.textContent).toContain("Unsaved Word (.docx) or PDF edits");
+    const quit = [...document.querySelectorAll("button")].find((b) => b.textContent === "Quit")!;
+    await act(async () => { quit.click(); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(invoked).toContain("app_quit");
+    await act(async () => root.unmount());
+    el.remove();
   });
 });

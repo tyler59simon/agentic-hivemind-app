@@ -1,6 +1,6 @@
 //! Surgical OOXML `.docx` writer: patches `<w:body>` and new media/relationships while keeping untouched
 //! archive entries (`styles.xml`, `header*.xml`, `footer*.xml`, `theme/*`, `docProps/*`, `<w:sectPr>`) verbatim.
-use super::{ext_for_mime, open_zip_safe, read_entry_capped, NewDocxMedia, MAX_TOTAL_EXPANDED};
+use super::{ext_for_mime, open_zip_safe, read_entry_capped, NewDocxMedia, MAX_SINGLE_ENTRY, MAX_TOTAL_EXPANDED, MAX_ZIP_ENTRIES};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use quick_xml::events::Event;
 use quick_xml::Reader;
@@ -140,13 +140,153 @@ fn next_rid(rels: &[RelEntry]) -> String {
     format!("rId{}", rels.len() + 1)
 }
 
-fn extract_sect_pr(doc_xml: &str) -> String {
-    if let Some(start) = doc_xml.rfind("<w:sectPr")
-        && let Some(end_rel) = doc_xml[start..].find("</w:sectPr>")
-    {
-        return doc_xml[start..start + end_rel + "</w:sectPr>".len()].to_string();
+/// Extract ONLY the body-level trailing `<w:sectPr>` (direct child of `<w:body>`),
+/// leaving paragraph-level `<w:pPr><w:sectPr>` section breaks to their paragraphs.
+fn extract_body_sect_pr(doc_xml: &str) -> String {
+    let mut reader = Reader::from_str(doc_xml);
+    let mut in_body = false;
+    let mut body_depth: usize = 0;
+    let mut found: Option<String> = None;
+    loop {
+        let before = reader.buffer_position() as usize;
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let ln = e.local_name(); let tag = ln.as_ref();
+                if !in_body {
+                    if tag == "body" {
+                        in_body = true;
+                        body_depth = 0;
+                    }
+                    continue;
+                }
+                if body_depth == 0 && tag == "sectPr" {
+                    let start_idx = before.min(doc_xml.len());
+                    let tag_start = doc_xml[start_idx..].find('<').map(|i| start_idx + i).unwrap_or(start_idx);
+                    let _ = reader.read_to_end(e.to_end().name());
+                    let end_idx = (reader.buffer_position() as usize).min(doc_xml.len());
+                    found = Some(doc_xml[tag_start..end_idx].to_string());
+                } else {
+                    body_depth += 1;
+                }
+            }
+            Ok(Event::Empty(e)) if in_body && body_depth == 0 && e.local_name().as_ref() == "sectPr" => {
+                let start_idx = before.min(doc_xml.len());
+                let tag_start = doc_xml[start_idx..].find('<').map(|i| start_idx + i).unwrap_or(start_idx);
+                let end_idx = (reader.buffer_position() as usize).min(doc_xml.len());
+                found = Some(doc_xml[tag_start..end_idx].to_string());
+            }
+            Ok(Event::End(e)) if in_body => {
+                if body_depth == 0 && e.local_name().as_ref() == "body" {
+                    break;
+                }
+                body_depth = body_depth.saturating_sub(1);
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
     }
-    r#"<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>"#.into()
+    found.unwrap_or_else(|| {
+        r#"<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>"#.into()
+    })
+}
+
+#[derive(Default)]
+struct NumberingInfo {
+    known_num_ids: HashSet<String>,
+    existing_bullet_id: Option<String>,
+    existing_ordered_id: Option<String>,
+    max_num_id: u32,
+    max_abs_id: u32,
+}
+
+fn attr_val(e: &quick_xml::events::BytesStart, want_local: &str) -> Option<String> {
+    for a in e.attributes().flatten() {
+        if a.key.local_name().as_ref() == want_local {
+            let raw: &str = a.value.as_ref();
+            return Some(quick_xml::escape::unescape(raw).map(|s| s.into_owned()).unwrap_or_else(|_| raw.to_string()));
+        }
+    }
+    None
+}
+
+fn analyze_numbering(xml: &str) -> NumberingInfo {
+    let mut info = NumberingInfo::default();
+    let mut abs_fmt: HashMap<String, String> = HashMap::new();
+    let mut num_to_abs: Vec<(String, String)> = Vec::new();
+    let mut reader = Reader::from_str(xml);
+    let mut cur_abs: Option<String> = None;
+    let mut cur_num: Option<String> = None;
+    let mut cur_ilvl: Option<u8> = None;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let ln = e.local_name(); let tag = ln.as_ref();
+                match tag {
+                    "abstractNum" => {
+                        cur_abs = attr_val(&e, "abstractNumId");
+                        if let Some(n) = cur_abs.as_deref().and_then(|v| v.parse::<u32>().ok()) {
+                            info.max_abs_id = info.max_abs_id.max(n);
+                        }
+                    }
+                    "lvl" => cur_ilvl = attr_val(&e, "ilvl").and_then(|v| v.parse().ok()),
+                    "num" => {
+                        cur_num = attr_val(&e, "numId");
+                        if let Some(ref id) = cur_num {
+                            info.known_num_ids.insert(id.clone());
+                            if let Ok(n) = id.parse::<u32>() {
+                                info.max_num_id = info.max_num_id.max(n);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                let ln = e.local_name(); let tag = ln.as_ref();
+                if tag == "numFmt" && cur_ilvl.unwrap_or(0) == 0 && let Some(ref abs) = cur_abs {
+                    let fmt = attr_val(&e, "val").unwrap_or_default().to_ascii_lowercase();
+                    abs_fmt.entry(abs.clone()).or_insert(fmt);
+                } else if tag == "abstractNumId" && let (Some(n), Some(v)) = (&cur_num, attr_val(&e, "val")) {
+                    num_to_abs.push((n.clone(), v));
+                }
+            }
+            Ok(Event::End(e)) => match e.local_name().as_ref() {
+                "abstractNum" => cur_abs = None,
+                "lvl" => cur_ilvl = None,
+                "num" => cur_num = None,
+                _ => {}
+            },
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    for (num_id, abs_id) in num_to_abs {
+        if let Some(fmt) = abs_fmt.get(&abs_id) {
+            if fmt == "bullet" && info.existing_bullet_id.is_none() {
+                info.existing_bullet_id = Some(num_id);
+            } else if fmt == "decimal" && info.existing_ordered_id.is_none() {
+                info.existing_ordered_id = Some(num_id);
+            }
+        }
+    }
+    info
+}
+
+fn patch_numbering_xml(orig: &str, new_abs: &[String], new_nums: &[String]) -> String {
+    let mut out = orig.to_string();
+    if !new_abs.is_empty() {
+        let joined = new_abs.join("\n  ");
+        if let Some(pos) = out.find("<w:num ").or_else(|| out.rfind("</w:numbering>")) {
+            out.insert_str(pos, &format!("{joined}\n  "));
+        }
+    }
+    if !new_nums.is_empty() {
+        let joined = new_nums.join("\n  ");
+        if let Some(pos) = out.rfind("</w:numbering>") {
+            out.insert_str(pos, &format!("  {joined}\n"));
+        }
+    }
+    out
 }
 
 fn extract_doc_open_tag(doc_xml: &str) -> String {
@@ -176,9 +316,51 @@ struct WriteCtx {
     media_rid: HashMap<String, String>,
     next_docpr_id: u32,
     used_lists: bool,
+    has_existing_numbering: bool,
+    numbering: NumberingInfo,
+    added_abs_xml: Vec<String>,
+    added_num_xml: Vec<String>,
 }
 
 impl WriteCtx {
+    fn resolve_list_num_id(&mut self, ordered: bool, requested: Option<&str>) -> String {
+        self.used_lists = true;
+        if let Some(id) = requested
+            && !id.is_empty()
+            && self.numbering.known_num_ids.contains(id)
+        {
+            return id.to_string();
+        }
+        if !self.has_existing_numbering {
+            return if ordered { "2".into() } else { "1".into() };
+        }
+        if !ordered && let Some(ref id) = self.numbering.existing_bullet_id {
+            return id.clone();
+        }
+        if ordered && let Some(ref id) = self.numbering.existing_ordered_id {
+            return id.clone();
+        }
+        self.numbering.max_abs_id += 1;
+        self.numbering.max_num_id += 1;
+        let abs_id = self.numbering.max_abs_id;
+        let num_id = self.numbering.max_num_id.to_string();
+        let abs_xml = if ordered {
+            format!(r#"<w:abstractNum w:abstractNumId="{abs_id}"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum>"#)
+        } else {
+            format!(r#"<w:abstractNum w:abstractNumId="{abs_id}"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum>"#)
+        };
+        let num_xml = format!(r#"<w:num w:numId="{num_id}"><w:abstractNumId w:val="{abs_id}"/></w:num>"#);
+        self.added_abs_xml.push(abs_xml);
+        self.added_num_xml.push(num_xml);
+        self.numbering.known_num_ids.insert(num_id.clone());
+        if ordered {
+            self.numbering.existing_ordered_id = Some(num_id.clone());
+        } else {
+            self.numbering.existing_bullet_id = Some(num_id.clone());
+        }
+        num_id
+    }
+
     fn link_rid(&mut self, href: &str) -> String {
         if let Some(existing) = self.rels.iter().find(|r| r.rel_type == HYPERLINK_REL_TYPE && r.target == href) {
             return existing.id.clone();
@@ -278,14 +460,14 @@ fn emit_inlines(nodes: &[Value], ctx: &mut WriteCtx) -> String {
     out
 }
 
-fn emit_paragraph(node: &Value, style: Option<&str>, num_id: Option<u8>, ctx: &mut WriteCtx) -> String {
+fn emit_paragraph(node: &Value, style: Option<&str>, num_id: Option<&str>, ctx: &mut WriteCtx) -> String {
     let mut ppr = String::new();
     if let Some(st) = style {
         ppr.push_str(&format!(r#"<w:pStyle w:val="{}"/>"#, escape_xml(st)));
     }
     if let Some(nid) = num_id {
         ctx.used_lists = true;
-        ppr.push_str(&format!(r#"<w:numPr><w:ilvl w:val="0"/><w:numId w:val="{nid}"/></w:numPr>"#));
+        ppr.push_str(&format!(r#"<w:numPr><w:ilvl w:val="0"/><w:numId w:val="{}"/></w:numPr>"#, escape_xml(nid)));
     }
     if let Some(al) = node["attrs"]["textAlign"].as_str() {
         let jc = match al {
@@ -297,6 +479,12 @@ fn emit_paragraph(node: &Value, style: Option<&str>, num_id: Option<u8>, ctx: &m
         };
         if let Some(v) = jc {
             ppr.push_str(&format!(r#"<w:jc w:val="{v}"/>"#));
+        }
+    }
+    if let Some(sect_xml) = node["attrs"]["sectPrXml"].as_str() {
+        let trimmed = sect_xml.trim();
+        if trimmed.starts_with("<w:sectPr") || trimmed.starts_with("<sectPr") {
+            ppr.push_str(trimmed);
         }
     }
     let inner = node["content"].as_array().map(|a| emit_inlines(a, ctx)).unwrap_or_default();
@@ -319,14 +507,16 @@ fn emit_block(node: &Value, ctx: &mut WriteCtx) -> String {
             .map(|kids| kids.iter().map(|k| emit_paragraph(k, Some("Quote"), None, ctx)).collect::<String>())
             .unwrap_or_default(),
         "bulletList" | "orderedList" => {
-            let nid = if node["type"].as_str() == Some("orderedList") { 2 } else { 1 };
+            let ordered = node["type"].as_str() == Some("orderedList");
+            let requested = node["attrs"]["listNumId"].as_str();
+            let nid = ctx.resolve_list_num_id(ordered, requested);
             let mut out = String::new();
             if let Some(items) = node["content"].as_array() {
                 for li in items {
                     if let Some(blocks) = li["content"].as_array() {
                         for b in blocks {
                             if b["type"].as_str() == Some("paragraph") {
-                                out.push_str(&emit_paragraph(b, None, Some(nid), ctx));
+                                out.push_str(&emit_paragraph(b, None, Some(&nid), ctx));
                             } else {
                                 out.push_str(&emit_block(b, ctx));
                             }
@@ -435,7 +625,10 @@ pub fn patch_docx(original_zip: &[u8], doc: &Value, new_media: &HashMap<String, 
     let orig_rels_xml = read_entry_capped(&mut src, "word/_rels/document.xml.rels", &mut budget)?
         .and_then(|b| String::from_utf8(b).ok())
         .unwrap_or_else(|| DEFAULT_DOC_RELS.to_string());
-    let has_numbering = src.by_name("word/numbering.xml").is_ok();
+    let orig_numbering_xml = read_entry_capped(&mut src, "word/numbering.xml", &mut budget)?
+        .and_then(|b| String::from_utf8(b).ok());
+    let has_numbering = orig_numbering_xml.is_some();
+    let numbering_info = orig_numbering_xml.as_deref().map(analyze_numbering).unwrap_or_default();
 
     let mut rels = parse_rel_entries(&orig_rels_xml);
     let mut media_rid: HashMap<String, String> = HashMap::new();
@@ -450,12 +643,15 @@ pub fn patch_docx(original_zip: &[u8], doc: &Value, new_media: &HashMap<String, 
         }
     }
 
-    // Decode newly added images and assign fresh media paths + rIds.
+    // Decode newly added images and assign fresh media paths + rIds (checking single-entry cap up front).
     let mut extra_files: Vec<(String, Vec<u8>)> = Vec::new();
     let mut extra_exts: HashSet<&'static str> = HashSet::new();
     let mut media_idx = 1usize;
     for (key, item) in new_media {
         let bytes = B64.decode(item.base64.trim()).map_err(|e| format!("Invalid image data for {key}: {e}"))?;
+        if bytes.len() as u64 > MAX_SINGLE_ENTRY {
+            return Err("Inserted image exceeds the 32 MB per-entry safety limit, so nothing was written".into());
+        }
         let ext = ext_for_mime(&item.mime);
         extra_exts.insert(ext);
         let mut target_rel = format!("media/hm_image_{media_idx}.{ext}");
@@ -470,13 +666,32 @@ pub fn patch_docx(original_zip: &[u8], doc: &Value, new_media: &HashMap<String, 
         media_idx += 1;
     }
 
-    let mut ctx = WriteCtx { rels, media_rid, next_docpr_id: 100, used_lists: false };
+    let mut ctx = WriteCtx {
+        rels,
+        media_rid,
+        next_docpr_id: 100,
+        used_lists: false,
+        has_existing_numbering: has_numbering,
+        numbering: numbering_info,
+        added_abs_xml: Vec::new(),
+        added_num_xml: Vec::new(),
+    };
     let body_xml: String = doc["content"]
         .as_array()
         .map(|blocks| blocks.iter().map(|b| emit_block(b, &mut ctx)).collect())
         .unwrap_or_else(|| "<w:p/>".into());
 
     let added_numbering = ctx.used_lists && !has_numbering;
+    let updated_numbering_xml = if let Some(ref orig_num) = orig_numbering_xml {
+        if !ctx.added_abs_xml.is_empty() || !ctx.added_num_xml.is_empty() {
+            Some(patch_numbering_xml(orig_num, &ctx.added_abs_xml, &ctx.added_num_xml))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     if added_numbering {
         let rid = next_rid(&ctx.rels);
         ctx.rels.push(RelEntry {
@@ -488,7 +703,7 @@ pub fn patch_docx(original_zip: &[u8], doc: &Value, new_media: &HashMap<String, 
     }
 
     let doc_open = extract_doc_open_tag(&orig_doc_xml);
-    let sect_pr = extract_sect_pr(&orig_doc_xml);
+    let sect_pr = extract_body_sect_pr(&orig_doc_xml);
     let new_doc_xml = format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n{doc_open}<w:body>{body_xml}{sect_pr}</w:body></w:document>");
     let new_rels_xml = serialize_rels(&ctx.rels);
 
@@ -496,43 +711,58 @@ pub fn patch_docx(original_zip: &[u8], doc: &Value, new_media: &HashMap<String, 
     let mut dst = ZipWriter::new(Cursor::new(&mut out_buf));
     let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
     let mut wrote_rels = false;
+    let mut entry_count: usize = 0;
+    let mut total_expanded: u64 = 0;
+
+    let mut write_checked = |z: &mut ZipWriter<Cursor<&mut Vec<u8>>>, name: &str, data: &[u8]| -> Result<(), String> {
+        entry_count += 1;
+        if entry_count > MAX_ZIP_ENTRIES {
+            return Err(format!("This .docx would exceed the {MAX_ZIP_ENTRIES}-entry safety limit, so nothing was written"));
+        }
+        let len = data.len() as u64;
+        if len > MAX_SINGLE_ENTRY {
+            return Err(format!("Entry {name} exceeds the 32 MB safety limit, so nothing was written"));
+        }
+        total_expanded = total_expanded.saturating_add(len);
+        if total_expanded > MAX_TOTAL_EXPANDED {
+            return Err("This .docx would exceed the 64 MB archive safety limit, so nothing was written".into());
+        }
+        z.start_file(name, opts).map_err(|e| e.to_string())?;
+        z.write_all(data).map_err(|e| e.to_string())?;
+        Ok(())
+    };
 
     for i in 0..src.len() {
         let mut f = src.by_index(i).map_err(|e| format!("Could not copy .docx entry: {e}"))?;
         let name = f.name().to_string();
         if name == "word/document.xml" {
-            dst.start_file(&name, opts).map_err(|e| e.to_string())?;
-            dst.write_all(new_doc_xml.as_bytes()).map_err(|e| e.to_string())?;
+            write_checked(&mut dst, &name, new_doc_xml.as_bytes())?;
         } else if name == "word/_rels/document.xml.rels" {
             wrote_rels = true;
-            dst.start_file(&name, opts).map_err(|e| e.to_string())?;
-            dst.write_all(new_rels_xml.as_bytes()).map_err(|e| e.to_string())?;
+            write_checked(&mut dst, &name, new_rels_xml.as_bytes())?;
+        } else if name == "word/numbering.xml" && let Some(ref patched_num) = updated_numbering_xml {
+            write_checked(&mut dst, &name, patched_num.as_bytes())?;
         } else if name == "[Content_Types].xml" {
             let mut raw = Vec::new();
             f.read_to_end(&mut raw).map_err(|e| e.to_string())?;
             let ct = String::from_utf8(raw).unwrap_or_else(|_| DEFAULT_CONTENT_TYPES.to_string());
             let updated = ensure_content_types(&ct, &extra_exts, added_numbering);
-            dst.start_file(&name, opts).map_err(|e| e.to_string())?;
-            dst.write_all(updated.as_bytes()).map_err(|e| e.to_string())?;
+            write_checked(&mut dst, &name, updated.as_bytes())?;
         } else {
             let mut raw = Vec::new();
             f.read_to_end(&mut raw).map_err(|e| e.to_string())?;
-            dst.start_file(&name, opts).map_err(|e| e.to_string())?;
-            dst.write_all(&raw).map_err(|e| e.to_string())?;
+            write_checked(&mut dst, &name, &raw)?;
         }
     }
 
     if !wrote_rels {
-        dst.start_file("word/_rels/document.xml.rels", opts).map_err(|e| e.to_string())?;
-        dst.write_all(new_rels_xml.as_bytes()).map_err(|e| e.to_string())?;
+        write_checked(&mut dst, "word/_rels/document.xml.rels", new_rels_xml.as_bytes())?;
     }
     if added_numbering {
-        dst.start_file("word/numbering.xml", opts).map_err(|e| e.to_string())?;
-        dst.write_all(DEFAULT_NUMBERING.as_bytes()).map_err(|e| e.to_string())?;
+        write_checked(&mut dst, "word/numbering.xml", DEFAULT_NUMBERING.as_bytes())?;
     }
     for (name, data) in extra_files {
-        dst.start_file(&name, opts).map_err(|e| e.to_string())?;
-        dst.write_all(&data).map_err(|e| e.to_string())?;
+        write_checked(&mut dst, &name, &data)?;
     }
 
     dst.finish().map_err(|e| format!("Could not write patched .docx: {e}"))?;

@@ -223,4 +223,85 @@ mod tests {
         }
         assert!(open_zip_safe(&buf).unwrap_err().contains("Unsafe archive entry"));
     }
+
+    #[test]
+    fn xml_refs_section_breaks_and_custom_numbering_survive_patch() {
+        let base = write::blank_docx().unwrap();
+        let mut custom = Vec::new();
+        {
+            let mut src = ZipArchive::new(Cursor::new(&base)).unwrap();
+            let mut dst = zip::ZipWriter::new(Cursor::new(&mut custom));
+            let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            for i in 0..src.len() {
+                let mut f = src.by_index(i).unwrap();
+                let name = f.name().to_string();
+                let mut data = Vec::new();
+                f.read_to_end(&mut data).unwrap();
+                if name == "word/document.xml" {
+                    let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p><w:pPr><w:sectPr><w:pgSz w:w="15840" w:h="12240" w:orient="landscape"/></w:sectPr></w:pPr><w:r><w:t>R&amp;D &lt;2026&gt; &#x20AC;100</w:t></w:r></w:p>
+    <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="7"/></w:numPr></w:pPr><w:r><w:t>Bullet A</w:t></w:r></w:p>
+    <w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>
+  </w:body>
+</w:document>"#;
+                    dst.start_file(&name, opts).unwrap();
+                    dst.write_all(xml.as_bytes()).unwrap();
+                } else if name == "word/numbering.xml" {
+                    // Intentionally assign numId="1" to decimal and numId="7" to bullet (opposite of defaults).
+                    let num_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="10"><w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum>
+  <w:abstractNum w:abstractNumId="20"><w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/></w:lvl></w:abstractNum>
+  <w:num w:numId="1"><w:abstractNumId w:val="10"/></w:num>
+  <w:num w:numId="7"><w:abstractNumId w:val="20"/></w:num>
+</w:numbering>"#;
+                    dst.start_file(&name, opts).unwrap();
+                    dst.write_all(num_xml.as_bytes()).unwrap();
+                } else {
+                    dst.start_file(&name, opts).unwrap();
+                    dst.write_all(&data).unwrap();
+                }
+            }
+            dst.finish().unwrap();
+        }
+
+        let loaded = read::read_docx_bytes(&custom).unwrap();
+        let blocks = loaded.doc["content"].as_array().unwrap();
+        assert_eq!(blocks[0]["content"][0]["text"], "R&D <2026> €100");
+        assert!(blocks[0]["attrs"]["sectPrXml"].as_str().unwrap().contains("landscape"));
+        assert_eq!(blocks[1]["type"], "bulletList");
+        assert_eq!(blocks[1]["attrs"]["listNumId"], "7");
+
+        // Add a brand-new ordered list without listNumId and patch back.
+        let mut edited = loaded.doc.clone();
+        edited["content"].as_array_mut().unwrap().push(serde_json::json!({
+            "type": "orderedList",
+            "content": [{ "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Step 1" }] }] }]
+        }));
+
+        let patched = write::patch_docx(&custom, &edited, &HashMap::new()).unwrap();
+        let reread = read::read_docx_bytes(&patched).unwrap();
+        let rb = reread.doc["content"].as_array().unwrap();
+        assert_eq!(rb[0]["content"][0]["text"], "R&D <2026> €100");
+        assert!(rb[0]["attrs"]["sectPrXml"].as_str().unwrap().contains("landscape"));
+        assert_eq!(rb[1]["type"], "bulletList");
+        assert_eq!(rb[1]["attrs"]["listNumId"], "7");
+        assert_eq!(rb[2]["type"], "orderedList");
+        assert_eq!(rb[2]["attrs"]["listNumId"], "1");
+    }
+
+    #[test]
+    fn patch_rejects_oversized_media_before_writing() {
+        let base = write::blank_docx().unwrap();
+        let parsed = read::read_docx_bytes(&base).unwrap();
+        let mut media = HashMap::new();
+        // >32 MB single entry
+        let huge = vec![0u8; (MAX_SINGLE_ENTRY as usize) + 16];
+        use base64::{engine::general_purpose::STANDARD as B64, Engine};
+        media.insert("new-media-1".into(), NewDocxMedia { mime: "image/png".into(), base64: B64.encode(&huge) });
+        let err = write::patch_docx(&base, &parsed.doc, &media).unwrap_err();
+        assert!(err.contains("32 MB"));
+    }
 }

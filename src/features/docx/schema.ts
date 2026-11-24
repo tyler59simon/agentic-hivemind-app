@@ -1,7 +1,7 @@
 // Tiptap document schema for `.docx` editing: reuses Hivemind's table and list support plus Word marks
 // (underline, text alignment, subscript, superscript, exact hex text color & highlight, inline images, page breaks,
 // and read-only `docxRawBlock` placeholders for preserved Word-only XML).
-import { Mark, Node, getSchema, mergeAttributes, type AnyExtension } from "@tiptap/core";
+import { Extension, Mark, Node, getSchema, mergeAttributes, type AnyExtension } from "@tiptap/core";
 import { Code } from "@tiptap/extension-code";
 import { CodeBlock } from "@tiptap/extension-code-block";
 import { BulletList, ListItem, ListKeymap, OrderedList } from "@tiptap/extension-list";
@@ -97,6 +97,37 @@ export const DocxRawBlock = Node.create({
 
 const InlineCode = Code.extend({ excludes: "" });
 
+/** Preserves paragraph-level OOXML section breaks (`sectPrXml`) and original Word numbering IDs (`listNumId`). */
+const DocxPreservedAttrs = Extension.create({
+  name: "docxPreservedAttrs",
+  addGlobalAttributes() {
+    return [
+      {
+        types: ["paragraph", "heading"],
+        attributes: {
+          sectPrXml: {
+            default: null,
+            parseHTML: (el: HTMLElement) => el.getAttribute("data-docx-sectpr"),
+            renderHTML: (attrs: { sectPrXml?: string | null }) =>
+              attrs.sectPrXml ? { "data-docx-sectpr": attrs.sectPrXml } : {},
+          },
+        },
+      },
+      {
+        types: ["bulletList", "orderedList"],
+        attributes: {
+          listNumId: {
+            default: null,
+            parseHTML: (el: HTMLElement) => el.getAttribute("data-docx-numid"),
+            renderHTML: (attrs: { listNumId?: string | null }) =>
+              attrs.listNumId ? { "data-docx-numid": attrs.listNumId } : {},
+          },
+        },
+      },
+    ];
+  },
+});
+
 export function docxExtensions(): AnyExtension[] {
   return [
     StarterKit.configure({
@@ -128,6 +159,7 @@ export function docxExtensions(): AnyExtension[] {
     DocxImage,
     DocxPageBreak,
     DocxRawBlock,
+    DocxPreservedAttrs,
   ];
 }
 

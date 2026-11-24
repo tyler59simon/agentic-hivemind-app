@@ -22,7 +22,7 @@ import { refreshStore } from "./lib/refresh";
 import { Shell } from "./shell/Shell";
 import { openInbox, openSession, useApp } from "./store";
 import { toast, Toasts } from "./ui/toast";
-import { unsavedUntitled, useWorkspace } from "./workspace/store";
+import { unsavedBinaryFiles, unsavedUntitled, useWorkspace } from "./workspace/store";
 import { onDocsChanged, onFilesChanged, onPageAppended, startDocumentSync, type DocsChanged } from "./documents/sync";
 import { onIndexProgress } from "./features/search/indexState";
 import type { IndexProgress } from "./lib/noteindex";
@@ -82,8 +82,8 @@ function useKeepDrafts() {
 /** Closing the window hides it to the tray while anything runs, or when that is on (the quick-capture hotkey keeps working);
  *  otherwise, with unsaved edits, it asks first (the drafts survive either way). */
 function useCloseGuard() {
-  // Whether any unsaved tab is a never-saved text file, which has no draft.
-  const [asking, setAsking] = useState<{ untitled: boolean } | null>(null);
+  // Whether any unsaved tab has no persisted draft (never-saved text file, or Word/PDF edits).
+  const [asking, setAsking] = useState<{ untitled: boolean; binary: boolean } | null>(null);
   const [keepDrafts, draftDialog] = useKeepDrafts();
   useEffect(() => {
     const win = getCurrentWindow();
@@ -100,7 +100,7 @@ function useCloseGuard() {
       const ws = useWorkspace.getState();
       if (Object.values(ws.dirty).some(Boolean)) {
         e.preventDefault();
-        setAsking({ untitled: unsavedUntitled(ws) });
+        setAsking({ untitled: unsavedUntitled(ws), binary: unsavedBinaryFiles(ws) });
         return;
       }
       // No unsaved tab, but a closed page's draft may still be on its way, or have failed: write or report it first
@@ -109,11 +109,14 @@ function useCloseGuard() {
     });
     return () => { stop.then((unlisten) => unlisten()); };
   }, []);
+  const lostParts: string[] = [];
+  if (asking?.binary) lostParts.push("Unsaved Word (.docx) and PDF edits are not kept as drafts and will be lost.");
+  if (asking?.untitled) lostParts.push("A new text file that was never saved is lost.");
   return (
     <>
       {asking && (
         <Confirm title="Quit with unsaved changes?" danger action="Quit"
-          message={`Some tabs have edits that are not saved. They are kept as drafts and come back when you reopen those notes and pages.${asking.untitled ? " A new text file that was never saved is lost." : ""}`}
+          message={`Some tabs have edits that are not saved. Text notes and pages are kept as drafts and come back when you reopen them.${lostParts.length ? ` ${lostParts.join(" ")}` : ""}`}
           onAnswer={(yes) => { setAsking(null); if (yes) void keepDrafts(() => { void getCurrentWindow().destroy(); }); }} />
       )}
       {draftDialog}
@@ -125,10 +128,16 @@ function useCloseGuard() {
 export function useQuitRequest() {
   const [lines, setLines] = useState<string[] | null>(null);
   const [keepDrafts, draftDialog] = useKeepDrafts();
-  const [untitled, setUntitled] = useState(false);
+  const [unpersisted, setUnpersisted] = useState<{ untitled: boolean; binary: boolean } | null>(null);
   const quit = useCallback(() => keepDrafts(() => { appQuit().catch((e) => toast(String(e), "error")); }), [keepDrafts]);
-  // Tray Quit asks too when a never-saved text file holds text (Codex review of 52051c8, D1).
-  const finish = useCallback(() => { if (unsavedUntitled(useWorkspace.getState())) setUntitled(true); else void quit(); }, [quit]);
+  // Tray Quit asks too when a never-saved text file or unsaved Word/PDF file holds edits without a persisted draft.
+  const finish = useCallback(() => {
+    const ws = useWorkspace.getState();
+    const untitled = unsavedUntitled(ws);
+    const binary = unsavedBinaryFiles(ws);
+    if (untitled || binary) setUnpersisted({ untitled, binary });
+    else void quit();
+  }, [quit]);
   useEffect(() => {
     const stop = listen("quit-requested", async () => {
       quitAck().catch(() => undefined);
@@ -138,13 +147,20 @@ export function useQuitRequest() {
     });
     return () => { stop.then((unlisten) => unlisten()); };
   }, [finish]);
+  const quitTitle = unpersisted?.binary
+    ? "Quit with unsaved changes that will be lost?"
+    : "Quit with an unsaved new text file?";
+  const quitMsg = [
+    unpersisted?.binary ? "Unsaved Word (.docx) or PDF edits are not kept as drafts and will be lost when Hivemind quits." : "",
+    unpersisted?.untitled ? "A new text file that was never saved is lost when Hivemind quits." : "",
+  ].filter(Boolean).join(" ");
   return (
     <>
       {lines && <QuitDialog lines={lines} onKeep={() => setLines(null)} onQuit={() => { setLines(null); finish(); }} />}
-      {untitled && (
-        <Confirm title="Quit with an unsaved new text file?" danger action="Quit"
-          message="A new text file that was never saved is lost when Hivemind quits."
-          onAnswer={(yes) => { setUntitled(false); if (yes) void quit(); }} />
+      {unpersisted && (
+        <Confirm title={quitTitle} danger action="Quit"
+          message={quitMsg}
+          onAnswer={(yes) => { setUnpersisted(null); if (yes) void quit(); }} />
       )}
       {draftDialog}
     </>

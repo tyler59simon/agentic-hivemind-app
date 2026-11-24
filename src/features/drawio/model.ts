@@ -13,6 +13,10 @@ export interface DrawioGeometry {
   sourcePoint?: DrawioPoint;
   targetPoint?: DrawioPoint;
   points?: DrawioPoint[];
+  /** Unknown `<mxGeometry>` attributes preserved verbatim on save. */
+  extraAttrs?: Record<string, string>;
+  /** Unmapped `<mxGeometry>` child elements (e.g. `mxPoint as="offset"`, `mxRectangle as="alternateBounds"`). */
+  extraChildrenXml?: string;
 }
 
 export interface DrawioCell {

@@ -110,6 +110,18 @@ describe("Draw.io XML round-trip and model mutations", () => {
     expect(afterDel.pages[0].cells.some((c) => c.id === s2.id)).toBe(true);
   });
 
+  it("preserves unmapped mxGeometry children (offset, alternateBounds) and extra attributes across edits", () => {
+    const xml = `<mxfile host="app.diagrams.net"><diagram id="d1" name="Page-1"><mxGraphModel><root><mxCell id="0" /><mxCell id="1" parent="0" /><mxCell id="g1" value="Group" vertex="1" parent="1"><mxGeometry x="10" y="20" width="200" height="120" as="geometry" customGeo="1"><mxRectangle x="10" y="20" width="80" height="30" as="alternateBounds" /></mxGeometry></mxCell><mxCell id="e1" value="Edge" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="12" y="-8" as="offset" /></mxGeometry></mxCell></root></mxGraphModel></diagram></mxfile>`;
+    const parsed = parseDrawio(xml);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const moved = moveCells(parsed.doc, 0, new Set(["g1"]), 16, 8);
+    const out = writeDrawio(moved);
+    expect(out).toContain('as="alternateBounds"');
+    expect(out).toContain('as="offset"');
+    expect(out).toContain('customGeo="1"');
+  });
+
   it("rejects malformed XML cleanly without throwing", () => {
     expect(parseDrawio("<mxfile><broken").ok).toBe(false);
     expect(parseDrawio("<notmx/>").ok).toBe(false);

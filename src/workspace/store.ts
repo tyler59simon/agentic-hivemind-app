@@ -58,6 +58,11 @@ export const MAX_PANES = 3;
 export const unsavedUntitled = (s: { panes: Pane[]; dirty: Record<string, boolean> }) =>
   s.panes.some((p) => p.tabs.some((t) => t.kind === "new-file" && s.dirty[t.id]));
 
+/** Whether an open Word (`.docx`) or PDF (`.pdf`) file has unsaved edits. Binary documents do not keep
+ *  persisted drafts, so closing the window or quitting without saving loses those edits. */
+export const unsavedBinaryFiles = (s: { panes: Pane[]; dirty: Record<string, boolean> }) =>
+  s.panes.some((p) => p.tabs.some((t) => t.kind === "file" && !!t.file && (isDocx(t.file.path) || isPdf(t.file.path)) && s.dirty[t.id]));
+
 /** A document is open at most once per pane set; a new note is always its own tab. */
 export const sameTab = (a: Omit<Tab, "id">, b: Tab) => sameDoc(a, b);
 

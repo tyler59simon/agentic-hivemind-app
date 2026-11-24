@@ -4,7 +4,7 @@ import { Ellipsis, Save } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { classify } from "../../lib/errors";
 import { fileName, folderOf, notebooksQuery, pageTitle, revealFile } from "../../lib/notebooks";
-import { assetBase, isLoose } from "../../lib/opens";
+import { isLoose } from "../../lib/opens";
 import { Menu } from "../../ui/Menu";
 import { toast } from "../../ui/toast";
 import { useWorkspace, type Mode, type Tab } from "../../workspace/store";
@@ -35,15 +35,6 @@ export function PdfTab({ tab }: { tab: Tab }) {
   const loose = isLoose(ref);
   const notebook = notebooks.data?.find((n) => n.id === ref.notebook);
   const mode: Mode = tab.mode === "hex" ? "hex" : tab.mode === "edit" || tab.mode === "history" ? tab.mode : "preview";
-
-  // Large (>64 MB) PDFs stream via the existing hmfile Range grant in read-only View mode.
-  const grant = useQuery({
-    queryKey: ["asset-base", ref.notebook, ref.path],
-    queryFn: () => assetBase(ref.notebook, ref.path),
-    enabled: !!session?.tooLarge,
-    refetchOnMount: "always",
-    gcTime: 0,
-  });
 
   useEffect(() => { void openPdf(ref); }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { updateTab(tab.id, { title: pageTitle(ref.path) }); }, [ref.path, tab.id, updateTab]);
@@ -94,7 +85,6 @@ export function PdfTab({ tab }: { tab: Tab }) {
   const dirty = session.status === "dirty" || session.status === "stale";
   const canEdit = session.status !== "readOnly";
   const where = loose ? "Opened file" : [notebook?.title, folderOf(ref.path)].filter(Boolean).join(" · ");
-  const streamUrl = session.tooLarge && grant.data ? `${grant.data}${encodeURIComponent(ref.path).replace(/%2F/g, "/")}` : undefined;
 
   return (
     <div className="note-page file-page">
@@ -112,12 +102,12 @@ export function PdfTab({ tab }: { tab: Tab }) {
               <button
                 type="button"
                 className="primary"
-                disabled={!dirty || session.status === "stale" || session.status === "saving"}
+                disabled={!dirty || session.status === "stale" || session.saving}
                 onClick={() => void doSave()}
                 title="Save PDF (Ctrl+S)"
               >
                 <Save size="1.1em" aria-hidden />
-                {session.status === "saving" ? "Saving…" : "Save"}
+                {session.saving ? "Saving…" : "Save"}
               </button>
             )}
             <Menu label="PDF actions" align="right" button={<Ellipsis size="1.3em" aria-hidden />} className="icon-menu">
@@ -162,7 +152,7 @@ export function PdfTab({ tab }: { tab: Tab }) {
       ) : (
         <div className="note file-editor">
           <Suspense fallback={<div className="center muted">Loading PDF viewer…</div>}>
-            <PdfViewer file={ref} session={session} editing={mode === "edit" && canEdit} streamUrl={streamUrl} />
+            <PdfViewer file={ref} session={session} editing={mode === "edit" && canEdit} />
           </Suspense>
         </div>
       )}

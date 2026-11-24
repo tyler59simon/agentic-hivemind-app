@@ -1,9 +1,10 @@
 // Keeps the documents store and the workspace in step: a tab showing an unsaved page gets the unsaved dot, and a page
 // no tab shows any more is let go (its draft stays). Also routes the notebook watcher's events.
 import type { QueryClient } from "@tanstack/react-query";
+import { movedPath } from "./keys";
 import { isDocx, isPdf, type FilesChanged } from "../lib/notebooks";
-import { refreshDocxOnDisk } from "../features/docx/store";
-import { refreshPdfOnDisk } from "../features/pdf/store";
+import { docxKey, isDocxDirty, refreshDocxOnDisk, releaseDocx, retargetDocx, useDocxStore } from "../features/docx/store";
+import { isPdfDirty, pdfKey, refreshPdfOnDisk, releasePdf, retargetPdf, usePdfStore } from "../features/pdf/store";
 import { lmContainer } from "./adapters/lmdoc";
 import { useWorkspace } from "../workspace/store";
 import { toast } from "../ui/toast";
@@ -15,8 +16,14 @@ let paused = false;
 function apply() {
   if (paused) return;
   const ws = useWorkspace.getState();
-  const { docs, refs } = useDocuments.getState();
+  const { docs, refs, held } = useDocuments.getState();
+  const isHeldRef = (ref: { notebook: string; path: string } | undefined) =>
+    !!ref && held.some((h) => h.notebook === ref.notebook && movedPath(ref.path, h.from, h.from) !== null);
+  const docxSessions = useDocxStore.getState().sessions;
+  const pdfSessions = usePdfStore.getState().sessions;
   const shown = new Set<string>();
+  const shownDocx = new Set<string>();
+  const shownPdf = new Set<string>();
   for (const pane of ws.panes) {
     for (const tab of pane.tabs) {
       // A comparison holds both of its files, and is unsaved when either is (NS-6A).
@@ -28,8 +35,20 @@ function apply() {
         continue;
       }
       if (tab.kind !== "file" || !tab.file) continue;
-      // Binary document tabs (.docx, .pdf) manage their own session & dirty flag.
-      if (isDocx(tab.file.path) || isPdf(tab.file.path)) continue;
+      if (isDocx(tab.file.path)) {
+        const key = docxKey(tab.file);
+        shownDocx.add(key);
+        const dirty = isDocxDirty(docxSessions[key]);
+        if (!!ws.dirty[tab.id] !== dirty) ws.setDirty(tab.id, dirty);
+        continue;
+      }
+      if (isPdf(tab.file.path)) {
+        const key = pdfKey(tab.file);
+        shownPdf.add(key);
+        const dirty = isPdfDirty(pdfSessions[key]);
+        if (!!ws.dirty[tab.id] !== dirty) ws.setDirty(tab.id, dirty);
+        continue;
+      }
       const key = keyOf(tab.file);
       shown.add(key);
       const dirty = isUnsaved(docs[key]);
@@ -37,11 +56,20 @@ function apply() {
     }
   }
   for (const key of Object.keys(refs)) if (!shown.has(key)) release(key);
+  const docxRefs = useDocxStore.getState().refs;
+  for (const key of Object.keys(docxRefs)) if (!shownDocx.has(key) && !isHeldRef(docxRefs[key])) releaseDocx(key);
+  const pdfRefs = usePdfStore.getState().refs;
+  for (const key of Object.keys(pdfRefs)) if (!shownPdf.has(key) && !isHeldRef(pdfRefs[key])) releasePdf(key);
 }
 
 /** Start keeping both stores in step; returns the stop function. */
 export function startDocumentSync() {
-  const stops = [useWorkspace.subscribe(apply), useDocuments.subscribe(apply)];
+  const stops = [
+    useWorkspace.subscribe(apply),
+    useDocuments.subscribe(apply),
+    useDocxStore.subscribe(apply),
+    usePdfStore.subscribe(apply),
+  ];
   // The last tab of a page was closed but its unsaved edits cannot be kept as a draft: the page comes back in a tab, which
   // says so and offers to save it, save a copy or discard the edits (Codex review of 7320d7f, DATA-5).
   onReleaseRefused((_key, file, reason) => {
@@ -58,6 +86,8 @@ export function retargetAll(notebook: string, from: string, to: string) {
   paused = true;
   try {
     retarget(notebook, from, to);
+    retargetDocx(notebook, from, to);
+    retargetPdf(notebook, from, to);
     useWorkspace.getState().retargetFile(notebook, from, to);
   } finally {
     paused = false;

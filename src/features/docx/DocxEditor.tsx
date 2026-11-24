@@ -9,7 +9,10 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { DocxMedia } from "../../lib/docx";
+import { toast } from "../../ui/toast";
 import { docxExtensions } from "./schema";
+
+const MAX_DOCX_IMAGE_BYTES = 30 * 1024 * 1024;
 
 export interface DocxEditorProps {
   doc: Record<string, unknown>;
@@ -44,6 +47,10 @@ export default function DocxEditor(props: DocxEditorProps) {
     const editor = editorRef.current;
     if (!editor || !editor.isEditable) return;
     if (!/^image\/(png|jpeg|jpg|gif|webp|bmp)$/i.test(file.type)) return;
+    if (file.size > MAX_DOCX_IMAGE_BYTES) {
+      toast("Image is too large for a Word document (30 MB limit).", "warn");
+      return;
+    }
     const buf = new Uint8Array(await file.arrayBuffer());
     const mediaId = latest.current.onAddMedia(file.type, bytesToBase64(buf));
     editor.chain().focus().insertContent({ type: "docxImage", attrs: { mediaId, alt: file.name } }).run();
@@ -111,7 +118,10 @@ export default function DocxEditor(props: DocxEditorProps) {
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor) return;
-    editor.setEditable(!props.readOnly);
+    const wantEditable = !props.readOnly;
+    if (editor.isEditable !== wantEditable) {
+      editor.setEditable(wantEditable, false);
+    }
   }, [props.readOnly]);
 
   useEffect(() => {

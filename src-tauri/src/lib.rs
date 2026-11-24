@@ -2006,7 +2006,7 @@ pub fn run() {
             notes_index::commands::index_search, notes_index::commands::index_links, notes_index::commands::index_incoming, notes_index::commands::index_pages,
             notes_index::commands::index_tags, notes_index::commands::index_graph, notes_index::commands::index_tasks, notes_index::commands::index_query, notes_index::commands::index_status, notes_index::commands::index_rebuild, notes_index::commands::index_related,
             docx::commands::docx_read, docx::commands::docx_raw, docx::commands::docx_save, docx::commands::docx_create, docx::commands::binary_restore,
-            pdf::pdf_meta, pdf::pdf_bytes, pdf::pdf_save, pdf::pdf_create, pdf::pdf_pick_merge
+            pdf::pdf_meta, pdf::pdf_bytes, pdf::pdf_range, pdf::pdf_save, pdf::pdf_create, pdf::pdf_pick_merge
         ])
         .build(context)
         .expect("error while running tauri application")

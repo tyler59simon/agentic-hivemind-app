@@ -102,12 +102,12 @@ export function DocxTab({ tab }: { tab: Tab }) {
               <button
                 type="button"
                 className="primary"
-                disabled={!dirty || session.status === "stale" || session.status === "saving"}
+                disabled={!dirty || session.status === "stale" || session.saving}
                 onClick={() => void doSave(false)}
                 title="Save (Ctrl+S)"
               >
                 <Save size="1.1em" aria-hidden />
-                {session.status === "saving" ? "Saving…" : "Save"}
+                {session.saving ? "Saving…" : "Save"}
               </button>
             )}
             <Menu label="Document actions" align="right" button={<Ellipsis size="1.3em" aria-hidden />} className="icon-menu">

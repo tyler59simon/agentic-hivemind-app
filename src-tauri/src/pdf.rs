@@ -4,8 +4,12 @@ use crate::history;
 use crate::studio;
 use crate::{blocking, AppState};
 use serde::Serialize;
+use std::io::{Read, Seek, SeekFrom};
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::{AppHandle, State};
+
+/// Maximum bytes returned by a single `pdf_range` read request (4 MB).
+const MAX_RANGE_CHUNK: u64 = 4 * 1024 * 1024;
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -87,6 +91,31 @@ pub async fn pdf_meta(state: State<'_, AppState>, notebook: String, path: String
 pub async fn pdf_bytes(state: State<'_, AppState>, notebook: String, path: String) -> Result<Response, String> {
     let (full, _) = studio::resolve_file(&state, &notebook, &path, false)?;
     let bytes = blocking(move || files::read_bytes(&full).map(|(b, _, _)| b)).await?;
+    Ok(Response::new(bytes))
+}
+
+/// Bounded byte-range reader for large (>64 MB) read-only PDFs via PDF.js `PDFDataRangeTransport`.
+pub(crate) fn read_pdf_range(full: &std::path::Path, offset: u64, length: u64) -> Result<Vec<u8>, String> {
+    if length == 0 {
+        return Ok(Vec::new());
+    }
+    let want = length.min(MAX_RANGE_CHUNK) as usize;
+    let mut f = std::fs::File::open(full).map_err(|e| format!("Could not open {}: {e}", full.display()))?;
+    let total = f.metadata().map_err(|e| format!("Could not read metadata for {}: {e}", full.display()))?.len();
+    if offset >= total {
+        return Ok(Vec::new());
+    }
+    f.seek(SeekFrom::Start(offset)).map_err(|e| format!("Could not seek {}: {e}", full.display()))?;
+    let to_read = (total - offset).min(want as u64) as usize;
+    let mut buf = vec![0u8; to_read];
+    f.read_exact(&mut buf).map_err(|e| format!("Could not read range from {}: {e}", full.display()))?;
+    Ok(buf)
+}
+
+#[tauri::command]
+pub async fn pdf_range(state: State<'_, AppState>, notebook: String, path: String, offset: u64, length: u64) -> Result<Response, String> {
+    let (full, _) = studio::resolve_file(&state, &notebook, &path, false)?;
+    let bytes = blocking(move || read_pdf_range(&full, offset, length)).await?;
     Ok(Response::new(bytes))
 }
 
@@ -180,6 +209,19 @@ mod tests {
         let orig_entry = versions.iter().find(|e| e.sha256 == st1.sha256).unwrap();
         let restored_bytes = history::read(&hist, &file, orig_entry.id).unwrap();
         assert_eq!(restored_bytes, v1);
+
+        // Bounded range reader returns exact slices
+        assert_eq!(read_pdf_range(&file, 0, 8).unwrap(), &v2[0..8]);
+        assert_eq!(read_pdf_range(&file, 8, 5).unwrap(), &v2[8..13]);
+        assert!(read_pdf_range(&file, 9999, 10).unwrap().is_empty());
+
+        // Restore refuses to overwrite a >16 MB file whose current bytes cannot be snapshotted
+        let big = dir.join("huge.pdf");
+        let big_bytes = vec![b'A'; 17 * 1024 * 1024];
+        let big_stamp = files::create_bytes(&big, &big_bytes).unwrap();
+        let err = studio::save_bytes_kept(&hist, &big, v1, &big_stamp, "restore").unwrap_err();
+        assert!(err.contains("16 MB"));
+        assert_eq!(std::fs::metadata(&big).unwrap().len(), big_bytes.len() as u64);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

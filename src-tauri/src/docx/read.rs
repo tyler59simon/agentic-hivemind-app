@@ -22,6 +22,17 @@ fn local_name(s: &str) -> &str {
     s
 }
 
+fn decode_general_ref(e: &quick_xml::events::BytesRef) -> String {
+    if let Ok(Some(ch)) = e.resolve_char_ref() {
+        return ch.to_string();
+    }
+    let raw: &str = e.as_ref();
+    if let Some(resolved) = quick_xml::escape::resolve_xml_entity(raw) {
+        return resolved.to_string();
+    }
+    format!("&{raw};")
+}
+
 fn attr_val(e: &quick_xml::events::BytesStart, want_local: &str) -> Option<String> {
     for a in e.attributes().flatten() {
         if a.key.local_name().as_ref() == want_local {
@@ -249,13 +260,14 @@ impl<'a> ParseCtx<'a> {
 #[derive(Debug)]
 enum BodyItem {
     Node(Value),
-    ListItem { ordered: bool, paragraph: Value },
+    ListItem { ordered: bool, num_id: String, paragraph: Value },
 }
 
-fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &mut ParseCtx) -> Result<BodyItem, String> {
+fn parse_paragraph(reader: &mut Reader<&[u8]>, doc_xml: &str, ctx: &mut ParseCtx) -> Result<BodyItem, String> {
     let mut style_id: Option<String> = None;
     let mut align: Option<String> = None;
     let mut num_id: Option<String> = None;
+    let mut sect_pr_xml: Option<String> = None;
     let mut has_bottom_border = false;
     let mut has_page_break = false;
     let mut inlines: Vec<Value> = Vec::new();
@@ -263,19 +275,32 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &mut ParseCtx) -> Result<Bod
     let mut in_ppr = false;
     let mut in_rpr = false;
     let mut in_t = false;
+    let mut cur_text = String::new();
     let mut run_style = RunStyle::default();
     let mut depth: usize = 1;
 
     loop {
+        let before = reader.buffer_position() as usize;
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                depth += 1;
                 let ln = e.local_name(); let tag = ln.as_ref();
+                if in_ppr && depth == 2 && tag == "sectPr" {
+                    let start_idx = before.min(doc_xml.len());
+                    let tag_start = doc_xml[start_idx..].find('<').map(|i| start_idx + i).unwrap_or(start_idx);
+                    let _ = reader.read_to_end(e.to_end().name());
+                    let end_idx = (reader.buffer_position() as usize).min(doc_xml.len());
+                    sect_pr_xml = Some(doc_xml[tag_start..end_idx].to_string());
+                    continue;
+                }
+                depth += 1;
                 match tag {
                     "pPr" if depth == 2 => in_ppr = true,
                     "rPr" => in_rpr = true,
                     "r" => run_style = RunStyle::default(),
-                    "t" => in_t = true,
+                    "t" => {
+                        in_t = true;
+                        cur_text.clear();
+                    }
                     "ins" | "del" => ctx.saw_tracked = true,
                     "oMath" | "oMathPara" => ctx.saw_math = true,
                     "hyperlink" => {
@@ -308,6 +333,12 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &mut ParseCtx) -> Result<Bod
                         }
                         "numId" => num_id = attr_val(&e, "val"),
                         "bottom" => has_bottom_border = true,
+                        "sectPr" if depth == 2 => {
+                            let start_idx = before.min(doc_xml.len());
+                            let tag_start = doc_xml[start_idx..].find('<').map(|i| start_idx + i).unwrap_or(start_idx);
+                            let end_idx = (reader.buffer_position() as usize).min(doc_xml.len());
+                            sect_pr_xml = Some(doc_xml[tag_start..end_idx].to_string());
+                        }
                         _ => {}
                     }
                 } else if in_rpr {
@@ -371,19 +402,28 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &mut ParseCtx) -> Result<Bod
             Ok(Event::Text(t)) if in_t => {
                 let raw: &str = t.as_ref();
                 let decoded = quick_xml::escape::unescape(raw).map(|s| s.into_owned()).unwrap_or_else(|_| raw.to_string());
-                if !decoded.is_empty() {
-                    let marks = run_style.to_marks(cur_link.as_deref());
-                    let mut node = json!({ "type": "text", "text": decoded });
-                    if !marks.is_empty() { node["marks"] = Value::Array(marks); }
-                    inlines.push(node);
-                }
+                cur_text.push_str(&decoded);
+            }
+            Ok(Event::GeneralRef(r)) if in_t => {
+                cur_text.push_str(&decode_general_ref(&r));
+            }
+            Ok(Event::CData(c)) if in_t => {
+                cur_text.push_str(c.as_ref());
             }
             Ok(Event::End(e)) => {
                 let ln = e.local_name(); let tag = ln.as_ref();
                 match tag {
                     "pPr" if depth == 2 => in_ppr = false,
                     "rPr" => in_rpr = false,
-                    "t" => in_t = false,
+                    "t" => {
+                        if !cur_text.is_empty() {
+                            let marks = run_style.to_marks(cur_link.as_deref());
+                            let mut node = json!({ "type": "text", "text": std::mem::take(&mut cur_text) });
+                            if !marks.is_empty() { node["marks"] = Value::Array(marks); }
+                            inlines.push(node);
+                        }
+                        in_t = false;
+                    }
                     "hyperlink" => cur_link = None,
                     _ => {}
                 }
@@ -398,16 +438,19 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &mut ParseCtx) -> Result<Bod
         }
     }
 
-    if has_page_break && inlines.is_empty() {
+    if has_page_break && inlines.is_empty() && sect_pr_xml.is_none() {
         return Ok(BodyItem::Node(json!({ "type": "docxPageBreak" })));
     }
-    if has_bottom_border && inlines.is_empty() {
+    if has_bottom_border && inlines.is_empty() && sect_pr_xml.is_none() {
         return Ok(BodyItem::Node(json!({ "type": "horizontalRule" })));
     }
 
     let mut attrs = serde_json::Map::new();
     if let Some(al) = align {
         attrs.insert("textAlign".into(), Value::String(al));
+    }
+    if let Some(sx) = sect_pr_xml {
+        attrs.insert("sectPrXml".into(), Value::String(sx));
     }
 
     if let Some(ref sid) = style_id
@@ -426,7 +469,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &mut ParseCtx) -> Result<Bod
 
     if let Some(nid) = num_id && nid != "0" {
         let ordered = *ctx.numbering.get(&nid).unwrap_or(&false);
-        return Ok(BodyItem::ListItem { ordered, paragraph: para });
+        return Ok(BodyItem::ListItem { ordered, num_id: nid, paragraph: para });
     }
 
     if let Some(ref sid) = style_id && (ctx.quotes.contains(sid) || sid.to_ascii_lowercase().contains("quote")) {
@@ -436,7 +479,7 @@ fn parse_paragraph(reader: &mut Reader<&[u8]>, ctx: &mut ParseCtx) -> Result<Bod
     Ok(BodyItem::Node(para))
 }
 
-fn parse_table(reader: &mut Reader<&[u8]>, ctx: &mut ParseCtx) -> Result<Value, String> {
+fn parse_table(reader: &mut Reader<&[u8]>, doc_xml: &str, ctx: &mut ParseCtx) -> Result<Value, String> {
     let mut rows: Vec<Value> = Vec::new();
     let mut depth: usize = 1;
     loop {
@@ -444,7 +487,7 @@ fn parse_table(reader: &mut Reader<&[u8]>, ctx: &mut ParseCtx) -> Result<Value, 
             Ok(Event::Start(e)) => {
                 let ln = e.local_name(); let tag = ln.as_ref();
                 if depth == 1 && tag == "tr" {
-                    rows.push(parse_table_row(reader, ctx)?);
+                    rows.push(parse_table_row(reader, doc_xml, ctx)?);
                 } else {
                     depth += 1;
                 }
@@ -464,7 +507,7 @@ fn parse_table(reader: &mut Reader<&[u8]>, ctx: &mut ParseCtx) -> Result<Value, 
     Ok(json!({ "type": "table", "content": rows }))
 }
 
-fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &mut ParseCtx) -> Result<Value, String> {
+fn parse_table_row(reader: &mut Reader<&[u8]>, doc_xml: &str, ctx: &mut ParseCtx) -> Result<Value, String> {
     let mut cells: Vec<Value> = Vec::new();
     let mut is_header = false;
     let mut depth: usize = 1;
@@ -473,7 +516,7 @@ fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &mut ParseCtx) -> Result<Val
             Ok(Event::Start(e)) => {
                 let ln = e.local_name(); let tag = ln.as_ref();
                 if depth == 1 && tag == "tc" {
-                    cells.push(parse_table_cell(reader, ctx, is_header)?);
+                    cells.push(parse_table_cell(reader, doc_xml, ctx, is_header)?);
                 } else {
                     if tag == "tblHeader" { is_header = true; }
                     depth += 1;
@@ -499,7 +542,7 @@ fn parse_table_row(reader: &mut Reader<&[u8]>, ctx: &mut ParseCtx) -> Result<Val
     Ok(json!({ "type": "tableRow", "content": cells }))
 }
 
-fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &mut ParseCtx, is_header: bool) -> Result<Value, String> {
+fn parse_table_cell(reader: &mut Reader<&[u8]>, doc_xml: &str, ctx: &mut ParseCtx, is_header: bool) -> Result<Value, String> {
     let mut colspan: u32 = 1;
     let mut blocks: Vec<Value> = Vec::new();
     let mut depth: usize = 1;
@@ -508,7 +551,7 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &mut ParseCtx, is_header: b
             Ok(Event::Start(e)) => {
                 let ln = e.local_name(); let tag = ln.as_ref();
                 if depth == 1 && tag == "p" {
-                    match parse_paragraph(reader, ctx)? {
+                    match parse_paragraph(reader, doc_xml, ctx)? {
                         BodyItem::Node(n) => blocks.push(n),
                         BodyItem::ListItem { paragraph, .. } => blocks.push(paragraph),
                     }
@@ -540,15 +583,16 @@ fn parse_table_cell(reader: &mut Reader<&[u8]>, ctx: &mut ParseCtx, is_header: b
     Ok(cell)
 }
 
-/// Group flat `BodyItem` stream into Tiptap top-level nodes (combining consecutive list items).
+/// Group flat `BodyItem` stream into Tiptap top-level nodes (combining consecutive list items with the same list ID).
 fn assemble_body(items: Vec<BodyItem>) -> Vec<Value> {
     let mut out: Vec<Value> = Vec::new();
-    let mut cur_list: Option<(bool, Vec<Value>)> = None;
+    let mut cur_list: Option<(bool, String, Vec<Value>)> = None;
 
-    let flush = |cur: &mut Option<(bool, Vec<Value>)>, out: &mut Vec<Value>| {
-        if let Some((ordered, list_items)) = cur.take() {
+    let flush = |cur: &mut Option<(bool, String, Vec<Value>)>, out: &mut Vec<Value>| {
+        if let Some((ordered, num_id, list_items)) = cur.take() {
             out.push(json!({
                 "type": if ordered { "orderedList" } else { "bulletList" },
+                "attrs": { "listNumId": num_id },
                 "content": list_items
             }));
         }
@@ -560,14 +604,14 @@ fn assemble_body(items: Vec<BodyItem>) -> Vec<Value> {
                 flush(&mut cur_list, &mut out);
                 out.push(n);
             }
-            BodyItem::ListItem { ordered, paragraph, .. } => {
-                if let Some((is_ord, _)) = &cur_list && *is_ord != ordered {
+            BodyItem::ListItem { ordered, num_id, paragraph } => {
+                if let Some((is_ord, ref cur_nid, _)) = cur_list && (is_ord != ordered || *cur_nid != num_id) {
                     flush(&mut cur_list, &mut out);
                 }
                 let li = json!({ "type": "listItem", "content": [paragraph] });
                 match &mut cur_list {
-                    Some((_, list_items)) => list_items.push(li),
-                    None => cur_list = Some((ordered, vec![li])),
+                    Some((_, _, list_items)) => list_items.push(li),
+                    None => cur_list = Some((ordered, num_id, vec![li])),
                 }
             }
         }
@@ -660,8 +704,8 @@ pub fn read_docx_bytes(bytes: &[u8]) -> Result<ParsedDocx, String> {
                     continue;
                 }
                 match tag {
-                    "p" => items.push(parse_paragraph(&mut reader, &mut ctx)?),
-                    "tbl" => items.push(BodyItem::Node(parse_table(&mut reader, &mut ctx)?)),
+                    "p" => items.push(parse_paragraph(&mut reader, &doc_xml, &mut ctx)?),
+                    "tbl" => items.push(BodyItem::Node(parse_table(&mut reader, &doc_xml, &mut ctx)?)),
                     "sectPr" => {
                         let _ = reader.read_to_end(e.to_end().name());
                     }
