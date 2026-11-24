@@ -18,6 +18,7 @@ import { tabKey } from "../ui/focus";
 import { Confirm } from "../ui/Modal";
 import { useNarrow } from "../lib/narrow";
 import { MAX_PANES, railShown, useWorkspace, type Pane, type Tab } from "./store";
+import { modalOpen } from "../ui/layers";
 
 /** What a tab shows. */
 export const TAB_VIEWS: Record<Tab["kind"], (tab: Tab) => ReactNode> = {
@@ -149,7 +150,7 @@ export function Workspace() {
   const close = useCloseTab();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
+      if (!(e.ctrlKey || e.metaKey) || modalOpen()) return;
       const ws = useWorkspace.getState();
       const pane = ws.panes.find((p) => p.id === ws.focused) ?? ws.panes[0];
       if (e.key.toLowerCase() === "w") { if (pane?.active) close.request(pane.id, pane.active); }

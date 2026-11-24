@@ -165,7 +165,7 @@ export function DrawingDialog({ ctx, existing, apply, stillUsed, onClose }: Draw
 function Overlay({ children, onCancel, onDone, saving }: { children: React.ReactNode; onCancel: () => void; onDone?: () => void; saving?: boolean }) {
   // A locked layer (DESK-4): Escape belongs to the drawing editor (it clears the selection), so it neither closes the
   // drawing nor reaches a dialog under it. Cancel and Done close it.
-  useLayer(true, onCancel, true);
+  useLayer(true, onCancel, true, true);
   return (
     <div className="hm-drawing" data-own-zoom role="dialog" aria-label="Drawing">
       <header className="hm-drawing-head">

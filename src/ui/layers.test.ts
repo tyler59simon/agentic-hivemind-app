@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Escape closes the top layer only (DESK-4).
 import { describe, expect, it, vi } from "vitest";
-import { anyLayer, isTopLayer, pushLayer } from "./layers";
+import { anyLayer, isTopLayer, modalOpen, pushLayer } from "./layers";
 
 const escape = () => { const e = new KeyboardEvent("keydown", { key: "Escape", cancelable: true }); window.dispatchEvent(e); return e; };
 
@@ -33,5 +33,15 @@ describe("layers", () => {
     window.dispatchEvent(used);
     expect(under).not.toHaveBeenCalled();
     u.pop();
+  });
+
+  it("knows when a modal is open, so app-wide shortcuts can wait; a menu is not one", () => {
+    const menu = pushLayer(() => {});
+    expect(modalOpen()).toBe(false);
+    const dialog = pushLayer(() => {}, () => false, true);
+    expect(modalOpen()).toBe(true);
+    dialog.pop();
+    menu.pop();
+    expect(modalOpen()).toBe(false);
   });
 });

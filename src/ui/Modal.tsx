@@ -13,7 +13,7 @@ export function Modal({ title, children, onClose, wide, locked }: {
   const box = useRef<HTMLDivElement>(null);
   // What had the focus when the dialog first rendered: the button or menu item that opened it.
   const opener = useRef(typeof document === "undefined" ? null : (document.activeElement as HTMLElement | null));
-  const layer = useLayer(true, onClose, locked);
+  const layer = useLayer(true, onClose, locked, true);
   useLayoutEffect(() => {
     const el = box.current;
     if (el && !el.contains(document.activeElement)) el.focus({ preventScroll: true });

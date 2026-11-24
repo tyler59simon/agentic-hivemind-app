@@ -33,6 +33,7 @@ import { useOpenRequests } from "./features/notes/opening";
 import { ComparePicker } from "./features/power/ComparePicker";
 import { newPageHere } from "./features/notes/actions";
 import type { FilesChanged } from "./lib/notebooks";
+import { modalOpen } from "./ui/layers";
 
 /** Shortcuts that work on every page. Ctrl+K and Ctrl+Shift+F belong to the top bar's search; tab ones to the open notes. */
 function useShortcuts() {
@@ -40,6 +41,7 @@ function useShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const { setPalette, go, goBack } = useApp.getState();
+      if (modalOpen()) return; // a dialog is open: nothing behind it changes (DESK-4)
       if (e.altKey && e.key === "ArrowLeft") { e.preventDefault(); goBack(); return; }
       if (!(e.ctrlKey || e.metaKey)) return;
       const key = e.key.toLowerCase();

@@ -1913,7 +1913,7 @@ button.icon { border: none; padding: .25rem; }
 
 /* ---- Windows contrast themes (DESK-OS): states that were shown by colour alone get a line. ---- */
 @media (forced-colors: active) {
-  .note-tab-pill.on, .nav-item.on, .tree-row[aria-selected="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
+  [role="tab"][aria-selected="true"], [aria-selected="true"].tree-row, .tree-row.on, .note-tab-pill.on, .nav-item.on { outline: 2px solid Highlight; outline-offset: -2px; }
   .switch span { border: 1px solid ButtonText; }
   .switch input:checked + span { background: Highlight; }
   .switch input:checked + span::after { background: HighlightText; }

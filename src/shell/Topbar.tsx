@@ -15,6 +15,7 @@ import { useNotebookTitle } from "../features/notes/notebookTitle";
 import { activeTab, useWorkspace } from "../workspace/store";
 import { SECTIONS } from "./Sidebar";
 import { useWindowTitle } from "./title";
+import { modalOpen } from "../ui/layers";
 
 interface Crumb { label: string; go?: () => void }
 
@@ -60,7 +61,7 @@ export function Topbar() {
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
+      if (!(e.ctrlKey || e.metaKey) || modalOpen()) return;
       const key = e.key.toLowerCase();
       if ((key === "k" && !e.shiftKey) || (key === "f" && e.shiftKey)) {
         e.preventDefault();
