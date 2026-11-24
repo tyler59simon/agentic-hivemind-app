@@ -67,22 +67,24 @@ pub fn call_with_body(bridge: &Bridge, generation: Option<u64>, staging: &Path, 
 }
 
 /// The option a body goes through when it is a staged file: `--body-file` for a page, `--settings-file` for the settings
-/// of a notebook (NS-7A), `--payload-file` for the query of `doc query` (NS-7B). Living Memory reads the settings and the
-/// payload from a file only, so they never go as stdin.
+/// of a notebook (NS-7A), `--payload-file` for the query of `doc query` (NS-7B), `--spec-file` for the query of a query view
+/// (`views add` and `views update`, CON-13). Living Memory reads the settings, the payload and the spec from a file only, so
+/// they never go as stdin.
 pub const BODY_FILE: &str = "--body-file";
 pub const SETTINGS_FILE: &str = "--settings-file";
 pub const PAYLOAD_FILE: &str = "--payload-file";
+pub const SPEC_FILE: &str = "--spec-file";
 /// Living Memory refuses a settings file over 256 KiB (`--settings-file is larger than 256 KiB`); a query payload is held to
 /// the same bound.
 const JSON_MAX: usize = 256 * 1024;
 
-/// `call_with_body` for any of the three file options. The body is the page, or the JSON of the settings or the query.
+/// `call_with_body` for any of the four file options. The body is the page, or the JSON of the settings or the query.
 pub fn call_with_file(bridge: &Bridge, generation: Option<u64>, staging: &Path, argv: &[String], body: &str, flag: &str) -> Result<Reply, String> {
-    // `proposals accept --edited` carries the user's merge of a page proposal as its body.
-    if !matches!(argv.first().map(String::as_str), Some("doc" | "proposals")) {
-        return Err("Only doc and proposals commands carry a page body".into());
+    // `proposals accept --edited` carries the user's merge of a page proposal as its body; `views add` and `views update` carry a query.
+    if !matches!(argv.first().map(String::as_str), Some("doc" | "proposals" | "views")) {
+        return Err("Only doc, proposals and views commands carry a body".into());
     }
-    if flag != BODY_FILE && flag != SETTINGS_FILE && flag != PAYLOAD_FILE {
+    if flag != BODY_FILE && flag != SETTINGS_FILE && flag != PAYLOAD_FILE && flag != SPEC_FILE {
         return Err(format!("\"{flag}\" is not a file option Hivemind passes"));
     }
     if flag != BODY_FILE && body.len() > JSON_MAX {
@@ -524,10 +526,10 @@ mod tests {
         assert!(!OPENABLE.contains(&"svg"));
     }
 
-    /// NS-7A and NS-7B: only the three file options pass, the settings and the query are bounded, and the staged file is a
-    /// `.json` that a leftover sweep removes.
+    /// NS-7A, NS-7B and CON-13: only the four file options pass, the settings and the query are bounded, and the staged file
+    /// is a `.json` that a leftover sweep removes.
     #[test]
-    fn only_the_three_file_options_pass_and_settings_and_queries_are_bounded() {
+    fn only_the_four_file_options_pass_and_settings_and_queries_are_bounded() {
         let bridge = Bridge::new(crate::settings::Launch { program: "py".into(), args: vec![], script: "no-such.py".into(), root: None });
         let staging = std::env::temp_dir().join(format!("hm-flag-{}", uuid::Uuid::new_v4().simple()));
         let argv = doc_argv("update", &[], &["jot", "daily"]);
@@ -538,6 +540,10 @@ mod tests {
         assert!(call_with_file(&bridge, None, &staging, &argv, &big, SETTINGS_FILE).unwrap_err().contains("256 KiB"));
         assert!(call_with_file(&bridge, None, &staging, &doc_argv("query", &[], &[]), &big, PAYLOAD_FILE).unwrap_err().contains("256 KiB"));
         assert!(call_with_file(&bridge, None, &staging, &["list".to_string()], "{}", SETTINGS_FILE).is_err(), "only doc commands");
+        // A query view's spec passes as a `--spec-file` of a `views` command (the size check is the proof it got past the options).
+        let views = ["views".to_string(), "add".to_string()];
+        assert!(call_with_file(&bridge, None, &staging, &views, &big, SPEC_FILE).unwrap_err().contains("256 KiB"));
+        assert!(call_with_file(&bridge, None, &staging, &views, "{}", "--spec-file=x").unwrap_err().contains("not a file option"));
         assert!(!staging.exists(), "nothing is staged for a refused call");
         // A query goes through its own option, before any `--`, and the argv keeps the operands after it.
         assert_eq!(with_options(&doc_argv("query", &["--all-domains"], &[]), &["--payload-file".into(), "q.json".into()]), ["doc", "query", "--all-domains", "--payload-file", "q.json", "--"]);

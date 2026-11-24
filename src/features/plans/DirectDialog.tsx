@@ -31,7 +31,6 @@ export function undoToast(client: QueryClient, text: string, receipt: Receipt) {
 export function explain(e: unknown): string {
   const p = classify(e);
   if (p.kind === "undo-conflict") return "This change can't be undone automatically: it was edited again afterwards. Undo the later change first, or edit it by hand.";
-  if (/^Stale revision: changes\.json/.test(p.message)) return "Another change was created or updated just now. Try again.";
   if (/^stale plan|^Stale revision/.test(p.message)) return "The note changed in the meantime. Close this and try again.";
   return p.message;
 }

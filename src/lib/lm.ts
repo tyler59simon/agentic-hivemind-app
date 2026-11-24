@@ -65,6 +65,8 @@ export interface Capabilities {
   items?: { fields?: number };
   /** 1: a system has a `project` field. */
   systems?: { project?: number };
+  /** 2: `views` also holds query views (`kinds` lists `note` and `query`); a row without `kind` is a note view. */
+  views?: { version: number; kinds: string[] };
   /** Notebook pages (NS-2A, NS-2B). */
   docs?: { version: number; max_page_bytes: number; max_asset_bytes: number; notebook_only_domains?: boolean; search?: boolean; folder_policy?: boolean | number; accept_edited?: boolean;
     /** 1: `doc read --file` and `doc propose --file` for folder notebook pages, and folder proposals in `proposals`. */
@@ -381,8 +383,6 @@ export interface ReviewResult {
 export const reviewArgs = (o: ScopeOptions) => scopeArgs("review", o);
 export const review = (o: ScopeOptions) => run<ReviewResult>(reviewArgs(o));
 
-export interface TimelineRow { ref: string; short_ref: string; date: string; type: NoteType; title: string; status: string; anchor?: boolean }
-export interface TimelineResult { ok: boolean; domain: string; by: "updated" | "created"; anchor: string | null; notes: TimelineRow[] }
 export interface TimelineOptions {
   domain?: string; ref?: string; date?: string; before?: number; after?: number;
   type?: NoteType; by?: "updated" | "created"; all?: boolean;
@@ -399,7 +399,6 @@ export function timelineArgs(o: TimelineOptions): string[] {
   if (o.all) argv.push("--all");
   return view(argv);
 }
-export const timeline = (o: TimelineOptions) => run<TimelineResult>(timelineArgs(o));
 
 // ---- Systems (an LM that has the `systems` command). ----
 
@@ -426,10 +425,11 @@ export interface SystemUpdate {
 export const writeSystem = (action: "create" | "update" | "retire", payload: SystemCreate | SystemUpdate | { slug: string }) =>
   direct(["system", action], payload);
 
-// ---- Note views (an LM that has the `views` command): a note kept as an HTML dashboard. ----
+// ---- Views (an LM that has the `views` command): a note kept as an HTML dashboard, and from `capabilities.views` 2 a saved page query. ----
 
-/** One row of `views`: a registered view and the state of its local page and published copy. */
-export interface ViewRow {
+/** A note view: a registered note and the state of its local page and published copy. */
+export interface NoteView {
+  kind: "note";
   /** The note's ID (not a ref): the ref is `${domain}:${note}`. */
   note: string; domain: string;
   /** The view's short title. */
@@ -439,6 +439,10 @@ export interface ViewRow {
   /** Absolute path of the local HTML page. */
   path: string; fresh: boolean; artifact_url: string | null; artifact_current: boolean; exists: boolean;
 }
+/** A query view: a page query (table or board) that Hivemind runs over its own index; Living Memory only stores it. `spec` is what it
+ *  stored (it checked the rules of `parseSpec`, but an older one may differ), so read it with `parseSpec`. */
+export interface QueryView { kind: "query"; id: string; title: string; spec: unknown; added: string }
+export type ViewRow = NoteView | QueryView;
 export interface ViewsResult { ok: boolean; views: ViewRow[] }
 
 export interface ViewItem { index: number; done: boolean; text: string; tags: string[]; id: string | null; detail: string | null }
@@ -451,15 +455,28 @@ export interface ViewModel {
   superseded_by: string | null; view_title?: string;
 }
 
-export const viewRef = (v: Pick<ViewRow, "domain" | "note">) => `${v.domain}:${v.note}`;
-export const views = () => run<ViewsResult>(view(["views", "--all-domains"]));
+export const viewRef = (v: Pick<NoteView, "domain" | "note">) => `${v.domain}:${v.note}`;
+/** What names a view in the route: a note view's ref, a query view's ID. */
+export const viewKey = (v: ViewRow) => (v.kind === "query" ? v.id : viewRef(v));
+/** An LM before views version 2 sends rows without `kind`: they are note views. */
+export const views = () =>
+  run<ViewsResult>(view(["views", "--all-domains"])).then((r) => ({ ...r, views: r.views.map((v) => ((v as { kind?: string }).kind ? v : ({ ...v, kind: "note" } as ViewRow))) }));
 export const viewModel = (ref: string) =>
   run<{ ok: boolean; model: ViewModel }>(view(["views", "render", ref, "--format", "json", "--domain", domainOf(ref)])).then((r) => r.model);
 export interface ViewWriteResult { ok: true; note: string; domain?: string; title?: string; path?: string; status: string; operation_id?: string }
 /** Register a view (the page is rendered at once). Without a title LM uses the note's own. */
 export const addView = (ref: string, title?: string) =>
   run<ViewWriteResult>(["views", "add", ref, "--domain", domainOf(ref), ...(title ? ["--title", title] : [])]);
-export const removeView = (ref: string) => run<ViewWriteResult>(["views", "remove", ref, "--domain", domainOf(ref)]);
+export interface QueryViewWriteResult { ok: true; kind: "query"; id: string; title: string; status: string; operation_id?: string }
+const isQueryId = (key: string) => /^q-[0-9a-f]{8}$/.test(key);
+/** Drop a view: a note view by its ref, a query view by its ID. */
+export const removeView = (key: string) =>
+  run<ViewWriteResult | QueryViewWriteResult>(["views", "remove", key, ...(isQueryId(key) ? [] : ["--domain", domainOf(key)])]);
+/** Save a query view. Living Memory reads the query from a file only, so the JSON goes through a staged `--spec-file`. Needs `capabilities.views` 2. */
+export const addQueryView = (title: string, spec: object) =>
+  runBody<QueryViewWriteResult>(["views", "add", "--title", title], JSON.stringify(spec), "--spec-file");
+export const updateQueryView = (id: string, spec: object, title?: string) =>
+  runBody<QueryViewWriteResult>(["views", "update", id, ...(title ? ["--title", title] : [])], JSON.stringify(spec), "--spec-file");
 
 // ---- Recap (LM `recap` command). ----
 
@@ -608,7 +625,7 @@ export interface DocHistoryRow { operation_id: string; kind: string; state: stri
 
 const PRIVATE = "--include-private";
 /** A command that carries a page body: Rust sends it as stdin, or through a staging file when it is large (NS-2C). */
-async function runBody<T>(argv: string[], body: string, flag?: "--settings-file" | "--payload-file"): Promise<T> {
+async function runBody<T>(argv: string[], body: string, flag?: "--settings-file" | "--payload-file" | "--spec-file"): Promise<T> {
   const reply = (await call("lm_body", { argv, body, ...(flag ? { flag } : {}), ...bound(argv) })) as Reply<T>;
   if (reply.exit_code !== 0) {
     const error = reply.error ?? { code: "invalid", message: `Exit code ${reply.exit_code}` };

@@ -22,7 +22,6 @@ mod learning;
 mod lmdoc;
 mod managed;
 mod oneshot;
-mod queries;
 mod notebooks;
 mod notes_index;
 mod notify;
@@ -1574,16 +1573,6 @@ fn exec_delete(app: AppHandle, state: State<'_, AppState>, kind: String, id: Str
     Ok(())
 }
 
-/// The evidence a generated text about `project` (or all active projects) would rest on.
-#[tauri::command]
-async fn exec_pack(app: AppHandle, project: Option<String>, days: Option<u32>) -> Result<executive::Pack, String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        executive::pack(&executive::viewer(&state.bridge), &state.executive, project.as_deref(), days.unwrap_or(14), today())
-    })
-    .await
-}
-
 #[tauri::command]
 async fn exec_brief(app: AppHandle, kind: String, project: Option<String>, days: Option<u32>) -> Result<Value, String> {
     blocking(move || {
@@ -1689,9 +1678,9 @@ fn executive_reports(app: AppHandle) -> conductor::Handler {
     })
 }
 
-const EXPORT_KINDS: [(&str, &str); 3] = [("md", "Markdown"), ("txt", "Plain text"), ("eml", "Email message")];
+const EXPORT_KINDS: [(&str, &str); 2] = [("md", "Markdown"), ("txt", "Plain text")];
 
-/// Save a draft or a briefing where the user picks. `format` is md, txt or eml; the content is written as given.
+/// Save a draft or a briefing where the user picks. `format` is md or txt; the content is written as given.
 #[tauri::command]
 async fn exec_export(app: AppHandle, name: String, format: String, content: String) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
@@ -1952,7 +1941,6 @@ pub fn run() {
             exec_list,
             exec_put,
             exec_delete,
-            exec_pack,
             exec_brief,
             exec_extract,
             exec_agent_start,
@@ -1965,7 +1953,7 @@ pub fn run() {
             agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_stop_and_approve, review_ask_codex, review_request_changes, review_request_terminal_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
             system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export, wiki_agent_build, wiki_agent_cancel,
             studio::notebooks_list, studio::notebook_add, studio::notebook_remove, studio::notebook_rename, studio::notebook_tree, studio::notebook_meta_get,
-            studio::notebook_meta_set, studio::notebook_append, studio::obsidian_setting, studio::query_views, studio::query_view_save, studio::query_view_delete, studio::file_read, studio::file_reopen, studio::file_save, studio::file_create, studio::file_mkdir, studio::file_rename, studio::file_delete,
+            studio::notebook_meta_set, studio::notebook_append, studio::obsidian_setting, studio::file_read, studio::file_reopen, studio::file_save, studio::file_create, studio::file_mkdir, studio::file_rename, studio::file_delete,
             studio::file_reveal, studio::asset_base, studio::lmdoc_assets, studio::notebook_add_dropped, studio::file_attach_bytes, studio::file_attach_dropped, opens::open_dropped, opens::claim_drop, opens::unclaimed_drops, studio::notebook_reach_record, lm_body, lmdoc_move, lmdoc_attach, studio::lmdoc_open_asset, opens::open_dialog, opens::open_pending, opens::open_recent,
             opens::open_forget, opens::file_save_as, bigfile::bigfile_open, bigfile::bigfile_lines, bigfile::bigfile_search, bigfile::bigfile_bytes, bigfile::bigfile_find_bytes, bigfile::bigfile_close, replace::replace_preview, replace::replace_apply, replace::replace_undo, history::history_list, history::history_read, history::history_pin, history::history_snapshot, history::git_file_log, history::git_file_commit,
             notes_index::commands::index_search, notes_index::commands::index_links, notes_index::commands::index_incoming, notes_index::commands::index_pages,

@@ -1,8 +1,8 @@
 // Saved queries (NS-7B): the query definition, the form that makes it, and running it over both kinds of notebook. A query
-// is a small JSON document (version 1) kept in a ```query block of a page or as a saved view in a folder notebook's
-// `.hivemind/queries/<name>.json`. Folder notebooks answer it from the index (`index_query`); Living Memory notebooks answer
-// it through `doc query`, to which it is translated. Both follow the same rules (`notes_index/structured.rs`), so the two
-// answers can be merged and sorted again here.
+// is a small JSON document (version 1) kept in a ```query block of a page or as a query view in Living Memory (`views add
+// --spec-file`, CON-13; `parseSpec` and Living Memory's `check_spec` follow the same rules). Folder notebooks answer it from
+// the index (`index_query`); Living Memory notebooks answer it through `doc query`, to which it is translated. Both follow the
+// same rules (`notes_index/structured.rs`), so the two answers can be merged and sorted again here.
 import { invoke } from "@tauri-apps/api/core";
 import { lmContainer } from "../../documents/adapters/lmdoc";
 import { docQuery, type DocQueryPage } from "../../lib/lm";
@@ -224,14 +224,7 @@ export function columnsOf(spec: QuerySpec): string[] {
   return [...new Set(asked)].filter((k) => k !== "title");
 }
 
-// ---- saved views -----------------------------------------------------------------------------------------------------
-
-/** A saved view of a folder notebook: one file, `.hivemind/queries/<name>.json`. `spec` is what the file holds, not yet checked. */
-export interface SavedView { name: string; spec: unknown }
-export const queryViews = (notebook: string) => invoke<SavedView[]>("query_views", { notebook }).then((r) => r ?? []);
-export const saveQueryView = (notebook: string, name: string, spec: QuerySpec) => invoke<void>("query_view_save", { notebook, name, spec });
-export const deleteQueryView = (notebook: string, name: string) => invoke<void>("query_view_delete", { notebook, name });
-export const viewsQuery = (notebook: string) => ({ queryKey: ["query-views", notebook], queryFn: () => queryViews(notebook) });
+// ---- in a page --------------------------------------------------------------------------------------------------------
 
 /** The text that puts a query in a page: a fenced block the Reading view draws. */
 export const queryBlock = (spec: QuerySpec) => `\`\`\`query\n${specJson(spec)}\n\`\`\`\n`;

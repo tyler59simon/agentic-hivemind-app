@@ -1247,13 +1247,8 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .switch input:checked + span::after { transform: translateX(1.05rem); background: var(--switch-knob-on); }
 .switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* ---- Dashboards ---- */
-@media (min-width: 1101px) { .split.dash-split { grid-template-columns: minmax(15rem, 21rem) minmax(0, 1fr); } }  /* the list is the narrow column */
-.dash-split .split-main { gap: 0; }
-.dash-split .split-rail { gap: 1rem; }
-.dash-split .split-rail > * + * { border-top: none; padding-top: 0; }
-.dash-row .lib-row-main { flex: 1; }
-.dash-chips { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .25rem; }
+/* ---- Note views (the dashboard in Notes > Views) ---- */
+.dash-body { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
 .dash-body .banner .eyebrow { font-size: .86rem; }
 .dash-body .lib-bar select { margin-bottom: .4rem; }
 .dash-body .lib-bar { flex-wrap: nowrap; gap: .4rem .8rem; }

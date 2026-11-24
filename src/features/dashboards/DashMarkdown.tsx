@@ -6,7 +6,7 @@ import type { NoteLinks } from "../links/useLinks";
 import { remarkWikilinks, WIKI_PREFIX } from "../viewer/remarkWikilinks";
 import { WikiLink } from "../viewer/NoteView";
 
-/** Markdown for a dashboard's detail, sections and callout. [[Note]] links open the note in Memory (resolved through
+/** Markdown for a dashboard's detail, sections and callout. [[Note]] links open the note (resolved through
  *  the dashboard note's own links); web links open in the system browser. `inline` drops the paragraph wrapper and
  *  shows [[links]] as plain chips, for text inside a button. */
 export function DashMarkdown({ children, links, inline }: { children: string; links: NoteLinks | null; inline?: boolean }) {

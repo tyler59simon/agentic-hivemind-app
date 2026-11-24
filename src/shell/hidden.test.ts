@@ -21,10 +21,10 @@ describe("hidden sidebar sections", () => {
     expect(hidden()).toEqual(["wiki"]);
   });
 
-  it("drops saved hides of removed sections (architecture, changes, overview, executive, recap, memory)", () => {
-    expect(migrateHidden({ hidden: ["architecture", "wiki", "changes", "overview", "executive", "recap", "memory"] })).toEqual({ hidden: ["wiki"] });
+  it("drops saved hides of removed sections (architecture, changes, overview, executive, recap, memory, dashboards)", () => {
+    expect(migrateHidden({ hidden: ["architecture", "wiki", "changes", "overview", "executive", "recap", "memory", "dashboards"] })).toEqual({ hidden: ["wiki"] });
     expect(migrateHidden(null)).toBeNull();
-    expect(useHidden.persist.getOptions().version).toBe(4);
+    expect(useHidden.persist.getOptions().version).toBe(5);
   });
 
   it("hides the Inbox where the user hid Review", () => {

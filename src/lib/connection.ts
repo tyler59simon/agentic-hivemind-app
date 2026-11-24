@@ -20,8 +20,11 @@ export const useSystemProjectEnabled = () => useConnection((s) => (s.capabilitie
 /** Custom note types need an LM that has the `types` command. */
 export const useNoteTypesEnabled = () => useConnection((s) => s.commands.includes("types"));
 
-/** Note dashboards need an LM that has the `views` command. */
+/** Note views need an LM that has the `views` command. */
 export const useViewsEnabled = () => useConnection((s) => s.commands.includes("views"));
+
+/** Saving query views needs `views` version 2: before it, the registry holds note views only. */
+export const useQueryViewsEnabled = () => useConnection((s) => (s.capabilities?.views?.version ?? 0) >= 2 && s.commands.includes("views"));
 
 /** The domain wiki needs an LM that has the `wiki` command. */
 export const useWikiEnabled = () => useConnection((s) => s.commands.includes("wiki"));
@@ -45,7 +48,7 @@ const folderPolicyOn = (s: { commands: string[]; capabilities?: Capabilities }) 
 export const useFolderPolicyEnabled = () => useConnection(folderPolicyOn);
 export const folderPolicyEnabled = () => folderPolicyOn(useConnection.getState());
 
-/** Merging an agent's proposal writes and settles it in one operation (`doc accept --edited`). Without it the write and
+/** Merging an agent's proposal writes and settles it in one operation (`proposals accept --edited`). Without it the write and
  *  the settling would be two steps, so the inbox offers only Accept and Reject (Codex review of 32fee20, D3). */
 export const useAcceptEditedEnabled = () => useConnection((s) => docsOn(s) && !!s.capabilities?.docs?.accept_edited);
 

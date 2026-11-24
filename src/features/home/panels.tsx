@@ -77,7 +77,7 @@ export function SystemContext({ project }: { project: Project }) {
         </>
       ) : (
         <>
-          <p className="muted">No system is registered for this project's repositories.</p>
+          <p className="muted">No system names this project or sits in its repositories.</p>
           <ArrowLink onClick={() => go({ page: "home", tab: "architecture" })}>Open Architecture</ArrowLink>
         </>
       )}

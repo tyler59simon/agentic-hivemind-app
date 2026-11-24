@@ -297,26 +297,6 @@ pub async fn notebook_meta_set(state: State<'_, AppState>, id: String, patch: Va
     blocking(move || sidecar::write(&root, &fallback, &patch).map(|(merged, _)| merged)).await
 }
 
-/// The saved views of a folder notebook, one file each in `.hivemind/queries` (NS-7B).
-#[tauri::command]
-pub async fn query_views(state: State<'_, AppState>, notebook: String) -> Result<Vec<crate::queries::SavedView>, String> {
-    let (root, _) = root_of(&state, &notebook)?;
-    blocking(move || crate::queries::list(&root)).await
-}
-
-/// Save a view under `name`, replacing one of that name.
-#[tauri::command]
-pub async fn query_view_save(state: State<'_, AppState>, notebook: String, name: String, spec: Value) -> Result<(), String> {
-    let (root, _) = root_of(&state, &notebook)?;
-    blocking(move || crate::queries::save(&root, &name, &spec)).await
-}
-
-#[tauri::command]
-pub async fn query_view_delete(state: State<'_, AppState>, notebook: String, name: String) -> Result<(), String> {
-    let (root, _) = root_of(&state, &notebook)?;
-    blocking(move || crate::queries::delete(&root, &name)).await
-}
-
 /// The two files of an Obsidian vault's `.obsidian` folder that NS-7A reads for the daily notes and templates settings.
 /// Hivemind reads nothing else there (`inside` and `visible` keep every other hidden part out of reach).
 const OBSIDIAN_FILES: &[&str] = &["daily-notes.json", "templates.json"];

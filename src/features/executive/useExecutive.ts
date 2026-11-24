@@ -33,10 +33,12 @@ export function usePortfolio() {
     () => portfolio(registry.data?.projects ?? [], rows.data?.notes ?? [], open.data?.items ?? [], milestones.data ?? [], health.data ?? [], today),
     [registry.data, rows.data, open.data, milestones.data, health.data, today],
   );
-  const scoped = project ? all.filter((r) => r.project.slug === project.slug) : all;
-  const loose = useMemo(() => crossProject(open.data?.items ?? [], rows.data?.notes ?? [], today), [open.data, rows.data, today]);
+  const slug = project?.slug;
+  const scoped = useMemo(() => (slug ? all.filter((r) => r.project.slug === slug) : all), [all, slug]);
+  const attn = useMemo(() => attention(scoped, today), [scoped, today]);
+  const loose = useMemo(() => (slug ? [] : crossProject(open.data?.items ?? [], rows.data?.notes ?? [], today)), [slug, open.data, rows.data, today]);
   return {
-    project, today, rows: scoped, all, attention: attention(scoped, today), crossProject: project ? [] : loose,
+    project, today, rows: scoped, all, attention: attn, crossProject: loose,
     projects: (registry.data?.projects ?? []).filter((p: Project) => p.status !== "archived"),
     loading: registry.isLoading || rows.isLoading || open.isLoading, error: registry.error ?? rows.error ?? open.error,
   };

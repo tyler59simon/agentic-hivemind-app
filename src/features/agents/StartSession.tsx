@@ -267,7 +267,7 @@ function StartForm({ project }: { project: Project | null }) {
               <button className="text" onClick={() => setPicking(true)}><Plus size="1.15em" aria-hidden />Add note</button>
             </Section>
             <Section title="Architecture" loading={(!!system && architecture.isLoading) || systems.isLoading}>
-              {!system ? <p className="muted small">No system is registered for this project's repositories.</p>
+              {!system ? <p className="muted small">No system names this project or sits in its repositories.</p>
                 : archModel && arch?.generatedAt ? (
                   <>
                     <Row icon={<FileText size="1.3em" aria-hidden />} meta={<ArrowLink onClick={() => openSystem(system.slug)}>Open diagram</ArrowLink>}>

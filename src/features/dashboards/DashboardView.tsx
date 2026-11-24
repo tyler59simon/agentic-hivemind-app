@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import { ChevronDown, Circle, CircleCheck, ExternalLink, FileText, Globe, Search } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
 import { classify } from "../../lib/errors";
-import { viewRef, type ViewItem, type ViewModel, type ViewRow } from "../../lib/lm";
+import { viewRef, type NoteView, type ViewItem, type ViewModel } from "../../lib/lm";
 import { toast } from "../../ui/toast";
 import { PageHeader, Tabs } from "../../ui/Page";
 import { useWorkspace } from "../../workspace/store";
@@ -85,9 +85,8 @@ async function openHtml(path: string) {
   }
 }
 
-/** One dashboard: the header with its actions, then the note's state, progress, items and remaining sections.
- *  `list` is the page's view list, drawn beside the dashboard. */
-export function DashboardView({ row, list }: { row: ViewRow; list: ReactNode }) {
+/** One note view as a dashboard: the header with its actions, then the note's state, progress, items and remaining sections. */
+export function DashboardView({ row }: { row: NoteView }) {
   const ref = viewRef(row);
   const query = useQuery(viewModelQuery(row));
   const { note: links } = useNoteLinks(ref);
@@ -97,7 +96,7 @@ export function DashboardView({ row, list }: { row: ViewRow; list: ReactNode }) 
   const openNote = () => useWorkspace.getState().openNote(ref, { title: noteTitle });
   const actions = (
     <>
-      <button className="outline" onClick={openNote} disabled={!row.note_title} title={row.note_title ? "Open the note in Memory" : "The note was not found"}><FileText size="1.15em" aria-hidden />Open note</button>
+      <button className="outline" onClick={openNote} disabled={!row.note_title} title={row.note_title ? "Open the note" : "The note was not found"}><FileText size="1.15em" aria-hidden />Open note</button>
       <button className="outline" onClick={() => openHtml(row.path)} disabled={!row.exists} title={row.path}><Globe size="1.15em" aria-hidden />Open HTML</button>
       {row.artifact_url && <button className="outline" onClick={() => openUrl(row.artifact_url!).catch((e) => toast(classify(e).message, "error"))} title={row.artifact_url}><ExternalLink size="1.15em" aria-hidden />Open artifact</button>}
     </>
@@ -109,32 +108,29 @@ export function DashboardView({ row, list }: { row: ViewRow; list: ReactNode }) 
     <>
       <PageHeader eyebrow={model ? [model.domain, model.status === "missing" ? "" : model.type].filter(Boolean).join(" · ") : row.domain}
         title={model?.title || noteTitle} subtitle={sub || undefined} actions={actions} />
-      <div className="split dash-split">
-        <div className="split-main">{list}</div>
-        <aside className="split-rail dash-body">
-          {query.isLoading && <p className="muted">Loading…</p>}
-          {query.error && <p className="error">{classify(query.error).message}</p>}
-          {model && (
-            <>
-              {banner && <div className="banner warn" role="status">{banner}</div>}
-              {model.important && <div className="banner"><span className="eyebrow">Important</span><div className="markdown"><DashMarkdown links={links}>{model.important}</DashMarkdown></div></div>}
-              {!!total && (
-                <div className="progress-line">
-                  <span className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={done}><span style={{ width: `${Math.round((100 * done) / total)}%` }} /></span>
-                  <span className="muted small">{done} of {total} done</span>
-                </div>
-              )}
-              <Items key={ref} model={model} links={links} />
-              {model.sections.map((s) => (
-                <section key={s.heading} className="section">
-                  <h2>{s.heading}</h2>
-                  <div className="markdown"><DashMarkdown links={links}>{s.text}</DashMarkdown></div>
-                </section>
-              ))}
-              <p className="muted small dash-path" title="The local page, rewritten whenever the note changes">{row.path}</p>
-            </>
-          )}
-        </aside>
+      <div className="dash-body">
+        {query.isLoading && <p className="muted">Loading…</p>}
+        {query.error && <p className="error">{classify(query.error).message}</p>}
+        {model && (
+          <>
+            {banner && <div className="banner warn" role="status">{banner}</div>}
+            {model.important && <div className="banner"><span className="eyebrow">Important</span><div className="markdown"><DashMarkdown links={links}>{model.important}</DashMarkdown></div></div>}
+            {!!total && (
+              <div className="progress-line">
+                <span className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={done}><span style={{ width: `${Math.round((100 * done) / total)}%` }} /></span>
+                <span className="muted small">{done} of {total} done</span>
+              </div>
+            )}
+            <Items key={ref} model={model} links={links} />
+            {model.sections.map((s) => (
+              <section key={s.heading} className="section">
+                <h2>{s.heading}</h2>
+                <div className="markdown"><DashMarkdown links={links}>{s.text}</DashMarkdown></div>
+              </section>
+            ))}
+            <p className="muted small dash-path" title="The local page, rewritten whenever the note changes">{row.path}</p>
+          </>
+        )}
       </div>
     </>
   );

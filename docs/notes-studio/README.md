@@ -9,7 +9,7 @@ Notes Studio (roadmap item NOTES-1) adds notebooks to Hivemind: a Notes page wit
 | Topic | Decision |
 | --- | --- |
 | Notebook kinds | **Folder notebook**: any folder the user picks, including an Obsidian vault; plain files are the only source of truth. **Living Memory notebook**: inside any Living Memory domain, or in a notebook-only domain with no folder binding |
-| Workspace | One shared tab and pane workspace (up to 3 panes) for the Memory page and the Notes page. The library and the notebook tree are two navigators over the same open documents. This supersedes decision 2 of `../plans/README.md` ("only notes are tabs") |
+| Workspace | One shared tab and pane workspace (up to 3 panes) on the Notes page. The memory tree and the notebook tree are two navigators over the same open documents. This supersedes decision 2 of `../plans/README.md` ("only notes are tabs") |
 | Any file | Open any file: open dialog, drag and drop, recent files, Windows file association and "Open with Hivemind", which opens the file in the running instance |
 | Folder metadata | Sidecar `.hivemind/notebook.json` inside the notebook, written only when the user changes order, icons, pins or settings |
 | History | A snapshot of every save in Hivemind's app data (100 versions or 90 days per page, pinned versions kept), plus the git timeline and a Commit button for notebooks in a git repository. Living Memory pages use Living Memory's journal |

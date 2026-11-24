@@ -1,13 +1,13 @@
 // What a dashboard does with a note's view model, mirrored from the page Living Memory writes (core/views.py):
 // tag kinds and badge classes, the Open/Done/All tabs, chip and text filters, and the three sort orders.
 import { wikilinks } from "../../lib/note";
-import type { ViewItem, ViewModel, ViewRow } from "../../lib/lm";
+import type { NoteView, ViewItem, ViewModel } from "../../lib/lm";
 
 /** The note ID of a ref (`domain:id`, or a bare ID). */
 export const noteId = (ref: string) => ref.slice(ref.lastIndexOf(":") + 1);
 
 /** The model of a view whose note no longer exists, built from its registry row (LM cannot render a ref it cannot resolve). */
-export const missingModel = (row: ViewRow): ViewModel => ({
+export const missingModel = (row: NoteView): ViewModel => ({
   id: row.note, domain: row.domain, title: row.title ?? "Note not found", type: "", status: "missing", updated: "", revision: "",
   summary: "", important: null, items: [], sections: [], counts: { open: 0, done: 0, total: 0 }, superseded_by: null, view_title: row.title ?? undefined,
 });

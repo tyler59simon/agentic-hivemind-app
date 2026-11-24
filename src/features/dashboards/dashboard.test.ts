@@ -3,7 +3,7 @@ import type { ViewItem } from "../../lib/lm";
 import { badgeClass, chipGroups, defaultTab, liveTags, linkParts, missingModel, noteBanner, noteId, passes, priorityOf, sortItems, tagKind, visibleItems, type Filters } from "./dashboard";
 
 describe("deleted and moved notes", () => {
-  const row = { note: "3a562a09-2b34-4a43-8901-c7a1801168e6", domain: "old", title: "Plan", note_title: null, path: "x.html", fresh: false, artifact_url: null, artifact_current: false, exists: true };
+  const row = { kind: "note" as const, note: "3a562a09-2b34-4a43-8901-c7a1801168e6", domain: "old", title: "Plan", note_title: null, path: "x.html", fresh: false, artifact_url: null, artifact_current: false, exists: true };
   it("builds the missing-note model from the registry row", () => {
     const m = missingModel(row);
     expect(m.status).toBe("missing");

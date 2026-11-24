@@ -127,8 +127,8 @@ describe("navigation", () => {
 describe("saved navigation", () => {
   const migrate = (route: object, version = 1) => useApp.persist.getOptions().migrate!({ project: "pay", domain: "demo", route }, version);
 
-  it("is version 7, and moves the Overview, Executive and Recap pages to Home", () => {
-    expect(useApp.persist.getOptions().version).toBe(7);
+  it("is version 8, and moves the Overview, Executive and Recap pages to Home", () => {
+    expect(useApp.persist.getOptions().version).toBe(8);
     for (const page of ["overview", "executive", "recap"]) expect(migrate({ page })).toEqual({ project: "pay", domain: "demo", route: { page: "home" } });
     expect(migrate({ page: "overview", view: "work" })).toMatchObject({ route: { page: "home" } });
   });
@@ -172,5 +172,17 @@ describe("saved navigation", () => {
   it("does not rerun older migrations on a version 4 save", () => {
     expect(migrate({ page: "home", tab: "architecture", system: "s" }, 4)).toMatchObject({ route: { page: "home", tab: "architecture", system: "s" } });
     expect(migrate({ page: "review" }, 4)).toMatchObject({ route: { page: "review" } });
+  });
+
+  // CON-13: the Dashboards page became Notes > Views.
+  it("moves a saved Dashboards route to Notes > Views, keeping the view it showed", () => {
+    expect(migrate({ page: "dashboards", ref: "demo:3a562a09-2b34-4a43-8901-c7a1801168e6" }, 7)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "views", ref: "demo:3a562a09-2b34-4a43-8901-c7a1801168e6" } });
+    expect(migrate({ page: "dashboards" }, 7)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "views" } });
+    expect(migrate({ page: "dashboards", ref: "demo:x" }, 1)).toMatchObject({ route: { page: "notes", view: "views", ref: "demo:x" } });
+  });
+
+  it("leaves a version 8 save, and the Notes routes of older ones, alone", () => {
+    expect(migrate({ page: "notes", view: "views", ref: "q-1a2b3c4d" }, 8)).toMatchObject({ route: { page: "notes", view: "views", ref: "q-1a2b3c4d" } });
+    expect(migrate({ page: "notes", view: "views" }, 7)).toMatchObject({ route: { page: "notes", view: "views" } });
   });
 });

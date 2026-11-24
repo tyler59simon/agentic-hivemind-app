@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import { AgentWorkspace } from "../features/agents/AgentWorkspace";
-import { DashboardsPage } from "../features/dashboards/DashboardsPage";
 import { NotesPage } from "../features/notes/NotesPage";
 import { HomePage } from "../features/home/HomePage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
@@ -18,7 +17,6 @@ const PAGES: Record<Page, () => ReactNode> = {
   home: () => <HomePage />,
   agents: () => <AgentWorkspace />,
   notes: () => <NotesPage />,
-  dashboards: () => <DashboardsPage />,
   wiki: () => <WikiPage />,
   maintenance: () => <MaintenancePage />,
   inbox: () => <InboxPage />,

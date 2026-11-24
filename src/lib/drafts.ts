@@ -41,7 +41,7 @@ export type Draft = NoteDraft | FileDraft;
 export const isFileDraft = (d: Draft): d is FileDraft => (d as FileDraft).kind === "file";
 
 // The newest value of every draft written in this run, so a reader never sees an older one while the write to disk is
-// still on its way (an editor that unmounts and mounts again at once, when moving between the Notes and Memory pages).
+// still on its way (an editor that unmounts and mounts again at once).
 const recent = new Map<string, Draft | null>();
 
 // Writes of one key run one after another, so they reach the disk in the order they were made.

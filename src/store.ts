@@ -13,8 +13,7 @@ export type InboxKind = "code" | "memory" | "pages" | "captures" | "maintenance"
 export type Route =
   | { page: "home"; view?: "briefings"; briefing?: string; capture?: string; tab?: "architecture"; system?: string }
   | { page: "agents"; session?: string; view?: "new" }
-  | { page: "dashboards"; ref?: string }
-  | { page: "notes"; notebook?: string; path?: string; view?: "tasks" | "views" | "tags" | "graph" }
+  | { page: "notes"; notebook?: string; path?: string; view?: "tasks" | "views" | "tags" | "graph"; ref?: string }
   | { page: "wiki"; domain?: string; at?: string; edition?: "agent"; project?: string }
   | { page: "maintenance" }
   | { page: "inbox"; session?: string; file?: string; kind?: InboxKind }
@@ -66,11 +65,13 @@ const whenFree = (move: () => void) => { if (!stopped(move)) move(); };
  *  and the Changes page was removed (CON-4, CON-17); a saved route to a removed page would have no page to show. Version 4:
  *  the Review page became the Inbox (CON-6), so a saved Review route opens it on the same session and file.
  *  Version 5 moves the old Memory workspace to Notes (CON-10). Version 6 removes `q` from the Memory route (CON-11).
- *  Version 7 moves Memory Graph and Tags into Notes (CON-12) and retires the Memory section and Activity/History pages (CON-21). */
+ *  Version 7 moves Memory Graph and Tags into Notes (CON-12) and retires the Memory section and Activity/History pages (CON-21).
+ *  Version 8 moves Dashboards into Notes > Views (CON-13): `ref` is the view the route names. */
 export function migrateNav(persisted: unknown, version = 1): unknown {
-  const saved = persisted as { route?: { page?: string; view?: string; q?: string; capture?: string; briefing?: string; system?: string } } | null;
+  const saved = persisted as { route?: { page?: string; view?: string; q?: string; capture?: string; briefing?: string; system?: string; ref?: string } } | null;
   const route = saved?.route;
   if (!route) return persisted;
+  if (version < 8 && route.page === "dashboards") return { ...saved, route: { page: "notes", view: "views", ...(route.ref ? { ref: route.ref } : {}) } };
   if (version < 7 && route.page === "memory") {
     if (route.view === "graph" || route.view === "tags") return { ...saved, route: { page: "notes", view: route.view } };
     if (route.view === "notes") return { ...saved, route: { page: "notes" } };
@@ -110,7 +111,7 @@ export const useApp = create<AppState>()(persist((set) => ({
   },
 }), {
   name: "hivemind.nav",
-  version: 7,
+  version: 8,
   storage: createJSONStorage(() => safeStorage),
   migrate: (persisted, version) => migrateNav(persisted, version) as AppState,
   partialize: (s) => ({ project: s.project, domain: s.domain, route: s.route }),

@@ -16,7 +16,6 @@ export interface Stakeholder extends Stamped { name: string; role: string; email
 
 /** One fact a generated text may cite. `ref` is a note ref, or `milestone:<id>` / `health:<slug>`. */
 export interface Evidence { id: string; kind: string; title: string; project?: string | null; ref?: string | null; date?: string | null; text: string }
-export interface Pack { evidence: Evidence[]; gaps: string[] }
 
 export const BRIEFING_KINDS = ["weekly", "project", "priorities", "commitments", "risks"] as const;
 export type BriefingKind = (typeof BRIEFING_KINDS)[number];
@@ -53,13 +52,12 @@ export const putRecord = <T>(kind: RecordKind, record: Partial<T>) => invoke<T>(
 export const deleteRecord = (kind: RecordKind, id: string) => invoke<void>("exec_delete", { kind, id });
 export const recordsQuery = <T>(kind: RecordKind) => ({ queryKey: ["executive", kind], queryFn: () => listRecords<T>(kind) });
 
-export const pack = (project: string | null, days?: number) => invoke<Pack>("exec_pack", { project, days });
 export const brief = (kind: BriefingKind, project: string | null, days: number) => invoke<Briefing>("exec_brief", { kind, project, days });
 /** Null: nothing worth keeping was found. */
 export const extract = (text: string, project: string | null, label?: string) => invoke<CaptureBatch | null>("exec_extract", { text, project, label });
 export const agentStart = (project: string | null, prompt: string, options: Pick<StartOptions, "engine" | "model">) =>
   invoke<SessionInfo>("exec_agent_start", { project, prompt, options });
 export const sessionCapture = (id: string) => invoke<CaptureBatch | null>("exec_session_capture", { id });
-export type ExportFormat = "md" | "txt" | "eml";
+export type ExportFormat = "md" | "txt";
 /** Null when the user cancelled the save dialog. */
 export const exportText = (name: string, format: ExportFormat, content: string) => invoke<string | null>("exec_export", { name, format, content });
