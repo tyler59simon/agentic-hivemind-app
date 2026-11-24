@@ -9,7 +9,8 @@ import { useDocsEnabled, useMaintenanceEnabled, useProjectsEnabled, useSystemsEn
 import {
   allProposalsQuery, list as listNotes, maintenanceHistory, maintenanceRun, maintenanceStatus, meta, proposalsList, review, type MaintenanceDecision, type Project,
 } from "../../lib/lm";
-import { skillProposalsQuery } from "../../lib/skills";
+import { skillProposalsQuery, skillsQuery } from "../../lib/skills";
+import { pausedSkills } from "../skills/skills";
 import { useInbox as useCaptureInbox } from "../executive/useExecutive";
 import { APPLIED_DAYS, appliedDecisions, DEFER_DAYS, deferredNotes, HISTORY_LIMIT, runsWithin, type RunDecisions } from "../maintenance/maintenance";
 import { useSeen } from "../maintenance/seen";
@@ -106,9 +107,11 @@ export function useInboxItems({ project, routed }: InboxScope = {}) {
     return stale?.behind ? [{ system, stale }] : [];
   }), [tracked, staleness]);
 
-  // Skills: proposals to publish, change or archive a skill.
+  // Skills: proposals to publish, change or archive a skill, and linked skills whose sync paused.
   const skillDrafts = useQuery({ ...skillProposalsQuery(), refetchOnMount: "always" });
   const skills = useMemo(() => skillDrafts.data ?? [], [skillDrafts.data]);
+  const skillList = useQuery({ ...skillsQuery(), refetchOnMount: "always" });
+  const syncs = useMemo(() => pausedSkills(skillList.data ?? []), [skillList.data]);
 
   const counts: InboxCounts = {
     ...NO_COUNTS,
@@ -118,14 +121,14 @@ export function useInboxItems({ project, routed }: InboxScope = {}) {
     captures: captures.length,
     maintenance: applied.length,
     architecture: proposals.length + behind.length,
-    skills: skills.length,
+    skills: skills.length + syncs.length,
   };
   const loading = sessions.isLoading || (projectsOn && (due.isLoading || memoryDrafts.isLoading))
     || (docsOn && pageDrafts.isLoading) || (systemsOn && registry.isLoading)
-    || maintenanceLoading || captureInbox.batches.isLoading || skillDrafts.isLoading;
+    || maintenanceLoading || captureInbox.batches.isLoading || skillDrafts.isLoading || skillList.isLoading;
   return {
     counts, total: inboxTotal(counts), loading, sessions, groups,
-    due, dueRows, kindTotals, deferred, covered, maintenanceLoading, unconfirmedNotes, drafts, pages, captures, applied, skills,
+    due, dueRows, kindTotals, deferred, covered, maintenanceLoading, unconfirmedNotes, drafts, pages, captures, applied, skills, syncs,
     registry, proposals, behind, dismiss,
   };
 }

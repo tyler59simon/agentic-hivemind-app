@@ -23,6 +23,7 @@ import { wikiAgentRunning } from "./lib/wiki";
 import { invalidateWiki } from "./features/wiki/useWiki";
 import { needsLmUpdate, useConnection } from "./lib/connection";
 import { refreshStore } from "./lib/refresh";
+import { skillsSyncNow } from "./lib/skills";
 import { Shell } from "./shell/Shell";
 import { closeSettings, openInbox, openSession, openSettings, useApp } from "./store";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
@@ -207,6 +208,8 @@ function useLiveRefresh(enabled: boolean) {
         client.invalidateQueries({ queryKey: ["skills"] });
         client.invalidateQueries({ queryKey: ["proposals"] });
       }),
+      // Skill sync changed a skill or its note (a watcher, a connect, or a focus pass).
+      listen("skills-changed", () => client.invalidateQueries({ queryKey: ["skills"] })),
       listen("architecture-drift", () => client.invalidateQueries({ queryKey: ["architecture", "drift"] })),
       listen("automations-changed", () => client.invalidateQueries({ queryKey: ["automations"] })),
       listen<string>("executive-changed", (e) => {
@@ -219,7 +222,18 @@ function useLiveRefresh(enabled: boolean) {
       listen<DocsChanged>("docs-changed", (e) => onDocsChanged(client, e.payload)),
       listen<IndexProgress>("index-progress", (e) => onIndexProgress(client, e.payload)),
     ];
-    return () => { stops.forEach((stop) => stop.then((unlisten) => unlisten())); };
+    // Linked skills sync when the window gets focus, at most once every 10 seconds. Errors only go to the console.
+    let last = 0;
+    const onFocus = () => {
+      if (Date.now() - last < 10_000) return;
+      last = Date.now();
+      skillsSyncNow().catch((e) => console.warn("skills_sync failed", e));
+    };
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      stops.forEach((stop) => stop.then((unlisten) => unlisten()));
+    };
   }, [enabled, client]);
 }
 

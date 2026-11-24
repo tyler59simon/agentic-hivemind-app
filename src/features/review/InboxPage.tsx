@@ -1,5 +1,5 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleCheck, FileText, Inbox as InboxIcon, Layers, Lightbulb, Network, NotebookPen, Sparkles, Wrench } from "lucide-react";
+import { CircleCheck, FileText, Inbox as InboxIcon, Layers, Lightbulb, Network, NotebookPen, RefreshCwOff, Sparkles, Wrench } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { reviewFiles, reviewRefresh, type FileChange, type SessionInfo } from "../../lib/agent";
 import { useProjectsEnabled } from "../../lib/connection";
@@ -7,9 +7,10 @@ import { type Staleness } from "../../lib/architecture";
 import { classify } from "../../lib/errors";
 import type { CaptureBatch } from "../../lib/executive";
 import { meta, review, writeSystem, type DocProposalRow, type MemoryProposal, type ReviewKind, type ReviewRow, type System, type SystemUpdate } from "../../lib/lm";
-import { learningQuery, type ReviewRun, type SkillProposal } from "../../lib/skills";
+import { learningQuery, type ReviewRun, type Skill, type SkillProposal } from "../../lib/skills";
 import { MemoryProposalCard, SkillProposalCard } from "../skills/LearnedCards";
-import { proposalTitle } from "../skills/skills";
+import { SkillSyncCard } from "../skills/SkillSyncCard";
+import { proposalTitle, syncTitle } from "../skills/skills";
 import { openSession, openSystem, useApp, type InboxKind } from "../../store";
 import { sections } from "../../lib/note";
 import { Markdown } from "../../ui/Markdown";
@@ -36,7 +37,7 @@ type Kind = "all" | InboxKind;
 const MAX_ROWS = 300;
 const EMPTY: Record<InboxKind, string> = {
   code: "No code changes are waiting.", memory: "No notes are waiting.", pages: "No page edits are waiting.", captures: "No captures are waiting.",
-  maintenance: "No maintenance changes are waiting.", architecture: "No architecture updates are waiting.", skills: "No skill proposals are waiting.",
+  maintenance: "No maintenance changes are waiting.", architecture: "No architecture updates are waiting.", skills: "No skill proposals or sync conflicts are waiting.",
 };
 
 type Item =
@@ -49,7 +50,8 @@ type Item =
   | { key: string; type: "applied"; item: AppliedItem }
   | { key: string; type: "proposal"; system: System; update: SystemUpdate; fields: string; proposer: SessionInfo }
   | { key: string; type: "behind"; system: System; stale: Staleness }
-  | { key: string; type: "skill"; proposal: SkillProposal };
+  | { key: string; type: "skill"; proposal: SkillProposal }
+  | { key: string; type: "skill-sync"; skill: Skill };
 
 /** A Memory item: the existing card, and the note's Executive Summary under it. */
 function MemoryCard({ row, due, why }: { row: ReviewRow; due: boolean; why?: string }) {
@@ -66,7 +68,7 @@ function MemoryCard({ row, due, why }: { row: ReviewRow; due: boolean; why?: str
 }
 
 /** Inbox: what waits for you before it counts as accepted. Agent code edits, notes, page edits, captures, what maintenance
- *  changed, registry changes and skill proposals each have their rows in the left list; the right pane shows the selected one. */
+ *  changed, registry changes, skill proposals and paused skill syncs each have their rows in the left list; the right pane shows the selected one. */
 export function InboxPage() {
   const client = useQueryClient();
   const route = useApp((s) => s.route);
@@ -76,7 +78,7 @@ export function InboxPage() {
   const inbox = useInboxItems({ routed: routed.session });
   const notebooks = useQuery(notebooksQuery());
   const where = (row: DocProposalRow) => proposalWhere(row, notebooks.data ?? []);
-  const { groups, sessions, due, drafts, pages, captures, applied, skills, proposals, behind, dismiss, counts } = inbox;
+  const { groups, sessions, due, drafts, pages, captures, applied, skills, syncs, proposals, behind, dismiss, counts } = inbox;
 
   // Code: each session's files. Sessions come from the hook; their file lists are read here, for the rows shown.
   useEffect(() => { reviewRefresh().catch(() => undefined); }, []);
@@ -141,9 +143,10 @@ export function InboxPage() {
     if (show("architecture")) for (const p of proposals) out.push({ key: `proposal:${p.system.slug}`, type: "proposal", system: p.system, update: p.update!, fields: p.fields, proposer: p.proposer! });
     if (show("architecture")) for (const b of behind) out.push({ key: `behind:${b.system.slug}`, type: "behind", system: b.system, stale: b.stale });
     if (show("skills")) for (const p of skills) out.push({ key: `skill:${p.id}`, type: "skill", proposal: p });
+    if (show("skills")) for (const s of syncs) out.push({ key: `skill-sync:${s.name}`, type: "skill-sync", skill: s });
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind, groups, lists, notes, inbox.deferred, inbox.unconfirmedNotes, kinds, drafts, runOf, pages, captures, applied, proposals, behind, skills]);
+  }, [kind, groups, lists, notes, inbox.deferred, inbox.unconfirmedNotes, kinds, drafts, runOf, pages, captures, applied, proposals, behind, skills, syncs]);
   const routedKey = routed.session && routed.file ? fileKey(routed.session, routed.file) : null;
   const firstOfRouted = visible.find((i) => (i.type === "file" || i.type === "session") && i.info.id === routed.session);
   const selected = (picked && visible.find((i) => i.key === picked))
@@ -249,6 +252,7 @@ export function InboxPage() {
                 : item.type === "proposal" ? row(item, <Network size="1.3em" aria-hidden />, `Architecture: ${item.system.name} update`)
                 : item.type === "behind" ? row(item, <Layers size="1.3em" aria-hidden />, `Architecture: ${item.system.name} is ${item.stale.behind} commit${item.stale.behind === 1 ? "" : "s"} behind`)
                 : item.type === "skill" ? row(item, <Sparkles size="1.3em" aria-hidden />, proposalTitle(item.proposal))
+                : item.type === "skill-sync" ? row(item, <RefreshCwOff size="1.3em" aria-hidden />, syncTitle(item.skill.name))
                 : null)}
               {!visible.length && kind !== "all" && !inbox.loading
                 && !(kind === "code" && lists.some((q) => q.isLoading))
@@ -262,6 +266,7 @@ export function InboxPage() {
                   {selected.type === "memory" && <MemoryCard row={selected.row} due={selected.due} why={selected.why} />}
                   {selected.type === "draft" && <MemoryProposalCard key={selected.proposal.id} proposal={selected.proposal} run={selected.run} onDone={done} />}
                   {selected.type === "skill" && <SkillProposalCard key={selected.proposal.id} proposal={selected.proposal} onDone={done} />}
+                  {selected.type === "skill-sync" && <SkillSyncCard key={selected.skill.name} skill={selected.skill} onDone={done} />}
                   {selected.type === "page" && (
                     <>
                       <h2>{selected.row.path}</h2>

@@ -2,6 +2,8 @@
 //! nobody approved yet, and approved sessions leave `hivemind/<id8>` branches that are never merged for the user.
 //! Discarding, ending and removing worktrees reuse the review and agent commands; this module lists, and deletes only
 //! `hivemind/*` branches already merged into the repository's default branch.
+//! Published skill copies (REG-10) are listed and removed by `skills::Skills::published` and `remove_published`; the commands
+//! `uninstall_skills` and `uninstall_remove_skills` in `lib.rs` call them.
 use crate::agent::events::{Mode, Status};
 use crate::agent::{Interface, ReviewState, SessionInfo};
 use crate::folders;

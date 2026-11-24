@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookOpenCheck, History, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { classify } from "../../lib/errors";
-import { learningQuery, skillAction, skillHistory, skillProposalsQuery, skillsQuery, skillsUpkeep, type Skill } from "../../lib/skills";
+import { learningQuery, skillAction, skillHistory, skillLink, skillProposalsQuery, skillsQuery, skillsUpkeep, skillUnlink, type Skill } from "../../lib/skills";
 import { openInbox, openSession, openSettings, useApp } from "../../store";
 import { Markdown } from "../../ui/Markdown";
 import { Confirm } from "../../ui/Modal";
@@ -12,7 +12,7 @@ import { ArrowLink, Row, Section } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { noteQuery } from "../viewer/NoteView";
 import { useWorkspace } from "../../workspace/store";
-import { COPY_WORDS, copyPlace, ledgerText, reliabilityText, runText, skillState } from "./skills";
+import { COPY_WORDS, copyPlace, ledgerText, linkRef, linkState, PAUSE_WORDS, reliabilityText, runText, skillState } from "./skills";
 
 const when = (ms: number) => new Date(ms).toLocaleString();
 
@@ -22,30 +22,61 @@ function NoteLink({ refId }: { refId: string }) {
   return <button className="link-row" onClick={() => useWorkspace.getState().openNote(refId, { title })}>{title}</button>;
 }
 
+/** "Link to note" for a note the skill came from, when that note is an active runbook (the only kind a skill can sync with). */
+function LinkToNote({ skill, refId }: { skill: Skill; refId: string }) {
+  const client = useQueryClient();
+  const note = useQuery(noteQuery(refId));
+  const [busy, setBusy] = useState(false);
+  if (note.data?.type !== "runbook" || note.data.status !== "active") return null;
+  const link = () => {
+    setBusy(true);
+    skillLink(skill.name, refId).then((linked) => {
+      toast(linked.link?.paused ? "Linked, but the texts differ: resolve it in the Inbox" : "Linked; it syncs from now on");
+      client.invalidateQueries({ queryKey: ["skills"] });
+    }, (e) => toast(classify(e).message, "error")).finally(() => setBusy(false));
+  };
+  return <button disabled={busy} onClick={link} title="Keep the skill and this note in step from now on">Link to note “{note.data.title}”</button>;
+}
+
 function SkillDetail({ skill }: { skill: Skill }) {
   const client = useQueryClient();
   const history = useQuery({ queryKey: ["skills", "history", skill.name], queryFn: () => skillHistory(skill.name) });
-  const [asking, setAsking] = useState<null | "archive" | number>(null);
+  const [asking, setAsking] = useState<null | "archive" | "unlink" | number>(null);
   const act = (action: "archive" | "restore" | "import" | "publish", version?: number) =>
     skillAction(skill.name, action, version).then(() => {
       toast(action === "archive" ? `Archived ${skill.name}` : action === "restore" ? `Restored version ${version} of ${skill.name}` : action === "import" ? "Imported the outside edit" : "Published again");
       client.invalidateQueries({ queryKey: ["skills"] });
     }, (e) => toast(classify(e).message, "error"));
+  const unlink = () => skillUnlink(skill.name).then(() => {
+    toast(`Unlinked ${skill.name} from its note`);
+    client.invalidateQueries({ queryKey: ["skills"] });
+  }, (e) => toast(classify(e).message, "error"));
   const edited = skill.copies.some((c) => c.state === "edited");
   const state = skillState(skill);
+  const synced = linkState(skill);
+  const paused = skill.link?.paused;
   return (
     <div className="review-pane">
-      <h2>{skill.name} <span className={`status-chip ${state.tone}`}>{state.label}</span></h2>
+      <h2>{skill.name} <span className={`status-chip ${state.tone}`}>{state.label}</span>
+        {synced && <> <span className={`status-chip ${synced.tone}`}>{synced.label}</span></>}</h2>
       <p>{skill.description}</p>
       <p className="muted small">
         Version {skill.version} · {skill.uses} use{skill.uses === 1 ? "" : "s"}{skill.lastUsed ? `, last ${when(skill.lastUsed)}` : ""} · {reliabilityText(skill)}
       </p>
       <p className="muted small">Reliability counts how the sessions that used this skill were reviewed. It shows a correlation, not that the skill caused the result.</p>
+      {paused && (
+        <div className="banner warn">
+          <span>{PAUSE_WORDS[paused.kind]}, so sync with the note is paused.</span>
+          <ArrowLink onClick={() => openInbox(undefined, undefined, "skills")}>Resolve in the Inbox</ArrowLink>
+        </div>
+      )}
       <div className="work-actions">
         {!skill.archived && <button onClick={() => setAsking("archive")}>Archive</button>}
+        {!skill.archived && skill.link && <button onClick={() => setAsking("unlink")}>Unlink</button>}
+        {!skill.archived && !skill.link && skill.notes.map((n) => <LinkToNote key={n} skill={skill} refId={n} />)}
         {!skill.archived && !edited && skill.copies.some((c) => c.state !== "current") && <button onClick={() => act("publish")}>Publish again</button>}
         {!skill.archived && !skill.copies.length && <button onClick={() => act("publish")}>Publish</button>}
-        {edited && <button className="primary" onClick={() => act("import")}>Keep the outside edit as a new version</button>}
+        {edited && !skill.link && <button className="primary" onClick={() => act("import")}>Keep the outside edit as a new version</button>}
         {skill.archived && <button className="primary" onClick={() => act("restore", skill.version)}>Restore</button>}
       </div>
       <Section title="Published copies"
@@ -53,12 +84,15 @@ function SkillDetail({ skill }: { skill: Skill }) {
         {skill.copies.map((c) => (
           <Row key={c.dir} icon={<BookOpenCheck size="1.3em" aria-hidden />} meta={COPY_WORDS[c.state]} title={c.dir}>{copyPlace(c.dir)}</Row>
         ))}
-        {edited && <p className="muted small">Someone changed a published copy. Hivemind will not overwrite it: keep the edit as a new version, or restore a version to replace it.</p>}
+        {edited && (skill.link
+          ? <p className="muted small">Someone edited a published copy. Because the skill is linked, Hivemind writes the edit back to the note and keeps it as a new version on its own. If both changed, sync pauses and the Inbox asks you.</p>
+          : <p className="muted small">Someone changed a published copy. Hivemind will not overwrite it: keep the edit as a new version, or restore a version to replace it.</p>)}
       </Section>
       <Section title="SKILL.md"><div className="markdown"><Markdown>{skill.body}</Markdown></div></Section>
-      {(!!skill.notes.length || !!skill.sessions.length) && (
+      {(!!skill.notes.length || !!skill.sessions.length || !!skill.link) && (
         <Section title="Where it came from">
-          {skill.notes.map((n) => <NoteLink key={n} refId={n} />)}
+          {skill.link && <><p className="muted small">Synced with</p><NoteLink refId={linkRef(skill.link)} /></>}
+          {skill.notes.filter((n) => !skill.link || n !== linkRef(skill.link)).map((n) => <NoteLink key={n} refId={n} />)}
           {skill.sessions.map((s) => <ArrowLink key={s} onClick={() => openSession(s)}>Session {s.slice(0, 8)}</ArrowLink>)}
         </Section>
       )}
@@ -75,6 +109,10 @@ function SkillDetail({ skill }: { skill: Skill }) {
       {asking === "archive" && (
         <Confirm title={`Archive ${skill.name}?`} action="Archive" danger message="Hivemind removes it from the Claude Code and Codex skill folders and keeps every version, so you can restore it."
           onAnswer={(yes) => { setAsking(null); if (yes) act("archive"); }} />
+      )}
+      {asking === "unlink" && (
+        <Confirm title={`Unlink ${skill.name}?`} action="Unlink" message="The skill and the note stop syncing. Both keep their current text. You can link them again here."
+          onAnswer={(yes) => { setAsking(null); if (yes) unlink(); }} />
       )}
       {typeof asking === "number" && (
         <Confirm title={`Restore version ${asking}?`} action="Restore" message={`Version ${asking} becomes the current version (as a new version) and is published again.`}
@@ -108,7 +146,7 @@ export function SkillsPane() {
         <button onClick={upkeep} title="Propose archiving skills unused for 30 days, or whose sessions are mostly rejected">Check for stale skills</button>
       </div>
       <p className="muted small">
-        Procedures learned from approved work, published to Claude Code and Codex.{" "}
+        Procedures learned from approved work, published to Claude Code and Codex. A skill made from a runbook note stays in sync with it.{" "}
         {status ? (status.enabled
           ? <>The reviewer reads finished sessions and proposes notes and skills; you approve them in the Inbox.</>
           : <>The post-session reviewer is off.</>) : null}

@@ -654,10 +654,11 @@ pub fn read_docx_bytes(bytes: &[u8]) -> Result<ParsedDocx, String> {
             has_charts = true;
         } else if low == "word/footnotes.xml" || low == "word/endnotes.xml" {
             has_notes = true;
-        } else if low.starts_with("word/media/") && !low.ends_with('/') {
-            if let Some(data) = read_entry_capped(&mut archive, name, &mut budget)? {
-                media_bytes.insert(name.clone(), data);
-            }
+        } else if low.starts_with("word/media/")
+            && !low.ends_with('/')
+            && let Some(data) = read_entry_capped(&mut archive, name, &mut budget)?
+        {
+            media_bytes.insert(name.clone(), data);
         }
     }
 

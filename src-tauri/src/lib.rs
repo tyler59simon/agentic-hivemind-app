@@ -34,6 +34,7 @@ mod review;
 mod settings;
 mod shell_env;
 mod skills;
+mod skillsync;
 mod studio;
 mod term;
 #[cfg(test)]
@@ -72,6 +73,10 @@ struct AppState {
     /// Executive conversations being captured now.
     capturing: executive::Claims,
     watcher: Mutex<Option<notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>>,
+    /// Watches the skill folders for edits to a linked skill's SKILL.md (`skillsync::watch_targets`).
+    skill_watcher: Mutex<Option<notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>>,
+    /// Sync triggers waiting for the pass that is running (`kick_skill_sync`).
+    skill_sync: skillsync::Queue,
     /// Why the quick-capture hotkey could not be registered, for the settings screen.
     shortcut_error: Mutex<Option<String>>,
     /// Folder notebooks the user registered (Notes Studio).
@@ -223,10 +228,11 @@ async fn connect(app: AppHandle, state: State<'_, AppState>) -> Result<ConnectIn
     let reported = doctor.result.get("root").and_then(Value::as_str).ok_or("Living Memory did not report its store root")?.to_string();
     state.bridge.pin_root(generation, PathBuf::from(&reported));
     let root = store_identity(&reported);
-    let (notes, store, docs) = (app.clone(), app.clone(), app.clone());
+    let (notes, store, docs, synced) = (app.clone(), app.clone(), app.clone(), app.clone());
     let debouncer = watcher::watch_all(
         &PathBuf::from(&root),
         move |domains| {
+            kick_skill_sync(&synced, skillsync::Scope::Domains(domains.clone()));
             let _ = notes.emit("notes-changed", NotesChanged { domains });
         },
         move |files| {
@@ -239,6 +245,12 @@ async fn connect(app: AppHandle, state: State<'_, AppState>) -> Result<ConnectIn
         },
     )?;
     *state.watcher.lock().unwrap() = Some(debouncer);
+    // An edit to a linked skill's SKILL.md syncs it to its note; a watcher that fails to start costs only that trigger.
+    let folders = app.clone();
+    *state.skill_watcher.lock().unwrap() = skillsync::watch_targets(state.skills.targets(), move |names| kick_skill_sync(&folders, skillsync::Scope::Names(names)))
+        .map_err(|e| eprintln!("skill folders are not watched: {e}"))
+        .ok();
+    kick_skill_sync(&app, skillsync::Scope::All);
     *state.store_root.lock().unwrap() = Some(PathBuf::from(&root));
     // Meaning search reads the model Living Memory installed in this store.
     state.index.set_store(Some(PathBuf::from(&root)));
@@ -463,14 +475,19 @@ fn skill_proposals(state: State<'_, AppState>, all: Option<bool>) -> Vec<skills:
 /// Approve (with the user's edits, when given) or reject a skill proposal.
 #[tauri::command]
 fn skill_decide(
-    state: State<'_, AppState>, id: String, approve: bool, description: Option<String>, body: Option<String>, reason: Option<String>,
+    app: AppHandle, state: State<'_, AppState>, id: String, approve: bool, description: Option<String>, body: Option<String>, reason: Option<String>,
 ) -> Result<skills::Proposal, String> {
     let edit = match (description, body) {
         (Some(d), Some(b)) => Some((d, b)),
         (None, None) => None,
         _ => return Err("An edit needs both the description and the text".into()),
     };
-    state.skills.decide(&id, approve, edit, "user", reason.filter(|r| !r.trim().is_empty()))
+    let decided = state.skills.decide(&id, approve, edit, "user", reason.filter(|r| !r.trim().is_empty()))?;
+    // A skill approved from a note is linked to it; the first pass writes the approved text to the note.
+    if approve && decided.link && decided.kind == skills::Kind::Create {
+        kick_skill_sync(&app, skillsync::Scope::Names(vec![decided.name.clone()]));
+    }
+    Ok(decided)
 }
 
 /// What the user can do to an approved skill: archive, restore a version, take an edited copy, publish again.
@@ -507,20 +524,159 @@ fn skills_upkeep(state: State<'_, AppState>) -> Vec<skills::Proposal> {
 /// A skill proposal from a runbook note: the note's text becomes the skill's, for the user to edit and approve.
 #[tauri::command]
 async fn skill_from_note(state: State<'_, AppState>, note: String) -> Result<skills::Proposal, String> {
-    let reply = state.bridge.call(&["read".into(), note.clone(), "--actor".into(), "viewer".into()], None)?;
-    if reply.exit_code != 0 {
-        return Err(format!("Living Memory could not read {note}: {}", reply.error));
+    let notes = BridgeNotes(state.bridge.clone());
+    let read = blocking({
+        let note = note.clone();
+        move || skillsync::NoteStore::read(&notes, &note)
+    })
+    .await?
+    .ok_or_else(|| format!("There is no note {note}"))?;
+    if read.note_type != "runbook" {
+        return Err(format!("A skill is made from a runbook note, and this is a {} note", read.note_type));
     }
-    let title = reply.result.get("title").and_then(Value::as_str).unwrap_or_default();
-    let body = reply.result.get("body").and_then(Value::as_str).unwrap_or_default();
-    let (description, text) = skills::from_note(body);
+    if read.truncated {
+        return Err("This note is longer than Living Memory returns in one read, so it cannot become a skill".into());
+    }
+    let (description, text) = skills::from_note(&read.body);
     state.skills.propose(
         skills::NewProposal {
-            kind: Some(skills::Kind::Create), name: skills::slug(title), description, body: text,
-            reason: format!("Made from the runbook note \"{title}\""), note: Some(note), ..Default::default()
+            kind: Some(skills::Kind::Create), name: skills::slug(&read.title), description, body: text,
+            reason: format!("Made from the runbook note \"{}\"", read.title), note: Some(format!("{}:{}", read.domain, read.id)),
+            link: true, note_revision: Some(read.revision.clone()), note_digest: Some(skillsync::digest(&skillsync::note_to_skill(&read.body))),
+            note_domain: Some(read.domain.clone()), note_title: Some(read.title.clone()), ..Default::default()
         },
         "user",
     )
+}
+
+/// Living Memory notes as skill sync reads and writes them, through the bridge.
+struct BridgeNotes(Arc<Bridge>);
+
+impl skillsync::NoteStore for BridgeNotes {
+    fn read(&self, note: &str) -> Result<Option<skillsync::NoteRead>, String> {
+        let argv = ["read", note, "--actor", "viewer", "--max-chars", "200000"].map(String::from);
+        let reply = self.0.call(&argv, None)?;
+        if reply.exit_code != 0 {
+            let message = reply.error.get("message").and_then(Value::as_str).unwrap_or_default();
+            return if message.starts_with("No note with") { Ok(None) } else { Err(format!("Living Memory could not read {note}: {}", reply.error)) };
+        }
+        let text = |key: &str| reply.result.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
+        Ok(Some(skillsync::NoteRead {
+            id: text("id"), domain: text("domain"), title: text("title"), note_type: text("type"), status: text("status"), body: text("body"),
+            revision: text("revision"), truncated: reply.result.get("truncated").and_then(Value::as_bool).unwrap_or(false),
+        }))
+    }
+
+    /// A stale revision is exit code 6 with error code "stale". The summary goes as one `--summary=TEXT` item so a summary
+    /// that starts with "-" is never read as a flag. Section texts are separate items: argparse reads a value that contains
+    /// a space as a value, but a section text with no space that starts with "-" would be read as a flag.
+    fn update(&self, note: &str, update: &skillsync::Update, expected_revision: &str) -> Result<skillsync::Written, String> {
+        let mut argv: Vec<String> = vec!["update".into(), note.into()];
+        if let Some((domain, _)) = note.split_once(':') {
+            argv.extend(["--domain".into(), domain.into()]);
+        }
+        if !update.summary.is_empty() {
+            argv.push(format!("--summary={}", update.summary));
+        }
+        for (heading, text) in &update.sections {
+            argv.extend(["--section".into(), heading.clone(), text.clone()]);
+        }
+        for heading in &update.drops {
+            argv.extend(["--drop-section".into(), heading.clone()]);
+        }
+        argv.extend(["--expected-revision".into(), expected_revision.into()]);
+        let reply = self.0.call(&argv, None)?;
+        match (reply.exit_code, reply.error.get("code").and_then(Value::as_str)) {
+            (0, _) => Ok(skillsync::Written::Ok),
+            (6, _) | (_, Some("stale")) => Ok(skillsync::Written::Stale),
+            _ => Err(format!("Living Memory could not update {note}: {}", reply.error)),
+        }
+    }
+}
+
+/// Sync the linked skills in `scope` off the async runtime. One pass runs at a time and one waits: a trigger that arrives
+/// meanwhile merges into the waiting scope instead of starting its own.
+fn kick_skill_sync(app: &AppHandle, scope: skillsync::Scope) {
+    let state = app.state::<AppState>();
+    if let Some(scope) = state.skill_sync.submit(scope) {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            run_skill_sync(&app, scope);
+        });
+    }
+}
+
+/// Run `scope` and whatever queued meanwhile, telling the webview when any skill changed. Returns how many changed.
+fn run_skill_sync(app: &AppHandle, mut scope: skillsync::Scope) -> usize {
+    let state = app.state::<AppState>();
+    let mut total = 0;
+    loop {
+        // A panic in a pass is logged and ends only that pass: the queue must go idle so later triggers run.
+        let pass = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| skillsync::sync(&state.skills, &BridgeNotes(state.bridge.clone()), &scope)));
+        let changed = pass.unwrap_or_else(|_| {
+            eprintln!("skill sync panicked; the pass was dropped");
+            0
+        });
+        if changed > 0 {
+            let _ = app.emit("skills-changed", ());
+        }
+        total += changed;
+        match state.skill_sync.next() {
+            Some(queued) => scope = queued,
+            None => return total,
+        }
+    }
+}
+
+/// Sync every linked skill (the webview calls this when the window gets focus). Returns how many skills changed; 0 when a
+/// pass was already running, which then covers this request too.
+#[tauri::command]
+async fn skills_sync(app: AppHandle) -> Result<usize, String> {
+    let Some(scope) = app.state::<AppState>().skill_sync.submit(skillsync::Scope::All) else { return Ok(0) };
+    blocking(move || Ok(run_skill_sync(&app, scope))).await
+}
+
+/// Link an existing skill to a runbook note: in step when the note maps to the skill, else paused as a conflict.
+#[tauri::command]
+async fn skill_link(app: AppHandle, name: String, note: String) -> Result<skills::SkillView, String> {
+    skills::check_name(&name)?;
+    blocking(move || {
+        let state = app.state::<AppState>();
+        skillsync::link(&state.skills, &BridgeNotes(state.bridge.clone()), &name, &note)?;
+        state.skills.view(&name, agent::now_ms()).ok_or_else(|| format!("There is no skill named {name}"))
+    })
+    .await
+}
+
+#[tauri::command]
+async fn skill_unlink(app: AppHandle, name: String) -> Result<(), String> {
+    skills::check_name(&name)?;
+    blocking(move || skillsync::unlink(&app.state::<AppState>().skills, &name)).await
+}
+
+/// Settle a skill whose sync is paused: `action` is "note" (take the note's text), "skill" (take the skill's), "merge"
+/// (take `description` and `body`) or "unlink".
+#[tauri::command]
+async fn skill_resolve(app: AppHandle, name: String, action: String, description: Option<String>, body: Option<String>) -> Result<skills::SkillView, String> {
+    skills::check_name(&name)?;
+    blocking(move || {
+        let state = app.state::<AppState>();
+        skillsync::resolve(&state.skills, &BridgeNotes(state.bridge.clone()), &name, &action, description, body)?;
+        state.skills.view(&name, agent::now_ms()).ok_or_else(|| format!("There is no skill named {name}"))
+    })
+    .await
+}
+
+/// The skill copies Hivemind published that are still in the CLIs' skill folders, for the uninstall list (REG-10).
+#[tauri::command]
+fn uninstall_skills(state: State<'_, AppState>) -> Vec<skills::Published> {
+    state.skills.published()
+}
+
+/// Remove the published skill copies nobody edited. The library and archived skills are untouched.
+#[tauri::command]
+fn uninstall_remove_skills(state: State<'_, AppState>) -> skills::RemoveReport {
+    state.skills.remove_published("user")
 }
 
 /// An automation's repository, checked when it runs: it must still be one of the project's, since it may have left Living
@@ -1899,6 +2055,8 @@ pub fn run() {
                 executive: executive::Store::new(app.path().app_data_dir()?.join("executive")),
                 capturing: executive::Claims::default(),
                 watcher: Mutex::new(None),
+                skill_watcher: Mutex::new(None),
+                skill_sync: skillsync::Queue::default(),
                 shortcut_error: Mutex::new(shortcut_error),
                 notebooks: notebooks::Registry::new(app.path().app_data_dir()?.join("notebooks.json")),
                 notebook_meta_dir: app.path().app_data_dir()?.join("notebook-meta"),
@@ -1991,7 +2149,7 @@ pub fn run() {
             exec_export,
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, ui_zoom, ui_zoom_set, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_roles, learning_status, learning_review, skills_list, skill_proposals, skill_decide, skill_action, skill_version, skill_history,
-            skills_upkeep, skill_from_note,
+            skills_upkeep, skill_from_note, skills_sync, skill_link, skill_unlink, skill_resolve, uninstall_skills, uninstall_remove_skills,
             automation_list, automation_put, automation_delete, automation_spend, automation_act, architecture_drift, architecture_rules_set, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, uninstall_inventory, uninstall_remove_worktree, uninstall_delete_branch, repo_branches,
             agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_stop_and_approve, review_ask_codex, review_request_changes, review_request_terminal_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
             system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export, wiki_agent_build, wiki_agent_cancel, wiki_agent_running,

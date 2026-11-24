@@ -59,7 +59,7 @@ export function NoteMenu({ refId, paper }: { refId: string; paper?: { white: boo
     { label: "Make a skill…", show: n.type === "runbook" && n.status === "active", act: () => {
       skillFromNote(refId).then((p) => {
         client.invalidateQueries({ queryKey: ["skills"] });
-        toast(`Skill proposal ${p.name} is waiting in the Inbox`, "info", { label: "Open Inbox", run: () => openInbox(undefined, undefined, "skills") });
+        toast(`Skill proposal ${p.name} is waiting in the Inbox. Once approved, the skill stays in sync with this note`, "info", { label: "Open Inbox", run: () => openInbox(undefined, undefined, "skills") });
       }, (e) => toast(classify(e).message, "error"));
     } },
     { label: paper?.white ? "Theme background" : "White background", show: !!paper, act: () => { paper?.flip(); } },

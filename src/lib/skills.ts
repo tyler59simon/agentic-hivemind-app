@@ -9,12 +9,20 @@ export type CopyState = "current" | "older" | "edited" | "missing";
 
 export interface SkillCopy { dir: string; state: CopyState }
 
+/** Why sync stopped for a linked skill. */
+export type PauseKind = "conflict" | "invalid_note" | "invalid_skill" | "loose_text" | "copies_differ" | "note_missing";
+export interface SkillText { description: string; body: string }
+export interface Pause { kind: PauseKind; reason: string; at: number; noteText: SkillText | null; skillText: SkillText | null }
+/** The two-way link between a skill and its runbook note, with what both held at the last sync. */
+export interface Link { note: string; domain: string; title: string; revision: string; noteDigest: string; version: number; paused: Pause | null }
+
 export interface Skill {
   name: string; description: string; version: number; archived: boolean; createdAt: number; updatedAt: number;
   notes: string[]; sessions: string[];
   body: string; versions: number[]; copies: SkillCopy[];
   uses: number; lastUsed: number | null; approved: number; rejected: number; reliability: number | null;
   stale: boolean; flagged: boolean;
+  link: Link | null;
 }
 
 export interface SkillProposal {
@@ -23,10 +31,14 @@ export interface SkillProposal {
   by: "reviewer" | "upkeep" | "user"; state: ProposalState; createdAt: number; decidedAt: number | null; decision: string | null;
   /** Set on an approval whose version was stored but not published everywhere. */
   warning?: string | null;
+  /** A proposal from a runbook note: approving it links the skill to the note. */
+  link: boolean;
+  noteRevision: string | null; noteDigest: string | null; noteDomain: string | null; noteTitle: string | null;
 }
 
 export interface LedgerEntry {
   at: number; actor: string; action: string; name: string; version: number | null; sha256: string | null; proposal: string | null; detail: string | null;
+  revision?: string | null;
 }
 
 export type ReviewTrigger = "approved" | "dismissed" | "finished" | "manual";
@@ -50,6 +62,20 @@ export const skillVersion = (name: string, version: number) => invoke<string>("s
 export const skillHistory = (name?: string) => invoke<LedgerEntry[]>("skill_history", { name: name ?? null });
 export const skillsUpkeep = () => invoke<SkillProposal[]>("skills_upkeep");
 export const skillFromNote = (note: string) => invoke<SkillProposal>("skill_from_note", { note });
+
+export type ResolveAction = "note" | "skill" | "merge" | "unlink";
+/** Sync every linked skill now; resolves to how many changed. The backend also emits `skills-changed` when any did. */
+export const skillsSyncNow = () => invoke<number>("skills_sync");
+export const skillLink = (name: string, note: string) => invoke<Skill>("skill_link", { name, note });
+export const skillUnlink = (name: string) => invoke<void>("skill_unlink", { name });
+export const skillResolve = (name: string, action: ResolveAction, text?: SkillText) =>
+  invoke<Skill>("skill_resolve", { name, action, description: text?.description ?? null, body: text?.body ?? null });
+
+/** A skill copy Hivemind published, listed before an uninstall (REG-10). */
+export interface Published { name: string; dir: string; state: CopyState; removable: boolean; reason: string | null }
+export interface RemoveReport { removed: string[]; kept: Published[] }
+export const uninstallSkills = () => invoke<Published[]>("uninstall_skills");
+export const uninstallRemoveSkills = () => invoke<RemoveReport>("uninstall_remove_skills");
 
 export const learningQuery = () => ({ queryKey: ["learning", "status"], queryFn: learningStatus });
 export const skillsQuery = () => ({ queryKey: ["skills", "list"], queryFn: skillsList });

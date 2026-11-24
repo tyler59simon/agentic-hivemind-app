@@ -46,6 +46,49 @@ pub struct Meta {
     /// Sessions whose work the skill was learned from.
     #[serde(default)]
     pub sessions: Vec<String>,
+    /// The runbook note this skill is kept in step with (`skillsync.rs`); None for a skill that stands alone.
+    #[serde(default)]
+    pub link: Option<Link>,
+}
+
+/// A skill's description and body, the two parts a note maps to.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Text {
+    pub description: String,
+    pub body: String,
+}
+
+/// The two-way link between a skill and its runbook note, with what both held at the last sync.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Link {
+    /// The note's full id, as `read` reports it.
+    pub note: String,
+    pub domain: String,
+    pub title: String,
+    /// The note revision at the last sync.
+    pub revision: String,
+    /// Digest of the note's mapped text (`skillsync::digest`) at the last sync.
+    pub note_digest: String,
+    /// The skill version at the last sync.
+    pub version: u32,
+    #[serde(default)]
+    pub paused: Option<Pause>,
+}
+
+/// Why sync stopped for a skill, with the two texts the user chooses between when both exist.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Pause {
+    /// "conflict", "invalid_note", "invalid_skill", "loose_text", "copies_differ" or "note_missing".
+    pub kind: String,
+    pub reason: String,
+    pub at: u64,
+    #[serde(default)]
+    pub note_text: Option<Text>,
+    #[serde(default)]
+    pub skill_text: Option<Text>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,6 +139,17 @@ pub struct Proposal {
     /// Returned by an approval whose version was stored but not published everywhere; never saved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
+    /// Approving a create links the new skill to `note` (made from a runbook note); the rest is the note as it was read.
+    #[serde(default)]
+    pub link: bool,
+    #[serde(default)]
+    pub note_revision: Option<String>,
+    #[serde(default)]
+    pub note_digest: Option<String>,
+    #[serde(default)]
+    pub note_domain: Option<String>,
+    #[serde(default)]
+    pub note_title: Option<String>,
 }
 
 /// What a proposer hands in; the store fills in the id, state and times.
@@ -116,6 +170,16 @@ pub struct NewProposal {
     pub session_title: Option<String>,
     #[serde(default)]
     pub note: Option<String>,
+    #[serde(default)]
+    pub link: bool,
+    #[serde(default)]
+    pub note_revision: Option<String>,
+    #[serde(default)]
+    pub note_digest: Option<String>,
+    #[serde(default)]
+    pub note_domain: Option<String>,
+    #[serde(default)]
+    pub note_title: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -134,6 +198,16 @@ pub struct LedgerEntry {
     pub proposal: Option<String>,
     #[serde(default)]
     pub detail: Option<String>,
+    /// The note revision a version written or written back by sync matches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+}
+
+impl LedgerEntry {
+    /// A row with only who, what and which skill; the caller fills the rest.
+    pub(crate) fn new(actor: &str, action: &str, name: &str) -> LedgerEntry {
+        LedgerEntry { at: now_ms(), actor: actor.into(), action: action.into(), name: name.into(), version: None, sha256: None, proposal: None, detail: None, revision: None }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -180,6 +254,27 @@ pub struct Copy {
     pub state: String,
 }
 
+/// A folder in a skill target that holds Hivemind's marker, whether or not the library still knows the skill (REG-10).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Published {
+    pub name: String,
+    pub dir: String,
+    /// "current", "older", "edited" or "missing", as for `Copy`; "current" or "edited" only, by hash, when the library has no such skill.
+    pub state: String,
+    /// False for an edited copy (and for one that could not be removed): it holds changes nobody approved.
+    pub removable: bool,
+    pub reason: Option<String>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveReport {
+    /// The folders whose Hivemind files were removed.
+    pub removed: Vec<String>,
+    pub kept: Vec<Published>,
+}
+
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillView {
@@ -205,6 +300,9 @@ pub struct Skills {
     /// Held by every change (propose, decide, publish, archive, restore, import): the reviewer's threads and the user's
     /// commands share the library, and a version number is read and then written.
     lock: std::sync::Mutex<()>,
+    /// Held by a whole sync pass, link, unlink and resolve, so two of them never read the same note and race to write it.
+    /// Taken before `lock`, never while holding it.
+    pub(crate) sync_lock: std::sync::Mutex<()>,
 }
 
 /// Where approved skills are published: `HIVEMIND_SKILL_DIRS` (a path list) when set, else the Claude Code and Codex
@@ -294,16 +392,11 @@ pub fn parse(text: &str) -> (String, String) {
     (description, body)
 }
 
-/// A note's text as a skill draft: the paragraph before the first heading becomes the description, the sections the body.
-/// Missing required sections are added empty, for the user to fill in before approving.
+/// A note's text as a skill draft: the summary becomes the description, the sections the body, except Links, Action items and
+/// the Important callout, which stay in the note. Missing required sections are added empty, for the user to fill in before
+/// approving.
 pub fn from_note(note_body: &str) -> (String, String) {
-    let text = note_body.replace("\r\n", "\n");
-    let first = if text.starts_with("## ") { Some(0) } else { text.find("\n## ").map(|i| i + 1) };
-    let (lead, rest) = match first {
-        Some(i) => (text[..i].trim(), text[i..].trim()),
-        None => (text.trim(), ""),
-    };
-    let mut body = rest.to_string();
+    let Text { description: lead, mut body } = crate::skillsync::note_to_skill(note_body);
     if section(&body, "When to use").is_none() {
         body = format!("## When to use\n\n{body}");
     }
@@ -374,7 +467,7 @@ pub fn used_in(events: &[SeqEvent], known: &BTreeSet<String>) -> BTreeSet<String
 
 impl Skills {
     pub fn new(dir: PathBuf, targets: Vec<PathBuf>) -> Skills {
-        Skills { dir, targets, lock: std::sync::Mutex::new(()) }
+        Skills { dir, targets, lock: std::sync::Mutex::new(()), sync_lock: std::sync::Mutex::new(()) }
     }
 
     fn library(&self) -> PathBuf {
@@ -398,7 +491,7 @@ impl Skills {
         serde_json::from_str(&std::fs::read_to_string(self.meta_path(name)).ok()?).ok()
     }
 
-    fn metas(&self) -> Vec<Meta> {
+    pub(crate) fn metas(&self) -> Vec<Meta> {
         let Ok(entries) = std::fs::read_dir(self.library()) else { return vec![] };
         let mut out: Vec<Meta> = entries.flatten().filter_map(|e| self.meta(&e.file_name().to_string_lossy())).collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -418,7 +511,7 @@ impl Skills {
         out
     }
 
-    fn ledger(&self, entry: LedgerEntry) -> Result<(), String> {
+    pub(crate) fn ledger(&self, entry: LedgerEntry) -> Result<(), String> {
         append_line(&self.dir.join("ledger.jsonl"), &entry)
     }
 
@@ -473,11 +566,16 @@ impl Skills {
             decided_at: None,
             decision: None,
             warning: None,
+            link: new.link && kind == Kind::Create,
+            note_revision: new.note_revision,
+            note_digest: new.note_digest,
+            note_domain: new.note_domain,
+            note_title: new.note_title,
         };
         self.save_proposal(&proposal)?;
         self.ledger(LedgerEntry {
-            at: proposal.created_at, actor: by.into(), action: format!("propose_{}", kind_word(kind)), name: proposal.name.clone(),
-            version: None, sha256: None, proposal: Some(proposal.id.clone()), detail: Some(proposal.reason.clone()).filter(|r| !r.is_empty()),
+            at: proposal.created_at, proposal: Some(proposal.id.clone()), detail: Some(proposal.reason.clone()).filter(|r| !r.is_empty()),
+            ..LedgerEntry::new(by, &format!("propose_{}", kind_word(kind)), &proposal.name)
         })?;
         Ok(proposal)
     }
@@ -534,14 +632,14 @@ impl Skills {
                     check_body(&p.description, &p.body)?;
                     let action = format!("approve_{}", kind_word(p.kind));
                     let source = (p.session.clone(), p.note.clone());
-                    written = Some(self.write_version(&p.name, &p.description, &p.body, Change { actor, action: &action, proposal: Some(&p.id), source })?);
+                    written = Some(self.write_version(&p.name, &p.description, &p.body, Change { actor, action: &action, proposal: Some(&p.id), source, revision: None, link: None })?);
+                    if p.kind == Kind::Create && p.link {
+                        self.link_approved(&p, actor)?;
+                    }
                 }
             }
         } else {
-            self.ledger(LedgerEntry {
-                at: now_ms(), actor: actor.into(), action: "reject".into(), name: p.name.clone(), version: None, sha256: None,
-                proposal: Some(p.id.clone()), detail: why.clone(),
-            })?;
+            self.ledger(LedgerEntry { proposal: Some(p.id.clone()), detail: why.clone(), ..LedgerEntry::new(actor, "reject", &p.name) })?;
         }
         p.state = if approve { ProposalState::Approved } else { ProposalState::Rejected };
         p.decided_at = Some(now_ms());
@@ -557,11 +655,11 @@ impl Skills {
     }
 
     /// Store a new version and make it current. Returns the new version number; the caller publishes it.
-    fn write_version(&self, name: &str, description: &str, body: &str, change: Change) -> Result<u32, String> {
-        let Change { actor, action, proposal, source } = change;
+    pub(crate) fn write_version(&self, name: &str, description: &str, body: &str, change: Change) -> Result<u32, String> {
+        let Change { actor, action, proposal, source, revision, link } = change;
         let now = now_ms();
         let mut meta = self.meta(name).unwrap_or(Meta {
-            name: name.into(), description: String::new(), version: 0, archived: false, created_at: now, updated_at: now, notes: vec![], sessions: vec![],
+            name: name.into(), description: String::new(), version: 0, archived: false, created_at: now, updated_at: now, notes: vec![], sessions: vec![], link: None,
         });
         let version = self.versions(name).last().copied().unwrap_or(0).max(meta.version) + 1;
         let text = render(name, description, body);
@@ -570,18 +668,38 @@ impl Skills {
         meta.version = version;
         meta.archived = false;
         meta.updated_at = now;
+        if let Some(mut link) = link {
+            link.version = version;
+            meta.link = Some(link);
+        }
         if let Some(session) = source.0.filter(|s| !meta.sessions.contains(s)) {
             meta.sessions.push(session);
         }
         if let Some(note) = source.1.filter(|n| !meta.notes.contains(n)) {
             meta.notes.push(note);
         }
-        write_atomic(&self.meta_path(name), &serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?)?;
+        self.save_meta(&meta)?;
         self.ledger(LedgerEntry {
-            at: now, actor: actor.into(), action: action.into(), name: name.into(), version: Some(version), sha256: Some(sha256(&text)),
-            proposal: proposal.map(str::to_string), detail: None,
+            at: now, version: Some(version), sha256: Some(sha256(&text)), proposal: proposal.map(str::to_string), revision: revision.map(str::to_string),
+            ..LedgerEntry::new(actor, action, name)
         })?;
         Ok(version)
+    }
+
+    /// Link a skill just created from an approved proposal to the note it was made from, at the note as it was read.
+    fn link_approved(&self, p: &Proposal, actor: &str) -> Result<(), String> {
+        let mut meta = self.meta(&p.name).ok_or_else(|| format!("There is no skill named {}", p.name))?;
+        let note = p.note.as_deref().map(|n| n.rsplit(':').next().unwrap_or(n)).unwrap_or_default();
+        meta.link = Some(Link {
+            note: note.to_string(), domain: p.note_domain.clone().unwrap_or_default(), title: p.note_title.clone().unwrap_or_default(),
+            revision: p.note_revision.clone().unwrap_or_default(), note_digest: p.note_digest.clone().unwrap_or_default(), version: 0, paused: None,
+        });
+        self.save_meta(&meta)?;
+        self.ledger(LedgerEntry { detail: p.note_title.clone(), ..LedgerEntry::new(actor, "link", &p.name) })
+    }
+
+    pub(crate) fn save_meta(&self, meta: &Meta) -> Result<(), String> {
+        write_atomic(&self.meta_path(&meta.name), &serde_json::to_string_pretty(meta).map_err(|e| e.to_string())?)
     }
 
     /// Copy the current version into every target whose CLI is set up. Refuses a folder Hivemind did not make, and a copy
@@ -591,7 +709,7 @@ impl Skills {
         self.publish_copies(name, actor)
     }
 
-    fn publish_copies(&self, name: &str, actor: &str) -> Result<Vec<String>, String> {
+    pub(crate) fn publish_copies(&self, name: &str, actor: &str) -> Result<Vec<String>, String> {
         let meta = self.meta(name).ok_or_else(|| format!("There is no skill named {name}"))?;
         if meta.archived {
             return Err(format!("{name} is archived"));
@@ -621,16 +739,13 @@ impl Skills {
             written.push(dir.display().to_string());
         }
         if !written.is_empty() {
-            self.ledger(LedgerEntry {
-                at: now_ms(), actor: actor.into(), action: "publish".into(), name: name.into(), version: Some(meta.version), sha256: Some(sha256(&text)),
-                proposal: None, detail: Some(written.join("; ")),
-            })?;
+            self.ledger(LedgerEntry { version: Some(meta.version), sha256: Some(sha256(&text)), detail: Some(written.join("; ")), ..LedgerEntry::new(actor, "publish", name) })?;
         }
         if problems.is_empty() { Ok(written) } else { Err(format!("Published to {} folder(s). Skipped: {}", written.len(), problems.join("; "))) }
     }
 
     /// "current", "older", "edited" or "missing" for a Hivemind copy; None for no folder or a folder without the marker.
-    fn copy_state(&self, dir: &Path, meta: &Meta) -> Option<String> {
+    pub(crate) fn copy_state(&self, dir: &Path, meta: &Meta) -> Option<String> {
         let marker: MarkerFile = serde_json::from_str(&std::fs::read_to_string(dir.join(MARKER)).ok()?).ok()?;
         let Ok(text) = std::fs::read_to_string(dir.join("SKILL.md")) else { return Some("missing".into()) };
         Some(if sha256(&text) != marker.sha256 {
@@ -669,26 +784,86 @@ impl Skills {
         for target in &self.targets {
             let dir = target.join(name);
             if self.copy_state(&dir, &meta).is_some() {
-                let remove = |file: &str| match std::fs::remove_file(dir.join(file)) {
-                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("Could not remove {}: {e}", dir.join(file).display())),
-                    _ => Ok(()),
-                };
-                remove("SKILL.md")?;
-                // A folder that also holds the user's files keeps the marker, so a restore may write SKILL.md there again.
-                let others = std::fs::read_dir(&dir).map(|entries| entries.flatten().any(|e| e.file_name() != MARKER)).unwrap_or(false);
-                if !others {
-                    remove(MARKER)?;
-                    let _ = std::fs::remove_dir(&dir);
-                }
+                remove_copy(&dir, false)?;
             }
         }
         meta.archived = true;
         meta.updated_at = now_ms();
-        write_atomic(&self.meta_path(name), &serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?)?;
-        self.ledger(LedgerEntry {
-            at: now_ms(), actor: actor.into(), action: "archive".into(), name: name.into(), version: Some(meta.version), sha256: None,
-            proposal: proposal.map(str::to_string), detail: None,
-        })
+        self.save_meta(&meta)?;
+        self.ledger(LedgerEntry { version: Some(meta.version), proposal: proposal.map(str::to_string), ..LedgerEntry::new(actor, "archive", name) })
+    }
+
+    /// Every folder in a target that holds Hivemind's marker, including skills the library no longer has. The state comes from
+    /// the marker's hash, and from the library's version when the skill is still there.
+    pub fn published(&self) -> Vec<Published> {
+        let mut out = vec![];
+        for target in &self.targets {
+            let Ok(entries) = std::fs::read_dir(target) else { continue };
+            let mut dirs: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| p.join(MARKER).is_file()).collect();
+            dirs.sort();
+            for dir in dirs {
+                let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let marker = std::fs::read_to_string(dir.join(MARKER)).ok().and_then(|t| serde_json::from_str::<MarkerFile>(&t).ok());
+                let (state, reason) = match (marker, std::fs::read_to_string(dir.join("SKILL.md"))) {
+                    (None, _) => ("edited", Some("Its marker file cannot be read, so Hivemind cannot tell what it wrote".to_string())),
+                    (Some(_), Err(_)) => ("missing", None),
+                    (Some(m), Ok(text)) if sha256(&text) != m.sha256 => ("edited", Some("SKILL.md was changed after Hivemind wrote it".to_string())),
+                    (Some(m), Ok(_)) => (if self.meta(&name).is_some_and(|meta| meta.version != m.version) { "older" } else { "current" }, None),
+                };
+                out.push(Published { name, dir: dir.display().to_string(), state: state.into(), removable: state != "edited", reason });
+            }
+        }
+        out
+    }
+
+    /// For an uninstall: remove the copies Hivemind wrote and nobody changed. An edited copy, a file added beside SKILL.md and a
+    /// folder without the marker stay. The library and every skill's `archived` flag are untouched.
+    pub fn remove_published(&self, actor: &str) -> RemoveReport {
+        let _lock = self.lock.lock().unwrap();
+        let (mut removed, mut kept) = (vec![], vec![]);
+        for item in self.published() {
+            if !item.removable {
+                kept.push(item);
+                continue;
+            }
+            match remove_copy(Path::new(&item.dir), true) {
+                Ok(()) => {
+                    let _ = self.ledger(LedgerEntry { detail: Some(item.dir.clone()), ..LedgerEntry::new(actor, "uninstall_remove", &item.name) });
+                    removed.push(item.dir);
+                }
+                Err(e) => kept.push(Published { removable: false, reason: Some(e), ..item }),
+            }
+        }
+        RemoveReport { removed, kept }
+    }
+
+    pub(crate) fn targets(&self) -> &[PathBuf] {
+        &self.targets
+    }
+
+    /// Run `change` with the library locked, but only when the skill is still as a sync pass saw it: not archived, the same
+    /// link (None: no link), and the same version when `version` is given. Returns None, and changes nothing, when it moved.
+    pub(crate) fn guarded<R>(&self, name: &str, seen: Option<&Link>, version: Option<u32>, change: impl FnOnce(Meta) -> Result<R, String>) -> Result<Option<R>, String> {
+        let _lock = self.lock.lock().unwrap();
+        let Some(meta) = self.meta(name) else { return Ok(None) };
+        if meta.archived || meta.link.as_ref() != seen || version.is_some_and(|v| meta.version != v) {
+            return Ok(None);
+        }
+        change(meta).map(Some)
+    }
+
+    /// Take the link off a skill, whatever state the skill and the link are in.
+    pub(crate) fn unlink(&self, name: &str, actor: &str) -> Result<(), String> {
+        let _lock = self.lock.lock().unwrap();
+        let mut meta = self.meta(name).ok_or_else(|| format!("There is no skill named {name}"))?;
+        let link = meta.link.take().ok_or_else(|| format!("{name} is not linked to a note"))?;
+        self.save_meta(&meta)?;
+        self.ledger(LedgerEntry { detail: Some(link.title), ..LedgerEntry::new(actor, "unlink", name) })
+    }
+
+    /// One skill as `list` shows it.
+    pub fn view(&self, name: &str, now: u64) -> Option<SkillView> {
+        self.list(now).into_iter().find(|s| s.meta.name == name)
     }
 
     /// Make an earlier version current again, as a new version, and publish it. Also brings back an archived skill.
@@ -700,8 +875,8 @@ impl Skills {
         self.clear_edited(&meta)?;
         let mut meta = meta;
         meta.archived = false;
-        write_atomic(&self.meta_path(name), &serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?)?;
-        let new = self.write_version(name, &description, &body, Change { actor, action: &format!("restore_v{version}"), proposal: None, source: (None, None) })?;
+        self.save_meta(&meta)?;
+        let new = self.write_version(name, &description, &body, Change { actor, action: &format!("restore_v{version}"), proposal: None, source: (None, None), revision: None, link: None })?;
         self.publish_copies(name, actor).map_err(|e| format!("Restored as v{new}, but not published everywhere: {e}"))?;
         Ok(new)
     }
@@ -711,10 +886,7 @@ impl Skills {
     pub fn import(&self, name: &str, actor: &str) -> Result<u32, String> {
         let _lock = self.lock.lock().unwrap();
         let meta = self.meta(name).ok_or_else(|| format!("There is no skill named {name}"))?;
-        let edited: Vec<(PathBuf, String)> = self.targets.iter().map(|t| t.join(name))
-            .filter(|d| self.copy_state(d, &meta).as_deref() == Some("edited"))
-            .filter_map(|d| std::fs::read_to_string(d.join("SKILL.md")).ok().map(|text| (d, text)))
-            .collect();
+        let edited = self.edited_copies(&meta);
         let Some((dir, text)) = edited.first() else { return Err(format!("No copy of {name} was edited outside Hivemind")) };
         if let Some((other, _)) = edited.iter().find(|(_, t)| t != text) {
             return Err(format!("{} and {} were edited differently; make them the same or restore a version", dir.display(), other.display()));
@@ -722,13 +894,21 @@ impl Skills {
         let (description, body) = parse(text);
         check_body(&description, &body)?;
         self.clear_edited(&meta)?;
-        let new = self.write_version(name, &description, &body, Change { actor, action: "import", proposal: None, source: (None, None) })?;
+        let new = self.write_version(name, &description, &body, Change { actor, action: "import", proposal: None, source: (None, None), revision: None, link: None })?;
         self.publish_copies(name, actor).map_err(|e| format!("Imported as v{new}, but not published everywhere: {e}"))?;
         Ok(new)
     }
 
+    /// The copies someone edited outside Hivemind: folder and text.
+    pub(crate) fn edited_copies(&self, meta: &Meta) -> Vec<(PathBuf, String)> {
+        self.targets.iter().map(|t| t.join(&meta.name))
+            .filter(|d| self.copy_state(d, meta).as_deref() == Some("edited"))
+            .filter_map(|d| std::fs::read_to_string(d.join("SKILL.md")).ok().map(|text| (d, text)))
+            .collect()
+    }
+
     /// Drop the marker of edited copies so publish may write them again.
-    fn clear_edited(&self, meta: &Meta) -> Result<(), String> {
+    pub(crate) fn clear_edited(&self, meta: &Meta) -> Result<(), String> {
         for target in &self.targets {
             let dir = target.join(&meta.name);
             if self.copy_state(&dir, meta).as_deref() == Some("edited") {
@@ -809,12 +989,33 @@ impl Skills {
     }
 }
 
-/// Who made a new version and why, for the ledger; `source` is the (session, note) it came from.
-struct Change<'a> {
-    actor: &'a str,
-    action: &'a str,
-    proposal: Option<&'a str>,
-    source: (Option<String>, Option<String>),
+/// Who made a new version and why, for the ledger; `source` is the (session, note) it came from, `revision` the note
+/// revision a sync version matches.
+pub(crate) struct Change<'a> {
+    pub actor: &'a str,
+    pub action: &'a str,
+    pub proposal: Option<&'a str>,
+    pub source: (Option<String>, Option<String>),
+    pub revision: Option<&'a str>,
+    /// The link to store with the new version (its `version` is filled in), for a version made by sync or a resolve.
+    pub link: Option<Link>,
+}
+
+/// Remove the two files Hivemind wrote into a published folder: SKILL.md, then the marker and the folder when nothing else
+/// is in it. A folder that also holds the user's files keeps the marker, so a restore may write SKILL.md there again;
+/// `leaving` (an uninstall, where nothing will write there again) removes the marker too and keeps the folder.
+fn remove_copy(dir: &Path, leaving: bool) -> Result<(), String> {
+    let remove = |file: &str| match std::fs::remove_file(dir.join(file)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("Could not remove {}: {e}", dir.join(file).display())),
+        _ => Ok(()),
+    };
+    remove("SKILL.md")?;
+    let others = std::fs::read_dir(dir).map(|entries| entries.flatten().any(|e| e.file_name() != MARKER)).unwrap_or(false);
+    if !others || leaving {
+        remove(MARKER)?;
+        let _ = std::fs::remove_dir(dir);
+    }
+    Ok(())
 }
 
 fn kind_word(kind: Kind) -> &'static str {
@@ -1077,5 +1278,65 @@ mod tests {
         assert_eq!((made.len(), made[0].kind, made[0].by.as_str()), (1, Kind::Archive, "upkeep"));
         assert!(skills.upkeep(later).is_empty(), "one proposal at a time");
         assert!(!skills.trusted("used", now_ms()));
+    }
+
+    #[test]
+    fn uninstall_removes_unedited_copies_and_keeps_everything_else() {
+        let (_g, skills, targets) = store("uninstall");
+        for name in ["clean-one", "edited-one", "with-files", "gone-from-library", "older-one"] {
+            let p = create(&skills, name);
+            skills.decide(&p.id, true, None, "user", None).unwrap();
+        }
+        // An edited copy, a copy with a file added beside it, a skill the library lost, and one a newer version replaced.
+        std::fs::write(targets[0].join("edited-one").join("SKILL.md"), "my own words").unwrap();
+        std::fs::write(targets[0].join("with-files").join("notes.md"), "mine").unwrap();
+        std::fs::remove_dir_all(skills.library().join("gone-from-library")).unwrap();
+        let patch = skills.propose(NewProposal { kind: Some(Kind::Patch), name: "older-one".into(), description: "Use when older.".into(), body: BODY.replace("Restart it.", "Restart older."), ..Default::default() }, "reviewer").unwrap();
+        skills.decide(&patch.id, true, None, "user", None).unwrap();
+        std::fs::write(targets[1].join("older-one").join(MARKER), r#"{"name":"older-one","version":1,"sha256":"x"}"#).unwrap();
+        // A folder that is not Hivemind's, and an archived skill whose copy was removed by archiving.
+        std::fs::create_dir_all(targets[0].join("hand-made")).unwrap();
+        std::fs::write(targets[0].join("hand-made").join("SKILL.md"), "hand made").unwrap();
+        let a = skills.propose(NewProposal { kind: Some(Kind::Archive), name: "clean-one".into(), reason: "unused".into(), ..Default::default() }, "upkeep").unwrap();
+        skills.decide(&a.id, true, None, "user", None).unwrap();
+
+        let listed = skills.published();
+        let state = |i: usize, name: &str| listed.iter().find(|p| p.name == name && Path::new(&p.dir).starts_with(&targets[i])).map(|p| (p.state.clone(), p.removable));
+        assert_eq!(state(0, "edited-one"), Some(("edited".into(), false)));
+        assert_eq!(state(1, "edited-one"), Some(("current".into(), true)));
+        assert_eq!(state(0, "gone-from-library"), Some(("current".into(), true)), "by hash only");
+        assert_eq!(state(0, "older-one"), Some(("current".into(), true)));
+        assert_eq!(state(1, "older-one"), Some(("edited".into(), false)), "its marker no longer matches its file");
+        assert!(listed.iter().all(|p| p.name != "hand-made" && p.name != "clean-one"));
+        assert!(listed.iter().find(|p| p.name == "edited-one" && Path::new(&p.dir).starts_with(&targets[0])).unwrap().reason.is_some());
+
+        let before = (skills.metas(), skills.version_text("older-one", 2).unwrap());
+        let report = skills.remove_published("user");
+        assert_eq!(report.removed.len(), 6);
+        let kept: Vec<(&str, bool)> = report.kept.iter().map(|p| (p.name.as_str(), Path::new(&p.dir).starts_with(&targets[0]))).collect();
+        assert_eq!(kept, [("edited-one", true), ("older-one", false)]);
+        assert_eq!(std::fs::read_to_string(targets[0].join("edited-one").join("SKILL.md")).unwrap(), "my own words");
+        assert!(!targets[1].join("edited-one").exists(), "an unedited copy of the same skill goes");
+        assert_eq!(std::fs::read_to_string(targets[0].join("with-files").join("notes.md")).unwrap(), "mine");
+        assert!(!targets[0].join("with-files").join("SKILL.md").exists() && !targets[0].join("with-files").join(MARKER).exists(), "Hivemind's files go, the user's stay");
+        assert_eq!(std::fs::read_to_string(targets[0].join("hand-made").join("SKILL.md")).unwrap(), "hand made");
+        assert!(!targets[0].join("gone-from-library").exists() && !targets[0].join("older-one").exists());
+        assert_eq!((skills.metas(), skills.version_text("older-one", 2).unwrap()), before, "the library is untouched");
+        assert!(skills.meta("with-files").is_some_and(|m| !m.archived), "nothing is archived by an uninstall");
+        let rows: Vec<LedgerEntry> = skills.history(None).into_iter().filter(|e| e.action == "uninstall_remove").collect();
+        assert_eq!(rows.len(), 6);
+        assert!(skills.remove_published("user").removed.is_empty(), "a second run has nothing to remove");
+        assert!(skills.published().iter().all(|p| p.name != "with-files"));
+    }
+
+    #[test]
+    fn a_marker_with_no_skill_file_is_removed_with_its_folder() {
+        let (_g, skills, targets) = store("marker-only");
+        let p = create(&skills, "hollow");
+        skills.decide(&p.id, true, None, "user", None).unwrap();
+        std::fs::remove_file(targets[0].join("hollow").join("SKILL.md")).unwrap();
+        assert_eq!(skills.published().iter().find(|p| Path::new(&p.dir).starts_with(&targets[0])).unwrap().state, "missing");
+        assert_eq!(skills.remove_published("user").removed.len(), 2);
+        assert!(!targets[0].join("hollow").exists());
     }
 }

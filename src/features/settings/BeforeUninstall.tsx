@@ -1,6 +1,10 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { agentCancel, agentEnd, agentSessions, reviewDiscard, uninstallDeleteBranch, uninstallInventory, uninstallRemoveWorktree, type UninstallInventory, type UninstallTree } from "../../lib/agent";
+import { classify } from "../../lib/errors";
+import { uninstallRemoveSkills, uninstallSkills, type Published, type RemoveReport } from "../../lib/skills";
 import { Confirm } from "../../ui/Modal";
+import { COPY_WORDS, copyPlace } from "../skills/skills";
 import { deletable, treeStep, waitStopped } from "./uninstall";
 
 function stateText(tree: UninstallTree): string {
@@ -10,6 +14,61 @@ function stateText(tree: UninstallTree): string {
     case "review": return tree.files === null ? "git could not read its edits" : tree.files === 1 ? "1 file not approved" : `${tree.files} files not approved`;
     case "remove": return "nothing to approve";
   }
+}
+
+/** REG-10: the skill copies Hivemind published into the Claude Code and Codex folders, and the button that removes the unedited ones. */
+export function PublishedSkills() {
+  const client = useQueryClient();
+  const found = useQuery({ queryKey: ["skills", "published"], queryFn: uninstallSkills });
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [report, setReport] = useState<RemoveReport | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const row = (p: Published) => (
+    <li key={p.dir}>
+      <strong>{p.name}</strong> · {copyPlace(p.dir)} · <code>{p.dir}</code> · {COPY_WORDS[p.state] ?? p.state}
+      {p.reason ? ` · ${p.reason}` : p.removable ? "" : " · stays"}
+    </li>
+  );
+  const remove = () => {
+    setBusy(true);
+    setError(null);
+    uninstallRemoveSkills().then((r) => {
+      setReport(r);
+      client.invalidateQueries({ queryKey: ["skills"] });
+    }, (e) => setError(classify(e).message)).finally(() => setBusy(false));
+  };
+  const rows = found.data ?? [];
+  const removable = rows.filter((p) => p.removable).length;
+  return (
+    <>
+      <h4>Published skills</h4>
+      <p className="muted small">Hivemind publishes skills as <code>SKILL.md</code> files in your Claude Code and Codex skill folders. Uninstalling does not remove them.</p>
+      {found.isLoading && <p className="muted small">Checking…</p>}
+      {found.error && <p className="error">{classify(found.error).message}</p>}
+      {found.data && !rows.length && !report && <p className="muted small">No skill copies published by Hivemind are in those folders.</p>}
+      {!report && rows.length > 0 && <ul>{rows.map(row)}</ul>}
+      {!report && rows.length > 0 && (
+        <button type="button" disabled={busy || !removable} onClick={() => setAsking(true)}>{busy ? "Removing…" : "Remove published skills"}</button>
+      )}
+      {error && <p className="error">{error}</p>}
+      {report && <>
+        <p>Removed {report.removed.length} published skill {report.removed.length === 1 ? "copy" : "copies"}.</p>
+        {report.kept.length > 0 && <>
+          <p className="muted small">Kept:</p>
+          <ul>{report.kept.map(row)}</ul>
+        </>}
+      </>}
+      {asking && (
+        <Confirm title="Remove published skills?" action="Remove" danger
+          message={<>
+            <p>This deletes the <code>SKILL.md</code> copies Hivemind wrote that nobody edited.</p>
+            <p>These stay: copies you or an agent edited, your own files in those folders, and the skill library in Hivemind's app data. Hivemind can publish the skills again.</p>
+          </>}
+          onAnswer={(yes) => { setAsking(false); if (yes) remove(); }} />
+      )}
+    </>
+  );
 }
 
 /** REG-8, REG-9: what an uninstall would leave in the user's repositories, and the steps to clean it up first. */
@@ -85,7 +144,8 @@ export function BeforeUninstall({ onOpenReview, onOpenSession }: { onOpenReview?
           </div>
         );
       })}
-      {found && !empty && <p className="muted small">After this, also see the Uninstall section of the README: the app data the uninstaller keeps, published skills, and <code>alm maintenance disable</code>.</p>}
+      <PublishedSkills />
+      {found && !empty && <p className="muted small">After this, also see the Uninstall section of the README: the app data the uninstaller keeps and <code>alm maintenance disable</code>.</p>}
       {discarding && (
         <Confirm title="Discard this session's edits?" action="Discard edits" danger
           message={`This resets the worktree of "${discarding.title}" to its review base (the last approved commit, else where it started) and deletes the files the agent created. It cannot be undone.`}

@@ -533,7 +533,7 @@ Review these commits for knowledge worth keeping.
         let kind = if skill.action == "patch" { Kind::Patch } else { Kind::Create };
         let new = NewProposal {
             kind: Some(kind), name: name.clone(), description: skill.description, body: skill.body, reason: skill.reason,
-            session: subject.session.clone(), session_title: Some(run.title.clone()), note: None,
+            session: subject.session.clone(), session_title: Some(run.title.clone()), note: None, ..Default::default()
         };
         match deps.skills.propose(new, "reviewer") {
             Ok(p) => {
