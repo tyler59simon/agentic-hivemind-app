@@ -68,11 +68,11 @@ pub fn parse_iso_ms(text: &str) -> Option<u64> {
     u64::try_from(ms).ok()
 }
 
-/// A folder path for comparison: slashes forward, no trailing slash, no `\\?\` prefix, lower case on Windows.
+/// A folder path for comparison: slashes forward, no trailing slash, no `\\?\` prefix, lower case on Windows and macOS.
 fn plain(path: &str) -> String {
     let text = path.replace('\\', "/");
     let text = text.strip_prefix("//?/").unwrap_or(&text).trim_end_matches('/').to_string();
-    if cfg!(windows) { text.to_lowercase() } else { text }
+    if cfg!(any(windows, target_os = "macos")) { text.to_lowercase() } else { text }
 }
 
 pub(super) fn same_folder(a: &str, b: &str) -> bool {

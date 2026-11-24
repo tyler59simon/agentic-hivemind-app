@@ -448,7 +448,7 @@ pub enum Stop {
     Ended,
 }
 
-/// A CLI process and, on Windows, the job that holds it and everything it starts (PROC-3).
+/// A CLI process and the job (Windows) or process group (Unix) that holds it and everything it starts (PROC-3).
 struct Process {
     child: Mutex<Child>,
     /// Ending it ends every descendant, also one whose parent has already exited, which `taskkill /T` cannot find. It
@@ -1468,6 +1468,7 @@ impl Inner {
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             command.creation_flags(CREATE_NO_WINDOW);
         }
+        crate::jobs::own_group(&mut command);
         let mut child = command.spawn().map_err(|e| format!("Could not start {}: {e}", spec.program))?;
         let (stdin, stdout) = (child.stdin.take(), child.stdout.take());
         let stderr = Drain::new(child.stderr.take());

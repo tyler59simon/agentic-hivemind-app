@@ -3,11 +3,12 @@
 use crate::settings::{self, Settings};
 use std::path::Path;
 
-/// A folder as it is compared: forward slashes, no trailing slash, and lower case on Windows.
+/// A folder as it is compared: forward slashes, no trailing slash, and lower case on Windows and macOS (their disks ignore
+/// case by default).
 pub(crate) fn normal(path: &str) -> String {
     let text = path.replace('\\', "/");
     let text = text.trim_end_matches('/');
-    if cfg!(windows) { text.to_lowercase() } else { text.to_string() }
+    if cfg!(any(windows, target_os = "macos")) { text.to_lowercase() } else { text.to_string() }
 }
 
 pub fn same(a: &str, b: &str) -> bool {

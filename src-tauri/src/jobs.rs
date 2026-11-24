@@ -1,6 +1,18 @@
 //! A Windows Job Object that ends every process in it when it is closed or ended, so stopping a process also stops what
-//! it started (PROC-3, LM-1). Elsewhere it does nothing: a child there is stopped through its own handle.
-use std::process::Child;
+//! it started (PROC-3, LM-1). On Unix the child runs in a process group of its own (`own_group`), and ending the job kills
+//! that group (MACOS-1C): without it, cancelling a session or quitting left the CLI's children running.
+use std::process::{Child, Command};
+
+/// Start `command` in a process group of its own (Unix), so `Job::end` reaches what it starts. Nothing on Windows, where
+/// the job object does this.
+#[cfg_attr(windows, allow(unused_variables))]
+pub fn own_group(command: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+}
 
 #[cfg(windows)]
 pub struct Job(windows_sys::Win32::Foundation::HANDLE);
@@ -70,20 +82,40 @@ impl Drop for Job {
     }
 }
 
+/// The process group of a child started with `own_group` (its id is the child's); 0 until `add`.
 #[cfg(not(windows))]
-pub struct Job;
+pub struct Job(std::sync::atomic::AtomicU32);
 
 #[cfg(not(windows))]
 impl Job {
     pub fn new() -> Option<Job> {
-        Some(Job)
+        Some(Job(std::sync::atomic::AtomicU32::new(0)))
     }
 
-    pub fn add(&self, _child: &Child) -> bool {
+    /// Record the group of `child`, which must have been started with `own_group`.
+    pub fn add(&self, child: &Child) -> bool {
+        self.0.store(child.id(), std::sync::atomic::Ordering::Relaxed);
         true
     }
 
-    pub fn end(&self) {}
+    /// Kill every process in the group now; the leader may have exited already.
+    pub fn end(&self) {
+        let group = self.0.load(std::sync::atomic::Ordering::Relaxed);
+        if group == 0 {
+            return;
+        }
+        #[cfg(unix)]
+        {
+            use std::process::Stdio;
+            // A minus sign addresses the whole group, as in git.rs.
+            let _ = Command::new("kill")
+                .args(["-KILL", &format!("-{group}")])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+    }
 }
 
 /// Whether a process with this id is running, for tests that check a stopped process is gone.

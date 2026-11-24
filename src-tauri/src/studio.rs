@@ -805,16 +805,43 @@ const RUNS_CODE: &[&str] = &[
     "msc", "gadget", "chm", "settingcontent-ms", "library-ms", "search-ms", "searchconnector-ms", "diagcab", "xll", "iqy", "slk", "py", "pyw", "sh",
 ];
 
+/// Kinds macOS runs or installs when it opens them (MACOS-1C). Bundles (`.app`, `.pkg`, `.workflow`, `.action`) are
+/// folders, which `open` launches as well.
+const RUNS_CODE_MAC: &[&str] = &[
+    "app", "pkg", "mpkg", "dmg", "command", "tool", "workflow", "action", "scpt", "scptd", "applescript", "terminal", "webloc", "inetloc",
+    "zsh", "bash", "csh", "ksh", "fish", "pl", "rb", "osax", "prefpane", "kext", "plugin", "bundle", "framework",
+];
+
 /// Why Hivemind will not open `path` with its associated program, or None.
 fn refuse_to_run(path: &Path) -> Option<String> {
     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    if path.is_dir() {
+    if !runs_code(&ext, path.is_dir(), executable(path)) && !(!path.is_dir() && dangerous_to_windows(&ext)) {
         return None;
     }
-    if RUNS_CODE.contains(&ext.as_str()) || dangerous_to_windows(&ext) {
-        return Some(format!("{} is a program or script, so Hivemind does not open it; use Show in Explorer", path.file_name().unwrap_or_default().to_string_lossy()));
+    let show = if cfg!(target_os = "macos") { "Show in Finder" } else { "Show in Explorer" };
+    Some(format!("{} is a program or script, so Hivemind does not open it; use {show}", path.file_name().unwrap_or_default().to_string_lossy()))
+}
+
+/// Whether opening a file or folder with this extension would run code: a Windows or macOS program or script, a macOS
+/// bundle folder, or a file marked executable (Unix).
+fn runs_code(ext: &str, is_dir: bool, executable: bool) -> bool {
+    if is_dir {
+        return RUNS_CODE_MAC.contains(&ext);
     }
-    None
+    executable || RUNS_CODE.contains(&ext) || RUNS_CODE_MAC.contains(&ext)
+}
+
+/// Whether a Unix file has an execute bit set; false on Windows and for folders.
+fn executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(path) {
+            return meta.is_file() && meta.permissions().mode() & 0o111 != 0;
+        }
+    }
+    let _ = path;
+    false
 }
 
 /// What Windows itself counts as dangerous to open (the list behind its download warnings).
@@ -1279,6 +1306,18 @@ mod tests {
         for name in ["report.pdf", "photo.png", "sheet.xlsx", "notes.docx", "README"] {
             assert!(refuse_to_run(Path::new(name)).is_none(), "{name}");
         }
+    }
+
+    #[test]
+    fn macos_programs_bundles_and_executables_are_not_opened() {
+        for ext in ["command", "app", "pkg", "dmg", "scpt", "webloc", "zsh"] {
+            assert!(runs_code(ext, false, false), "{ext}");
+        }
+        assert!(runs_code("app", true, false), "an .app bundle is a folder");
+        assert!(runs_code("", false, true), "a file marked executable");
+        assert!(!runs_code("", true, false), "a plain folder");
+        assert!(!runs_code("photos", true, false));
+        assert!(!runs_code("pdf", false, false));
     }
 
     /// A notebook folder with `Page.md` holding `text`, and a history folder beside it.

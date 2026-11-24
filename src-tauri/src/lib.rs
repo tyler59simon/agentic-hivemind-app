@@ -32,6 +32,7 @@ mod replace;
 mod resources;
 mod review;
 mod settings;
+mod shell_env;
 mod skills;
 mod studio;
 mod term;
@@ -1737,6 +1738,8 @@ fn tell(text: &str) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before any thread: a macOS app launched from Finder has launchd's short PATH and no LANG.
+    shell_env::hydrate();
     let context = tauri::generate_context!();
     // Before any window or writer: a second copy would overwrite this one's records (EXEC-7, EXEC-12). A launch that finds
     // the data folder taken brings the running copy to the front and exits.
@@ -1775,6 +1778,8 @@ pub fn run() {
     let open_queue = Arc::new(opens::OpenQueue::default());
     open_queue.push(None, launch);
     let state_queue = open_queue.clone();
+    #[cfg(target_os = "macos")]
+    let finder_queue = open_queue.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -1927,6 +1932,14 @@ pub fn run() {
                     let _ = sampled.emit("agent-resources", usage);
                 },
             );
+            if cfg!(target_os = "macos") {
+                app.set_menu(capture::macos_menu(app.handle())?)?;
+                app.on_menu_event(|app, event| {
+                    if event.id() == capture::APP_QUIT {
+                        capture::request_quit(app);
+                    }
+                });
+            }
             Ok(())
         })
         // Pictures and PDFs beside a page (NS-1B). The handler reads files, so it answers off the main thread.
@@ -1984,7 +1997,9 @@ pub fn run() {
         ])
         .build(context)
         .expect("error while running tauri application")
-        .run(|app, event| {
+        .run(move |app, event| {
+            #[cfg(target_os = "macos")]
+            macos_event(app, &event, &finder_queue);
             // An agent session, a terminal or a wiki build must not outlive the app that started it.
             if let tauri::RunEvent::Exit = event
                 && let Some(state) = app.try_state::<AppState>()
@@ -1994,6 +2009,29 @@ pub fn run() {
                 wiki_build::stop();
             }
         });
+}
+
+/// macOS delivers Finder opens (file associations) and Dock clicks as events, not as a new launch, and a Dock or logout
+/// Quit as an exit request with no code (MACOS-1C).
+#[cfg(target_os = "macos")]
+fn macos_event(app: &AppHandle, event: &tauri::RunEvent, queue: &opens::OpenQueue) {
+    match event {
+        tauri::RunEvent::Opened { urls } => {
+            let paths: Vec<PathBuf> = urls.iter().filter_map(|u| u.to_file_path().ok()).filter(|p| p.is_file()).collect();
+            if !paths.is_empty() {
+                queue.push(None, paths);
+                capture::show_main(app);
+                let _ = app.emit("open-requested", ());
+            }
+        }
+        tauri::RunEvent::Reopen { .. } => capture::show_main(app),
+        // Hivemind's own exits pass a code (`app.exit(0)`); one without asks the page first, as tray Quit does.
+        tauri::RunEvent::ExitRequested { code: None, api, .. } => {
+            api.prevent_exit();
+            capture::request_quit(app);
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]

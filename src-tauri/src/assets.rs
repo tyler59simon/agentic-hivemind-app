@@ -64,7 +64,13 @@ impl AssetGrants {
 
 /// The URL prefix for files under `root`, ending in a slash.
 pub fn base_url(grant: &str) -> String {
-    format!("http://{SCHEME}.localhost/{grant}/")
+    base_url_for(cfg!(windows), grant)
+}
+
+/// WebView2 reaches a custom scheme as `http://<scheme>.localhost`; WKWebView (macOS) and WebKitGTK serve it as
+/// `<scheme>://localhost`, and cannot intercept an `http://` URL. `serve` reads only the path, so both forms work there.
+fn base_url_for(windows: bool, grant: &str) -> String {
+    if windows { format!("http://{SCHEME}.localhost/{grant}/") } else { format!("{SCHEME}://localhost/{grant}/") }
 }
 
 fn content_type(ext: &str) -> Option<&'static str> {
@@ -245,6 +251,22 @@ mod tests {
             b = b.header(*k, *v);
         }
         b.body(Vec::new()).unwrap()
+    }
+
+    #[test]
+    fn the_base_url_uses_the_form_each_webview_serves() {
+        assert_eq!(base_url_for(true, "g1"), "http://hmfile.localhost/g1/");
+        assert_eq!(base_url_for(false, "g1"), "hmfile://localhost/g1/");
+    }
+
+    #[test]
+    fn serves_the_macos_url_form() {
+        let dir = scratch();
+        let grants = AssetGrants::default();
+        let g = grants.grant(&dir);
+        let r = serve(&get(&format!("{}pic.svg", base_url_for(false, &g)), &[("Origin", "tauri://localhost")]), "main", &grants, &Protected::new(None));
+        assert_eq!(r.status(), StatusCode::OK);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -445,6 +445,10 @@ pub fn under_program_files(program_files: Option<PathBuf>, names: &[&str]) -> Ve
 /// repository: `ClaudeCode` is the folder Claude Code's managed settings use under Program Files (`managed.rs`), the others
 /// are the product's name spelled out.
 pub fn machine_folders() -> Vec<PathBuf> {
+    // Homebrew (Apple silicon, then Intel): a fallback when the login shell's PATH could not be read (shell_env).
+    if cfg!(target_os = "macos") {
+        return vec![PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/usr/local/bin")];
+    }
     under_program_files(std::env::var_os("ProgramFiles").map(PathBuf::from), &["ClaudeCode", "Claude Code", r"Anthropic\ClaudeCode"])
 }
 
@@ -460,8 +464,8 @@ pub fn locate(saved: &Settings, machine_dirs: &[PathBuf], home: &Path, on_path: 
     if let Some(machine) = machine_dirs.iter().map(|dir| dir.join(name)).find(|path| path.is_file()) {
         return Ok(machine.display().to_string());
     }
-    let installed = home.join(".local").join("bin").join(name);
-    if installed.is_file() {
+    // The native installer's place, then the older local npm install (`claude migrate-installer`).
+    if let Some(installed) = [home.join(".local").join("bin").join(name), home.join(".claude").join("local").join(name)].into_iter().find(|p| p.is_file()) {
         return Ok(installed.display().to_string());
     }
     if on_path() {

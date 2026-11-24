@@ -277,7 +277,7 @@ pub fn environment(own: &[String], memory_root: Option<&Path>, terminal_id: &str
     (set, remove)
 }
 
-/// Terminal ids of PowerShell tabs start with this.
+/// Terminal ids of shell tabs (PowerShell, or the login shell off Windows) start with this.
 pub const SHELL_PREFIX: &str = "shell-";
 
 /// The shell to start and its tab label: PowerShell 7 when `pwsh` is the path of one, else Windows PowerShell under
@@ -292,10 +292,23 @@ pub fn shell_program(pwsh: Option<PathBuf>, system_root: &Path) -> (Cli, &'stati
     }
 }
 
-/// The shell on this machine; an error on systems other than Windows.
+/// The user's login shell off Windows: `$SHELL` when it is an absolute path, else `/bin/zsh` (the macOS default), started
+/// with `-l` so it reads the profile a Terminal window reads. The label is the shell's name.
+pub fn posix_shell(shell: Option<&str>) -> (Cli, &'static str) {
+    let program = shell.filter(|s| s.starts_with('/')).unwrap_or("/bin/zsh").to_string();
+    let label = match Path::new(&program).file_name().and_then(|n| n.to_str()) {
+        Some("zsh") => "zsh",
+        Some("bash") => "bash",
+        Some("fish") => "fish",
+        _ => "Shell",
+    };
+    (Cli { program, args: vec!["-l".into()] }, label)
+}
+
+/// The shell on this machine: PowerShell on Windows, the login shell elsewhere.
 pub fn shell() -> Result<(Cli, &'static str), String> {
     if !cfg!(windows) {
-        return Err("PowerShell tabs are for Windows".into());
+        return Ok(posix_shell(std::env::var("SHELL").ok().as_deref()));
     }
     let on_path = std::env::var_os("PATH").and_then(|path| std::env::split_paths(&path).map(|dir| dir.join("pwsh.exe")).find(|exe| exe.is_file()));
     let installed = std::env::var_os("ProgramFiles").map(|dir| PathBuf::from(dir).join("PowerShell").join("7").join("pwsh.exe")).filter(|exe| exe.is_file());
@@ -702,9 +715,12 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(windows))]
-    fn shell_tabs_are_for_windows() {
-        assert_eq!(shell().unwrap_err(), "PowerShell tabs are for Windows");
+    fn the_shell_off_windows_is_the_login_shell() {
+        let (cli, label) = posix_shell(Some("/opt/homebrew/bin/fish"));
+        assert_eq!((cli.program.as_str(), cli.args, label), ("/opt/homebrew/bin/fish", vec!["-l".to_string()], "fish"));
+        assert_eq!(posix_shell(None).0.program, "/bin/zsh");
+        assert_eq!(posix_shell(Some("zsh")).0.program, "/bin/zsh");   // not absolute: the default
+        assert_eq!(posix_shell(Some("/usr/local/bin/nu")).1, "Shell");
     }
 
     #[test]

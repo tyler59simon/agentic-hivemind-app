@@ -268,6 +268,7 @@ impl Bridge {
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             command.creation_flags(CREATE_NO_WINDOW);
         }
+        crate::jobs::own_group(&mut command);
         let mut child = command
             .spawn()
             .map_err(|e| format!("Could not start {} {}: {e}", launch.program, launch.script.display()))?;

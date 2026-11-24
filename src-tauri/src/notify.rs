@@ -39,7 +39,11 @@ pub fn session(app: &AppHandle, id: &str, title: &str, text: &str) {
     if main_active(app) {
         return;
     }
-    *PENDING.lock().unwrap() = Some((id.to_string(), Instant::now()));
+    // The focus fallback is for a toast whose click did not arrive; where no toast is shown (`show` does nothing off
+    // Windows), it would jump to a session the user never heard about (MACOS-1C).
+    if SHOWS_TOASTS {
+        *PENDING.lock().unwrap() = Some((id.to_string(), Instant::now()));
+    }
     show(app, title, text, Some(id.to_string()));
 }
 
@@ -116,6 +120,9 @@ fn show(app: &AppHandle, title: &str, text: &str, session: Option<String>) {
         let _ = toast.show();
     });
 }
+
+/// Whether `show` puts up a notification on this system.
+const SHOWS_TOASTS: bool = cfg!(windows);
 
 #[cfg(not(windows))]
 fn show(_app: &AppHandle, _title: &str, _text: &str, _session: Option<String>) {}

@@ -1,6 +1,6 @@
 //! Quick capture: a small always-on-top window opened by a global hotkey or the tray icon,
 //! so a note can be saved without bringing up the whole app.
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -24,9 +24,9 @@ pub fn quit_ack() {
     *LAST_QUIT.lock().unwrap() = None;
 }
 
-/// Tray Quit: show the window and ask the page to confirm (it quits at once when nothing runs); a second click within
-/// five seconds exits directly.
-fn request_quit(app: &AppHandle) {
+/// Tray Quit (also Cmd+Q and Dock Quit on macOS): show the window and ask the page to confirm (it quits at once when
+/// nothing runs); a second request within five seconds exits directly.
+pub fn request_quit(app: &AppHandle) {
     let now = Instant::now();
     let mut last = LAST_QUIT.lock().unwrap();
     if quit_again(*last, now) {
@@ -80,6 +80,49 @@ pub fn apply_shortcut(app: &AppHandle, shortcut: Option<&str>) -> Result<(), Str
             .map_err(|e| format!("Could not register {accelerator}: {e}. It may be taken by another app or not a valid shortcut.")),
         None => Ok(()),
     }
+}
+
+/// The id of the macOS app menu's Quit item. Not `quit`: a global menu handler also sees the tray menu's events.
+pub const APP_QUIT: &str = "app-quit";
+
+/// The macOS menu bar. Tauri's default binds Cmd+Q to a Quit that skips the page's confirmation and Cmd+W to Close
+/// Window, which hides the app instead of closing the page's tab. This one keeps the standard App, Edit and Window items,
+/// routes Quit through `request_quit`, and leaves Cmd+W to the page (MACOS-1C).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn macos_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let name = app.package_info().name.clone();
+    let app_menu = Submenu::with_items(
+        app,
+        &name,
+        true,
+        &[
+            &PredefinedMenuItem::about(app, None, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::services(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, None)?,
+            &PredefinedMenuItem::hide_others(app, None)?,
+            &PredefinedMenuItem::show_all(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, APP_QUIT, format!("Quit {name}"), true, Some("CmdOrCtrl+Q"))?,
+        ],
+    )?;
+    let edit = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+    let window = Submenu::with_items(app, "Window", true, &[&PredefinedMenuItem::minimize(app, None)?, &PredefinedMenuItem::maximize(app, None)?])?;
+    Menu::with_items(app, &[&app_menu, &edit, &window])
 }
 
 pub fn tray(app: &AppHandle) -> tauri::Result<()> {
