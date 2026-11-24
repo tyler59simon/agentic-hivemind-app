@@ -31,8 +31,9 @@ export function stepZoom(zoom: number, action: ZoomAction): number {
 export const zoomPercent = (zoom: number): string => `${Math.round(zoom * 100)}%`;
 
 let current = 1;
-// The level the last request asked for, until the window reports it: quick steps build on it, not on `current`.
-let wanted: number | null = null;
+// The level the latest request asked for, until that request is answered: quick steps build on it, not on `current`.
+let wanted: { n: number; zoom: number } | null = null;
+let asked = 0;
 const listeners = new Set<(zoom: number) => void>();
 const changed = (zoom: number) => { current = zoom; listeners.forEach((l) => l(zoom)); };
 
@@ -49,18 +50,19 @@ export function onZoomChange(listener: (zoom: number) => void): () => void {
 /** Zoom every window to `zoom` and keep it. Resolves to the zoom kept. */
 export async function setZoom(zoom: number): Promise<number> {
   if (!inTauri()) { changed(zoom); return zoom; }
-  wanted = zoom;
+  const n = ++asked;
+  wanted = { n, zoom };
   try {
     const kept = await invoke<number>("ui_zoom_set", { zoom });
     changed(kept);
     return kept;
   } finally {
-    if (wanted === zoom) wanted = null;
+    if (wanted?.n === n) wanted = null;
   }
 }
 
 /** One step in or out, or back to 100 percent, from the level last asked for (two quick presses go two steps). */
-export const zoomBy = (action: ZoomAction): Promise<number> => setZoom(stepZoom(wanted ?? current, action));
+export const zoomBy = (action: ZoomAction): Promise<number> => setZoom(stepZoom(wanted?.zoom ?? current, action));
 
 /** Views that zoom themselves (boards, the architecture canvas, drawings) keep Ctrl+wheel. Only a view with its own zoom
  *  keys (the drawing editor, marked data-own-zoom-keys) keeps Ctrl+=, Ctrl+- and Ctrl+0 as well. */

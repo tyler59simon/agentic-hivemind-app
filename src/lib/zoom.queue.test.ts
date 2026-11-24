@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   }),
 }));
 
-const { currentZoom, zoomBy } = await import("./zoom");
+const { currentZoom, stepZoom, zoomBy } = await import("./zoom");
 const g = window as unknown as { __TAURI_INTERNALS__?: unknown };
 afterEach(() => { delete g.__TAURI_INTERNALS__; });
 
@@ -29,5 +29,24 @@ describe("quick zoom steps", () => {
     expect(asked[2]).toBe(1.1);
     pending[2]();
     await third;
+  });
+
+  it("is not thrown off by an earlier reply for the same level (Codex re-review, DESK-R10)", async () => {
+    g.__TAURI_INTERNALS__ = {};
+    asked.length = 0;
+    pending.length = 0;
+    const start = currentZoom();
+    const up = stepZoom(start, "in"), upUp = stepZoom(up, "in");
+    const calls = [zoomBy("in"), zoomBy("in"), zoomBy("out")];
+    expect(asked).toEqual([up, upUp, up]);
+    // The first reply matches the third request's level but is not the third request: the next step still builds on it.
+    pending[0]();
+    pending[1]();
+    await Promise.all(calls.slice(0, 2));
+    void zoomBy("in");
+    expect(asked[3]).toBe(upUp);
+    pending[2]();
+    pending[3]();
+    await Promise.all(calls);
   });
 });
