@@ -4,6 +4,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNo
 import { convertToUtf8, discardKept, edit, inOwnStore, isArriving, isDeleting, keyOf, open, recreate as recreatePageAgain, reformat, reload, resolveMerge, save, useDocuments } from "../../documents/store";
 import { isUnsaved, mergeable, type DocState } from "../../documents/session";
 import { classify } from "../../lib/errors";
+import { baseName, fileManager, joinPath, parentFolder } from "../../lib/platform";
 import { assetLink, attachFile, openAttachment, parseLm } from "../../documents/adapters/lmdoc";
 import { lmAssets, treeQuery } from "../../documents/io";
 import { lmNotebooksQuery } from "../../lib/lm";
@@ -242,8 +243,8 @@ function PageName({ tab, notebook }: { tab: Tab; notebook: Notebook | undefined 
     if (!name || name === pageTitle(path)) return;
     movePath(client, tab.file!.notebook, path, renamed(path, name)).catch((e) => toast(classify(e).message, "error"));
   };
-  const folder = full ? full.slice(0, full.lastIndexOf("\\")) : "";
-  const where = loose ? `Opened file${folder ? ` · ${folder.slice(folder.lastIndexOf("\\") + 1)}` : ""}` : [notebook?.title, folderOf(path)].filter(Boolean).join(" · ");
+  const folder = full ? parentFolder(full) : "";
+  const where = loose ? `Opened file${folder ? ` · ${baseName(folder)}` : ""}` : [notebook?.title, folderOf(path)].filter(Boolean).join(" · ");
   return (
     <>
       <span className="eyebrow" title={full ?? path}>{where || "notebook"}</span>
@@ -422,10 +423,10 @@ function TextFileTab({ tab }: { tab: Tab }) {
                 return (
                   <>
                     {editable && item("Open in the editor", () => updateTab(tab.id, { mode: markdown ? "live" : "source" }))}
-                    {item("Show in Explorer", () => revealFile(ref.notebook, ref.path).catch((e) => toast(classify(e).message, "error")))}
+                    {item(`Show in ${fileManager()}`, () => revealFile(ref.notebook, ref.path).catch((e) => toast(classify(e).message, "error")))}
                     {item("Open with default app", () => revealFile(ref.notebook, ref.path, true).catch((e) => toast(classify(e).message, "error")))}
                     {item("Copy path", () => {
-                      const copied = loose ? full ?? ref.path : notebook ? `${notebook.path}\\${ref.path.replace(/\//g, "\\")}` : ref.path;
+                      const copied = loose ? full ?? ref.path : notebook ? joinPath(notebook.path, ref.path) : ref.path;
                       navigator.clipboard.writeText(copied).then(() => toast("Path copied"), () => toast(copied));
                     })}
                   </>
@@ -487,10 +488,10 @@ function TextFileTab({ tab }: { tab: Tab }) {
               if (lm) return <>{item("Attach file…", () => void attach())}{paper}{item("Delete page…", remove, "danger-text")}</>;
               return (
                 <>
-                  {item("Show in Explorer", () => revealFile(ref.notebook, ref.path).catch((e) => toast(classify(e).message, "error")))}
+                  {item(`Show in ${fileManager()}`, () => revealFile(ref.notebook, ref.path).catch((e) => toast(classify(e).message, "error")))}
                   {item("Open with default app", () => revealFile(ref.notebook, ref.path, true).catch((e) => toast(classify(e).message, "error")))}
                   {item("Copy path", () => {
-                    const copied = loose ? full ?? ref.path : notebook ? `${notebook.path}\\${ref.path.replace(/\//g, "\\")}` : ref.path;
+                    const copied = loose ? full ?? ref.path : notebook ? joinPath(notebook.path, ref.path) : ref.path;
                     navigator.clipboard.writeText(copied).then(() => toast("Path copied"), () => toast(copied));
                   })}
                   {!richDoc && item("Compare with another file…", () => useComparePicker.getState().show(ref))}

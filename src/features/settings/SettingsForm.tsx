@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { applyDocSize, DOC_SIZES, useDocSize } from "../../lib/docSize";
+import { isMac } from "../../lib/platform";
 import { setZoom, useZoom, ZOOM_STEPS, zoomPercent } from "../../lib/zoom";
 import { useEffect, useState } from "react";
 import { ENGINE_LABELS, ENGINES, enginesText, shownEngines, type Engine } from "../../lib/agent";
@@ -17,7 +18,8 @@ import { amount, BUDGET_DEFAULTS, EXECUTIVE_CALLS, withCallLimit } from "./budge
 import { SpendToday } from "./SpendToday";
 import { withCommands } from "./commands";
 
-const DEFAULT_SHORTCUT = "CommandOrControl+Alt+M";
+// Keep in step with DEFAULT_CAPTURE_SHORTCUT in src-tauri/src/settings.rs.
+const DEFAULT_SHORTCUT = isMac ? "CommandOrControl+Alt+Shift+M" : "CommandOrControl+Alt+M";
 type PathKey = "python" | "script" | "root" | "claude_path" | "codex_path" | "architecture_suite_plugin";
 
 /** Where Hivemind finds Python, living_memory.py and the store; quick capture; editor default. */

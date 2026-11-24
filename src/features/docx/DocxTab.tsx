@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ellipsis, Save } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { classify } from "../../lib/errors";
+import { fileManager } from "../../lib/platform";
 import { fileName, folderOf, notebooksQuery, pageTitle, revealFile } from "../../lib/notebooks";
 import { isLoose } from "../../lib/opens";
 import { Menu } from "../../ui/Menu";
@@ -117,7 +118,7 @@ export function DocxTab({ tab }: { tab: Tab }) {
                 );
                 return (
                   <>
-                    {item("Show in Explorer", () => revealFile(ref.notebook, ref.path).catch((e) => toast(classify(e).message, "error")))}
+                    {item(`Show in ${fileManager()}`, () => revealFile(ref.notebook, ref.path).catch((e) => toast(classify(e).message, "error")))}
                     {item("Open with default app", () => revealFile(ref.notebook, ref.path, true).catch((e) => toast(classify(e).message, "error")))}
                     {item("Hex view", () => updateTab(tab.id, { mode: "hex" }))}
                     {!loose && item("Delete…", () => setConfirmDelete(true), "danger-text")}

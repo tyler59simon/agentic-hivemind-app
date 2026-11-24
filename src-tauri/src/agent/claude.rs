@@ -154,7 +154,7 @@ impl Adapter for ClaudeCode {
         if spec.isolated {
             // No settings file at all (so no user allow rules), no MCP servers, skills or commands, and only the shell and the
             // to-do list: what may run is exactly the allow rules below.
-            command.args(["--restricted", "--tools", "Bash,PowerShell,TodoWrite"]);
+            command.args(["--restricted", "--tools", ISOLATED_TOOLS]);
             if spec.strict_mcp {
                 command.arg("--strict-mcp-config");
             }
@@ -444,6 +444,10 @@ pub fn under_program_files(program_files: Option<PathBuf>, names: &[&str]) -> Ve
 /// Where a per-machine install of Claude Code may be. None of these is documented by Claude Code or recorded in this
 /// repository: `ClaudeCode` is the folder Claude Code's managed settings use under Program Files (`managed.rs`), the others
 /// are the product's name spelled out.
+/// The tools of an isolated session: the shell and the to-do list. Claude Code has a PowerShell tool on Windows only
+/// (MACOS-1D).
+const ISOLATED_TOOLS: &str = if cfg!(windows) { "Bash,PowerShell,TodoWrite" } else { "Bash,TodoWrite" };
+
 pub fn machine_folders() -> Vec<PathBuf> {
     under_program_files(std::env::var_os("ProgramFiles").map(PathBuf::from), &["ClaudeCode", "Claude Code", r"Anthropic\ClaudeCode"])
 }
@@ -860,7 +864,7 @@ mod tests {
         (executive.isolated, executive.strict_mcp) = (true, false);
         let args = args_of(&ClaudeCode.command(&executive));
         assert!(!args.iter().any(|a| a == "--strict-mcp-config"), "{args:?}");
-        for flag in ["--restricted", "--tools", "Bash,PowerShell,TodoWrite", "--disable-slash-commands"] {
+        for flag in ["--restricted", "--tools", ISOLATED_TOOLS, "--disable-slash-commands"] {
             assert!(args.iter().any(|a| a == flag), "{flag}");
         }
         // The flag order is as before, so only the one flag differs.
@@ -878,7 +882,7 @@ mod tests {
         let expected = [
             "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
             "--permission-mode", "dontAsk", "--permission-prompts", "none",
-            "--restricted", "--tools", "Bash,PowerShell,TodoWrite", "--strict-mcp-config", "--disable-slash-commands",
+            "--restricted", "--tools", ISOLATED_TOOLS, "--strict-mcp-config", "--disable-slash-commands",
             "--session-id", "00000000-0000-4000-8000-000000000001", "--max-budget-usd", "5",
             "--allowedTools", "TodoWrite", "Bash(alm --json --domain pay search *)",
         ];

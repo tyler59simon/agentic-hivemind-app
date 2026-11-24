@@ -7,6 +7,7 @@ import type { EditorState, Range } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { replacedBlocks } from "./blocks";
 import { richContext, richRefresh } from "./context";
+import { commandKey } from "../../../lib/platform";
 import { footnoteDefs, footnoteRefs, isPicture, parseEmbed } from "./parse";
 import { FootnoteWidget, MathWidget, PictureWidget } from "./widgets";
 
@@ -147,12 +148,12 @@ export const richInline = ViewPlugin.fromClass(class {
   }
 }, { decorations: (v) => v.decorations });
 
-/** Ctrl+click on a link opens it (Ctrl+Shift+click: in a split, for pages). */
+/** Ctrl+click (Cmd+click on macOS) on a link opens it (with Shift: in a split, for pages). */
 export const richLinks = EditorView.domEventHandlers({
   mousedown: (e, view) => {
     const link = (e.target as HTMLElement).closest<HTMLElement>("[data-href]");
     const ctx = view.state.facet(richContext);
-    if (!link || !ctx || !(e.ctrlKey || e.metaKey)) return false;
+    if (!link || !ctx || e.button !== 0 || !commandKey(e)) return false;
     e.preventDefault();
     ctx.openHref(link.dataset.href!, e.shiftKey);
     return true;

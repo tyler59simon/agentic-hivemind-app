@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { sessionsQuery } from "../../lib/agent";
 import { useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
+import { commandKey } from "../../lib/platform";
 import type { Milestone } from "../../lib/executive";
 import { writeProject, type NoteRow, type Project } from "../../lib/lm";
 import { sections } from "../../lib/note";
@@ -50,7 +51,7 @@ function useCapture(projects: Project[], project: Project | undefined): { start:
   const go = useApp((s) => s.go);
   const [capturing, setCapturing] = useState(false);
   useEffect(() => {
-    const key = (e: KeyboardEvent) => { if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "c" && !modalOpen()) { e.preventDefault(); setCapturing(true); } };
+    const key = (e: KeyboardEvent) => { if (commandKey(e) && e.shiftKey && e.key.toLowerCase() === "c" && !modalOpen()) { e.preventDefault(); setCapturing(true); } };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, []);

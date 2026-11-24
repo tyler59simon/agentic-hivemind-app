@@ -461,6 +461,8 @@ mod prune_tests {
         assert_eq!(drops.take(&early, &[0]).unwrap(), vec![PathBuf::from("C:/drops/early.md")]);
     }
 
+    // Uses Windows paths (C:\...), which are relative elsewhere (MACOS-1D).
+    #[cfg(windows)]
     #[test]
     fn knock_paths_touch_nothing_and_keep_only_usable_paths() {   // Codex review of 52051c8, I2
         let open = vec!["--flag".to_string(), "rel.txt".to_string(), r"C:\nowhere\abs.md".to_string()];

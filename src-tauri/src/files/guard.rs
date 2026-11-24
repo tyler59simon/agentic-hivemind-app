@@ -156,6 +156,8 @@ impl Protected {
 mod tests {
     use super::*;
 
+    // Uses Windows paths (C:\...), which are relative elsewhere (MACOS-1D).
+    #[cfg(windows)]
     #[test]
     fn reserved_folders_are_named_whatever_their_case() {   // Codex re-review of fa08348, P1
         assert!(reserved(Path::new(r"C:\code\repo\.git\config")).unwrap().contains(".git folder"));

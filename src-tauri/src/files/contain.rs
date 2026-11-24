@@ -195,6 +195,8 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
+    // Uses Windows paths (C:\...), which are relative elsewhere (MACOS-1D).
+    #[cfg(windows)]
     #[test]
     fn relative_paths_use_forward_slashes() {
         let root = Path::new(r"C:\nb");

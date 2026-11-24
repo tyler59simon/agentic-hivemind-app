@@ -93,6 +93,8 @@ mod tests {
         assert_eq!(serde_json::to_value(&changed[0]).unwrap(), serde_json::json!({ "notebook": "nb-1", "paths": ["a.md"] }));
     }
 
+    // Uses Windows paths (C:\...), which are relative elsewhere (MACOS-1D).
+    #[cfg(windows)]
     #[test]
     fn pages_are_located_in_their_notebook() {
         assert_eq!(locate(&roots(), Path::new(r"C:\Notes\Projects\Roadmap.md")), Some(("nb-1".into(), "Projects/Roadmap.md".into())));

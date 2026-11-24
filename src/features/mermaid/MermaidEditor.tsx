@@ -111,9 +111,9 @@ export default function MermaidEditor(props: MermaidEditorProps) {
   const copyPng = async () => {
     if (!currentSvg) return;
     try {
-      const blob = await rasterizeSvgToPng(currentSvg);
       if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
-        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        // The picture goes in as a promise: WKWebView allows the write only during the click (MACOS-1D).
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": rasterizeSvgToPng(currentSvg) })]);
         toast("PNG copied to clipboard");
       } else {
         toast("Clipboard image copy is not available here", "warn");

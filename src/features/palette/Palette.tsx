@@ -1,5 +1,6 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isNarrow } from "../../lib/narrow";
+import { parentFolder } from "../../lib/platform";
 import { useLayer } from "../../ui/layers";
 import { zoomBy } from "../../lib/zoom";
 import { useEffect, useMemo, useState } from "react";
@@ -84,7 +85,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
         : (notebooks.data ?? []).flatMap((nb, i) => (trees[i]?.data?.entries ?? []).filter((e) => e.kind === "page").map((e) => entry(nb.id, e.path)));
       // Files opened from outside a notebook, newest first (NS-1B).
       const files = (recent.data ?? []).filter((r) => r.exists).map((r) => ({
-        key: `recent:${r.id}`, label: r.name, detail: `${r.path.slice(0, r.path.lastIndexOf("\\"))} · recent file`,
+        key: `recent:${r.id}`, label: r.name, detail: `${parentFolder(r.path)} · recent file`,
         run: () => { app.setPalette(null); openPage(recentRef(r)); },
       }));
       // The newest few lead, so an empty query shows them; ties keep this order.

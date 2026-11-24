@@ -74,9 +74,9 @@ export default function SvgEditor(props: SvgEditorProps) {
     const src = inspected.ok ? debounced : lastValid?.text;
     if (!src) return;
     try {
-      const blob = await rasterizeSvgToPng(src);
       if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
-        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        // The picture goes in as a promise: WKWebView allows the write only during the click (MACOS-1D).
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": rasterizeSvgToPng(src) })]);
         toast("PNG copied to clipboard");
       } else {
         toast("Clipboard image copy is not available here", "warn");

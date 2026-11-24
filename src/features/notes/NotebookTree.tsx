@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarDays, ChevronDown, ChevronRight, Ellipsis, File, FileText, Folder, FolderPlus, GitBranch, Image as ImageIcon, Inbox, LayoutPanelTop, Plus, Workflow } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { classify } from "../../lib/errors";
+import { fileManager } from "../../lib/platform";
 import { treeQuery } from "../../documents/io";
 import type { DocNotebook } from "../../lib/lm";
 import { isCanvas, isDocx, isDrawio, isMarkdown, isMermaid, isPdf, isRichDoc, isSvg, metaQuery, revealFile, type Notebook } from "../../lib/notebooks";
@@ -255,7 +256,7 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
               <li><button role="menuitem" onClick={() => { close(); onSettings(); }}>Notebook settings…</button></li>
               {lm
                 ? <li><button role="menuitem" onClick={() => { close(); onProposals?.(); }}>Agent proposals…</button></li>
-                : <li><button role="menuitem" onClick={() => { close(); revealFile(notebook.id, null).catch(fail); }}>Show in Explorer</button></li>}
+                : <li><button role="menuitem" onClick={() => { close(); revealFile(notebook.id, null).catch(fail); }}>Show in {fileManager()}</button></li>}
               {!lm && <li><button role="menuitem" onClick={() => { close(); openFindInFiles({ notebook: notebook.id }); }}>Find in files…</button></li>}
               <li><button role="menuitem" onClick={() => { close(); client.invalidateQueries({ queryKey: ["notebook-tree", notebook.id] }); }}>Refresh</button></li>
             </>
@@ -336,7 +337,7 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
                 {item("Rename", () => setRenaming({ path: n.path, value: label(n) }))}
                 {item("Move to…", () => moveTo(n))}
                 {!lm && n.kind === "other" && item("Open with default app", () => revealFile(notebook.id, n.path, true).catch(fail))}
-                {!lm && item("Show in Explorer", () => revealFile(notebook.id, n.path).catch(fail))}
+                {!lm && item(`Show in ${fileManager()}`, () => revealFile(notebook.id, n.path).catch(fail))}
                 {!(lm && n.kind === "dir") && item(n.kind === "dir" ? "Delete section…" : "Delete…", () => remove(n), "danger-text")}
               </>
             );

@@ -1,4 +1,5 @@
 import { reloadKey } from "../../lib/keys";
+import { isMac } from "../../lib/platform";
 
 export interface Key { type: string; key: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }
 export type KeyAction = "copy" | "paste" | "leave" | "search" | "newline" | "pass";
@@ -6,7 +7,8 @@ export type KeyAction = "copy" | "paste" | "leave" | "search" | "newline" | "pas
 /** What the terminal does with a key before xterm sees it. */
 export function keyAction(e: Key, hasSelection: boolean): KeyAction {
   if (e.type !== "keydown") return "pass";
-  const mod = (e.ctrlKey || e.metaKey) && !e.altKey;
+  // On macOS only Cmd: Ctrl+C, Ctrl+V and the rest go to the program in the terminal.
+  const mod = isMac ? e.metaKey && !e.ctrlKey && !e.altKey : (e.ctrlKey || e.metaKey) && !e.altKey;
   const key = e.key.toLowerCase();
   if (mod && e.shiftKey && key === "k") return "leave";
   if (mod && e.shiftKey && key === "f") return "search";

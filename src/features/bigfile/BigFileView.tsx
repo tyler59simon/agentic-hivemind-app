@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FileRef } from "../../documents/keys";
 import { bigfileLines, bigfileSearch, type BigHit, type BigLine } from "../../lib/bigfile";
 import { classify } from "../../lib/errors";
+import { copyLater } from "../../lib/platform";
 import { toast } from "../../ui/toast";
 import { ROW, useWindowed } from "./virtual";
 import { useBigFile } from "./useBigFile";
@@ -154,8 +155,11 @@ export function BigFileView({ file }: { file: FileRef }) {
     const wanted = Math.min(to - from + 1, COPY_LIMIT);
     const text: string[] = [];
     try {
-      for (let at = from; at < from + wanted; at += 500) text.push(...(await bigfileLines(big.handle, at, Math.min(500, from + wanted - at))).lines.map((l) => l.text));
-      await navigator.clipboard.writeText(text.join("\n"));
+      const handle = big.handle;
+      await copyLater((async () => {
+        for (let at = from; at < from + wanted; at += 500) text.push(...(await bigfileLines(handle, at, Math.min(500, from + wanted - at))).lines.map((l) => l.text));
+        return text.join("\n");
+      })());
       toast(`Copied ${text.length.toLocaleString()} ${text.length === 1 ? "line" : "lines"}${wanted < to - from + 1 ? ` (the first ${COPY_LIMIT.toLocaleString()})` : ""}`);
     } catch (e) {
       toast(classify(e).message, "error");

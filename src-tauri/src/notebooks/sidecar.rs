@@ -139,6 +139,8 @@ mod tests {
         dir
     }
 
+    // Uses Windows file locks (share mode) (MACOS-1D).
+    #[cfg(windows)]
     #[test]
     fn the_fallback_keeps_its_base_inside_and_a_fallback_from_before_the_hash_keeps_the_old_rule() {
         let root = scratch();

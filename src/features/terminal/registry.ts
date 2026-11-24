@@ -11,6 +11,7 @@ import "@xterm/xterm/css/xterm.css";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useSyncExternalStore } from "react";
 import type { Engine, SessionInfo } from "../../lib/agent";
+import { isMac } from "../../lib/platform";
 import { onThemeChange } from "../../lib/theme";
 import { termClose, termLogin, termOpen, termResize, termShell, termWrite, type ShellTarget, type StartMode, type TermExit, type TermInfo } from "../../lib/term";
 import { keyAction } from "./keys";
@@ -138,7 +139,7 @@ function watchDrops() {
     const live = terminalAt(e.payload.position.x / window.devicePixelRatio, e.payload.position.y / window.devicePixelRatio);
     if (!live) return;
     // A PowerShell tab expands `$` and backticks inside double quotes, so it gets single-quoted literals.
-    live.term.paste(quotePaths(e.payload.paths, sources.get(live.id)?.shell ? "powershell" : "other"));
+    live.term.paste(quotePaths(e.payload.paths, sources.get(live.id)?.shell ? (isMac ? "posix" : "powershell") : "other"));
     live.term.focus();
   }).catch(() => { dropListener = false; });
 }

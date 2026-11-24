@@ -59,7 +59,7 @@ export const makeFolder = (notebook: string, path: string) => invoke<void>("file
 export const renameFile = (notebook: string, from: string, to: string) => invoke<void>("file_rename", { notebook, from, to });
 /** Moves to the notebook's trash; returns where it went. */
 export const deleteFile = (notebook: string, path: string, pre?: Stamp) => invoke<string>("file_delete", { notebook, path, pre: pre ?? null });
-/** Shows the file in Explorer, or with `open` opens it in the program Windows associates with it. */
+/** Shows the file in Explorer (Finder on macOS), or with `open` opens it in the program Windows associates with it. */
 export const revealFile = (notebook: string, path: string | null, open = false) => invoke<void>("file_reveal", { notebook, path, open });
 
 export const notebooksQuery = () => ({ queryKey: ["notebooks"], queryFn: listNotebooks });

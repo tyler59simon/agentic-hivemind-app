@@ -66,7 +66,9 @@ pub struct Settings {
     pub ui_zoom: Option<f64>,
 }
 
-pub const DEFAULT_CAPTURE_SHORTCUT: &str = "CommandOrControl+Alt+M";
+/// On macOS Cmd+Option+M minimizes every window of the front app, so Shift is added there (MACOS-1D). Keep in step with
+/// `DEFAULT_SHORTCUT` in src/features/settings/SettingsForm.tsx.
+pub const DEFAULT_CAPTURE_SHORTCUT: &str = if cfg!(target_os = "macos") { "CommandOrControl+Alt+Shift+M" } else { "CommandOrControl+Alt+M" };
 pub const DEFAULT_AGENT_BUDGET_USD: f64 = 5.0;
 pub const DEFAULT_LEARNING_DAILY_USD: f64 = 1.0;
 pub const DEFAULT_AUTOMATION_DAILY_USD: f64 = 5.0;

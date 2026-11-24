@@ -12,6 +12,7 @@ import { SchedulesSection } from "./features/schedules/SchedulesSection";
 import { MaintenanceSection } from "./features/maintenance/MaintenanceSection";
 import { agentSessions } from "./lib/agent";
 import { captureStatus, connect, domains, setBridgeGeneration } from "./lib/lm";
+import { commandKey, editableTarget, isMac } from "./lib/platform";
 import { prefs } from "./lib/prefs";
 import { appQuit, notifyTray, quitAck, termList } from "./lib/term";
 import { useAttentionEvents } from "./features/terminal/attention";
@@ -45,8 +46,9 @@ function useShortcuts() {
     const onKey = (e: KeyboardEvent) => {
       const { setPalette, go, goBack } = useApp.getState();
       if (modalOpen()) return; // a dialog is open: nothing behind it changes (DESK-4)
-      if (e.altKey && e.key === "ArrowLeft") { e.preventDefault(); goBack(); return; }
-      if (!(e.ctrlKey || e.metaKey)) return;
+      // On macOS Option+Left moves a word left in text, so it goes back only outside text fields.
+      if (e.altKey && e.key === "ArrowLeft" && !(isMac && editableTarget(e.target))) { e.preventDefault(); goBack(); return; }
+      if (!commandKey(e)) return;
       const key = e.key.toLowerCase();
       if (key === "p" && !e.shiftKey) { e.preventDefault(); setPalette("commands"); }
       else if (key === "o") { e.preventDefault(); setPalette("notes"); }
