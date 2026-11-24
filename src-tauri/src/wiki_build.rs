@@ -130,6 +130,11 @@ pub fn summary(result: &Value) -> (String, f64) {
     (text, cost)
 }
 
+/// Whether a finished build left pages failed or unbuilt; a scheduled rebuild then ends as a failure (WIKI-R2).
+pub fn incomplete(result: &Value) -> bool {
+    ["failed", "pending"].iter().any(|key| result.get(*key).and_then(Value::as_array).is_some_and(|a| !a.is_empty()))
+}
+
 /// A domain or project goes to Living Memory as one argument; one that starts with `-` would read as a flag.
 fn check_name(what: &str, value: &str) -> Result<(), String> {
     if value.is_empty() || value.starts_with('-') {
@@ -474,6 +479,14 @@ mod tests {
         assert_eq!(summary(&json!({ "written": ["pg000001"], "failed": [{ "page": "pg000002", "reason": "x" }], "pending": ["pg000003", "pg000004"], "cost_usd": 1.0 })).0, "1 page written, $1.00, 1 failed, 2 left");
         assert_eq!(summary(&json!({ "ok": true, "written": [], "failed": [], "pending": [], "cost_usd": 0 })), ("Nothing changed".to_string(), 0.0));
         assert_eq!(summary(&json!({ "ok": true })), ("Nothing changed".to_string(), 0.0));
+    }
+
+    #[test]
+    fn a_build_with_failed_or_unbuilt_pages_is_incomplete() {   // WIKI-R2
+        assert!(!incomplete(&json!({ "ok": true, "written": ["pg000001"], "failed": [], "pending": [] })));
+        assert!(!incomplete(&json!({ "ok": true })));
+        assert!(incomplete(&json!({ "written": [], "failed": [{ "page": "pg000002", "reason": "x" }], "pending": [] })));
+        assert!(incomplete(&json!({ "written": [], "failed": [], "pending": ["pg000003"] })));
     }
 
     #[test]

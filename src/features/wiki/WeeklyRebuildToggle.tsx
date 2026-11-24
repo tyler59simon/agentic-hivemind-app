@@ -5,11 +5,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { classify } from "../../lib/errors";
 import { toast } from "../../ui/toast";
-import { automationPut, automationsQuery, type Automation } from "../../lib/workflows";
+import { automationPut, automationsQuery, type Automation } from "../../lib/automations";
 import { usd } from "./wiki";
 
 export const WEEKLY_REBUILD = "Weekly wiki rebuild";
-const CAP_USD = 2;
+export const WIKI_REBUILD_CAP_USD = 2;
+const CAP_USD = WIKI_REBUILD_CAP_USD;
 
 /** The project's weekly rebuild, if one was made. */
 export const rebuildOf = (automations: Automation[], project: string) =>

@@ -93,7 +93,7 @@ export interface Settings {
   allowed_commands?: Record<string, string[]> | null;
   /** Whether finished sessions are reviewed for knowledge and skills (default on), and the daily cap of the reviewer and the executive calls. */
   learning_reviewer?: boolean | null; learning_daily_usd?: number | null;
-  /** The daily cap of the sessions and workflows automations start. */
+  /** The daily cap of the sessions and wiki rebuilds automations start. */
   automation_daily_usd?: number | null;
   /** The most one reviewer call, and each executive call by name, may spend. */
   review_call_usd?: number | null; executive_call_usd?: Record<string, number> | null;

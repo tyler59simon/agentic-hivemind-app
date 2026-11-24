@@ -12,6 +12,7 @@ import { useAvailableSections } from "../../shell/Sidebar";
 import type { Mode } from "../../workspace/store";
 import { projectsQuery } from "../projects/useProject";
 import { amount, BUDGET_DEFAULTS, EXECUTIVE_CALLS, withCallLimit } from "./budgets";
+import { SpendToday } from "./SpendToday";
 import { withCommands } from "./commands";
 
 const DEFAULT_SHORTCUT = "CommandOrControl+Alt+M";
@@ -115,25 +116,26 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
           ))}
         </>
       )}
-      <p className="muted small">Hivemind starts {enginesText(shown, "or")} for you; {shown.length > 1 ? "each uses its own" : "it uses its"} saved sign-in.{claudeOn && <> A background task, such as generating a system's architecture, may only read the system's repositories, run Architecture Suite and write to the system's architecture folder.</>} An interactive session works in its own git worktree.{claudeOn && <> It asks before it edits files or runs commands, except where you chose “Accept edits” or your own Claude Code settings already allow the action. The spend cap per agent run (under Budgets) applies to each run of the agent; continuing a session after the cap starts a new run. The cap does not apply in the terminal{shown.includes("codex") ? " or to Codex" : ""}.</>}</p>
+      <p className="muted small">Hivemind starts {enginesText(shown, "or")} for you; {shown.length > 1 ? "each uses its own" : "it uses its"} saved sign-in.{claudeOn && <> A background task, such as generating a system's architecture, may only read the system's repositories, run Architecture Suite and write to the system's architecture folder.</>} An interactive session works in its own git worktree.{claudeOn && <> It asks before it edits files or runs commands, except where you chose “Accept edits” or your own Claude Code settings already allow the action. The spend cap per agent run (under Spend) applies to each run of the agent; continuing a session after the cap starts a new run. The cap does not apply in the terminal{shown.includes("codex") ? " or to Codex" : ""}.</>}</p>
 
-      <h3>Learning</h3>
+      <h3 id="settings-learning">Learning</h3>
       {claudeOn ? (
         <>
           <label className="check"><input type="checkbox" checked={value.learning_reviewer ?? true}
             onChange={(e) => setValue({ ...value, learning_reviewer: e.target.checked })} /> Review finished sessions for notes and skills worth keeping</label>
-          <p className="muted small">When you approve or discard a chat session's edits, or a long session ends, Hivemind sends a summary of the session to Claude (Sonnet, no tools, within the limits under Budgets). Notes it proposes wait in the Inbox and are saved only when you accept them; skills are proposed only from sessions you approved.</p>
+          <p className="muted small">When you approve or discard a chat session's edits, or a long session ends, Hivemind sends a summary of the session to Claude (Sonnet, no tools, within the limits under Spend). Notes it proposes wait in the Inbox and are saved only when you accept them; skills are proposed only from sessions you approved.</p>
           <label className="check"><input type="checkbox" checked={value.skills_auto_patch ?? false}
             onChange={(e) => setValue({ ...value, skills_auto_patch: e.target.checked })} /> Apply reviewer changes to a skill without asking when sessions using it were approved at least 3 times</label>
           <p className="muted small">New skills always wait for you. Every change is in the skill's history and can be undone with Restore.</p>
         </>
       ) : <p className="muted small">Learning reviews use Claude Code, which is hidden.</p>}
 
-      <h3>Budgets</h3>
+      <h3 id="settings-spend">Spend</h3>
       <p className="muted small">Amounts are in US dollars. Leave a field empty for its default (shown in grey). Daily budgets start again at midnight UTC, and 0 turns that kind of spending off.</p>
+      <SpendToday />
       {claudeOn && money("agent_budget_usd", "Spend cap per agent run, Claude Code chat", BUDGET_DEFAULTS.agentRun, 0.01)}
       {money("automation_daily_usd", "Automations per day", BUDGET_DEFAULTS.automationsDaily)}
-      <p className="muted small">Sessions and workflows that automations start. A run starts only when its own budget (set on each automation) fits in what is left today. A workflow is checked for one session's budget and can spend up to that much per task. Only Claude Code sessions are counted: Codex uses your ChatGPT plan. Follow-up messages you send to an automation's session, and tasks you retry in its workflow, count as your own spending.</p>
+      <p className="muted small">Sessions and wiki rebuilds that automations start (Settings, Schedules). A run starts only when its own budget, set on each automation and never above the spend cap per agent run, fits in what is left today. Only Claude Code sessions are counted: Codex uses your ChatGPT plan. Follow-up messages you send to an automation's session count as your own spending.</p>
       {money("learning_daily_usd", "Learning and executive per day", BUDGET_DEFAULTS.learningDaily)}
       <p className="muted small">The session reviewer, the briefings and capture on Home, and the commit reviews and briefings that automations ask for.</p>
       <details>

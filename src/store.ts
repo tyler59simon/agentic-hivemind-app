@@ -17,9 +17,11 @@ export type Route =
   | { page: "notes"; notebook?: string; path?: string; view?: "tasks" | "views" | "tags" | "graph" | "wiki"; ref?: string; domain?: string; at?: string; edition?: "agent"; whole?: true }
   | { page: "maintenance" }
   | { page: "inbox"; session?: string; file?: string; kind?: InboxKind }
-  | { page: "skills"; skill?: string }
-  | { page: "workflows"; tab?: "runs" | "automations"; run?: string; automation?: string };
+  | { page: "skills"; skill?: string };
 export type Page = Route["page"];
+
+/** The Settings sections a link can open at. Settings is not a route: it replaces the whole shell while it is open. */
+export type SettingsSection = "learning" | "spend" | "schedules" | "maintenance";
 
 export const safeStorage: StateStorage = {
   getItem: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
@@ -38,6 +40,8 @@ interface AppState {
   route: Route;
   /** Earlier routes, oldest first, for Back. */
   back: Route[];
+  /** Settings while it is open, at a section when a link asked for one; null when closed. Not kept over a restart. */
+  settings: { section?: SettingsSection } | null;
   setProject: (project: string | null) => void;
   setDomain: (domain: string) => void;
   setPalette: (palette: AppState["palette"]) => void;
@@ -67,11 +71,13 @@ const whenFree = (move: () => void) => { if (!stopped(move)) move(); };
  *  Version 5 moves the old Memory workspace to Notes (CON-10). Version 6 removes `q` from the Memory route (CON-11).
  *  Version 7 moves Memory Graph and Tags into Notes (CON-12) and retires the Memory section and Activity/History pages (CON-21).
  *  Version 8 moves Dashboards into Notes > Views (CON-13): `ref` is the view the route names.
- *  Version 9 moves the Wiki into Notes (CON-14): the project it named becomes the picked project. */
+ *  Version 9 moves the Wiki into Notes (CON-14): the project it named becomes the picked project.
+ *  Version 10 removes the Workflows page (CON-20): its schedules are in Settings, so a saved Workflows route opens Home. */
 export function migrateNav(persisted: unknown, version = 1): unknown {
   const saved = persisted as { route?: { page?: string; view?: string; q?: string; capture?: string; briefing?: string; system?: string; ref?: string; domain?: string; at?: string; edition?: string; project?: string } } | null;
   const route = saved?.route;
   if (!route) return persisted;
+  if (version < 10 && route.page === "workflows") return { ...saved, route: { page: "home" } };
   if (version < 9 && route.page === "wiki") {
     const { domain, at, edition, project } = route;
     return { ...saved, ...(project ? { project } : {}), route: { page: "notes", view: "wiki", ...(domain ? { domain } : {}), ...(at ? { at } : {}), ...(edition === "agent" ? { edition } : {}),
@@ -104,6 +110,7 @@ export const useApp = create<AppState>()(persist((set) => ({
   palette: null,
   route: { page: "home" },
   back: [],
+  settings: null,
   setProject: (project) => set({ project }),
   setDomain: (domain) => set({ domain }),
   setPalette: (palette) => set({ palette }),
@@ -118,7 +125,7 @@ export const useApp = create<AppState>()(persist((set) => ({
   },
 }), {
   name: "hivemind.nav",
-  version: 9,
+  version: 10,
   storage: createJSONStorage(() => safeStorage),
   migrate: (persisted, version) => migrateNav(persisted, version) as AppState,
   partialize: (s) => ({ project: s.project, domain: s.domain, route: s.route }),
@@ -133,6 +140,7 @@ export const openSession = (session: string) => app().go({ page: "agents", sessi
 /** Show the Inbox: on one session's edits (and one file) when given, or on one group. */
 export const openInbox = (session?: string, file?: string, kind?: InboxKind) => app().go({ page: "inbox", session, file, kind });
 export const openSkills = (skill?: string) => app().go({ page: "skills", skill });
-export const openWorkflows = (to: { tab?: "runs" | "automations"; run?: string; automation?: string } = {}) =>
-  app().go({ page: "workflows", ...to, tab: to.automation ? "automations" : to.run ? "runs" : to.tab }, { replace: app().route.page === "workflows" });
+/** Open Settings, at a section when one is given (Schedules, Spend, Maintenance, Learning). */
+export const openSettings = (section?: SettingsSection) => useApp.setState({ settings: section ? { section } : {} });
+export const closeSettings = () => useApp.setState({ settings: null });
 export const startSession = () => app().go({ page: "agents", view: "new" });

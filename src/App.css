@@ -1426,26 +1426,21 @@ sup.wiki-cite .removed { color: var(--muted); text-decoration: line-through; }
   .wiki-tree-box.open { display: block; }
 }
 
-/* ---- Workflows ---- */
+/* ---- Settings > Schedules (CON-20) ---- */
 .flow-row { display: flex; flex-wrap: wrap; gap: .6rem; align-items: flex-end; }
 .flow-row .grow { flex: 1 1 12rem; }
 .flow-checks { display: flex; flex-wrap: wrap; gap: .3rem .9rem; }
-.flow-editor { display: flex; flex-direction: column; gap: .7rem; }
-.flow-task-edit { border: 1px solid var(--border); border-radius: .5rem; padding: .5rem .8rem .7rem; display: flex; flex-direction: column; gap: .5rem; }
-.flow-task-edit legend { font-size: .86rem; color: var(--muted); padding: 0 .3rem; }
-.flow-graph { flex: none; display: flex; align-items: flex-start; gap: .4rem; overflow-x: auto; padding-bottom: .4rem; }
-.flow-step { display: flex; align-items: flex-start; gap: .4rem; }
-.flow-arrow { color: var(--muted); margin-top: 2.2rem; flex: none; }
-.flow-col { display: flex; flex-direction: column; gap: .6rem; width: 17rem; flex: none; }
-.flow-task { border: 1px solid var(--border-strong); border-radius: .5rem; padding: .6rem .75rem; background: var(--bg-alt); display: flex; flex-direction: column; gap: .3rem; min-width: 0; overflow-wrap: anywhere; }
-.flow-task.running { border-color: var(--chip-run-border); }
-.flow-task.failed, .flow-task.blocked { border-color: var(--error); }
-.flow-task-head { display: flex; justify-content: space-between; align-items: center; gap: .4rem; }
-.flow-task .status-chip { align-self: flex-start; }
-.flow-task-head .status-chip { align-self: auto; }
+.schedules { margin-top: 1.2rem; }
+.schedules h4, .spend-today h4 { margin: .3rem 0 0; font-size: .92rem; }
+.schedule-row { display: flex; flex-direction: column; gap: .35rem; padding: .55rem 0; border-top: 1px solid var(--border); }
+.schedule-row > .check { align-items: flex-start; }
+.schedule-row details summary { cursor: pointer; color: var(--muted); }
+.schedule-waiting, .schedule-custom { display: flex; flex-direction: column; gap: .4rem; }
+.schedule-form { display: flex; flex-direction: column; gap: .6rem; padding: .7rem .8rem; border: 1px solid var(--border-strong); border-radius: .5rem; }
+.schedule-form h4 { margin: 0; }
+.spend-today .properties { margin: .3rem 0; }
 
 .plain-list { margin: .3rem 0 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: .15rem; }
-.flow-system { display: flex; flex-direction: column; gap: .3rem; flex: none; }
 
 /* ---- Executive ---- */
 .exec .split-main { display: flex; flex-direction: column; gap: 1.3rem; }

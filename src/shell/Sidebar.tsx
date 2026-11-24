@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, House, NotebookPen, Wrench, Sparkles, SquareCheck, Terminal, Workflow, type LucideIcon } from "lucide-react";
+import { ChevronDown, House, NotebookPen, Wrench, Sparkles, SquareCheck, Terminal, type LucideIcon } from "lucide-react";
 import logo from "../assets/logo.png";
 import { ProjectSwitcher } from "../features/projects/ProjectSwitcher";
 import { useInboxItems } from "../features/review/useInboxItems";
@@ -22,7 +22,6 @@ export const SECTIONS: { page: Page; label: string; icon: LucideIcon }[] = [
   { page: "maintenance", label: "Maintenance", icon: Wrench },
   { page: "inbox", label: "Inbox", icon: SquareCheck },
   { page: "skills", label: "Skills", icon: Sparkles },
-  { page: "workflows", label: "Workflows", icon: Workflow },
 ];
 
 /** The sections this store offers (some need a newer Living Memory), whether or not the user hid them. */

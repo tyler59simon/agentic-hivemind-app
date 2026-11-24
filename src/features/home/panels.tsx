@@ -10,9 +10,9 @@ import type { RepoActivity } from "../../lib/git";
 import { driftQuery } from "../../lib/architecture";
 import type { Project } from "../../lib/lm";
 import { skillHistory } from "../../lib/skills";
-import { automationsQuery, workflowsQuery } from "../../lib/workflows";
+import { automationsQuery } from "../../lib/automations";
 import { ago } from "../../lib/text";
-import { openInbox, openSession, openSkills, openSystem, openWorkflows, useApp } from "../../store";
+import { openInbox, openSession, openSettings, openSkills, openSystem, useApp } from "../../store";
 import { ArrowLink, Row, Section } from "../../ui/Page";
 import { agentActivity, agentNeeds, type Need } from "../projects/agentwork";
 import { useInboxItems } from "../review/useInboxItems";
@@ -103,15 +103,14 @@ export function NeedsReview({ project }: { project?: Project }) {
     archBehind: inbox.behind.length,
   });
   const automations = useQuery({ ...automationsQuery(), retry: false });
-  const workflows = useQuery({ ...workflowsQuery(), retry: false });
   const drift = useQuery({ ...driftQuery(system?.slug ?? ""), enabled: !!system, retry: false });
   const needs = agentNeeds({
     memoryDrafts: inbox.drafts.length, skillDrafts: inbox.skills.length,
-    runs: automations.data?.runs ?? [], workflows: (workflows.data ?? []).filter((w) => !project || w.project === project.slug),
+    runs: automations.data?.runs ?? [],
     drift: drift.data, behindShown: inbox.behind.length > 0, stale: inbox.kindTotals?.stale, duplicates: inbox.kindTotals?.duplicate, now: Date.now(),
   });
   const open = (n: Need) => (n.target.page === "inbox" ? openInbox(undefined, undefined, n.target.kind)
-    : n.target.page === "architecture" ? openSystem(n.target.system) : openWorkflows({ tab: n.target.tab, run: n.target.run }));
+    : n.target.page === "architecture" ? openSystem(n.target.system) : openSettings("schedules"));
   return (
     <Section title="Needs you" count={rows.length + needs.length + captures.length} loading={due.isLoading || inbox.maintenanceLoading} error={due.error}
       empty={!due.isLoading && !inbox.maintenanceLoading && !rows.length && !needs.length && !captures.length ? "Nothing is waiting for you." : undefined}>
@@ -136,16 +135,14 @@ export function NeedsReview({ project }: { project?: Project }) {
   );
 }
 
-/** What agent sessions, workflows, automations and the skills library did lately. */
+/** What agent sessions, automations and the skills library did lately. */
 export function AgentActivity({ project }: { project?: Project }) {
   const sessions = useQuery(sessionsQuery());
-  const workflows = useQuery({ ...workflowsQuery(), retry: false });
   const automations = useQuery({ ...automationsQuery(), retry: false });
   const ledger = useQuery({ queryKey: ["skills", "history", "*"], queryFn: () => skillHistory(), retry: false });
   const names = new Map((automations.data?.automations ?? []).map((a) => [a.id, a.name]));
   const items = agentActivity({
     sessions: (sessions.data ?? []).filter((s) => !project || s.project === project.slug),
-    workflows: (workflows.data ?? []).filter((w) => !project || w.project === project.slug),
     runs: (automations.data?.runs ?? []).filter((r) => {
       const a = automations.data?.automations.find((x) => x.id === r.automation);
       return !project || !a?.project || a.project === project.slug;
@@ -156,8 +153,8 @@ export function AgentActivity({ project }: { project?: Project }) {
     <Section title="Agent activity" loading={sessions.isLoading} empty={!items.length ? "No agent activity yet." : undefined}>
       {items.map((a) => (
         <Row key={a.key} meta={ago(new Date(a.at).toISOString())}
-          onClick={() => ("session" in a.target ? openSession(a.target.session) : "workflow" in a.target ? openWorkflows({ run: a.target.workflow })
-            : "skill" in a.target ? openSkills(a.target.skill) : openWorkflows({ tab: "automations" }))}>{a.text}</Row>
+          onClick={() => ("session" in a.target ? openSession(a.target.session)
+            : "skill" in a.target ? openSkills(a.target.skill) : openSettings("schedules"))}>{a.text}</Row>
       ))}
     </Section>
   );

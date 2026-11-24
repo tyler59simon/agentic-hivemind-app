@@ -241,7 +241,7 @@ pub struct SessionInfo {
     /// A reviewer's or tester's conclusion from its last turn.
     #[serde(default)]
     pub verdict: Option<Verdict>,
-    /// What started the session when it was not the user: `workflow:<run>:<task>`, `automation:<id>` or `review:<session>`.
+    /// What started the session when it was not the user: `automation:<id>` or `review:<session>`.
     #[serde(default)]
     pub origin: Option<String>,
     /// The Codex review session the user asked for from the Inbox, for this session's edits.
@@ -333,13 +333,13 @@ pub struct StartOptions {
     /// Chat only, with a role: nobody answers prompts, so whatever the profile does not allow is refused.
     #[serde(default)]
     pub unattended: bool,
-    /// Set by workflows and automations; never read from the webview.
+    /// Set by automations; never read from the webview.
     #[serde(skip)]
     pub origin: Option<String>,
-    /// A lower Claude budget than the settings' one, for workflows and automations; never read from the webview.
+    /// A lower Claude budget than the settings' one, for automations; never read from the webview.
     #[serde(skip)]
     pub budget_usd: Option<f64>,
-    /// Set by workflows: the commit (a verified checkpoint) the worktree starts at, with the task's branch as its base;
+    /// Set by Ask Codex: the commit (a verified checkpoint) the worktree starts at, with the task's branch as its base;
     /// never read from the webview.
     #[serde(skip)]
     pub start: Option<String>,
@@ -391,7 +391,7 @@ pub enum Emit {
     Lifecycle(Lifecycle),
 }
 
-/// What happened to a session, for the parts of Hivemind that act on it: notifications, workflows, automations and the
+/// What happened to a session, for the parts of Hivemind that act on it: notifications, automations and the
 /// learning reviewer. Sent after the session list has been saved, so a listener reads the new state.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Lifecycle {

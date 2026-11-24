@@ -127,8 +127,8 @@ describe("navigation", () => {
 describe("saved navigation", () => {
   const migrate = (route: object, version = 1) => useApp.persist.getOptions().migrate!({ project: "pay", domain: "demo", route }, version);
 
-  it("is version 9, and moves the Overview, Executive and Recap pages to Home", () => {
-    expect(useApp.persist.getOptions().version).toBe(9);
+  it("is version 10, and moves the Overview, Executive and Recap pages to Home", () => {
+    expect(useApp.persist.getOptions().version).toBe(10);
     for (const page of ["overview", "executive", "recap"]) expect(migrate({ page })).toEqual({ project: "pay", domain: "demo", route: { page: "home" } });
     expect(migrate({ page: "overview", view: "work" })).toMatchObject({ route: { page: "home" } });
   });
@@ -191,6 +191,16 @@ describe("saved navigation", () => {
     expect(migrate({ page: "wiki", domain: "demo", project: "core" }, 1)).toMatchObject({ project: "core", route: { page: "notes", view: "wiki", domain: "demo" } });
     // The whole-domain scope of the agent edition ("") names no project.
     expect(migrate({ page: "wiki", domain: "demo", edition: "agent", project: "" }, 8)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "wiki", domain: "demo", edition: "agent", whole: true } });
+  });
+
+  // CON-20: the Workflows page was deleted; its schedules are in Settings, which is not a route.
+  it("sends a saved Workflows route to Home", () => {
+    expect(migrate({ page: "workflows", tab: "automations", automation: "a1" }, 9)).toEqual({ project: "pay", domain: "demo", route: { page: "home" } });
+    expect(migrate({ page: "workflows" }, 1)).toMatchObject({ route: { page: "home" } });
+  });
+
+  it("leaves a version 10 save alone", () => {
+    expect(migrate({ page: "inbox", kind: "skills" }, 10)).toMatchObject({ route: { page: "inbox", kind: "skills" } });
   });
 
   it("leaves a version 9 save alone", () => {

@@ -96,7 +96,7 @@ export interface SessionInfo {
   summary: string | null;
   /** A reviewer's or tester's conclusion from its last turn. */
   verdict: Verdict | null;
-  /** What started the session when it was not the user: `workflow:<run>:<task>`, `automation:<id>` or `review:<session>`. */
+  /** What started the session when it was not the user: `automation:<id>` or `review:<session>`. */
   origin?: string | null;
   /** The Codex review session asked for from the Inbox, for this session's edits. */
   reviewedBy?: string | null;

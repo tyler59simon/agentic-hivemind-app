@@ -8,6 +8,7 @@ import logo from "./assets/logo.png";
 import { Palette } from "./features/palette/Palette";
 import { BeforeUninstall } from "./features/settings/BeforeUninstall";
 import { SettingsForm } from "./features/settings/SettingsForm";
+import { SchedulesSection } from "./features/schedules/SchedulesSection";
 import { agentSessions } from "./lib/agent";
 import { captureStatus, connect, domains, setBridgeGeneration } from "./lib/lm";
 import { prefs } from "./lib/prefs";
@@ -20,7 +21,7 @@ import { invalidateWiki } from "./features/wiki/useWiki";
 import { needsLmUpdate, useConnection } from "./lib/connection";
 import { refreshStore } from "./lib/refresh";
 import { Shell } from "./shell/Shell";
-import { openInbox, openSession, useApp } from "./store";
+import { closeSettings, openInbox, openSession, openSettings, useApp } from "./store";
 import { toast, Toasts } from "./ui/toast";
 import { unsavedUntitled, useWorkspace } from "./workspace/store";
 import { onDocsChanged, onFilesChanged, onPageAppended, startDocumentSync, type DocsChanged } from "./documents/sync";
@@ -177,7 +178,6 @@ function useLiveRefresh(enabled: boolean) {
         client.invalidateQueries({ queryKey: ["proposals"] });
       }),
       listen("architecture-drift", () => client.invalidateQueries({ queryKey: ["architecture", "drift"] })),
-      listen("workflows-changed", () => client.invalidateQueries({ queryKey: ["workflows"] })),
       listen("automations-changed", () => client.invalidateQueries({ queryKey: ["automations"] })),
       listen<string>("executive-changed", (e) => client.invalidateQueries({ queryKey: ["executive", e.payload] })),
       listen<{ ref: string }>("open-note", (e) => useWorkspace.getState().openNote(e.payload.ref)),
@@ -193,7 +193,15 @@ function useLiveRefresh(enabled: boolean) {
 export default function App() {
   const app = useApp();
   const client = useQueryClient();
-  const [settings, setSettings] = useState(false);
+  const settings = useApp((s) => s.settings);
+  const setSettings = (open: boolean) => (open ? openSettings() : closeSettings());
+  // A link that opened Settings at a section scrolls there once the section has drawn.
+  useEffect(() => {
+    if (!settings?.section) return;
+    const id = `settings-${settings.section}`;
+    const frame = requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ block: "start" }));
+    return () => cancelAnimationFrame(frame);
+  }, [settings]);
   const link = useQuery({ queryKey: ["connect"], queryFn: connect, retry: false, staleTime: Infinity });
   const known = useQuery({ queryKey: ["domains"], queryFn: domains, enabled: link.isSuccess });
   useShortcuts();
@@ -220,7 +228,7 @@ export default function App() {
     if (first) app.setDomain(first.name);
   }, [known.data, app]);
 
-  const reconnect = useCallback(() => { setSettings(false); client.resetQueries(); }, [client]);
+  const reconnect = useCallback(() => { closeSettings(); client.resetQueries(); }, [client]);
 
   // The dialogs belong to every branch: tray Quit must show its dialog while Settings is open or the connection has failed.
   const dialogs = <>{closeGuard}{quitDialog}{folderOffer}</>;
@@ -235,6 +243,7 @@ export default function App() {
             {link.error && <p className="error">{String(link.error)}</p>}
             {outdated && <p className="error">This version of Living Memory is too old: Hivemind needs one with direct writes and unified proposals (<code>alm version</code> lists <code>direct_writes</code> and <code>proposals</code> under capabilities). Update Living Memory, then reconnect.</p>}
             <SettingsForm onSaved={reconnect} />
+            {link.isSuccess && !outdated && <SchedulesSection />}
             <BeforeUninstall
               onOpenReview={link.isSuccess && !outdated ? (id) => { setSettings(false); openInbox(id); } : undefined}
               onOpenSession={link.isSuccess && !outdated ? (id) => { setSettings(false); openSession(id); } : undefined} />

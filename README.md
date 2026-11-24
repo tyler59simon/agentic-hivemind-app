@@ -6,7 +6,7 @@ It runs on Tauri 2 with React and TypeScript, on Windows, macOS and Linux. It is
 
 ## What it does
 
-- **Layout:** a sidebar with a project picker and its sections (Home, Agent Workspace, Notes, Maintenance, Inbox, Skills, Workflows; the project's wiki is Notes > Wiki), and a top bar with a breadcrumb and a search field. Every section is scoped to the picked project, or to all memory.
+- **Layout:** a sidebar with a project picker and its sections (Home, Agent Workspace, Notes, Maintenance, Inbox, Skills; the project's wiki is Notes > Wiki; schedules and spending are in Settings), and a top bar with a breadcrumb and a search field. Every section is scoped to the picked project, or to all memory.
 - **Memory:**
   - a library with search, tabs by note type, and Status, Scope (project, domain, all domains) and Tag filters; the selected note is previewed beside the list
   - a quick switcher (Ctrl+O) and a command palette (Ctrl+P)
@@ -30,8 +30,7 @@ It runs on Tauri 2 with React and TypeScript, on Windows, macOS and Linux. It is
 - **Agent roles:** chat sessions start as an architect, developer, reviewer, researcher or tester, each with a permission profile Hivemind builds (read only, research, or edit its own worktree), live CPU and memory use, and a verdict from reviewers and testers.
 - **Learning:** after you approve or dismiss a session's edits, a capped, tool-free reviewer drafts notes for Living Memory and skill proposals; you approve them in the Inbox.
 - **Skills:** approved procedures are kept with every version and published to Claude Code and Codex (`~/.claude/skills`, `~/.codex/skills`), with use counts and how the sessions that used them were reviewed.
-- **Workflows:** a goal split into tasks for agents in roles, run in dependency order in separate worktrees, with checkpoint commits and a report. Nothing is merged or pushed.
-- **Automations:** scheduled or event-driven work (reviews of new commits, memory maintenance, skill upkeep, drift checks, failure investigations) with ask-first, budgets and notifications.
+- **Schedules (Settings):** scheduled or event-driven work (morning briefings, memory maintenance, weekly wiki rebuilds, and custom automations such as reviews of new commits, skill upkeep, drift checks and failure investigations) with ask-first, budgets and notifications. Custom automations are listed only while "Show custom automations" is on.
 - **Architecture drift:** the Architecture Suite's diff, check and verify, plus hand-edited outputs and commits since the output was made.
 
 See [docs/engineering-workspace.md](docs/engineering-workspace.md) for how the agent features work, their safety model and their limits.

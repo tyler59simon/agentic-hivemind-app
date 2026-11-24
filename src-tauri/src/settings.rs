@@ -38,7 +38,7 @@ pub struct Settings {
     /// in one day, in US dollars; None means the default.
     #[serde(default)]
     pub learning_daily_usd: Option<f64>,
-    /// The most the sessions and workflows automations start may spend in one day, in US dollars; None means the default.
+    /// The most the sessions and wiki rebuilds automations start may spend in one day, in US dollars; None means the default.
     #[serde(default)]
     pub automation_daily_usd: Option<f64>,
     /// The most one reviewer call may spend, in US dollars; None means the default.
@@ -105,7 +105,7 @@ impl Settings {
         daily(self.learning_daily_usd, DEFAULT_LEARNING_DAILY_USD)
     }
 
-    /// The daily cap for the sessions and workflows automations start; zero turns them off. Before this cap existed, a
+    /// The daily cap for the sessions and wiki rebuilds automations start; zero turns them off. Before this cap existed, a
     /// learning cap of zero also stopped these automations, so a settings file from then keeps them stopped.
     pub fn automation_daily_usd(&self) -> f64 {
         let off_before = self.automation_daily_usd.is_none() && self.learning_daily_usd == Some(0.0);

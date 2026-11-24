@@ -140,7 +140,7 @@ pub fn create(worktrees: &Path, repo: &Path, branch: Option<&str>, session_id: &
 }
 
 /// `create`, started at the commit `start` (a full sha) rather than at the branch's tip, with `branch` still recorded as
-/// the base. A workflow starts a dependent task at the checkpoint it verified, which the branch may have left since.
+/// the base. Ask Codex starts its reviewer at the checkpoint it made, which the branch may have left since.
 pub fn create_at(worktrees: &Path, repo: &Path, branch: Option<&str>, start: Option<&str>, session_id: &str) -> Result<Worktree, String> {
     if !repo.is_dir() {
         return Err(format!("The repository folder does not exist: {}", repo.display()));
