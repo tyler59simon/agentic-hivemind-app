@@ -42,17 +42,31 @@ fn shell_path(shell: &str, wait: Duration) -> Option<String> {
         .ok()?;
     let mut stdout = child.stdout.take()?;
     let (tx, rx) = mpsc::channel();
-    // A reader thread, so a profile that starts something holding stdout open cannot stall the app's start.
+    // A reader thread that answers as soon as the second mark arrives: a profile may start something that keeps stdout
+    // open, so the start never waits for the pipe to close. Such a reader is left blocked on the pipe, which is harmless.
     std::thread::spawn(move || {
-        let mut out = String::new();
-        let _ = stdout.read_to_string(&mut out);
-        let _ = tx.send(out);
+        let mut out = Vec::new();
+        let mut chunk = [0u8; 4096];
+        loop {
+            match stdout.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => out.extend_from_slice(&chunk[..n]),
+            }
+            if out.len() > MAX_OUTPUT || between_marks(&String::from_utf8_lossy(&out)).is_some() {
+                break;
+            }
+        }
+        let _ = tx.send(String::from_utf8_lossy(&out).into_owned());
     });
     let out = rx.recv_timeout(wait).ok();
+    // SIGKILL ends the shell at once, so reaping it does not wait on anything it started.
     let _ = child.kill();
     let _ = child.wait();
     between_marks(&out?)
 }
+
+/// More output than any PATH: the profile printed something else, and reading stops.
+const MAX_OUTPUT: usize = 256 * 1024;
 
 fn between_marks(out: &str) -> Option<String> {
     let start = out.find(MARK)? + MARK.len();

@@ -815,20 +815,29 @@ const RUNS_CODE_MAC: &[&str] = &[
 /// Why Hivemind will not open `path` with its associated program, or None.
 fn refuse_to_run(path: &Path) -> Option<String> {
     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    if !runs_code(&ext, path.is_dir(), executable(path)) && !(!path.is_dir() && dangerous_to_windows(&ext)) {
+    let mac = cfg!(target_os = "macos");
+    if !runs_code(&ext, path.is_dir(), executable(path), mac) && !(!path.is_dir() && dangerous_to_windows(&ext)) && !(mac && finder_alias(path)) {
         return None;
     }
     let show = if cfg!(target_os = "macos") { "Show in Finder" } else { "Show in Explorer" };
     Some(format!("{} is a program or script, so Hivemind does not open it; use {show}", path.file_name().unwrap_or_default().to_string_lossy()))
 }
 
-/// Whether opening a file or folder with this extension would run code: a Windows or macOS program or script, a macOS
-/// bundle folder, or a file marked executable (Unix).
-fn runs_code(ext: &str, is_dir: bool, executable: bool) -> bool {
+/// Whether opening a file or folder with this extension would run code: a Windows program or script, on macOS (`mac`)
+/// also a macOS one or a bundle folder, or a file marked executable (Unix).
+fn runs_code(ext: &str, is_dir: bool, executable: bool, mac: bool) -> bool {
     if is_dir {
-        return RUNS_CODE_MAC.contains(&ext);
+        return mac && RUNS_CODE_MAC.contains(&ext);
     }
-    executable || RUNS_CODE.contains(&ext) || RUNS_CODE_MAC.contains(&ext)
+    executable || RUNS_CODE.contains(&ext) || (mac && RUNS_CODE_MAC.contains(&ext))
+}
+
+/// Whether `path` is a Finder alias: a bookmark file (`book....mark`) that `open` follows to its original, which may be a
+/// program.
+fn finder_alias(path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 16];
+    std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut head)).is_ok() && &head[..4] == b"book" && &head[8..12] == b"mark"
 }
 
 /// Whether a Unix file has an execute bit set; false on Windows and for folders.
@@ -1311,13 +1320,29 @@ mod tests {
     #[test]
     fn macos_programs_bundles_and_executables_are_not_opened() {
         for ext in ["command", "app", "pkg", "dmg", "scpt", "webloc", "zsh"] {
-            assert!(runs_code(ext, false, false), "{ext}");
+            assert!(runs_code(ext, false, false, true), "{ext}");
         }
-        assert!(runs_code("app", true, false), "an .app bundle is a folder");
-        assert!(runs_code("", false, true), "a file marked executable");
-        assert!(!runs_code("", true, false), "a plain folder");
-        assert!(!runs_code("photos", true, false));
-        assert!(!runs_code("pdf", false, false));
+        assert!(runs_code("app", true, false, true), "an .app bundle is a folder");
+        assert!(runs_code("", false, true, true), "a file marked executable");
+        assert!(!runs_code("", true, false, true), "a plain folder");
+        assert!(!runs_code("photos", true, false, true));
+        assert!(!runs_code("pdf", false, false, true));
+        // Codex F9 (772b27c): on Windows a folder named vendor.app is a folder, and a .pkg file is not a program.
+        assert!(!runs_code("app", true, false, false));
+        assert!(!runs_code("pkg", false, false, false));
+        assert!(runs_code("exe", false, false, false));
+    }
+
+    #[test]
+    fn a_finder_alias_is_recognised_by_its_header() {
+        let dir = temp_dir();
+        let alias = dir.join("Tool alias");
+        std::fs::write(&alias, b"book\0\0\0\0mark\0\0\0\0rest").unwrap();
+        let page = dir.join("bookmarks.md");
+        std::fs::write(&page, b"bookmarks of mine").unwrap();
+        assert!(finder_alias(&alias));
+        assert!(!finder_alias(&page));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// A notebook folder with `Page.md` holding `text`, and a history folder beside it.

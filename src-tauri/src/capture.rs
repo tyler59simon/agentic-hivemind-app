@@ -24,9 +24,9 @@ pub fn quit_ack() {
     *LAST_QUIT.lock().unwrap() = None;
 }
 
-/// Tray Quit (also Cmd+Q and Dock Quit on macOS): show the window and ask the page to confirm (it quits at once when
-/// nothing runs); a second request within five seconds exits directly.
-pub fn request_quit(app: &AppHandle) {
+/// Tray Quit: show the window and ask the page to confirm (it quits at once when nothing runs); a second click within
+/// five seconds exits directly.
+fn request_quit(app: &AppHandle) {
     let now = Instant::now();
     let mut last = LAST_QUIT.lock().unwrap();
     if quit_again(*last, now) {
@@ -36,6 +36,12 @@ pub fn request_quit(app: &AppHandle) {
     }
     *last = Some(now);
     drop(last);
+    ask_quit(app);
+}
+
+/// Show the window and ask the page to confirm quitting. The macOS menu's Quit (Cmd+Q) uses this alone: pressing it twice
+/// must not skip the confirmation while the page loads.
+pub fn ask_quit(app: &AppHandle) {
     show_main(app);
     let _ = app.emit("quit-requested", ());
 }
@@ -87,7 +93,7 @@ pub const APP_QUIT: &str = "app-quit";
 
 /// The macOS menu bar. Tauri's default binds Cmd+Q to a Quit that skips the page's confirmation and Cmd+W to Close
 /// Window, which hides the app instead of closing the page's tab. This one keeps the standard App, Edit and Window items,
-/// routes Quit through `request_quit`, and leaves Cmd+W to the page (MACOS-1C).
+/// routes Quit through `ask_quit`, and leaves Cmd+W to the page (MACOS-1C).
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn macos_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let name = app.package_info().name.clone();

@@ -445,10 +445,6 @@ pub fn under_program_files(program_files: Option<PathBuf>, names: &[&str]) -> Ve
 /// repository: `ClaudeCode` is the folder Claude Code's managed settings use under Program Files (`managed.rs`), the others
 /// are the product's name spelled out.
 pub fn machine_folders() -> Vec<PathBuf> {
-    // Homebrew (Apple silicon, then Intel): a fallback when the login shell's PATH could not be read (shell_env).
-    if cfg!(target_os = "macos") {
-        return vec![PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/usr/local/bin")];
-    }
     under_program_files(std::env::var_os("ProgramFiles").map(PathBuf::from), &["ClaudeCode", "Claude Code", r"Anthropic\ClaudeCode"])
 }
 
@@ -464,12 +460,20 @@ pub fn locate(saved: &Settings, machine_dirs: &[PathBuf], home: &Path, on_path: 
     if let Some(machine) = machine_dirs.iter().map(|dir| dir.join(name)).find(|path| path.is_file()) {
         return Ok(machine.display().to_string());
     }
-    // The native installer's place, then the older local npm install (`claude migrate-installer`).
-    if let Some(installed) = [home.join(".local").join("bin").join(name), home.join(".claude").join("local").join(name)].into_iter().find(|p| p.is_file()) {
+    let installed = home.join(".local").join("bin").join(name);
+    if installed.is_file() {
         return Ok(installed.display().to_string());
     }
     if on_path() {
         return Ok("claude".into());
+    }
+    // Off Windows, after PATH: the older local npm install, then Homebrew (Apple silicon, Intel), for when the login
+    // shell's PATH could not be read (shell_env).
+    if !cfg!(windows) {
+        let fallback = [home.join(".claude").join("local").join(name), PathBuf::from("/opt/homebrew/bin/claude"), PathBuf::from("/usr/local/bin/claude")];
+        if let Some(found) = fallback.into_iter().find(|p| p.is_file()) {
+            return Ok(found.display().to_string());
+        }
     }
     Err("Claude Code was not found. Install it, or set the path to its program in Settings.".into())
 }
@@ -991,6 +995,21 @@ mod tests {
         assert_eq!(locate(&saved(&chosen), &[], &home, || false).unwrap(), chosen.display().to_string());
         // A saved path that is not there falls through to the next place.
         assert_eq!(locate(&saved(&home.join("gone")), &[], &home, || false).unwrap(), installed.display().to_string());
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    #[test]
+    fn an_old_local_install_never_comes_before_path() {   // Codex F10 (772b27c)
+        let home = std::env::temp_dir().join(format!("hivemind-agent-local-{}", std::process::id()));
+        let local = home.join(".claude").join("local");
+        std::fs::create_dir_all(&local).unwrap();
+        let old = local.join(if cfg!(windows) { "claude.exe" } else { "claude" });
+        std::fs::write(&old, "").unwrap();
+        let nothing = Settings::default();
+        assert_eq!(locate(&nothing, &[], &home, || true).unwrap(), "claude");
+        // Without one on PATH it is the fallback off Windows only.
+        let missing = locate(&nothing, &[], &home, || false);
+        if cfg!(windows) { assert!(missing.is_err()) } else { assert_eq!(missing.unwrap(), old.display().to_string()) }
         std::fs::remove_dir_all(home).ok();
     }
 

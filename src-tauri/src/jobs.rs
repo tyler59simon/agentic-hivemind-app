@@ -98,17 +98,20 @@ impl Job {
         true
     }
 
-    /// Kill every process in the group now; the leader may have exited already.
+    /// Kill every process in the group, once; the leader may have exited already. Limit: when the leader was reaped and
+    /// every process of the group is gone, the system may give the number to a new group before this runs; one shot and
+    /// prompt calls keep that window small.
     pub fn end(&self) {
-        let group = self.0.load(std::sync::atomic::Ordering::Relaxed);
+        let group = self.0.swap(0, std::sync::atomic::Ordering::Relaxed);
         if group == 0 {
             return;
         }
         #[cfg(unix)]
         {
             use std::process::Stdio;
-            // A minus sign addresses the whole group, as in git.rs.
-            let _ = Command::new("kill")
+            // A minus sign addresses the whole group, as in git.rs. By absolute path: the PATH read from the login shell
+            // (shell_env) comes first and could hold another `kill`.
+            let _ = Command::new("/bin/kill")
                 .args(["-KILL", &format!("-{group}")])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())

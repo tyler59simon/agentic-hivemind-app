@@ -1936,7 +1936,7 @@ pub fn run() {
                 app.set_menu(capture::macos_menu(app.handle())?)?;
                 app.on_menu_event(|app, event| {
                     if event.id() == capture::APP_QUIT {
-                        capture::request_quit(app);
+                        capture::ask_quit(app);
                     }
                 });
             }
@@ -1949,7 +1949,14 @@ pub fn run() {
             std::thread::spawn(move || {
                 let state = app.state::<AppState>();
                 let protected = studio::protected(&state);
-                responder.respond(assets::serve(&request, &label, &state.assets, &protected));
+                let response = assets::serve(&request, &label, &state.assets, &protected);
+                // WKWebView can cancel a task between Wry's response, data and finish calls when they come from a worker
+                // thread (wry#1856), so on macOS the answer goes from the main thread in one step. Reading stays here.
+                if cfg!(target_os = "macos") {
+                    let _ = app.run_on_main_thread(move || responder.respond(response));
+                } else {
+                    responder.respond(response);
+                }
             });
         })
         // The hidden capture window must not keep the app alive once the main window is really closed.
@@ -2011,13 +2018,15 @@ pub fn run() {
         });
 }
 
-/// macOS delivers Finder opens (file associations) and Dock clicks as events, not as a new launch, and a Dock or logout
-/// Quit as an exit request with no code (MACOS-1C).
+/// macOS delivers Finder opens (file associations) and Dock clicks as events, not as a new launch (MACOS-1C). Finder's
+/// paths are queued as given and checked when the page takes them, as a second launch's are. Limit: Dock Quit and logout
+/// end the app without the page's confirmation (tao has no applicationShouldTerminate hook); `RunEvent::Exit` still stops
+/// the programs Hivemind started.
 #[cfg(target_os = "macos")]
 fn macos_event(app: &AppHandle, event: &tauri::RunEvent, queue: &opens::OpenQueue) {
     match event {
         tauri::RunEvent::Opened { urls } => {
-            let paths: Vec<PathBuf> = urls.iter().filter_map(|u| u.to_file_path().ok()).filter(|p| p.is_file()).collect();
+            let paths: Vec<PathBuf> = urls.iter().filter_map(|u| u.to_file_path().ok()).collect();
             if !paths.is_empty() {
                 queue.push(None, paths);
                 capture::show_main(app);
@@ -2025,11 +2034,6 @@ fn macos_event(app: &AppHandle, event: &tauri::RunEvent, queue: &opens::OpenQueu
             }
         }
         tauri::RunEvent::Reopen { .. } => capture::show_main(app),
-        // Hivemind's own exits pass a code (`app.exit(0)`); one without asks the page first, as tray Quit does.
-        tauri::RunEvent::ExitRequested { code: None, api, .. } => {
-            api.prevent_exit();
-            capture::request_quit(app);
-        }
         _ => {}
     }
 }
