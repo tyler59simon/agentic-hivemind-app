@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, GitFork, Hash, Kanban, ListChecks, NotebookPen, Plus, Sparkles } from "lucide-react";
+import { BookOpen, GitFork, Hash, Kanban, ListChecks, NotebookPen, Plus, Sparkles, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { lmContainer } from "../../documents/adapters/lmdoc";
 import { useConnection, useDocsEnabled, useFolderProposalsEnabled, useWikiEnabled } from "../../lib/connection";
@@ -17,6 +17,7 @@ import { RewriteDialog } from "../links/RewriteDialog";
 import { useCurrentProject } from "../projects/useProject";
 import { progressLine, useIndexState } from "../search/indexState";
 import { TaxonomyView } from "../taxonomy/TaxonomyView";
+import { PeoplePane } from "../people/PeoplePane";
 import { SkillsPane } from "../skills/SkillsPane";
 import { WikiPane } from "../wiki/WikiPane";
 import { Workspace } from "../../workspace/Workspace";
@@ -139,6 +140,7 @@ export function NotesPage() {
           <button type="button" className={`link-row${route.page === "notes" && route.view === "graph" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "graph" })}><GitFork size="1em" aria-hidden /> Graph</button>
           {wikiOn && <button type="button" className={`link-row${route.page === "notes" && route.view === "wiki" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "wiki" })}><BookOpen size="1em" aria-hidden /> Wiki</button>}
           <button type="button" className={`link-row${route.page === "notes" && route.view === "skills" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "skills" })}><Sparkles size="1em" aria-hidden /> Skills</button>
+          <button type="button" className={`link-row${route.page === "notes" && route.view === "people" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "people" })}><Users size="1em" aria-hidden /> People</button>
         </div>
         <MemoryTree tree={memory} />
         {notebooks.isLoading && <p className="muted small pad" role="status">Loading notebooks…</p>}
@@ -168,12 +170,13 @@ export function NotesPage() {
       </nav>
       {route.page === "notes" && route.view
         ? (
-          <div className={`notes-lists${route.view === "graph" ? " notes-graph" : route.view === "skills" ? " notes-skills" : ""}`}>
+          <div className={`notes-lists${route.view === "graph" ? " notes-graph" : route.view === "skills" ? " notes-skills" : route.view === "people" ? " notes-people" : ""}`}>
             {route.view === "tasks" ? <TasksView />
               : route.view === "views" ? <ViewsPage />
               : route.view === "tags" ? <TaxonomyView />
               : route.view === "wiki" ? <WikiPane />
               : route.view === "skills" ? <SkillsPane />
+              : route.view === "people" ? <PeoplePane onAdd={add} />
               : route.view === "graph" ? <GraphView key={project?.tag ?? ""} projectTag={project?.tag} projectName={project?.name} />
               : null}
           </div>

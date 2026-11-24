@@ -9,6 +9,7 @@ import { richOutline } from "../features/hmdoc/outline";
 import { HistoryRail } from "../features/history/FileHistory";
 import { usePick } from "../features/history/pick";
 import { SourceHistory } from "../features/history/HistoryViews";
+import { PersonItems } from "../features/people/PersonItems";
 import { Backlinks, OutgoingLinks } from "../features/links/BacklinksPanel";
 import { LinksPanel, LocalGraphPanel } from "../features/links/LinksPanel";
 import { RelatedPages } from "../features/links/RelatedPanel";
@@ -116,6 +117,7 @@ export function PageRail() {
       {/* The index covers folder notebooks; a loose file or a Living Memory page has no backlinks to show. */}
       {!isLoose(tab.file) && !isLm(tab.file) && (
         <>
+          <PersonItems file={tab.file} />
           <Section title="Backlinks"><Backlinks file={tab.file} /></Section>
           <Section title="Outgoing links"><OutgoingLinks file={tab.file} /></Section>
           <Section title="Related"><RelatedPages file={tab.file} /></Section>

@@ -6,7 +6,7 @@ import { createJSONStorage, persist, type StateStorage } from "zustand/middlewar
 /** The Inbox's groups: each is a tab of the page. */
 export type InboxKind = "code" | "memory" | "pages" | "captures" | "maintenance" | "architecture" | "skills";
 
-/** One page per sidebar section. Notes holds the notebook and memory trees and the open documents; `view: "skills"` shows the
+/** One page per sidebar section. Notes holds the notebook and memory trees and the open documents; `view: "people"` shows the People list and its setup; `view: "skills"` shows the
  *  skills library (on `skill` when given); `view: "wiki"` shows the wiki of the
  *  picked project, at the page `at` of `domain` and in the agent-written `edition`, or with `whole` the wiki of the whole domain.
  *  Home shows the picked project (or all of them); `view: "briefings"` opens its
@@ -15,7 +15,7 @@ export type InboxKind = "code" | "memory" | "pages" | "captures" | "maintenance"
 export type Route =
   | { page: "home"; view?: "briefings"; briefing?: string; capture?: string; tab?: "architecture"; system?: string }
   | { page: "agents"; session?: string; view?: "new" }
-  | { page: "notes"; notebook?: string; path?: string; view?: "tasks" | "views" | "tags" | "graph" | "wiki" | "skills"; ref?: string; domain?: string; at?: string; edition?: "agent"; whole?: true; skill?: string }
+  | { page: "notes"; notebook?: string; path?: string; view?: "tasks" | "views" | "tags" | "graph" | "wiki" | "skills" | "people"; ref?: string; domain?: string; at?: string; edition?: "agent"; whole?: true; skill?: string }
   | { page: "inbox"; session?: string; file?: string; kind?: InboxKind };
 export type Page = Route["page"];
 

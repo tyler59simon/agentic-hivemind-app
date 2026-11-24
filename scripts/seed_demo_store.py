@@ -269,7 +269,7 @@ def main():
          "**Done when:** the replay suite shows zero duplicates over a 30-day sample"],
         ["[[Use event ID as the idempotency key]]", "[[Key retention period]]", "[[Duplicate alert on provider timeout]]",
          "[[Retry policy: exponential backoff with jitter]]"],
-        actions=["Send the idempotency header to the provider", "Extend key retention to cover late redeliveries",
+        actions=["Send the idempotency header to the provider (due: 2026-12-05, owner: Dana Lee)", "Extend key retention to cover late redeliveries",
                  "Alert on-call when the duplicate rate exceeds 0.1%"],
         done=["Dedupe by event ID in ingestion — decided in [[Use event ID as the idempotency key]]", "Add duplicate counters to the delivery dashboard"], **PS)
     refs["plan_extract"] = note("paystream", "plan", "Extract notification delivery",
@@ -283,7 +283,7 @@ def main():
         "Check whether fixed-interval retries still fit after the Nov 3 provider incident, and replace them if not.", "planning",
         ["**Outcome:** replaced by exponential backoff with jitter"],
         ["[[Retry policy: exponential backoff with jitter]]", "[[Replay behavior and retries]]"],
-        actions=["Model retry load for a 20-minute provider outage", "Agree the new policy with the provider's limits"],
+        actions=["Model retry load for a 20-minute provider outage (owner: Sam Okafor)", "Agree the new policy with the provider's limits"],
         done=["Collect retry timings from the Nov 3 incident"], **P)
 
     refs["research"] = note("paystream", "research", "Replay behavior and retries",

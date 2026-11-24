@@ -1,5 +1,5 @@
 //! The executive workspace's backend. It keeps the operational records Living Memory does not hold (milestones, project
-//! health, stakeholders, generated briefings and capture batches waiting for review), builds the evidence pack that grounds
+//! health, generated briefings and capture batches waiting for review), builds the evidence pack that grounds
 //! every generated text, and runs the tool-free calls that extract and brief. Durable knowledge stays in Living Memory: this module only reads it, and the webview writes there only
 //! when the user accepts an item.
 //!
@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
-pub const KINDS: [&str; 5] = ["milestone", "health", "stakeholder", "briefing", "capture"];
+pub const KINDS: [&str; 4] = ["milestone", "health", "briefing", "capture"];
 const MAX_RECORD: usize = 1 << 20;
 const TIMEOUT: Duration = Duration::from_secs(300);
 const MODEL: &str = "sonnet";

@@ -1754,6 +1754,13 @@ button.icon { border: none; padding: .25rem; }
 .skills-pane { display: flex; flex-direction: column; gap: .3rem; flex: 1; min-height: 0; }
 .skills-pane > .section-head h2 { margin: 0; }
 .skills-pane .review { margin-top: .5rem; }
+/* Notes > People (CON-15). */
+.people-pane { display: flex; flex-direction: column; gap: .4rem; max-width: 40rem; }
+.people-pane > .section-head h2 { margin: 0; }
+.people-setup { display: flex; flex-direction: column; gap: .6rem; max-width: 24rem; }
+.people-setup label { display: flex; flex-direction: column; gap: .2rem; }
+.people-list li { display: flex; align-items: center; gap: .5rem; }
+button.owner-chip { cursor: pointer; }
 .views-head { display: flex; align-items: baseline; gap: .8rem; margin-bottom: .5rem; }
 .views-head h1 { font-size: 1.25rem; margin: 0; }
 .views-filters { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .6rem; }

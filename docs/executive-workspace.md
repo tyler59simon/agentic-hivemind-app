@@ -12,8 +12,9 @@ The user approved the design on 2026-11-19. These choices came from the user: co
 | Commitments | Living Memory | Action items on the plan note `Commitments: <Project>` (or `Commitments: Cross-project`), written as `Task (owner: Name, due: YYYY-MM-DD)` with `update --add-action`, ticked with `check` |
 | Writing preferences | Living Memory | `preference` notes in `_global`, tagged `subject/user` |
 | Projects | Living Memory | The existing `projects` registry |
-| Milestones, project health, stakeholders | Hivemind | Records under `%APPDATA%\dev.hivemind.app\executive\<kind>\<id>.json` |
+| Milestones, project health | Hivemind | Records under `%APPDATA%\dev.hivemind.app\executive\<kind>\<id>.json` |
 | Generated briefings, capture batches waiting for review | Hivemind | Same record store |
+| Stakeholders | Hivemind | One Markdown page per person in the People folder of a folder notebook, see [People](people.md) |
 
 A capture batch is model output that waits for review. It is not memory: it holds fields Living Memory proposals cannot (milestones, owner, due) and the duplicate matches Hivemind looks up. No Living Memory change was needed; every gap was operational data or orchestration.
 
@@ -61,4 +62,4 @@ Managed (organization) Claude Code settings still apply to these calls and to th
 
 ## Extension points for connectors
 
-Nothing below is built. Capture batches carry `source: { kind, label, session }`, so an Outlook, Teams or Jira connector adds a source kind (an email thread, a meeting transcript, a ticket) and feeds the same extraction and review. Stakeholders carry an `email`, so a Microsoft 365 connector could add a "Send" action behind an explicit step. Jira issues could map to commitments through the same `(owner, due)` convention, or to milestones. Any connector goes through the review step; nothing it reads is saved without the user's accept.
+Nothing below is built. Capture batches carry `source: { kind, label, session }`, so an Outlook, Teams or Jira connector adds a source kind (an email thread, a meeting transcript, a ticket) and feeds the same extraction and review. A stakeholder's page has an `email` property, so a Microsoft 365 connector could add a "Send" action behind an explicit step. Jira issues could map to commitments through the same `(owner, due)` convention, or to milestones. Any connector goes through the review step; nothing it reads is saved without the user's accept.

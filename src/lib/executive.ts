@@ -1,10 +1,10 @@
-// The executive workspace's records and calls. Operational records (milestones, health, stakeholders, briefings and
+// The executive workspace's records and calls. Operational records (milestones, health, briefings and
 // capture batches) live in Hivemind's app data through these commands; durable knowledge stays in Living Memory (lib/lm.ts).
 // Rust builds every prompt and gathers the evidence; the webview names the task and sends what the user typed.
 import { invoke } from "@tauri-apps/api/core";
 import type { SessionInfo, StartOptions } from "./agent";
 
-export type RecordKind = "milestone" | "health" | "stakeholder" | "briefing" | "capture";
+export type RecordKind = "milestone" | "health" | "briefing" | "capture";
 interface Stamped { id: string; created: number; updated: number }
 
 export type MilestoneStatus = "planned" | "at_risk" | "done" | "missed";
@@ -12,7 +12,6 @@ export interface Milestone extends Stamped { project: string; title: string; due
 export type HealthStatus = "green" | "amber" | "red";
 /** The user's call on a project's health; the id is the project slug. */
 export interface Health extends Stamped { project: string; status: HealthStatus; note: string }
-export interface Stakeholder extends Stamped { name: string; role: string; email: string; projects: string[]; notes: string }
 
 /** One fact a generated text may cite. `ref` is a note ref, or `milestone:<id>` / `health:<slug>`. */
 export interface Evidence { id: string; kind: string; title: string; project?: string | null; ref?: string | null; date?: string | null; text: string }

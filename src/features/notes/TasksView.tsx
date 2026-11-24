@@ -6,6 +6,7 @@ import { useMemo, useState } from "react";
 import { lmContainer } from "../../documents/adapters/lmdoc";
 import { classify } from "../../lib/errors";
 import { toast } from "../../ui/toast";
+import { OwnerChip } from "../people/OwnerChip";
 import { refreshLists } from "./pageWrite";
 import { filterTasks, groupTasks, sortTasks, type DoneFilter, type DueFilter, type Grouping, type TaskItem } from "./taskList";
 import { displayText, isoDate } from "./tasks";
@@ -76,7 +77,7 @@ export function TasksView() {
                   <input type="checkbox" checked={t.done} disabled={busy === t.id} aria-label={`${t.done ? "Reopen" : "Tick"} ${displayText(t.text)}`} onChange={(e) => void tick(t, e.target.checked)} />
                   <span className="task-text">{displayText(t.text)}</span>
                   {t.priority && <span className="chip small" title="Priority">{t.priority}</span>}
-                  {t.owner && <span className="chip small" title="Owner">{t.owner}</span>}
+                  {t.owner && <OwnerChip owner={t.owner} />}
                   {t.due && <span className={`chip small${overdue ? " overdue" : ""}`} title="Due date">{t.due}</span>}
                   <button className="link task-page" onClick={() => openSource(t)} title={t.kind === "action" ? "Open the note" : `Open ${t.path}`}>{t.title || t.path}</button>
                   <span className="muted small task-notebook">{t.notebookTitle}</span>

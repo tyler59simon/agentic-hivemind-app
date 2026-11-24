@@ -7,6 +7,7 @@ import { classify } from "../../lib/errors";
 import type { Milestone } from "../../lib/executive";
 import { refreshStore } from "../../lib/refresh";
 import { toast } from "../../ui/toast";
+import { OwnerChip } from "../people/OwnerChip";
 import { refreshLists } from "../notes/pageWrite";
 import type { TaskItem } from "../notes/taskList";
 import { displayText } from "../notes/tasks";
@@ -59,7 +60,7 @@ function TaskRow({ t, today, ticks }: { t: TaskItem; today: string; ticks: Tick 
       <input type="checkbox" checked={done} disabled={ticks.isBusy(t.id)} aria-label={`Tick ${displayText(t.text)}`} onChange={() => void ticks.tick(t, true)} />
       <span className="task-text">{displayText(t.text)}</span>
       {t.priority && <span className="chip small" title="Priority">{t.priority}</span>}
-      {t.owner && <span className="chip small" title="Owner">{t.owner}</span>}
+      {t.owner && <OwnerChip owner={t.owner} />}
       {t.due && <span className={`chip small${overdue ? " overdue" : ""}`} title="Due date">{t.due}</span>}
       <button className="link task-page" onClick={() => openSource(t)} title={t.kind === "action" ? "Open the note" : `Open ${t.path}`}>{t.title || t.path}</button>
     </li>
