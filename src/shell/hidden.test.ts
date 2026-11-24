@@ -9,26 +9,26 @@ describe("hidden sidebar sections", () => {
   beforeEach(() => useHidden.setState({ hidden: [] }));
 
   it("hides a section and shows it again", () => {
-    setShown("skills", false);
-    expect(hidden()).toEqual(["skills"]);
-    setShown("skills", true);
+    setShown("agents", false);
+    expect(hidden()).toEqual(["agents"]);
+    setShown("agents", true);
     expect(hidden()).toEqual([]);
   });
 
   it("hiding twice keeps one entry", () => {
-    setShown("maintenance", false);
-    setShown("maintenance", false);
-    expect(hidden()).toEqual(["maintenance"]);
+    setShown("notes", false);
+    setShown("notes", false);
+    expect(hidden()).toEqual(["notes"]);
   });
 
-  it("drops saved hides of removed sections (architecture, changes, overview, executive, recap, memory, dashboards, wiki, workflows)", () => {
-    expect(migrateHidden({ hidden: ["architecture", "skills", "changes", "overview", "executive", "recap", "memory", "dashboards", "wiki", "workflows"] })).toEqual({ hidden: ["skills"] });
+  it("drops saved hides of removed sections (architecture, changes, overview, executive, recap, memory, dashboards, wiki, workflows, maintenance, skills)", () => {
+    expect(migrateHidden({ hidden: ["architecture", "agents", "changes", "overview", "executive", "recap", "memory", "dashboards", "wiki", "workflows", "maintenance", "skills"] })).toEqual({ hidden: ["agents"] });
     expect(migrateHidden(null)).toBeNull();
-    expect(useHidden.persist.getOptions().version).toBe(7);
+    expect(useHidden.persist.getOptions().version).toBe(8);
   });
 
   it("hides the Inbox where the user hid Review", () => {
-    expect(migrateHidden({ hidden: ["skills", "review"] })).toEqual({ hidden: ["skills", "inbox"] });
+    expect(migrateHidden({ hidden: ["notes", "review"] })).toEqual({ hidden: ["notes", "inbox"] });
     expect(migrateHidden({ hidden: ["review", "inbox"] })).toEqual({ hidden: ["inbox"] });
   });
 

@@ -11,13 +11,14 @@ describe("agentNeeds", () => {
       drift: { system: "pay", attention: true, summary: "3 commits behind" } as never, stale: 4, duplicates: 1, now: NOW,
     });
     expect(needs.map((x) => x.text)).toEqual([
-      "3 learned drafts to approve or reject", "1 automation run waiting for you to start", "1 automation run failed today",
+      "2 learned note drafts to approve or reject", "1 skill proposal to approve or reject", "1 automation run waiting for you to start", "1 automation run failed today",
       "Architecture drift: 3 commits behind", "4 stale notes and 1 possible duplicate in memory",
     ]);
-    expect(needs[3].target).toEqual({ page: "architecture", system: "pay" });
+    expect(needs[4].target).toEqual({ page: "architecture", system: "pay" });
     expect(needs[0].target).toEqual({ page: "inbox", kind: "memory" });
-    expect(needs[1].target).toEqual({ page: "schedules" });
-    expect(needs[4].target).toEqual({ page: "inbox", kind: "memory" });
+    expect(needs[1].target).toEqual({ page: "inbox", kind: "skills" });
+    expect(needs[2].target).toEqual({ page: "schedules" });
+    expect(needs[5].target).toEqual({ page: "inbox", kind: "memory" });
     const behindOnly = { system: "pay", attention: true, summary: "3 commits behind", edited: [], findings: null, layout: null } as never;
     const none = { memoryDrafts: 0, skillDrafts: 0, runs: [], now: NOW };
     expect(agentNeeds({ ...none, drift: behindOnly, behindShown: true })).toEqual([]);

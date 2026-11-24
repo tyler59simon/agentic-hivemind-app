@@ -440,7 +440,7 @@ export function AgentWorkspace() {
   if (view === "new") return <StartSession />;
   return (
     <div className="page fill-page">
-      <PageHeader title="Agent Workspace" actions={<StopSession session={currentInfo} />}
+      <PageHeader title="Agents" actions={<StopSession session={currentInfo} />}
         subtitle={terminalView ? `Run ${enginesText(shown, "or")} in a local, project-aware harness with memory and context.` : undefined} />
       {(terminalView || chatEmpty || currentInfo?.mode === "interactive") && <Toolbar info={currentInfo} face={terminalView ? "terminal" : "chat"} sessions={all} onAsk={setAsked} />}
       {!enabled ? <p className="muted">Agent sessions need a newer Living Memory (one with the <code>projects</code> command).</p>

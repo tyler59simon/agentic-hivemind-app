@@ -1,3 +1,5 @@
+// Settings > Maintenance (CON-22): Living Memory's automatic note review. On and off with the domain it covers, its limits, the next
+// run and today's spending, and its runs with each decision and Restore. Applied decisions are also in the Inbox.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useMaintenanceEnabled, useRestoreEnabled } from "../../lib/connection";
@@ -8,14 +10,15 @@ import {
 } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
-import { PageHeader } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
 import { isUnbound } from "../recap/recap";
 import { costText, HISTORY_LIMIT, nextRunText, resultText, runSummary, sortDecisions, usd, wasArchived } from "./maintenance";
 
-// The store's file watcher does not cover maintenance/ (run records and accounting), so the open page polls.
+// The store's file watcher does not cover maintenance/ (run records and accounting), so the section polls while Settings is open.
 const POLL_MS = 60_000;
+/** Runs listed at first, and added by each Show more. */
+const PAGE = 30;
 
 function NoteLink({ refId, title }: { refId: string; title?: string | null }) {
   const openNote = useWorkspace((s) => s.openNote);
@@ -48,9 +51,9 @@ function StatusCard({ s }: { s: MaintenanceStatus }) {
   const a = s.accounting;
   const last = s.last_run;
   return (
-    <section className="section">
+    <div className="maintenance-status">
       <div className="section-head">
-        <h2>{s.enabled ? "On" : "Off"}</h2>
+        <h4>{s.enabled ? "On" : "Off"}</h4>
         <span className="fill" />
         {!s.enabled && (
           <select aria-label="Domain to maintain" value={target} onChange={(e) => setPicked(e.target.value)}>
@@ -81,7 +84,7 @@ function StatusCard({ s }: { s: MaintenanceStatus }) {
       </>}
       {last && <p className="muted">Last run: {when(last.attempted_at)}, {last.status}. {runSummary(last)}.</p>}
       {s.errors.map((e, i) => <p key={i} className="error">{e}</p>)}
-    </section>
+    </div>
   );
 }
 
@@ -134,37 +137,32 @@ function RunRow({ r, open, onToggle }: { r: MaintenanceRun; open: boolean; onTog
   );
 }
 
-/** Maintenance: automatic note review, from Living Memory's `maintenance` commands. */
-export function MaintenancePage() {
+/** Maintenance in Settings, from Living Memory's `maintenance` commands. Nothing shows when this Living Memory has none. */
+export function MaintenanceSection() {
   const enabled = useMaintenanceEnabled();
   const status = useQuery({ queryKey: ["maintenance", "status"], queryFn: maintenanceStatus, enabled, refetchInterval: POLL_MS });
   const history = useQuery({ queryKey: ["maintenance", "history"], queryFn: () => maintenanceHistory(HISTORY_LIMIT), enabled, refetchInterval: POLL_MS });
   const [open, setOpen] = useState<string | null>(null);
-  const title = "Maintenance";
-  const sub = "Automatic review of notes: what it checks, what it changed, and how to undo it.";
-  if (!enabled) {
-    return (
-      <div className="page">
-        <PageHeader title={title} subtitle={sub} />
-        <p className="muted">This version of Living Memory has no <code>maintenance</code> command. Update Living Memory to use maintenance.</p>
-      </div>
-    );
-  }
+  const [shown, setShown] = useState(PAGE);
+  if (!enabled) return null;
   const error = status.error ?? history.error;
   const unbound = isUnbound(error);
+  const runs = history.data?.runs ?? [];
   return (
-    <div className="page">
-      <PageHeader title={title} subtitle={sub} />
+    <section className="settings maintenance" id="settings-maintenance">
+      <h3>Maintenance</h3>
+      <p className="muted small">Automatic review of notes: what it checks, what it changed, and how to undo it.</p>
       {(status.isLoading || history.isLoading) && <p className="muted">Loading…</p>}
       {unbound ? <p className="muted">This project has no bound domain, so there is nothing to maintain yet.</p> : error ? <p className="error">{classify(error).message}</p> : null}
       {status.data && <StatusCard s={status.data} />}
       {history.data && (
-        <section className="section">
-          <div className="section-head"><h2>Runs</h2></div>
-          {!history.data.runs.length && <p className="muted">No maintenance runs yet.</p>}
-          {history.data.runs.map((r) => <RunRow key={r.id} r={r} open={open === r.id} onToggle={() => setOpen(open === r.id ? null : r.id)} />)}
-        </section>
+        <>
+          <h4>Runs</h4>
+          {!runs.length && <p className="muted">No maintenance runs yet.</p>}
+          {runs.slice(0, shown).map((r) => <RunRow key={r.id} r={r} open={open === r.id} onToggle={() => setOpen(open === r.id ? null : r.id)} />)}
+          {runs.length > shown && <button type="button" className="link" onClick={() => setShown(shown + PAGE)}>Show more ({runs.length - shown} older)</button>}
+        </>
       )}
-    </div>
+    </section>
   );
 }

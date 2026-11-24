@@ -127,8 +127,8 @@ describe("navigation", () => {
 describe("saved navigation", () => {
   const migrate = (route: object, version = 1) => useApp.persist.getOptions().migrate!({ project: "pay", domain: "demo", route }, version);
 
-  it("is version 10, and moves the Overview, Executive and Recap pages to Home", () => {
-    expect(useApp.persist.getOptions().version).toBe(10);
+  it("is version 11, and moves the Overview, Executive and Recap pages to Home", () => {
+    expect(useApp.persist.getOptions().version).toBe(11);
     for (const page of ["overview", "executive", "recap"]) expect(migrate({ page })).toEqual({ project: "pay", domain: "demo", route: { page: "home" } });
     expect(migrate({ page: "overview", view: "work" })).toMatchObject({ route: { page: "home" } });
   });
@@ -199,8 +199,16 @@ describe("saved navigation", () => {
     expect(migrate({ page: "workflows" }, 1)).toMatchObject({ route: { page: "home" } });
   });
 
-  it("leaves a version 10 save alone", () => {
-    expect(migrate({ page: "inbox", kind: "skills" }, 10)).toMatchObject({ route: { page: "inbox", kind: "skills" } });
+  // CON-22: Skills became Notes > Skills; Maintenance became a Settings section, which is not a route.
+  it("moves a saved Skills route to Notes > Skills and sends Maintenance to Home", () => {
+    expect(migrate({ page: "skills", skill: "restart-recovery" }, 10)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "skills", skill: "restart-recovery" } });
+    expect(migrate({ page: "skills" }, 1)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "skills" } });
+    expect(migrate({ page: "maintenance" }, 10)).toEqual({ project: "pay", domain: "demo", route: { page: "home" } });
+  });
+
+  it("leaves a version 11 save alone", () => {
+    expect(migrate({ page: "inbox", kind: "skills" }, 11)).toMatchObject({ route: { page: "inbox", kind: "skills" } });
+    expect(migrate({ page: "notes", view: "skills", skill: "x" }, 11)).toMatchObject({ route: { page: "notes", view: "skills", skill: "x" } });
   });
 
   it("leaves a version 9 save alone", () => {

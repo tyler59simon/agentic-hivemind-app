@@ -9,6 +9,7 @@ import { Palette } from "./features/palette/Palette";
 import { BeforeUninstall } from "./features/settings/BeforeUninstall";
 import { SettingsForm } from "./features/settings/SettingsForm";
 import { SchedulesSection } from "./features/schedules/SchedulesSection";
+import { MaintenanceSection } from "./features/maintenance/MaintenanceSection";
 import { agentSessions } from "./lib/agent";
 import { captureStatus, connect, domains, setBridgeGeneration } from "./lib/lm";
 import { prefs } from "./lib/prefs";
@@ -243,7 +244,7 @@ export default function App() {
             {link.error && <p className="error">{String(link.error)}</p>}
             {outdated && <p className="error">This version of Living Memory is too old: Hivemind needs one with direct writes and unified proposals (<code>alm version</code> lists <code>direct_writes</code> and <code>proposals</code> under capabilities). Update Living Memory, then reconnect.</p>}
             <SettingsForm onSaved={reconnect} />
-            {link.isSuccess && !outdated && <SchedulesSection />}
+            {link.isSuccess && !outdated && <><SchedulesSection /><MaintenanceSection /></>}
             <BeforeUninstall
               onOpenReview={link.isSuccess && !outdated ? (id) => { setSettings(false); openInbox(id); } : undefined}
               onOpenSession={link.isSuccess && !outdated ? (id) => { setSettings(false); openSession(id); } : undefined} />

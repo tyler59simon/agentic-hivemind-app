@@ -11,7 +11,7 @@ Living Memory still owns knowledge and the Architecture Suite still owns archite
 | Roles and profiles | `src-tauri/src/agent/roles.rs`, `agent/scope.rs` (`profile_policy`, `deny_rules`) | `features/agents/start.ts` (`PROFILE_HELP`) | none |
 | Session reports | `src-tauri/src/conductor.rs`, `agent/mod.rs` (`Lifecycle`) | | none |
 | Resource use | `src-tauri/src/resources.rs` | `AgentWorkspace.tsx` (`useResources`) | none |
-| Post-session reviewer | `src-tauri/src/learning.rs` | `features/review/LearnedCards.tsx`, `features/skills/SkillsPage.tsx` | `learning/runs.jsonl`, `learning/spend.json` |
+| Post-session reviewer | `src-tauri/src/learning.rs` | `features/review/LearnedCards.tsx`, `features/skills/SkillsPane.tsx` (Notes, Skills) | `learning/runs.jsonl`, `learning/spend.json` |
 | Skills | `src-tauri/src/skills.rs` | `features/skills/` | `skills/library/<name>/`, `skills/proposals/`, `skills/ledger.jsonl`, `skills/usage.jsonl`, `skills/outcomes.jsonl` |
 | Automations | `src-tauri/src/automations.rs` | `features/schedules/SchedulesSection.tsx` (Settings, Schedules) | `automations.json`, `automation-runs/<id>.json`, `automation-spend.json` |
 | Architecture drift | `src-tauri/src/archsuite.rs` | `features/systems/DriftPanel.tsx` | `architecture-runs/<system>/` |

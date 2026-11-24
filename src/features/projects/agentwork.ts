@@ -31,8 +31,9 @@ const n = (count: number, word: string, plural = `${word}s`) => `${count} ${coun
 /** Each thing waiting for the user, with where it is resolved. */
 export function agentNeeds(i: NeedsInput): Need[] {
   const out: Need[] = [];
-  const drafts = i.memoryDrafts + i.skillDrafts;
-  if (drafts) out.push({ key: "drafts", text: `${n(drafts, "learned draft")} to approve or reject`, target: { page: "inbox", kind: i.memoryDrafts ? "memory" : "skills" } });
+  // One row per Inbox tab, so each link lands where its drafts are (CONR-12).
+  if (i.memoryDrafts) out.push({ key: "drafts", text: `${n(i.memoryDrafts, "learned note draft")} to approve or reject`, target: { page: "inbox", kind: "memory" } });
+  if (i.skillDrafts) out.push({ key: "skill-drafts", text: `${n(i.skillDrafts, "skill proposal")} to approve or reject`, target: { page: "inbox", kind: "skills" } });
   const waiting = i.runs.filter((r) => r.state === "waiting").length;
   if (waiting) out.push({ key: "waiting", text: `${n(waiting, "automation run")} waiting for you to start`, target: { page: "schedules" } });
   const failed = i.runs.filter((r) => r.state === "failed" && i.now - r.at < DAY).length;

@@ -6,7 +6,8 @@ import { createJSONStorage, persist, type StateStorage } from "zustand/middlewar
 /** The Inbox's groups: each is a tab of the page. */
 export type InboxKind = "code" | "memory" | "pages" | "captures" | "maintenance" | "architecture" | "skills";
 
-/** One page per sidebar section. Notes holds the notebook and memory trees and the open documents; `view: "wiki"` shows the wiki of the
+/** One page per sidebar section. Notes holds the notebook and memory trees and the open documents; `view: "skills"` shows the
+ *  skills library (on `skill` when given); `view: "wiki"` shows the wiki of the
  *  picked project, at the page `at` of `domain` and in the agent-written `edition`, or with `whole` the wiki of the whole domain.
  *  Home shows the picked project (or all of them); `view: "briefings"` opens its
  *  list of briefings, `briefing` one briefing, and `capture` the review of one capture batch; `tab: "architecture"` shows the
@@ -14,10 +15,8 @@ export type InboxKind = "code" | "memory" | "pages" | "captures" | "maintenance"
 export type Route =
   | { page: "home"; view?: "briefings"; briefing?: string; capture?: string; tab?: "architecture"; system?: string }
   | { page: "agents"; session?: string; view?: "new" }
-  | { page: "notes"; notebook?: string; path?: string; view?: "tasks" | "views" | "tags" | "graph" | "wiki"; ref?: string; domain?: string; at?: string; edition?: "agent"; whole?: true }
-  | { page: "maintenance" }
-  | { page: "inbox"; session?: string; file?: string; kind?: InboxKind }
-  | { page: "skills"; skill?: string };
+  | { page: "notes"; notebook?: string; path?: string; view?: "tasks" | "views" | "tags" | "graph" | "wiki" | "skills"; ref?: string; domain?: string; at?: string; edition?: "agent"; whole?: true; skill?: string }
+  | { page: "inbox"; session?: string; file?: string; kind?: InboxKind };
 export type Page = Route["page"];
 
 /** The Settings sections a link can open at. Settings is not a route: it replaces the whole shell while it is open. */
@@ -72,11 +71,14 @@ const whenFree = (move: () => void) => { if (!stopped(move)) move(); };
  *  Version 7 moves Memory Graph and Tags into Notes (CON-12) and retires the Memory section and Activity/History pages (CON-21).
  *  Version 8 moves Dashboards into Notes > Views (CON-13): `ref` is the view the route names.
  *  Version 9 moves the Wiki into Notes (CON-14): the project it named becomes the picked project.
- *  Version 10 removes the Workflows page (CON-20): its schedules are in Settings, so a saved Workflows route opens Home. */
+ *  Version 10 removes the Workflows page (CON-20): its schedules are in Settings, so a saved Workflows route opens Home.
+ *  Version 11 moves Skills into Notes > Skills and Maintenance into Settings (CON-22); a saved Maintenance route opens Home. */
 export function migrateNav(persisted: unknown, version = 1): unknown {
-  const saved = persisted as { route?: { page?: string; view?: string; q?: string; capture?: string; briefing?: string; system?: string; ref?: string; domain?: string; at?: string; edition?: string; project?: string } } | null;
+  const saved = persisted as { route?: { page?: string; view?: string; q?: string; capture?: string; briefing?: string; system?: string; ref?: string; domain?: string; at?: string; edition?: string; project?: string; skill?: string } } | null;
   const route = saved?.route;
   if (!route) return persisted;
+  if (version < 11 && route.page === "skills") return { ...saved, route: { page: "notes", view: "skills", ...(route.skill ? { skill: route.skill } : {}) } };
+  if (version < 11 && route.page === "maintenance") return { ...saved, route: { page: "home" } };
   if (version < 10 && route.page === "workflows") return { ...saved, route: { page: "home" } };
   if (version < 9 && route.page === "wiki") {
     const { domain, at, edition, project } = route;
@@ -125,7 +127,7 @@ export const useApp = create<AppState>()(persist((set) => ({
   },
 }), {
   name: "hivemind.nav",
-  version: 10,
+  version: 11,
   storage: createJSONStorage(() => safeStorage),
   migrate: (persisted, version) => migrateNav(persisted, version) as AppState,
   partialize: (s) => ({ project: s.project, domain: s.domain, route: s.route }),
@@ -139,7 +141,7 @@ export const openSystem = (slug: string) => app().go({ page: "home", tab: "archi
 export const openSession = (session: string) => app().go({ page: "agents", session });
 /** Show the Inbox: on one session's edits (and one file) when given, or on one group. */
 export const openInbox = (session?: string, file?: string, kind?: InboxKind) => app().go({ page: "inbox", session, file, kind });
-export const openSkills = (skill?: string) => app().go({ page: "skills", skill });
+export const openSkills = (skill?: string) => app().go({ page: "notes", view: "skills", ...(skill ? { skill } : {}) });
 /** Open Settings, at a section when one is given (Schedules, Spend, Maintenance, Learning). */
 export const openSettings = (section?: SettingsSection) => useApp.setState({ settings: section ? { section } : {} });
 export const closeSettings = () => useApp.setState({ settings: null });

@@ -6,7 +6,7 @@ It runs on Tauri 2 with React and TypeScript, on Windows, macOS and Linux. It is
 
 ## What it does
 
-- **Layout:** a sidebar with a project picker and its sections (Home, Agent Workspace, Notes, Maintenance, Inbox, Skills; the project's wiki is Notes > Wiki; schedules and spending are in Settings), and a top bar with a breadcrumb and a search field. Every section is scoped to the picked project, or to all memory.
+- **Layout:** a sidebar with a project picker and its sections (Home, Inbox, Agents, Notes, and Settings; the project's wiki and skills are Notes > Wiki and Notes > Skills; schedules, spending and memory maintenance are in Settings), and a top bar with a breadcrumb and a search field. Every section is scoped to the picked project, or to all memory.
 - **Memory:**
   - a library with search, tabs by note type, and Status, Scope (project, domain, all domains) and Tag filters; the selected note is previewed beside the list
   - a quick switcher (Ctrl+O) and a command palette (Ctrl+P)
@@ -14,7 +14,7 @@ It runs on Tauri 2 with React and TypeScript, on Windows, macOS and Linux. It is
 - **Notes:** open as tabs, side by side in up to three panes. A note page has Reading, Source and History tabs, and a context rail with its connections (backlinks, outgoing links, replaces / replaced by, links to missing notes), recent history, outline, details and a local graph. Hovering a note link shows its summary.
 - **Home:** the picked project's current plan, next open items, recent notes and commits, and what needs review. Its Architecture tab shows the project's systems (all systems when no project is picked).
 - **Inbox:** everything that waits for you, across projects, with one count on the sidebar. Its groups are agent code edits (with an Ask Codex button that has a read-only Codex review a diff), notes due for confirmation and drafts, notebook page edits agents proposed (store notebooks and folder notebooks; a folder notebook also shows "N agent edits" on the Notes page, and an accepted edit is kept in the page's file history), Executive captures, what maintenance changed in the last week (each with Undo and Looks right), registry updates an agent proposed, and skill proposals.
-- **Architecture** (Home tab): a system's containers drawn from its Architecture Suite model (context and container levels, pan, zoom, select a box to inspect it), with its decisions, runbooks and weaknesses. Background agent sessions are listed in Agent Workspace.
+- **Architecture** (Home tab): a system's containers drawn from its Architecture Suite model (context and container levels, pan, zoom, select a box to inspect it), with its decisions, runbooks and weaknesses. Background agent sessions are listed in Agents.
 - **Editor:**
   - CodeMirror with Obsidian-style live preview, plus a plain Source mode
   - a properties form, `[[` title autocomplete, and Ctrl+S to save
@@ -29,7 +29,7 @@ It runs on Tauri 2 with React and TypeScript, on Windows, macOS and Linux. It is
 - **Quick capture:** a global hotkey (default Ctrl+Alt+M) or the tray icon opens a small window to save a note without opening the app.
 - **Agent roles:** chat sessions start as an architect, developer, reviewer, researcher or tester, each with a permission profile Hivemind builds (read only, research, or edit its own worktree), live CPU and memory use, and a verdict from reviewers and testers.
 - **Learning:** after you approve or dismiss a session's edits, a capped, tool-free reviewer drafts notes for Living Memory and skill proposals; you approve them in the Inbox.
-- **Skills:** approved procedures are kept with every version and published to Claude Code and Codex (`~/.claude/skills`, `~/.codex/skills`), with use counts and how the sessions that used them were reviewed.
+- **Skills** (Notes > Skills): approved procedures are kept with every version and published to Claude Code and Codex (`~/.claude/skills`, `~/.codex/skills`), with use counts and how the sessions that used them were reviewed.
 - **Schedules (Settings):** scheduled or event-driven work (morning briefings, memory maintenance, weekly wiki rebuilds, and custom automations such as reviews of new commits, skill upkeep, drift checks and failure investigations) with ask-first, budgets and notifications. Custom automations are listed only while "Show custom automations" is on.
 - **Architecture drift:** the Architecture Suite's diff, check and verify, plus hand-edited outputs and commits since the output was made.
 

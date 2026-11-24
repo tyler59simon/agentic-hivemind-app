@@ -3,7 +3,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import { isPlan, undo } from "../../lib/lm";
-import { useApp } from "../../store";
+import { openSettings } from "../../store";
 import { ArrowLink } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { explain, finishDirect } from "../plans/DirectDialog";
@@ -14,7 +14,6 @@ import { useSeen } from "./seen";
 
 export function AppliedPane({ item, title }: { item: AppliedItem; title?: string }) {
   const client = useQueryClient();
-  const go = useApp((s) => s.go);
   const markSeen = useSeen((s) => s.markSeen);
   const [dialog, setDialog] = useState<ReactNode>(null);
   const [busy, setBusy] = useState(false);
@@ -49,7 +48,7 @@ export function AppliedPane({ item, title }: { item: AppliedItem; title?: string
       <div className="work-actions">
         <button className="primary" onClick={settle} disabled={busy}>Looks right</button>
         <button onClick={reverse} disabled={busy}>{busy ? "Undoing…" : "Undo"}</button>
-        <ArrowLink onClick={() => go({ page: "maintenance" })}>Open Maintenance</ArrowLink>
+        <ArrowLink onClick={() => openSettings("maintenance")}>Open Maintenance</ArrowLink>
       </div>
       {dialog}
     </>

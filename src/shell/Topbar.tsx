@@ -17,7 +17,7 @@ import { SECTIONS } from "./Sidebar";
 
 interface Crumb { label: string; go?: () => void }
 
-const NOTES_VIEWS = { tasks: "Tasks", views: "Views", tags: "Tags", graph: "Graph", wiki: "Wiki" } as const;
+const NOTES_VIEWS = { tasks: "Tasks", views: "Views", tags: "Tags", graph: "Graph", wiki: "Wiki", skills: "Skills" } as const;
 
 function useCrumbs(): Crumb[] {
   const route = useApp((s) => s.route);

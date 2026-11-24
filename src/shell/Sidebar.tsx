@@ -1,12 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, House, NotebookPen, Wrench, Sparkles, SquareCheck, Terminal, type LucideIcon } from "lucide-react";
+import { ChevronDown, House, NotebookPen, Settings, SquareCheck, Terminal, type LucideIcon } from "lucide-react";
 import logo from "../assets/logo.png";
 import { ProjectSwitcher } from "../features/projects/ProjectSwitcher";
 import { useInboxItems } from "../features/review/useInboxItems";
 import { dotOf, useAttention } from "../features/terminal/attention";
 import { sessionsQuery } from "../lib/agent";
-import { useMaintenanceEnabled, useSystemsEnabled } from "../lib/connection";
+import { useSystemsEnabled } from "../lib/connection";
 import type { ConnectInfo } from "../lib/lm";
 import { refreshStore } from "../lib/refresh";
 import { useApp, type Page } from "../store";
@@ -14,21 +14,16 @@ import { Menu } from "../ui/Menu";
 import { useWorkspace } from "../workspace/store";
 import { useHidden } from "./hidden";
 
-/** The sections, in the order the sidebar lists them. */
+/** The sections, in the order the sidebar lists them; Settings follows them (CON-22). Skills is in Notes and Maintenance in Settings. */
 export const SECTIONS: { page: Page; label: string; icon: LucideIcon }[] = [
   { page: "home", label: "Home", icon: House },
-  { page: "agents", label: "Agent Workspace", icon: Terminal },
-  { page: "notes", label: "Notes", icon: NotebookPen },
-  { page: "maintenance", label: "Maintenance", icon: Wrench },
   { page: "inbox", label: "Inbox", icon: SquareCheck },
-  { page: "skills", label: "Skills", icon: Sparkles },
+  { page: "agents", label: "Agents", icon: Terminal },
+  { page: "notes", label: "Notes", icon: NotebookPen },
 ];
 
-/** The sections this store offers (some need a newer Living Memory), whether or not the user hid them. */
-export function useAvailableSections() {
-  const on: Partial<Record<Page, boolean>> = { maintenance: useMaintenanceEnabled() };
-  return SECTIONS.filter((s) => on[s.page] ?? true);
-}
+/** The sections the sidebar can show, whether or not the user hid them. */
+export const useAvailableSections = () => SECTIONS;
 
 export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; onSettings: () => void; onReconnect: () => void }) {
   const page = useApp((s) => s.route.page);
@@ -72,6 +67,7 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
             {mark(p) && <span className={`nav-dot ${p === "agents" && waiting ? "waiting" : p === "agents" && attention === "done" ? "done" : p === "notes" ? "unsaved" : ""}`} title={mark(p)!} aria-label={mark(p)!} />}
           </button>
         ))}
+        <button className="nav-item" onClick={onSettings}><Settings size="1.35em" aria-hidden /><span className="grow">Settings</span></button>
       </nav>
       {menu && (
         <ul className="menu-list context" role="menu" style={{ top: menu.y, left: menu.x }} onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
