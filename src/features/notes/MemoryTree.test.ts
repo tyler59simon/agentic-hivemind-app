@@ -46,6 +46,6 @@ it("lists every page of active note metadata and coalesces refs repeated across 
 
   expect(await listMemoryNotes(new AbortController().signal)).toEqual(rows);
   expect(requests).toHaveLength(2);
-  expect(requests[0]).toEqual(expect.arrayContaining(["list", "--all-domains", "--status", "active", "--limit", "250"]));
+  expect(requests[0]).toEqual(expect.arrayContaining(["search", "--all-domains", "--status", "active", "--limit", "250"]));
   expect(requests[1]).toEqual(expect.arrayContaining(["--offset", "250"]));
 });

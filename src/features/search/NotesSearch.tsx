@@ -137,7 +137,7 @@ export function NotesSearchBox({ inputRef }: { inputRef: RefObject<HTMLInputElem
   const current = useCurrentNotebook();
   const lmSearch = useDocsSearch();
   const canSearchMem = useConnection((s) => s.commands.includes("search"));
-  const canListMem = useConnection((s) => s.commands.includes("list"));
+  const canListMem = useConnection((s) => s.commands.includes("search"));
   const notebooks = useQuery(notebooksQuery());
   const lmNotebooks = useQuery({ ...lmNotebooksQuery(), enabled: lmSearch });
   const settled = useSettled(query);

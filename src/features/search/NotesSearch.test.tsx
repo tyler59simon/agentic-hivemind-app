@@ -29,10 +29,10 @@ vi.mock("@tauri-apps/api/core", () => ({
         const argv = args.argv as string[];
         if (argv[0] === "taxonomy") return { exit_code: 0, error: null, result: { tags: ["concern/decision", "project/pay"] } };
         if (argv[0] === "projects") return { exit_code: 0, error: null, result: { ok: true, projects: [{ slug: "pay", name: "Paystream", status: "active", repos: [], aliases: [], description: "", charter: null, created: "", updated: "", tag: "project/pay", tag_registered: true }], warnings: [] } };
-        if (argv[0] === "doc" && argv[1] === "search") return { exit_code: 0, error: null, result: { ok: true, pages: [{ origin: "lm", domain: "demo", notebook: "plans", notebook_title: "Release plans", title: "Roadmap.md", path: "Roadmap.md", heading: null, snippet: "the plan page", line_start: 1, line_end: 2, revision: "r", score: 1, relevance: 1 }] } };
+        if (argv[0] === "search" && argv.includes("--pages")) return { exit_code: 0, error: null, result: { ok: true, pages: [{ origin: "lm", domain: "demo", notebook: "plans", notebook_title: "Release plans", title: "Roadmap.md", path: "Roadmap.md", heading: null, snippet: "the plan page", line_start: 1, line_end: 2, revision: "r", score: 1, relevance: 1 }] } };
         if (argv[0] === "doc" && argv[1] === "notebooks") return { exit_code: 0, error: null, result: { notebooks: [{ domain: "demo", notebook: "plans", title: "Release plans", visibility: "searchable", private: false, revision: "r", pages: 1, assets: 0, asset_bytes: 0, proposals: 0, updated: "" }] } };
+        if (argv[0] === "search" && argv[1].startsWith("--")) return { exit_code: 0, error: null, result: { mode: "list", domains: ["demo"], total: 1, offset: 0, notes: [{ ref: "demo:2", id: "2", domain: "demo", title: "Old archived plan", type: "plan", status: "archived", tags: ["plan"], created: "2026-10-01", updated: "2026-10-02", revision: "r", path: "", summary: "Retired plan" }] } };
         if (argv[0] === "search") return { exit_code: 0, error: null, result: { mode: "lexical", domains: ["demo"], fallback: false, results: [{ id: "demo:1", domain: "demo", title: "Plan decision", type: "decision", snippet: "we plan", updated: "2026-11-20", tags: ["project/pay"], status: "active", score: 1, rank: 1, engine: "lexical", revision: "r", sourceField: "body", sourceScope: "active", relevance: 1 }] } };
-        if (argv[0] === "list") return { exit_code: 0, error: null, result: { domains: ["demo"], total: 1, offset: 0, notes: [{ ref: "demo:2", id: "2", domain: "demo", title: "Old archived plan", type: "plan", status: "archived", tags: ["plan"], created: "2026-10-01", updated: "2026-10-02", revision: "r", path: "", summary: "Retired plan" }] } };
         return { exit_code: 0, error: null, result: {} };
       }
     }
@@ -62,13 +62,14 @@ const setValue = async (e: Element, v: string) => {
   await act(async () => { Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(e, v); e.dispatchEvent(new Event(e instanceof HTMLSelectElement ? "change" : "input", { bubbles: true })); });
 };
 const press = async (key: string, mods: { ctrlKey?: boolean } = {}) => act(async () => { input().dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...mods })); });
-const searchedLm = () => calls.some((c) => c.cmd === "lm" && ((c.args.argv as string[])[0] === "search" || ((c.args.argv as string[])[0] === "doc" && (c.args.argv as string[])[1] === "search")));
+const searchedLm = () => calls.some((c) => { const argv = (c.args?.argv ?? []) as string[]; return c.cmd === "lm" && argv[0] === "search" && (argv.includes("--pages") || !argv[1].startsWith("--")); });
+const noteSearches = () => calls.filter((c) => { const argv = (c.args?.argv ?? []) as string[]; return c.cmd === "lm" && argv[0] === "search" && !argv.includes("--pages") && !argv[1].startsWith("--"); });
 const groupTitles = () => [...document.querySelectorAll(".search-group h3")].map((h) => h.textContent);
 const rows = () => [...document.querySelectorAll<HTMLElement>("[role=option]")];
 const activeRow = () => rows().findIndex((r) => r.getAttribute("aria-selected") === "true");
 
 async function mount(lmSearch: boolean) {
-  useConnection.setState({ commands: ["doc", "search", "list", "taxonomy", "projects"], api: 2, capabilities: lmSearch ? { docs: { version: 1, max_page_bytes: 1, max_asset_bytes: 1, search: true } } : { docs: { version: 1, max_page_bytes: 1, max_asset_bytes: 1 } } });
+  useConnection.setState({ commands: ["doc", "search", "taxonomy", "projects"], api: 2, capabilities: lmSearch ? { docs: { version: 1, max_page_bytes: 1, max_asset_bytes: 1, search: true } } : { docs: { version: 1, max_page_bytes: 1, max_asset_bytes: 1 } } });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   (globalThis as { __qc?: unknown }).__qc = client;
   const el = document.createElement("div");
@@ -115,7 +116,7 @@ describe("the unified top-bar search box (CON-11)", () => {
     await setValue(input(), "plan");
     await settle();
     expect(groupTitles()).toEqual(["Memory notes", "This notebook", "Other notebooks"]);
-    expect(calls.some((c) => c.cmd === "lm" && (c.args.argv as string[])[0] === "doc" && (c.args.argv as string[])[1] === "search")).toBe(false);
+    expect(calls.some((c) => c.cmd === "lm" && (c.args.argv as string[])[0] === "search" && (c.args.argv as string[]).includes("--pages"))).toBe(false);
   });
 
   it("the arrow keys move over the rows, Enter opens the one marked, and the panel closes", async () => {
@@ -178,13 +179,13 @@ describe("the unified top-bar search box (CON-11)", () => {
     await act(async () => input().focus());
     await setValue(input(), "plan");
     await settle();
-    const searchCall = calls.filter((c) => c.cmd === "lm" && (c.args.argv as string[])[0] === "search").pop();
+    const searchCall = noteSearches().pop();
     expect(searchCall?.args.argv).toContain("tag=project/pay");
     const scopeBtn = [...document.querySelectorAll<HTMLButtonElement>(".search-filters button")].find((b) => b.textContent === "Paystream")!;
     calls.length = 0;
     await act(async () => { scopeBtn.click(); });
     await settle();
-    const wideCall = calls.filter((c) => c.cmd === "lm" && (c.args.argv as string[])[0] === "search").pop();
+    const wideCall = noteSearches().pop();
     expect(wideCall?.args.argv).not.toContain("tag=project/pay");
   });
 

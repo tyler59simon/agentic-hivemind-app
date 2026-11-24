@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { LmError, addAction, archiveNote, isPlan, supersedeNote, taxonomyAdd, undo, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, ruleAllowed, setPin, setRule, list, listArgs, openArgs, writeProject, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setTransport, writeSystem, systemsArgs, update, setBridgeGeneration, noteTypes, typeWrite, timelineArgs, wikiModel, agentWikiModel, type Invoke } from "./lm";
+import { LmError, addAction, archiveNote, isPlan, supersedeNote, taxonomyAdd, undo, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, ruleAllowed, setPin, setRule, list, listArgs, openArgs, writeProject, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setTransport, writeSystem, systemsArgs, update, setBridgeGeneration, noteTypes, typeWrite, timelineArgs, links, docSearch, deletePlan, wikiModel, agentWikiModel, type Invoke } from "./lm";
 
 afterEach(() => setTransport(invoke as Invoke));
 
@@ -13,8 +13,8 @@ function fake(reply: unknown) {
 describe("argv builders", () => {
   it("list runs as viewer with filters", () => {
     expect(listArgs({ domain: "demo", status: "any", types: ["bug"], tags: ["concern/bug"], offset: 5, limit: 10 }))
-      .toEqual(["list", "--domain", "demo", "--status", "any", "--type", "bug", "--tag", "concern/bug", "--offset", "5", "--limit", "10", "--actor", "viewer"]);
-    expect(listArgs({ allDomains: true, domain: "ignored" })).toEqual(["list", "--all-domains", "--limit", "1000", "--actor", "viewer"]);
+      .toEqual(["search", "--domain", "demo", "--status", "any", "--type", "bug", "--tag", "concern/bug", "--offset", "5", "--limit", "10", "--actor", "viewer"]);
+    expect(listArgs({ allDomains: true, domain: "ignored" })).toEqual(["search", "--all-domains", "--limit", "1000", "--actor", "viewer"]);
   });
 
   it("search adds --rebuild only when filtered", () => {
@@ -48,7 +48,7 @@ describe("run", () => {
   });
 
   it("list can ask for summaries", () => {
-    expect(listArgs({ domain: "d", summary: true })).toEqual(["list", "--domain", "d", "--limit", "1000", "--with-summary", "--actor", "viewer"]);
+    expect(listArgs({ domain: "d", summary: true })).toEqual(["search", "--domain", "d", "--limit", "1000", "--with-summary", "--actor", "viewer"]);
   });
 
   it("projects, open, review and timeline read as viewer", () => {
@@ -186,5 +186,31 @@ describe("a note save and the bridge generation (Codex review of 7320d7f, LM-2)"
     await update("demo:abc", { title: "New" });
     expect(calls[0]).toMatchObject(["lm", { argv: ["update", "demo:abc", "--domain", "demo"], generation: 3 }]);
     expect((calls[1] as [string, Record<string, unknown>])[1]).not.toHaveProperty("generation");
+  });
+});
+
+describe("one search command", () => {
+  const argvOf = (calls: unknown[], n = 0) => ((calls[n] as [string, { argv: string[] }])[1]).argv;
+
+  it("deletePlan runs delete-plan with the note's domain", async () => {
+    const calls = fake({ exit_code: 0, result: { ok: true, plan_id: "p", digest: "d", kind: "delete", summary: {} }, error: null });
+    await deletePlan("demo:abc");
+    expect(argvOf(calls)).toEqual(["delete-plan", "demo:abc", "--domain", "demo"]);
+  });
+
+  it("links is search --links, as viewer", async () => {
+    const calls = fake({ exit_code: 0, result: { nodes: [], edges: [], unresolved: [] }, error: null });
+    await links({ allDomains: true });
+    await links({ domain: "demo", status: "active" });
+    expect(argvOf(calls, 0)).toEqual(["search", "--links", "--all-domains", "--status", "any", "--actor", "viewer"]);
+    expect(argvOf(calls, 1)).toEqual(["search", "--links", "--domain", "demo", "--status", "active", "--actor", "viewer"]);
+  });
+
+  it("docSearch is search --pages over every domain with private notebooks, and keeps only Living Memory pages", async () => {
+    const page = (origin: string, path: string) => ({ origin, domain: "demo", notebook: "nb", notebook_title: "NB", title: path, path, heading: null, snippet: "", line_start: 1, line_end: 1, revision: null, score: 1, relevance: 1 });
+    const calls = fake({ exit_code: 0, result: { ok: true, mode: "pages", pages: [page("lm", "a.md"), page("folder", "b.md"), page("lm", "c.md")] }, error: null });
+    const found = await docSearch("quokka", 2);
+    expect(argvOf(calls)).toEqual(["search", "--pages", "--all-domains", "--limit", "4", "--include-private", "--actor", "viewer", "--", "quokka"]);
+    expect(found.map((p) => p.path)).toEqual(["a.md", "c.md"]);
   });
 });

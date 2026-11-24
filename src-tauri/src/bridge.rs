@@ -18,8 +18,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 /// Oldest `serve` API this app speaks (Living Memory's `version` reports it).
-pub const MIN_API: u64 = 1;
-const REQUIRED: [&str; 4] = ["serve", "list", "domains", "version"];
+pub const MIN_API: u64 = 3;
+const REQUIRED: [&str; 4] = ["serve", "search", "domains", "version"];
 /// The longest request line Living Memory's `serve` reads (its SERVE_LIMIT); a longer one is never sent (NS-2C, C2).
 pub const SERVE_LIMIT: usize = 2 * 1024 * 1024;
 /// How much of the server's stderr is kept to explain why it exited.
@@ -477,7 +477,7 @@ mod tests {
 
     #[test]
     fn version_check_accepts_current_api() {
-        let ok = reply(json!({"api": 1, "commands": ["serve", "list", "domains", "version", "read"]}));
+        let ok = reply(json!({"api": 3, "commands": ["serve", "search", "domains", "version", "read"]}));
         assert!(check_version(&ok).is_ok());
     }
 
@@ -495,7 +495,7 @@ mod tests {
     fn a_missing_script_says_living_memory_is_not_installed() {   // REG-6
         let script = std::env::temp_dir().join("hivemind-no-such-dir").join("living_memory.py");
         let bridge = Bridge::new(Launch { program: "py".into(), args: vec![], script: script.clone(), root: None });
-        let error = bridge.call(&["list".into()], None).unwrap_err();
+        let error = bridge.call(&["search".into()], None).unwrap_err();
         assert!(error.starts_with(&format!("Living Memory is not installed at {}", script.display())), "{error}");
     }
 
@@ -528,7 +528,7 @@ mod tests {
         let script = dir.join("living_memory.py");
         std::fs::write(&script, "import sys\nsys.stderr.write('x' * 9000)\nraise SystemExit('boom: no module named core')\n").unwrap();
         let bridge = Bridge::new(Launch { program, args, script, root: None });
-        let error = bridge.call(&["list".into()], None).unwrap_err();
+        let error = bridge.call(&["search".into()], None).unwrap_err();
         assert!(error.starts_with("Living Memory exited (") && error.contains("1). Its last error output:\n"), "{error}");
         assert!(error.ends_with("boom: no module named core"), "{error}");
         assert!(!error.contains("update it"), "{error}");
@@ -562,7 +562,7 @@ mod tests {
         assert_eq!(created.exit_code, 0, "{:?}", created.error);
         let id = created.result["id"].as_str().unwrap().to_string();
 
-        let page = call(&["list", "--domain", "demo", "--actor", "viewer"], None);
+        let page = call(&["search", "--domain", "demo", "--actor", "viewer"], None);
         let revision = page.result["notes"][0]["revision"].as_str().unwrap().to_string();
         assert_eq!(page.result["total"], 1);
 
@@ -618,7 +618,7 @@ mod tests {
         let ticked = ok(call(&["check", &rollout, "--index", "2", "--domain", "demo"], None));
         assert_eq!((ticked["item"].as_str(), ticked["open"].as_i64()), (Some("ship"), Some(0)));
 
-        let links = ok(call(&["links", "--domain", "demo", "--actor", "viewer"], None));
+        let links = ok(call(&["search", "--links", "--domain", "demo", "--actor", "viewer"], None));
         assert_eq!(links["edges"][0]["from"], rollout.as_str());
         assert_eq!(links["edges"][0]["to"], cache.as_str());
 
@@ -685,7 +685,7 @@ mod tests {
             r#"{"title":"App cache","body":"The app caches reads.","tags":["subject/project","concern/knowledge"]}"#)));
         let loose = format!("demo:{}", loose["id"].as_str().unwrap());
 
-        let page = ok(call(&["list", "--all-domains", "--status", "any", "--tag", "project/app", "--with-summary", "--actor", "viewer"], None));
+        let page = ok(call(&["search", "--all-domains", "--status", "any", "--tag", "project/app", "--with-summary", "--actor", "viewer"], None));
         assert_eq!(page["total"], 2);
         let plan_row = page["notes"].as_array().unwrap().iter().find(|n| n["ref"] == rollout.as_str()).unwrap();
         assert_eq!((plan_row["actions"]["open"].as_i64(), plan_row["actions"]["done"].as_i64()), (Some(1), Some(1)));
@@ -703,7 +703,7 @@ mod tests {
         ok(call(&["update", &loose], Some(&payload.to_string())));
         let after = ok(call(&["read", &loose, "--actor", "viewer"], None));
         assert_eq!(after["updated"], before["updated"]);
-        assert_eq!(ok(call(&["list", "--all-domains", "--tag", "project/app", "--actor", "viewer"], None))["total"], 3);
+        assert_eq!(ok(call(&["search", "--all-domains", "--tag", "project/app", "--actor", "viewer"], None))["total"], 3);
         drop(bridge);
         std::fs::remove_dir_all(base).ok();
     }
@@ -717,7 +717,7 @@ here = os.path.dirname(os.path.abspath(__file__))
 def reply(id, result):
     sys.stdout.write(json.dumps({"id": id, "exit_code": 0, "result": result, "error": None}) + "\n")
     sys.stdout.flush()
-VERSION = {"api": 1, "commands": ["serve", "list", "domains", "version"]}
+VERSION = {"api": 3, "commands": ["serve", "search", "domains", "version"]}
 def mark(name):
     open(os.path.join(here, name), "w").close()
 def marked(name):
@@ -894,9 +894,11 @@ for line in sys.stdin:
 
     #[test]
     fn version_check_names_missing_commands() {
-        let old = reply(json!({"api": 1, "commands": ["serve", "version"]}));
+        let old = reply(json!({"api": 3, "commands": ["serve", "version"]}));
         let message = check_version(&old).unwrap_err();
-        assert!(message.contains("list") && message.contains("domains"), "{message}");
+        assert!(message.contains("search") && message.contains("domains"), "{message}");
+        let older = reply(json!({"api": 2, "commands": REQUIRED}));
+        assert!(check_version(&older).unwrap_err().contains("api 2, needs 3"));
         assert!(check_version(&reply(json!({"commands": REQUIRED}))).is_err());
     }
 }

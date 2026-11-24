@@ -276,7 +276,7 @@ fn pack_within(lm: &Lm, store: &Store, project: Option<&str>, days: u32, today: 
             found.push(of("action item", line.clone(), Some(text(item, "ref")), due_of(&line).map(|d| d.to_string()),
                 format!("Open item on \"{}\": {line}.{late}", text(item, "title"))));
         }
-        let rows = lm(&["list", "--all-domains", "--status", "active", "--tag", &tag, "--with-summary", "--limit", "300"])?;
+        let rows = lm(&["search", "--all-domains", "--status", "active", "--tag", &tag, "--with-summary", "--limit", "300"])?;
         let mut rows: Vec<&Value> = array(&rows, "notes").collect();
         rows.sort_by_key(|r| std::cmp::Reverse(text(r, "updated")));
         let note = |r: &Value| of(&text(r, "type"), text(r, "title"), Some(text(r, "ref")), Some(day(&text(r, "updated")).to_string()), text(r, "summary"));
@@ -775,7 +775,7 @@ mod tests {
             "open" => json!({"items": [
                 {"ref": "paystream:p1", "title": "Commitments: PayStream", "item": "Send the Q3 plan (owner: Dana, due: 2026-11-10)"},
                 {"ref": "paystream:x1", "title": "Commitments: Cross-project", "item": "Hire a staff engineer (owner: Lee, due: 2026-12-15)"}]}),
-            "list" => json!({"notes": [
+            "search" if argv.contains(&"--tag") => json!({"notes": [
                 {"ref": "paystream:d1", "title": "Use event IDs as keys", "type": "decision", "summary": "Dedupe by event ID.", "updated": "2026-11-18T10:00:00"},
                 {"ref": "paystream:d0", "title": "Old decision", "type": "decision", "summary": "Long ago.", "updated": "2026-01-01T10:00:00"},
                 {"ref": "paystream:r1", "title": "Provider rate limit", "type": "risk", "summary": "Replays may hit the limit.", "updated": "2026-09-01"},

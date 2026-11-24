@@ -5,7 +5,7 @@ import { useConnection } from "../../lib/connection";
 
 /** The domain's link graph (all statuses), or null when this Living Memory has no `links` command yet. */
 export function useLinks(domain: string | null | undefined) {
-  const supported = useConnection((c) => c.commands.includes("links"));
+  const supported = useConnection((c) => c.commands.includes("search"));
   return useQuery({
     queryKey: ["links", domain],
     queryFn: () => links({ domain: domain!, status: "any" }),

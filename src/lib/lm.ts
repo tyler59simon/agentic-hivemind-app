@@ -139,7 +139,7 @@ export interface ListOptions {
   types?: NoteType[]; tags?: string[]; offset?: number; limit?: number; summary?: boolean;
 }
 export function listArgs(o: ListOptions): string[] {
-  const argv = ["list"];
+  const argv = ["search"];
   if (o.allDomains) argv.push("--all-domains");
   else if (o.domain) argv.push("--domain", o.domain);
   if (o.status) argv.push("--status", o.status);
@@ -321,7 +321,7 @@ export interface LinkNode { ref: string; id: string; domain: string; title: stri
 export interface LinkEdge { from: string; to: string; kind: "link" | "supersedes" }
 export interface LinkGraph { domains: string[]; nodes: LinkNode[]; edges: LinkEdge[]; unresolved: { from: string; target: string }[] }
 export const links = (o: { domain?: string; allDomains?: boolean; status?: "active" | "any" }) =>
-  run<LinkGraph>(view(["links", ...(o.allDomains ? ["--all-domains"] : ["--domain", o.domain ?? ""]), "--status", o.status ?? "any"]));
+  run<LinkGraph>(view(["search", "--links", ...(o.allDomains ? ["--all-domains"] : ["--domain", o.domain ?? ""]), "--status", o.status ?? "any"]));
 
 // ---- Projects, open work, review and timeline (LM api 2). ----
 
@@ -655,7 +655,7 @@ export async function docNotebooks(): Promise<DocNotebooks> {
   }
   return out;
 }
-/** A paragraph of a Living Memory notebook page that matches a search (`doc search`, NS-2B). */
+/** A paragraph of a Living Memory notebook page that matches a search (`search --pages`, NS-2B). */
 export interface DocSearchHit {
   domain: string; notebook: string; notebook_title: string; title: string; path: string; heading: string | null; snippet: string;
   line_start: number; line_end: number; revision: string | null; score: number; relevance: number;
@@ -663,10 +663,11 @@ export interface DocSearchHit {
   similarity?: number;
 }
 /** Search the notebook pages of every domain, private notebooks included (Hivemind's bridge only). Needs `docs.search`.
- *  A hidden notebook is searched only when named, so it never appears here. */
+ *  A hidden notebook never appears here. `search --pages` also returns folder pages, which alternate with these by rank and
+ *  which Hivemind's own index serves instead, so twice the rows are asked for and only the Living Memory ones kept. */
 export const docSearch = (query: string, limit = 10) =>
-  run<{ pages: (DocSearchHit & { origin?: string })[] }>(doc(["search"], [query], ["--all-domains", "--limit", String(limit)], { viewer: true }))
-    .then((r) => (r.pages ?? []).filter((p) => !p.origin || p.origin === "lm"));
+  run<{ pages: (DocSearchHit & { origin?: string })[] }>(["search", "--pages", "--all-domains", "--limit", String(Math.min(50, limit * 2)), PRIVATE, "--actor", "viewer", "--", query])
+    .then((r) => (r.pages ?? []).filter((p) => !p.origin || p.origin === "lm").slice(0, limit));
 /** A task line of a Living Memory notebook page (`doc tasks`, NS-7B): its line number (from 1, as the page reads), its box, its
  *  text (at most 500 characters) and the due date Living Memory found in it. */
 export interface DocTask { domain: string; notebook: string; path: string; title: string; line: number; done: boolean; text: string; due: string | null }

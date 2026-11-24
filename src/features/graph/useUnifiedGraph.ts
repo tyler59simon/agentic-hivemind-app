@@ -12,7 +12,7 @@ import { openPage } from "../notes/actions";
 import { buildUnifiedGraph, type UnifiedNode } from "./graphData";
 
 export function useUnifiedGraph() {
-  const linksSupported = useConnection((c) => c.commands.includes("links"));
+  const linksSupported = useConnection((c) => c.commands.includes("search"));
   const notebooks = useQuery(notebooksQuery());
   const memory = useQuery({
     queryKey: ["links", "*"],

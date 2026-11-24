@@ -52,7 +52,7 @@ function mount() {
 describe("TaxonomyView (unified Tags view)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    useConnection.setState({ commands: ["taxonomy", "list"], api: 2, capabilities: undefined });
+    useConnection.setState({ commands: ["taxonomy", "search"], api: 2, capabilities: undefined });
     useApp.setState({ route: { page: "notes", view: "tags" }, domain: "sandbox" });
     useWorkspace.setState({ panes: [{ id: "p1", tabs: [], active: null }], focused: "p1" });
     useNotesSearch.setState({ query: "", open: false });

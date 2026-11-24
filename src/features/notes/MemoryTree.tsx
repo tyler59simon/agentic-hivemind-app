@@ -57,7 +57,7 @@ export function groupMemoryNotes(rows: NoteRow[], projects: Project[], picked: s
 }
 
 export function useMemoryTree() {
-  const enabled = useConnection((s) => s.commands.includes("list"));
+  const enabled = useConnection((s) => s.commands.includes("search"));
   const projectsEnabled = useProjectsEnabled();
   const picked = useApp((s) => s.project);
   const notes = useQuery({ queryKey: ["list", "notes-tree"], queryFn: ({ signal }) => listMemoryNotes(signal), enabled });

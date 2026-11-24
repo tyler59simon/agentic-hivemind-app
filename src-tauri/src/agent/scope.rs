@@ -382,7 +382,7 @@ pub fn other_folder(saved: &Settings, path: &str) -> Result<PathBuf, String> {
 }
 
 /// Living Memory's read commands, which the executive chat may run without asking.
-const MEMORY_READS: [&str; 10] = ["search", "ask", "read", "open", "list", "recap", "log", "timeline", "projects", "history"];
+const MEMORY_READS: [&str; 9] = ["search", "ask", "read", "open", "recap", "log", "timeline", "projects", "history"];
 /// Living Memory's writes the executive chat may not run: what it learns reaches memory only through the user's review.
 const MEMORY_WRITES: [&str; 12] = ["capture", "update", "propose", "check", "confirm", "resolve", "reopen", "supersede", "restore", "batch", "distinct", "proposals"];
 

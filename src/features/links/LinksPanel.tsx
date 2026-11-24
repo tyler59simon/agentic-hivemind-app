@@ -26,7 +26,7 @@ const needsUpdate = <p className="muted pad">Backlinks need Living Memory's <cod
 
 /** Who links here, where this note links, what it replaced or was replaced by, and links to nothing. */
 export function LinksPanel({ tab }: { tab: Tab }) {
-  const supported = useConnection((c) => c.commands.includes("links"));
+  const supported = useConnection((c) => c.commands.includes("search"));
   const openTab = useWorkspace((s) => s.openTab);
   const { note: links, isLoading } = useNoteLinks(tab.ref);
   if (!supported) return needsUpdate;

@@ -42,7 +42,7 @@ function RenameTag({ from, taxonomyTags, onClose }: { from: TagUsage; taxonomyTa
 /** Unified Tags view across Living Memory notes (registered taxonomy + custom types) and folder notebook #tags (CON-12). */
 export function TaxonomyView() {
   const taxEnabled = useConnection((c) => c.commands.includes("taxonomy"));
-  const listEnabled = useConnection((c) => c.commands.includes("list"));
+  const listEnabled = useConnection((c) => c.commands.includes("search"));
   const tax = useQuery({ queryKey: ["taxonomy"], queryFn: taxonomy, enabled: taxEnabled });
   const notes = useQuery({ queryKey: ["list", "*", "any"], queryFn: ({ signal }) => listMemoryNotes(signal, "any"), enabled: listEnabled });
   const pageTags = useQuery(tagsQuery());
