@@ -41,7 +41,7 @@ export function domainOfOp(op: Pick<Operation, "files">): string | null {
 export type ActorKind = "you" | "obsidian" | "agent" | "plan";
 export interface Actor { kind: ActorKind; label: string }
 
-const HARNESSES: Record<string, string> = { claude: "Claude", codex: "Codex", copilot: "Copilot", factory: "Factory", hivemind: "Hivemind" };
+const HARNESSES: Record<string, string> = { claude: "Claude", codex: "Codex", copilot: "Copilot", factory: "Factory", antigravity: "Antigravity", hivemind: "Hivemind" };
 
 export function actorOf(op: Pick<Operation, "operation_id" | "kind">, mine: Set<string>, origin?: string): Actor {
   if (mine.has(op.operation_id)) return { kind: "you", label: "You · Hivemind" };
