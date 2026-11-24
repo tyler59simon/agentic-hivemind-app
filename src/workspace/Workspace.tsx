@@ -10,14 +10,14 @@ import { FindInFilesTab } from "../features/search/FindInFiles";
 import { discard, flushAllDrafts, keyOf, useDocuments } from "../documents/store";
 import { isUnsaved } from "../documents/session";
 import { newPageHere } from "../features/notes/actions";
-import { fileName, isMarkdown, isRichDoc, pageTitle } from "../lib/notebooks";
+import { fileName, isMarkdown, isRichDoc } from "../lib/notebooks";
 import { announceDocumentLook, useWhitePaper } from "../lib/paper";
 import { useApp } from "../store";
 import { ErrorBoundary } from "../ui/ErrorBoundary";
 import { tabKey } from "../ui/focus";
 import { Confirm } from "../ui/Modal";
 import { useNarrow } from "../lib/narrow";
-import { MAX_PANES, railShown, useWorkspace, type Pane, type Tab } from "./store";
+import { MAX_PANES, railShown, tabLabel, useWorkspace, type Pane, type Tab } from "./store";
 import { modalOpen } from "../ui/layers";
 
 /** What a tab shows. */
@@ -30,9 +30,6 @@ export const TAB_VIEWS: Record<Tab["kind"], (tab: Tab) => ReactNode> = {
   find: (tab) => <FindInFilesTab key={tab.id} />,
 };
 
-const label = (tab: Tab) => (tab.kind === "note" ? tab.title || tab.ref?.split(":")[1]?.slice(0, 8) || "Note"
-  : tab.kind === "file" ? tab.title || pageTitle(tab.file?.path ?? "") || "Page"
-  : tab.kind === "new-file" ? tab.title || "Untitled" : tab.kind === "compare" ? tab.title || "Compare" : tab.kind === "find" ? "Find in files" : tab.title || "New note");
 
 /** Whether a tab other than `tabId` shows the page at `key` (a split), which then keeps the page open. */
 const shownAgain = (key: string, tabId: string) =>
@@ -76,10 +73,10 @@ export function useCloseTab() {
 function TabPill({ tab, active, onPick, onClose }: { tab: Tab; active: boolean; onPick: () => void; onClose: () => void }) {
   const dirty = useWorkspace((s) => !!s.dirty[tab.id]);
   return (
-    <div role="tab" aria-selected={active} tabIndex={active ? 0 : -1} className={`note-tab-pill ${active ? "on" : ""}`} title={label(tab)}
+    <div role="tab" aria-selected={active} tabIndex={active ? 0 : -1} className={`note-tab-pill ${active ? "on" : ""}`} title={tabLabel(tab)}
       onClick={onPick} onAuxClick={(e) => { if (e.button === 1) onClose(); }} onKeyDown={(e) => tabKey(e, { open: onPick, close: onClose })}>
       {tab.kind === "file" && isRichDoc(tab.file?.path ?? "") && <LayoutPanelTop size="1em" aria-hidden className="tab-icon" />}
-      <span className="tab-label">{label(tab)}</span>
+      <span className="tab-label">{tabLabel(tab)}</span>
       {dirty && <span className="dot" aria-label="unsaved">●</span>}
       <button className="tab-close" tabIndex={-1} aria-label="Close tab" onClick={(e) => { e.stopPropagation(); onClose(); }}><X size="1em" aria-hidden /></button>
     </div>
@@ -135,7 +132,7 @@ function PaneView({ pane, focused, last, onClose }: {
           </>
         )}
       </div>
-      <div className="pane-body" data-paper={white ? "" : undefined} role="tabpanel" aria-label={active ? label(active) : "No tab open"}>
+      <div className="pane-body" data-paper={white ? "" : undefined} role="tabpanel" aria-label={active ? tabLabel(active) : "No tab open"}>
         {active ? <ErrorBoundary label="This tab" resetKey={active.id} onError={() => void flushAllDrafts()}>{TAB_VIEWS[active.kind](active)}</ErrorBoundary> : (
           <div className="center muted"><p>Open a note or page here: Ctrl+click a link, or press <kbd>Ctrl</kbd>+<kbd>O</kbd>.</p></div>
         )}
@@ -163,11 +160,12 @@ export function Workspace() {
       }
       else if (e.key === "Tab") { e.preventDefault(); ws.cycle(e.shiftKey ? -1 : 1); }
       else if (e.key === "\\") { e.preventDefault(); ws.split(); }
-      // An editor that used the key (Rich mode's inline code) has the last word (Codex review of 2392f6b, R1-9).
+      // An editor that used the key has the last word (Codex review of 2392f6b, R1-9). An editing mode (Live or Source)
+      // goes to Reading, anything else to Live, for notes and pages alike (CONR-16).
       else if (e.key.toLowerCase() === "e" && !e.defaultPrevented) {
         e.preventDefault();
         const tab = pane?.tabs.find((t) => t.id === pane.active);
-        if (tab?.kind === "note") ws.updateTab(tab.id, { mode: tab.mode === "live" ? "reading" : "live" });
+        if (tab?.kind === "note") ws.updateTab(tab.id, { mode: tab.mode === "live" || tab.mode === "source" ? "reading" : "live" });
         else if (tab?.kind === "file" && tab.file && isMarkdown(tab.file.path)) ws.updateTab(tab.id, { mode: (tab.mode ?? "live") === "reading" ? "live" : "reading" });
       }
     };

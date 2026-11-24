@@ -1,4 +1,4 @@
-// Keeps the documents store and the workspace in step: a tab showing an unsaved page gets the unsaved dot, and a page
+// Keeps the documents store, the note sessions and the workspace in step: a tab showing an unsaved page or note gets the unsaved dot, and a page
 // no tab shows any more is let go (its draft stays). Also routes the notebook watcher's events.
 import type { QueryClient } from "@tanstack/react-query";
 import type { FilesChanged } from "../lib/notebooks";
@@ -7,6 +7,8 @@ import { useWorkspace } from "../workspace/store";
 import { toast } from "../ui/toast";
 import { keyOf, onReleaseRefused, refresh, release, retarget, useDocuments } from "./store";
 import { isUnsaved } from "./session";
+import { currentStore, sessionKey, useNoteSessions } from "../features/editor/noteSessions";
+import { isDirty } from "../features/editor/save";
 
 let paused = false;
 
@@ -14,6 +16,8 @@ function apply() {
   if (paused) return;
   const ws = useWorkspace.getState();
   const { docs, refs } = useDocuments.getState();
+  const { sessions } = useNoteSessions.getState();
+  const store = currentStore();
   const shown = new Set<string>();
   for (const pane of ws.panes) {
     for (const tab of pane.tabs) {
@@ -23,6 +27,17 @@ function apply() {
         keys.forEach((k) => shown.add(k));
         const dirty = keys.some((k) => isUnsaved(docs[k]));
         if (!!ws.dirty[tab.id] !== dirty) ws.setDirty(tab.id, dirty);
+        continue;
+      }
+      // A note tab follows the note's shared editing session while one is open, so a twin in Reading or History, or an
+      // inactive one, loses its dot when the other pane saves (CONR-16). With no session the dot stays as it was: it then
+      // marks edits kept as a draft.
+      if (tab.kind === "note" && tab.ref) {
+        const session = store === undefined ? undefined : sessions[sessionKey(store, tab.ref)];
+        if (session?.st) {
+          const dirty = isDirty(session.st.base, session.st.mine);
+          if (!!ws.dirty[tab.id] !== dirty) ws.setDirty(tab.id, dirty);
+        }
         continue;
       }
       if (tab.kind !== "file" || !tab.file) continue;
@@ -37,7 +52,7 @@ function apply() {
 
 /** Start keeping both stores in step; returns the stop function. */
 export function startDocumentSync() {
-  const stops = [useWorkspace.subscribe(apply), useDocuments.subscribe(apply)];
+  const stops = [useWorkspace.subscribe(apply), useDocuments.subscribe(apply), useNoteSessions.subscribe(apply)];
   // The last tab of a page was closed but its unsaved edits cannot be kept as a draft: the page comes back in a tab, which
   // says so and offers to save it, save a copy or discard the edits (Codex review of 7320d7f, DATA-5).
   onReleaseRefused((_key, file, reason) => {

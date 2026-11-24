@@ -388,8 +388,10 @@ export function applyProgress(p: BuildProgress | null, e: WikiBuildEvent): Build
 
 /** What to tell the user when a build is over. `cancelled` is true when the user asked it to stop. */
 export function buildOutcome(done: Pick<WikiBuildDone, "ok" | "result" | "error">, cancelled: boolean): { text: string; kind: "info" | "warn" | "error" } {
-  if (cancelled) return { text: "Wiki build cancelled. The pages already written are kept.", kind: "info" };
   const r = done.result;
+  // A build that finished before the cancel reached it reads as finished (Codex review of 99ceaea, W3).
+  const finished = done.ok && r && r.stopped === null && !r.pending.length && !r.failed.length;
+  if (cancelled && !finished) return { text: "Wiki build cancelled. The pages already written are kept.", kind: "info" };
   if (!done.ok || !r) return { text: `Wiki build failed: ${done.error ?? "unknown error"}`, kind: "error" };
   const pages = `${r.written.length} page${r.written.length === 1 ? "" : "s"} written for ${usd(r.cost_usd)}`;
   if (r.stopped === "budget") return { text: `Wiki build stopped at its budget: ${pages}, ${r.pending.length} left. Refresh continues from there.`, kind: "warn" };

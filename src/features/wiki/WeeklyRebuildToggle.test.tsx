@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Automation } from "../../lib/workflows";
+import type { Automation } from "../../lib/automations";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -66,6 +66,15 @@ describe("the Rebuild weekly switch", () => {
     expect(box(el).checked).toBe(false);
     await flip(el);
     expect(puts()[1]).toMatchObject({ id: "id-core", enabled: true });
+  });
+
+  // Codex re-review of 55cfab2: renamed in Settings, Schedules, the rebuild is still this switch's, so no second one is made.
+  it("still finds the rebuild after it was renamed", async () => {
+    saved = [rebuild("core", { name: "Sunday rebuild" })];
+    const el = await mount();
+    expect(box(el).checked).toBe(true);
+    await flip(el);
+    expect(puts()).toEqual([expect.objectContaining({ id: "id-core", name: "Sunday rebuild", enabled: false })]);
   });
 
   it("finds the project's own rebuild, and says its cap and when it last ran", async () => {

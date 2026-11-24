@@ -2,10 +2,7 @@ import type { ReactNode } from "react";
 import { AgentWorkspace } from "../features/agents/AgentWorkspace";
 import { NotesPage } from "../features/notes/NotesPage";
 import { HomePage } from "../features/home/HomePage";
-import { MaintenancePage } from "../features/maintenance/MaintenancePage";
 import { InboxPage } from "../features/review/InboxPage";
-import { SkillsPage } from "../features/skills/SkillsPage";
-import { WorkflowsPage } from "../features/workflows/WorkflowsPage";
 import type { ConnectInfo } from "../lib/lm";
 import { useApp, type Page } from "../store";
 import { Sidebar } from "./Sidebar";
@@ -18,10 +15,7 @@ const PAGES: Record<Page, () => ReactNode> = {
   home: () => <HomePage />,
   agents: () => <AgentWorkspace />,
   notes: () => <NotesPage />,
-  maintenance: () => <MaintenancePage />,
   inbox: () => <InboxPage />,
-  skills: () => <SkillsPage />,
-  workflows: () => <WorkflowsPage />,
 };
 
 /** The app frame: sidebar, top bar, and the page for the current route. */

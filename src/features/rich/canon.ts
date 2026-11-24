@@ -1,4 +1,4 @@
-// What "the same Markdown" means for Rich mode (NS-3B): two mdast trees are equal when their canonical forms are.
+// What "the same Markdown" means for the rich editor (NS-3B, now used by .hmdoc pages): two mdast trees are equal when their canonical forms are.
 // The canonical form drops positions, writes inline content as runs of text with a set of marks (the editor cannot
 // tell `***a***` nested one way from the other), drops empty paragraphs, pads short table rows, and reads a `raw`
 // node as the node it was parsed as.

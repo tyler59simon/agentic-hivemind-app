@@ -422,15 +422,6 @@ fn checkpoint_held(id: &str, tree: &Worktree, message: &str) -> Result<Option<St
     }
 }
 
-/// A workflow checkpoint: the session's edits as a commit on its own branch, without recording a review decision (the
-/// user still approves the session in Review; the approval then finds this commit). When nothing changed, the worktree's
-/// commit as it is, read while the session is held, so the checkpoint is the commit this call saw (Codex review F7-1).
-pub fn checkpoint(agents: &Manager, worktrees_dir: &Path, id: &str, message: &str) -> Result<Option<String>, String> {
-    let _held = agents.reserve(id)?;
-    let tree = checked_worktree(&agents.info(id)?, worktrees_dir)?;
-    checkpoint_held(id, &tree, message)
-}
-
 /// Ask Codex to review a session's edits: checkpoint them as a commit on the session's branch, then start a read-only Codex
 /// reviewer whose worktree begins at that commit. The worktree starts at the branch tip, so the prompt names the commit
 /// the Inbox compares with; `git diff <base>..HEAD` then shows the same edits. `start` starts the session (the
@@ -1011,9 +1002,14 @@ mod tests {
         let rig = Rig::new();
         let tree = rig.tree(1);
         let (manager, _) = rig.manager(&[session(1, Some(tree.clone()))]);
-        assert_eq!(checkpoint(&manager, &rig.worktrees, &id(1), "nothing"), Ok(Some(tree.base_sha.clone())));
+        // As Ask Codex checkpoints: holding the session, on its checked worktree.
+        let checkpoint = |message: &str| {
+            let _held = manager.reserve(&id(1)).unwrap();
+            checkpoint_held(&id(1), &checked_worktree(&manager.info(&id(1)).unwrap(), &rig.worktrees).unwrap(), message)
+        };
+        assert_eq!(checkpoint("nothing"), Ok(Some(tree.base_sha.clone())));
         make_edits(&tree);
-        let made = checkpoint(&manager, &rig.worktrees, &id(1), "edits").unwrap().unwrap();
+        let made = checkpoint("edits").unwrap().unwrap();
         assert_ne!(made, tree.base_sha);
         assert_eq!(head(Path::new(&tree.path)), made);
     }

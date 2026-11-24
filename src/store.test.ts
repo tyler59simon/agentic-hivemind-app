@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { wikiRoute } from "./features/wiki/wiki";
-import { migrateNav, openInbox, openProject, openSession, openSystem, setLeaveGuard, startSession, useApp } from "./store";
+import { migrateNav, openInbox, openProject, openSession, openSettings, openSystem, setLeaveGuard, startSession, useApp } from "./store";
 
 const app = () => useApp.getState();
 
@@ -124,11 +124,26 @@ describe("navigation", () => {
   });
 });
 
+// Codex review of 857ec37, S2: a link inside Settings (a session, a note, the Inbox) closes Settings so its target shows.
+describe("Settings", () => {
+  beforeEach(() => useApp.setState({ route: { page: "home" }, back: [], settings: null }));
+  it("opens at a section and closes when a link goes anywhere, the current page included", () => {
+    openSettings("schedules");
+    expect(useApp.getState().settings).toEqual({ section: "schedules" });
+    openSession("s1");
+    expect(useApp.getState()).toMatchObject({ settings: null, route: { page: "agents", session: "s1" } });
+    openSettings();
+    expect(useApp.getState().settings).toEqual({});
+    useApp.getState().go({ page: "agents", session: "s1" });
+    expect(useApp.getState().settings).toBeNull();
+  });
+});
+
 describe("saved navigation", () => {
   const migrate = (route: object, version = 1) => useApp.persist.getOptions().migrate!({ project: "pay", domain: "demo", route }, version);
 
-  it("is version 9, and moves the Overview, Executive and Recap pages to Home", () => {
-    expect(useApp.persist.getOptions().version).toBe(9);
+  it("is version 11, and moves the Overview, Executive and Recap pages to Home", () => {
+    expect(useApp.persist.getOptions().version).toBe(11);
     for (const page of ["overview", "executive", "recap"]) expect(migrate({ page })).toEqual({ project: "pay", domain: "demo", route: { page: "home" } });
     expect(migrate({ page: "overview", view: "work" })).toMatchObject({ route: { page: "home" } });
   });
@@ -191,6 +206,24 @@ describe("saved navigation", () => {
     expect(migrate({ page: "wiki", domain: "demo", project: "core" }, 1)).toMatchObject({ project: "core", route: { page: "notes", view: "wiki", domain: "demo" } });
     // The whole-domain scope of the agent edition ("") names no project.
     expect(migrate({ page: "wiki", domain: "demo", edition: "agent", project: "" }, 8)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "wiki", domain: "demo", edition: "agent", whole: true } });
+  });
+
+  // CON-20: the Workflows page was deleted; its schedules are in Settings, which is not a route.
+  it("sends a saved Workflows route to Home", () => {
+    expect(migrate({ page: "workflows", tab: "automations", automation: "a1" }, 9)).toEqual({ project: "pay", domain: "demo", route: { page: "home" } });
+    expect(migrate({ page: "workflows" }, 1)).toMatchObject({ route: { page: "home" } });
+  });
+
+  // CON-22: Skills became Notes > Skills; Maintenance became a Settings section, which is not a route.
+  it("moves a saved Skills route to Notes > Skills and sends Maintenance to Home", () => {
+    expect(migrate({ page: "skills", skill: "restart-recovery" }, 10)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "skills", skill: "restart-recovery" } });
+    expect(migrate({ page: "skills" }, 1)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", view: "skills" } });
+    expect(migrate({ page: "maintenance" }, 10)).toEqual({ project: "pay", domain: "demo", route: { page: "home" } });
+  });
+
+  it("leaves a version 11 save alone", () => {
+    expect(migrate({ page: "inbox", kind: "skills" }, 11)).toMatchObject({ route: { page: "inbox", kind: "skills" } });
+    expect(migrate({ page: "notes", view: "skills", skill: "x" }, 11)).toMatchObject({ route: { page: "notes", view: "skills", skill: "x" } });
   });
 
   it("leaves a version 9 save alone", () => {

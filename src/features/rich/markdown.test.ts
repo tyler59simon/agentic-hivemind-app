@@ -1,14 +1,14 @@
-// NS-3B: Rich mode reads Obsidian syntax as Live does (NS-3A's `richSyntax` is the reference), and writes edited
-// blocks plainly where that reads back the same, keeping the page's own choices.
+// NS-3B, kept for the .hmdoc editor and its Markdown import and export (CON-19): the Markdown reader takes Obsidian
+// syntax as Live does (NS-3A's `richSyntax` is the reference), and writeBlock writes a block plainly where that reads
+// back the same, keeping the page's own choices.
 import { GFM, parser as lezer } from "@lezer/markdown";
 import type { Nodes } from "mdast";
 import type { Construct, Event, Token, TokenizeContext } from "micromark-util-types";
 import { describe, expect, it } from "vitest";
 import { richSyntax } from "../editor/rich/syntax";
-import { loadPage, markdownNodes } from "./fromMarkdown";
+import { loadPage } from "./fromMarkdown";
 import { DEFAULT_STYLE, parse, stringify } from "./markdown";
 import { obsidian } from "./micromark/obsidian";
-import { serialize } from "./preserve";
 import { richSchema } from "./schema";
 import { blockToMdast, readsAs, writeBlock } from "./toMarkdown";
 import { wikiParts } from "./views";
@@ -52,7 +52,7 @@ const CASES = [
   "Before %%first\nsecond%% after.",
 ];
 
-describe("Rich reads Obsidian syntax as Live does", () => {
+describe("the Markdown reader takes Obsidian syntax as Live does", () => {
   it.each(CASES)("%j", (text) => {
     expect(richFinds(text)).toEqual(liveFinds(text));
   });
@@ -106,20 +106,11 @@ describe("writing an edited block", () => {
     expect(out.split("\n")[3]).toBe("| 2 | 3 |");
   });
 
-  it("puts a new list next to a list of the same kind with the other marker, so they stay two lists", () => {
-    const page = "- a\n- b\n";
-    const { doc, original } = loadPage(schema, page);
-    const copy = doc.child(0).type.create({ ...doc.child(0).attrs, srcId: null }, doc.child(0).content);
-    const out = serialize(doc.type.create(null, [doc.child(0), copy]), original);
-    expect(parse(out).children).toHaveLength(2);
-    expect(out).toBe("- a\n- b\n\n* a\n* b\n");
-  });
 });
 
 describe("Codex review of 2392f6b", () => {
   const schema = richSchema();
   const page = (text: string) => loadPage(schema, text);
-  const blocks = (text: string) => parse(text).children.map((c) => c.type);
 
   it("opens a page with a comment over two lines (R1-P1)", () => {
     const { doc } = page("Before %%first\nsecond%% after.\n");
@@ -144,36 +135,6 @@ describe("Codex review of 2392f6b", () => {
     expect(reads).toBeLessThan(10 * events.length);
   });
 
-  it("parts two blocks with a blank line once one changes type (R1-2)", () => {
-    const { doc, original } = page("One\n## Two\n");
-    const heading = doc.child(1);
-    const para = schema.nodes.paragraph.create({ srcId: heading.attrs.srcId }, heading.content);
-    const out = serialize(doc.type.create(null, [doc.child(0), para]), original);
-    expect(out).toBe("One\n\nTwo\n");
-    expect(blocks(out)).toEqual(["paragraph", "paragraph"]);
-  });
-
-  it("keeps two lists apart when the block between them is deleted (R1-3)", () => {
-    const { doc, original } = page("- a\n\nmid\n\n- b\n");
-    const out = serialize(doc.type.create(null, [doc.child(0), doc.child(2)]), original);
-    expect(blocks(out)).toEqual(["list", "list"]);
-    expect(out).toBe("- a\n\n* b\n");
-  });
-
-  it.each([["fence", "Para\n\n```\ncode"], ["display math", "Para\n\n$$\nx"]])("closes an unclosed %s that moves above another block (R1-4)", (_, text) => {
-    const { doc, original } = page(text);
-    const out = serialize(doc.type.create(null, [doc.child(1), doc.child(0)]), original);
-    expect(blocks(out)).toEqual([text.includes("$$") ? "math" : "code", "paragraph"]);
-    expect(out.trimEnd().endsWith("Para")).toBe(true);
-  });
-
-  it("moves an indented fence with its indentation, so its code stays the same (R1-5)", () => {
-    const { doc, original } = page("Para\n\n  ```py\n  print(1)\n  ```\n");
-    const out = serialize(doc.type.create(null, [doc.child(1), doc.child(0)]), original);
-    const code = parse(out).children[0] as { type: string; value: string };
-    expect(code).toMatchObject({ type: "code", value: "print(1)" });
-  });
-
   it("escapes pipes of links, embeds and math in a table cell (R1-6)", () => {
     const cell = (children: unknown[]) => ({ type: "tableCell", children });
     const head = { type: "tableRow", children: [cell([{ type: "text", value: "a" }]), cell([{ type: "text", value: "b" }]), cell([{ type: "text", value: "c" }])] };
@@ -195,26 +156,10 @@ describe("Codex review of 2392f6b", () => {
 describe("Codex review of b0afec0", () => {
   const schema = richSchema();
   const page = (text: string) => loadPage(schema, text);
-  const blocks = (text: string) => parse(text).children.map((c) => c.type);
-
-  it("gives a new list the other marker rather than an original list, so the next list stays apart (R2-P1)", () => {
-    const { doc, original } = page("1. a\n2. b\n\n1) c\n");
-    const fresh = doc.child(0).type.create({ ...doc.child(0).attrs, srcId: null, marker: "." }, doc.child(0).content);
-    const out = serialize(doc.type.create(null, [fresh, doc.child(0), doc.child(1)]), original);
-    expect(blocks(out)).toEqual(["list", "list", "list"]);
-    expect(out.endsWith("1. a\n2. b\n\n1) c\n")).toBe(true);
-  });
 
   it("opens a comment holding thousands of code spans (R2-2)", () => {
     const { doc } = page(`%%${"`a` ".repeat(21000)}%%\n`);
     expect(doc.child(0).type.name).toBe("paragraph");
-  });
-
-  it("keeps an indented paragraph moved below a list shown as a source box out of the list (R2-3)", () => {
-    const { doc, original } = page("  Para\n\n- [x\n  y][r]\n\n[r]: https://x\n");
-    expect(doc.child(1).type.name).toBe("rawBlock");
-    const out = serialize(doc.type.create(null, [doc.child(1), doc.child(0), doc.child(2)]), original);
-    expect(blocks(out)).toEqual(["list", "paragraph", "definition"]);
   });
 
   it("reads back the pipes of math and embeds in a table cell as written (R2-4)", () => {
@@ -232,7 +177,6 @@ describe("Codex review of b0afec0", () => {
 });
 
 describe("Codex review of ad6c5c5", () => {
-  const schema = richSchema();
   const cell = (children: unknown[]) => ({ type: "tableCell", children });
   const table = (nodes: unknown[]) => ({
     type: "table", align: [null, null, null],
@@ -264,13 +208,6 @@ describe("Codex review of ad6c5c5", () => {
     }
   });
 
-  it("keeps a new list apart from the next one when the writer must keep its marker (R3-3)", () => {
-    const { doc, original } = loadPage(schema, "* a\n");
-    const [fresh] = markdownNodes(schema, "* ---\n");
-    expect(fresh.type.name).toBe("bulletList");
-    const out = serialize(doc.type.create(null, [fresh.type.create({ ...fresh.attrs, marker: null }, fresh.content), doc.child(0)]), original);
-    expect(parse(out).children.map((c) => c.type)).toEqual(["list", "list"]);
-  });
 });
 
 describe("long lists, written item by item (UI pass of NS-3B)", () => {

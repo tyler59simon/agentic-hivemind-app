@@ -1,6 +1,6 @@
-// The editor of a `.hmdoc` page (NS-3C): NS-3B's Rich editor over the rich page's schema. The page is the file's JSON:
-// the editor is built from the document session's text and hands the whole file back after every change, written in the
-// stable key order. Opening a file never writes it: only an edit, or a change to the page's settings, does.
+// The editor of a `.hmdoc` page (NS-3C): a Tiptap editor over the rich page's schema, built from src/features/rich.
+// The page is the file's JSON: the editor is built from the document session's text and hands the whole file back
+// after every change, written in the stable key order. Opening a file never writes it: only an edit, or a change to the page's settings, does.
 import { Editor, Extension } from "@tiptap/core";
 import { Placeholder } from "@tiptap/extension-placeholder";
 import type { Node as PMNode } from "@tiptap/pm/model";
@@ -13,7 +13,7 @@ import { isPicture } from "../editor/rich/parse";
 import { registerDropTarget } from "../notes/drops";
 import { attachPictures, PendingPictures, pastedSlice, RichInputRules, richKeys, slashKey, slashPlugin, type SlashState } from "../rich/editing";
 import { AtomPopover, LinkPopover } from "../rich/popovers";
-import { BlockHandle } from "../rich/RichEditor";
+import { BlockHandle } from "../rich/BlockHandle";
 import { SLASH_ITEMS, runSlash, type BlockCommand } from "../rich/slash";
 import { RichToolbar } from "../rich/toolbar";
 import { withViews } from "../rich/views";

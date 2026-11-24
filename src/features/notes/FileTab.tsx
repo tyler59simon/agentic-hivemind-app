@@ -36,7 +36,7 @@ import { runExport } from "./richActions";
 import { useComparePicker } from "../power/ComparePicker";
 import { encodingLabel, StatusLine } from "../power/StatusLine";
 
-const MODES: { id: Mode; label: string }[] = [...MARKDOWN_MODES.slice(0, 2), { id: "rich", label: "Rich" }, ...MARKDOWN_MODES.slice(2)];
+const MODES = MARKDOWN_MODES;
 /** A text file has its source and its history; a rich page has no modes of its own (NS-3C), only the page and its history. */
 const TEXT_MODES: { id: Mode; label: string }[] = [{ id: "source", label: "Source" }, HISTORY];
 const RICH_MODES: { id: Mode; label: string }[] = [{ id: "live", label: "Page" }, HISTORY];
@@ -47,8 +47,6 @@ const SYSTEM_VIEWED = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf)$/i;
 /** A file in the large file viewer (NS-6B): its lines, or its bytes. */
 const VIEWER_MODES: { id: Mode; label: string }[] = [{ id: "bigfile", label: "Large file viewer" }, { id: "hex", label: "Hex view" }];
 
-/** Rich mode (NS-3B) loads its editor, Tiptap and the Markdown parser only when a page first opens in it. */
-const RichEditor = lazy(() => import("../rich/RichEditor"));
 /** A `.hmdoc` page (NS-3C) loads its editor, the rich page schema and Tiptap only when one first opens. */
 const HmdocEditor = lazy(() => import("../hmdoc/HmdocEditor"));
 /** A canvas (NS-7C) loads its board editor only when one first opens in Board mode. */
@@ -264,7 +262,7 @@ export function FileTab({ tab }: { tab: Tab }) {
   // A parked page of another store shows no attachments: they would come from the store connected now (R3-P3).
   const own = inOwnStore(key);
   const pictures = useQuery({ queryKey: ["asset-base", ref.notebook, ref.path], queryFn: () => assetBase(ref.notebook, ref.path), refetchOnMount: "always", gcTime: 0, enabled: (markdown || richDoc || canvas) && own });
-  const mode: Mode = tab.mode === "history" ? "history" : markdown ? tab.mode ?? "live" : canvas ? (tab.mode === "source" ? "source" : "board") : "source";
+  const mode: Mode = tab.mode === "history" ? "history" : markdown ? (MARKDOWN_MODES.some((m) => m.id === tab.mode) ? tab.mode! : "live") : canvas ? (tab.mode === "source" ? "source" : "board") : "source";
   const titles = useCallback(() => pages.filter((p) => isMarkdown(p) || isRichDoc(p)).map(pageTitle), [pages]);
   // A canvas that cannot be held as a board opens as Source with the reason, and nothing is written (NS-7C). The tab stays
   // in Source until the user picks Board, so typing the fix does not flip the view under the cursor.
@@ -321,7 +319,7 @@ export function FileTab({ tab }: { tab: Tab }) {
     const d = useDocuments.getState().docs[key];
     return !!d && d.status !== "readOnly" && d.status !== "loading" && d.status !== "error" && !arriving && inOwnStore(key);
   }, [key, arriving]);
-  // Rich editing of a Markdown page (NS-3A); a page of another store shows and attaches nothing from this one.
+  // Live editing of a Markdown page (NS-3A); a page of another store shows and attaches nothing from this one.
   // A Living Memory notebook's attachments are not in its tree; `![[picture.png]]` looks among them too.
   const assets = useQuery({ queryKey: ["lm-assets", ref.notebook], queryFn: () => lmAssets(ref.notebook), enabled: markdown && own && !!lm });
   const files = useMemo(() => (assets.data?.length ? [...pages, ...assets.data] : pages), [pages, assets.data]);
@@ -466,9 +464,6 @@ export function FileTab({ tab }: { tab: Tab }) {
       {markdown && mode === "live" && doc.text.length > RICH_LIMIT && (
         <div className="banner note-banner">This page is over 1 MB, so Live shows plain Markdown styling without tables, pictures or diagrams.</div>
       )}
-      {markdown && mode === "rich" && doc.text.length > RICH_LIMIT && (
-        <div className="banner note-banner">This page is over 1 MB, so it opens as Markdown source instead of in Rich mode.</div>
-      )}
       {mode === "history"
         ? <FileHistory file={ref} tabId={tab.id} />
         : canvas && mode === "board" && !canvasIssue
@@ -491,15 +486,6 @@ export function FileTab({ tab }: { tab: Tab }) {
                     onSave={doSave} ctx={rich} ctxStamp={richStamp} reveal={reveal} pictures={pictureFiles} invalid={readOnlyJson} />
                 </Suspense>
               )}
-          </div>
-        )
-        : markdown && mode === "rich" && doc.text.length <= RICH_LIMIT
-        ? (
-          <div className="note file-editor">
-            <Suspense fallback={<div className="center muted">Loading the Rich editor…</div>}>
-              <RichEditor key={key} text={doc.text} readOnly={doc.status === "readOnly" || arriving} onChange={(text) => edit(key, text)}
-                onSave={doSave} ctx={rich} ctxStamp={richStamp} reveal={reveal} placeholder="Start writing…" />
-            </Suspense>
           </div>
         )
         : mode === "reading"

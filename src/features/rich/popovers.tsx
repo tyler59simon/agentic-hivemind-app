@@ -1,4 +1,4 @@
-// Small editors for what Rich mode shows drawn (NS-3B): math, `[[links]]`, embeds, pictures, inline source and
+// Small editors for what the rich editor shows drawn (NS-3B, now used by .hmdoc pages): math, `[[links]]`, embeds, pictures, inline source and
 // footnote references open one on double-click, and the toolbar's link button opens one for links (Ctrl+K stays the
 // app's search, as in Live).
 import type { Editor } from "@tiptap/core";

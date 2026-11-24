@@ -2,12 +2,12 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { movedPath, sameDoc, type FileRef } from "../documents/keys";
-import { isCanvas, isMarkdown } from "../lib/notebooks";
+import { isCanvas, isMarkdown, pageTitle } from "../lib/notebooks";
 import type { NoteType } from "../lib/lm";
 import { prefs } from "../lib/prefs";
 import { safeStorage, useApp } from "../store";
 
-export type Mode = "reading" | "live" | "rich" | "source" | "history" | "bigfile" | "hex" | "board";
+export type Mode = "reading" | "live" | "source" | "history" | "bigfile" | "hex" | "board";
 export type TabKind = "note" | "new-note" | "file" | "new-file" | "compare" | "find";
 const KINDS: readonly string[] = ["note", "new-note", "file", "new-file", "compare", "find"];
 export type { FileRef };
@@ -210,16 +210,22 @@ export function notesOnly(stored: { panes?: Pane[]; focused?: string; panel?: st
   return { panes: all, focused: all.some((p) => p.id === stored.focused) ? stored.focused! : all[0].id, rail: stored.panel !== null };
 }
 
-/** A stored layout without tabs of unknown kinds. */
+/** A stored layout without tabs of unknown kinds. A tab saved in Rich mode, which was deleted (CON-19), opens in Live. */
 export function knownKinds(stored: Partial<WorkspaceState> | undefined): Partial<WorkspaceState> {
   if (!stored?.panes) return stored ?? {};
   const panes = stored.panes.map((p) => {
     const tabs = p.tabs.filter((t) => KINDS.includes(t.kind) && (t.kind !== "file" || !!t.file))
-      .map((t) => (t.paper === undefined || typeof t.paper === "boolean" ? t : { ...t, paper: undefined }));
+      .map((t) => (t.paper === undefined || typeof t.paper === "boolean" ? t : { ...t, paper: undefined }))
+      .map((t) => ((t.mode as string) === "rich" ? { ...t, mode: "live" as const } : t));
     return { ...p, tabs, active: tabs.some((t) => t.id === p.active) ? p.active : tabs[0]?.id ?? null };
   });
   return { ...stored, panes };
 }
+
+/** A tab's name in the tab strip and the top bar's last crumb. */
+export const tabLabel = (tab: Tab) => (tab.kind === "note" ? tab.title || tab.ref?.split(":")[1]?.slice(0, 8) || "Note"
+  : tab.kind === "file" ? tab.title || pageTitle(tab.file?.path ?? "") || "Page"
+  : tab.kind === "new-file" ? tab.title || "Untitled" : tab.kind === "compare" ? tab.title || "Compare" : tab.kind === "find" ? "Find in files" : tab.title || "New note");
 
 /** The tab shown in the focused pane. */
 export function activeTab(s: Pick<WorkspaceState, "panes" | "focused">): Tab | undefined {

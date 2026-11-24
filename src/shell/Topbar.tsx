@@ -12,23 +12,24 @@ import { useApp } from "../store";
 import { fileName, pageTitle } from "../lib/notebooks";
 import { isLoose } from "../lib/opens";
 import { useNotebookTitle } from "../features/notes/notebookTitle";
-import { activeTab, useWorkspace } from "../workspace/store";
+import { activeTab, tabLabel, useWorkspace } from "../workspace/store";
 import { SECTIONS } from "./Sidebar";
 import { useWindowTitle } from "./title";
 import { modalOpen } from "../ui/layers";
 
 interface Crumb { label: string; go?: () => void }
 
-const NOTES_VIEWS = { tasks: "Tasks", views: "Views", tags: "Tags", graph: "Graph", wiki: "Wiki" } as const;
+const NOTES_VIEWS = { tasks: "Tasks", views: "Views", tags: "Tags", graph: "Graph", wiki: "Wiki", skills: "Skills" } as const;
 
 function useCrumbs(): Crumb[] {
   const route = useApp((s) => s.route);
   const go = useApp((s) => s.go);
   const { project } = useCurrentProject();
   const other = useApp((s) => s.project === OTHER_FOLDERS);
+  // A note's title, or the name of a tab that is not a page: a new note or page, a comparison, Find in files (CONR-16).
   const noteTitle = useWorkspace((s) => {
     const tab = activeTab(s);
-    return tab?.kind === "note" ? tab.title : undefined;
+    return tab && tab.kind !== "file" ? tabLabel(tab) : undefined;
   });
   const page = useWorkspace((s) => { const t = activeTab(s); return t?.kind === "file" ? t.file : undefined; });
   const notebook = useNotebookTitle(page && !isLoose(page) ? page.notebook : undefined, route.page === "notes");

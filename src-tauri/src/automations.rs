@@ -43,8 +43,6 @@ pub enum Trigger {
 pub enum Action {
     /// Start one unattended session in a role. `{event}` and `{commits}` in the prompt are filled in.
     Role { role: Role, #[serde(default)] engine: Engine, prompt: String },
-    /// Start a workflow from a template, unattended.
-    Workflow { template: String, goal: String },
     /// Living Memory's own maintenance run (it keeps its own budget and rules).
     MemoryMaintenance,
     /// Propose archiving stale or flagged skills.
@@ -79,7 +77,7 @@ pub struct Automation {
     pub enabled: bool,
     pub trigger: Trigger,
     pub action: Action,
-    /// The project and repository a session, workflow or commit check works on.
+    /// The project and repository a session or commit check works on.
     #[serde(default)]
     pub project: Option<String>,
     #[serde(default)]
@@ -89,7 +87,7 @@ pub struct Automation {
     pub ask_first: bool,
     #[serde(default)]
     pub notify: Notify,
-    /// Each session's Claude budget for a role or workflow action (capped by the settings' session budget).
+    /// Each session's Claude budget for a role action, and the cap of a wiki rebuild (both capped by the settings' session budget).
     #[serde(default)]
     pub budget_usd: Option<f64>,
     pub created_at: u64,
@@ -131,8 +129,6 @@ pub struct RunRow {
     #[serde(default)]
     pub session: Option<String>,
     #[serde(default)]
-    pub workflow: Option<String>,
-    #[serde(default)]
     pub cost_usd: Option<f64>,
     #[serde(default)]
     pub ended_at: Option<u64>,
@@ -160,8 +156,9 @@ pub enum Started {
     Done { detail: String, cost: Option<f64> },
     /// A session runs; the run ends with the session's turn.
     Session(String),
-    /// A workflow runs; the run ends with it.
-    Workflow(String),
+    /// Done, but it failed part way (a wiki rebuild with failed or unfinished pages), with what it cost: the run fails, so a
+    /// failure notification fires, and keeps the cost (WIKI-R2).
+    Failed { detail: String, cost: Option<f64> },
 }
 
 /// What automations need from the rest of the app; tests use a fake.
@@ -179,11 +176,11 @@ pub trait Doer: Send + Sync {
     /// Whether today's learning budget has room (commit reviews and briefings; their calls reserve their own share).
     fn budget_left(&self) -> bool;
     /// Whether a session with this budget (None: the settings' cap per agent run) fits in what is left of today's
-    /// automation budget. A workflow is checked for one session's budget.
+    /// automation budget.
     fn budget_fits(&self, budget_usd: Option<f64>) -> bool;
-    /// Count what a session or workflow a run started cost against today's automation budget, once, when it ends.
+    /// Count what a session a run started cost against today's automation budget, once, when it ends.
     fn charge(&self, usd: f64);
-    /// Stop a session or workflow that started for a run the user cancelled meanwhile.
+    /// Stop a session that started for a run the user cancelled meanwhile.
     fn stop(&self, started: &Started);
     /// Why the automation may not run on its own now (its engine is hidden), or None. A paused automation is not admitted
     /// and keeps its last seen commit; Run now still tries it and reports the reason.
@@ -307,18 +304,17 @@ pub fn check(a: &Automation) -> Result<(), String> {
     if a.budget_usd.is_some_and(|b| !b.is_finite() || b <= 0.0) {
         return Err("A run's budget must be more than $0".into());
     }
-    let needs_project = matches!(a.action, Action::Role { .. } | Action::Workflow { .. } | Action::CommitCapture) || a.trigger == Trigger::Commit;
+    let needs_project = matches!(a.action, Action::Role { .. } | Action::CommitCapture) || a.trigger == Trigger::Commit;
     if needs_project && (a.project.as_deref().is_none_or(str::is_empty) || a.repo.as_deref().is_none_or(str::is_empty)) {
         return Err("This automation works on a project: pick the project and repository".into());
     }
     match &a.action {
         Action::Role { prompt, .. } if prompt.trim().is_empty() => Err("Write the session's instructions".into()),
-        Action::Workflow { goal, template } if goal.trim().is_empty() || template.trim().is_empty() => Err("Pick a workflow template and write its goal".into()),
         Action::ArchitectureCheck { system } if system.trim().is_empty() => Err("Pick the system to check".into()),
         Action::ExecutiveBriefing { briefing, .. } if !crate::executive::BRIEF_KINDS.contains(&briefing.as_str()) => Err("Pick the kind of briefing".into()),
         Action::ExecutiveBriefing { days, .. } if !(1..=90).contains(days) => Err("A briefing covers 1 to 90 days".into()),
         Action::WikiRebuild { domain } if domain.trim().is_empty() || a.project.as_deref().is_none_or(str::is_empty) => Err("Pick the domain and the project whose wiki to rebuild".into()),
-        Action::Role { role: Role::Developer, .. } => Err("An automation may not start a developer: it would edit code with nobody watching. Use a workflow you start yourself.".into()),
+        Action::Role { role: Role::Developer, .. } => Err("An automation may not start a developer: it would edit code with nobody watching. Start a developer session yourself.".into()),
         // Turning such an automation off is always allowed.
         Action::Role { role, engine: Engine::Codex, .. } if a.enabled && role.profile() == Profile::EditWorktree =>
             Err(format!("Codex cannot edit files without asking in an unattended session, so it cannot run the {} role here. Pick another role or show Claude Code in Settings.", role.label())),
@@ -333,18 +329,21 @@ pub struct Automations {
     wake: Condvar,
     /// Set (under the `state` lock) when a definition changes, so the scheduler does not sleep through the change.
     dirty: AtomicBool,
-    /// Held while a run is admitted and while a run's row is written, so two triggers at once start one run. A session or
-    /// workflow starts without it (that takes seconds); `pending` covers the time before the run knows its child.
+    /// Held while a run is admitted and while a run's row is written, so two triggers at once start one run. A session
+    /// starts without it (that takes seconds); `pending` covers the time before the run knows its child.
     admit: Mutex<()>,
     /// Starts under way and the reports that came for children no run knows yet. Used only while `admit` is held.
     pending: Mutex<Pending>,
     /// Automations the scheduler is firing on another thread.
     busy: Mutex<BTreeSet<String>>,
+    /// Why `automations.json` must not be written: it could not be read, or entries were dropped from it and no copy of the
+    /// original could be kept. Every save is then refused, so the original survives (Codex review of 99ceaea, C1).
+    blocked: Option<String>,
     /// The cancel switch of each run whose action is under way, by run id.
     cancels: Mutex<HashMap<String, Arc<Cancel>>>,
 }
 
-/// Sessions and workflows being started for runs, and the reports that came before their run saved the child's id.
+/// Sessions being started for runs, and the reports that came before their run saved the child's id.
 #[derive(Default)]
 struct Pending {
     /// The automation of each start under way, once per start.
@@ -352,10 +351,9 @@ struct Pending {
     early: Vec<Ended>,
 }
 
-/// A session or workflow's end, as `finished` is told it.
+/// A session's end, as `finished` is told it.
 struct Ended {
     session: Option<String>,
-    workflow: Option<String>,
     ok: bool,
     detail: String,
     cost: Option<f64>,
@@ -363,7 +361,7 @@ struct Ended {
 
 impl Ended {
     fn of(&self, row: &RunRow) -> bool {
-        (self.session.is_some() && row.session == self.session) || (self.workflow.is_some() && row.workflow == self.workflow)
+        self.session.is_some() && row.session == self.session
     }
 }
 
@@ -379,14 +377,14 @@ fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
-/// Why a run that spends money may not start now, or None. A session, workflow or wiki rebuild must fit, with its whole budget,
+/// Why a run that spends money may not start now, or None. A session or wiki rebuild must fit, with its whole budget,
 /// in what is left of today's automation budget; commit reviews and briefings draw on the learning budget.
 fn unaffordable(a: &Automation, doer: &dyn Doer) -> Option<String> {
     match a.action {
         // Codex bills the user's ChatGPT plan, not dollars, so a Codex session neither needs nor uses the automation
-        // budget (Codex review R7-4). A workflow is checked: its tasks may use Claude.
+        // budget (Codex review R7-4).
         Action::Role { engine: Engine::Codex, .. } => None,
-        Action::Role { .. } | Action::Workflow { .. } | Action::WikiRebuild { .. } if !doer.budget_fits(a.budget_usd) => {
+        Action::Role { .. } | Action::WikiRebuild { .. } if !doer.budget_fits(a.budget_usd) => {
             Some("Today's automation budget has no room left for this run's budget".into())
         }
         Action::CommitCapture | Action::ExecutiveBriefing { .. } if !doer.budget_left() => Some("Today's learning budget is used".into()),
@@ -394,13 +392,43 @@ fn unaffordable(a: &Automation, doer: &dyn Doer) -> Option<String> {
     }
 }
 
+/// The saved automations, read entry by entry. An entry that no longer reads (a Workflows task-graph automation, whose
+/// action was deleted in CON-20, or one a newer build wrote) is dropped, and the file as it was is first copied to
+/// `automations.json.bak-<ms>`, so the next save cannot lose it. A file that is not a list at all is copied aside the same way.
+/// The second value says why the file must not be written: it exists but could not be read, or the copy failed.
+fn load(path: &std::path::Path) -> (Vec<Automation>, Option<String>) {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (vec![], None),
+        Err(e) => return (vec![], Some(format!("Hivemind could not read {}: {e}. Automations are not saved until it can.", path.display()))),
+    };
+    let (list, dropped) = match serde_json::from_str::<Vec<serde_json::Value>>(&text) {
+        Ok(raw) => {
+            let total = raw.len();
+            let list: Vec<Automation> = raw.into_iter().filter_map(|v| serde_json::from_value(v).ok()).collect();
+            let dropped = total - list.len();
+            (list, dropped)
+        }
+        Err(_) => (vec![], 1),
+    };
+    if dropped > 0 {
+        let aside = path.with_file_name(format!("automations.json.bak-{}", now_ms()));
+        if let Err(e) = std::fs::copy(path, &aside) {
+            let why = format!("Hivemind could not keep a copy of {} before dropping {dropped} unreadable automation(s): {e}. Automations are not saved until it can.", path.display());
+            eprintln!("{why}");
+            return (list, Some(why));
+        }
+    }
+    (list, None)
+}
+
 impl Automations {
     pub fn new(app_data: PathBuf) -> Automations {
         let path = app_data.join("automations.json");
-        let list: Vec<Automation> = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let (list, blocked) = load(&path);
         let autos = Automations {
             path, runs_dir: app_data.join("automation-runs"), state: Mutex::new(list), wake: Condvar::new(), dirty: AtomicBool::new(false),
-            admit: Mutex::new(()), pending: Mutex::default(), busy: Mutex::new(BTreeSet::new()), cancels: Mutex::new(HashMap::new()),
+            admit: Mutex::new(()), pending: Mutex::default(), busy: Mutex::new(BTreeSet::new()), cancels: Mutex::new(HashMap::new()), blocked,
         };
         autos.recover();
         autos
@@ -424,6 +452,9 @@ impl Automations {
     }
 
     fn save(&self, list: &[Automation]) -> Result<(), String> {
+        if let Some(why) = &self.blocked {
+            return Err(why.clone());
+        }
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -438,6 +469,10 @@ impl Automations {
 
     /// Add or replace a definition. Turning on a schedule sets its next time; nothing runs at once.
     pub fn put(&self, mut a: Automation, now: u64) -> Result<Automation, String> {
+        // Refused before the list in memory changes, so a schedule that was not saved never runs (Codex re-review of 55cfab2).
+        if let Some(why) = &self.blocked {
+            return Err(why.clone());
+        }
         check(&a)?;
         let mut list = self.state.lock().unwrap();
         if a.id.is_empty() {
@@ -472,6 +507,9 @@ impl Automations {
     }
 
     pub fn delete(&self, id: &str) -> Result<(), String> {
+        if let Some(why) = &self.blocked {
+            return Err(why.clone());
+        }
         let mut list = self.state.lock().unwrap();
         if !valid_id(id) || !list.iter().any(|a| a.id == id) {
             return Err("Unknown automation".into());
@@ -576,7 +614,7 @@ impl Automations {
             }
             return None;
         }
-        // A run cancelled while its session or workflow starts still occupies the automation until that start is cleaned up.
+        // A run cancelled while its session starts still occupies the automation until that start is cleaned up.
         let open = self.runs(id).iter().any(|r| matches!(r.state, RunState::Waiting | RunState::Running))
             || self.pending.lock().unwrap().starting.iter().any(|s| s == id);
         if open {
@@ -588,7 +626,7 @@ impl Automations {
         }
         let mut row = RunRow {
             id: uuid::Uuid::new_v4().simple().to_string(), automation: id.into(), at: now, cause: cause.into(), event,
-            state: RunState::Running, detail: None, session: None, workflow: None, cost_usd: None, ended_at: None, source,
+            state: RunState::Running, detail: None, session: None, cost_usd: None, ended_at: None, source,
         };
         // The schedule moves on whether or not this run goes ahead, so a refused run is not retried every minute.
         self.mark_ran(id, now, None);
@@ -598,7 +636,7 @@ impl Automations {
             row.ended_at = Some(now);
         } else if a.ask_first && cause != "manual" {
             row.state = RunState::Waiting;
-            doer.notify(&a.name, "Waiting for you to start it (Workflows, Automations)");
+            doer.notify(&a.name, "Waiting for you to start it (Settings, Schedules)");
         }
         if let Err(e) = self.put_run(&row) {
             // Without its row nothing could cancel the run or see it end, so it does not start.
@@ -640,7 +678,7 @@ impl Automations {
         Ok(row)
     }
 
-    /// Cancel a waiting run, or mark a running one cancelled (the caller stops its session or workflow).
+    /// Cancel a waiting run, or mark a running one cancelled (the caller stops its session).
     pub fn cancel(&self, run: &str) -> Result<RunRow, String> {
         let _admit = self.admit.lock().unwrap();
         let mut row = self.find_run(run).ok_or("Unknown run")?;
@@ -683,14 +721,14 @@ impl Automations {
     }
 
     /// Do a run's action, without the lock: the git reads for its prompt, and the action itself, which may start a session
-    /// or workflow (seconds) or take minutes. A child that ends before the run has saved its id leaves its report in
+    /// (seconds) or take minutes. A child that ends before the run has saved its id leaves its report in
     /// `pending`, and the run takes it up once the id is saved. A cancel that came meanwhile wins, and a child started for
     /// a cancelled run is stopped.
     fn execute(&self, a: &Automation, mut row: RunRow, doer: &dyn Doer, admit: MutexGuard<'_, ()>) -> RunRow {
         // Registered while `admit` is held, so a cancel (which takes it) always finds the flag.
         let cancel = Arc::new(Cancel::default());
         self.cancels.lock().unwrap().insert(row.id.clone(), cancel.clone());
-        let starts = matches!(a.action, Action::Role { .. } | Action::Workflow { .. });
+        let starts = matches!(a.action, Action::Role { .. });
         if starts {
             self.pending.lock().unwrap().starting.push(a.id.clone());
         }
@@ -709,7 +747,7 @@ impl Automations {
             head: head.clone(),
             batch: batch.map(|(commits, _)| commits),
         };
-        // A run cancelled during the reads does nothing: no session, no workflow and no paid call (Codex review F15-6).
+        // A run cancelled during the reads does nothing: no session and no paid call (Codex review F15-6).
         {
             let _admit = self.admit.lock().unwrap();
             if let Some(cancelled) = self.find_run(&row.id).filter(|r| r.state == RunState::Cancelled) {
@@ -722,7 +760,7 @@ impl Automations {
         }
         let outcome = doer.run(a, &vars, &cancel);
         let child = match &outcome {
-            Ok(started @ (Started::Session(_) | Started::Workflow(_))) if starts => Some(started.clone()),
+            Ok(started @ Started::Session(_)) if starts => Some(started.clone()),
             _ => None,
         };
         match outcome {
@@ -736,9 +774,11 @@ impl Automations {
                 row.session = Some(id);
                 row.detail = Some("Session running".into());
             }
-            Ok(Started::Workflow(id)) => {
-                row.workflow = Some(id);
-                row.detail = Some("Workflow running".into());
+            Ok(Started::Failed { detail, cost }) => {
+                row.state = RunState::Failed;
+                row.detail = Some(detail);
+                row.cost_usd = cost;
+                row.ended_at = Some(now_ms());
             }
             Err(e) => {
                 row.state = RunState::Failed;
@@ -752,6 +792,15 @@ impl Automations {
         self.cancels.lock().unwrap().remove(&row.id);
         if let Some(cancelled) = self.find_run(&row.id).filter(|r| r.state == RunState::Cancelled) {
             let Some(child) = child else {
+                // What the action spent before it stopped stays on the cancelled run (Codex review of 99ceaea, B2).
+                let cancelled = match row.cost_usd {
+                    Some(cost) if cancelled.cost_usd.is_none() => {
+                        let kept = RunRow { cost_usd: Some(cost), ..cancelled };
+                        self.keep_run(&kept, doer);
+                        kept
+                    }
+                    _ => cancelled,
+                };
                 if starts {
                     self.start_done(&a.id);
                 }
@@ -761,7 +810,7 @@ impl Automations {
             // its cost is still counted when it ends, and the child is stopped, even when it reported already (a turn's
             // end leaves a session's process running). Until it is, the automation counts as busy, so no new run of it
             // starts beside it.
-            let kept = RunRow { session: row.session, workflow: row.workflow, ..cancelled };
+            let kept = RunRow { session: row.session, ..cancelled };
             self.keep_run(&kept, doer);
             let kept = self.take_early(kept, doer).0;
             drop(admit);
@@ -827,24 +876,6 @@ impl Automations {
         row
     }
 
-    /// End the run of each workflow an automation started that has ended, with the workflow's outcome and its cost: what each
-    /// task's first attempt spent (`Task::cost_usd`), or for a task stopped before its turn ended, what its session has
-    /// spent (`cost_of`). Called after every session report and after the user acts on a workflow: a cancel, or a skip
-    /// of its last open task, ends a workflow with no session report (Codex review F15-3). A run already ended is left as it is.
-    pub fn workflows_ended(&self, runs: Vec<crate::workflow::Run>, cost_of: impl Fn(&str) -> Option<f64>, doer: &dyn Doer) {
-        use crate::workflow::RunState as Flow;
-        for run in runs.into_iter().filter(|r| r.origin.as_deref().is_some_and(|o| o.starts_with("automation:"))) {
-            let outcome = match run.state {
-                Flow::Succeeded => "succeeded",
-                Flow::Failed => "failed",
-                Flow::Cancelled => "was cancelled",
-                _ => continue,
-            };
-            let cost: f64 = run.tasks.iter().filter_map(|t| t.cost_usd.or_else(|| t.session.as_deref().and_then(&cost_of))).sum();
-            self.finished(None, Some(&run.id), run.state == Flow::Succeeded, format!("The workflow {outcome}"), Some(cost), doer);
-        }
-    }
-
     fn report(&self, a: &Automation, row: &RunRow, doer: &dyn Doer) {
         let failed = matches!(row.state, RunState::Failed);
         if a.notify == Notify::All || (a.notify == Notify::Failures && failed) {
@@ -853,19 +884,19 @@ impl Automations {
         }
     }
 
-    /// A session or workflow a run started has ended. Returns the run it ended, once, and counts its cost (`Doer::charge`)
+    /// A session a run started has ended. Returns the run it ended, once, and counts its cost (`Doer::charge`)
     /// once; None when no run has it yet. A report that comes while a start is under way may be that child's, so it is kept
     /// for the run to take up once it has saved the child's id.
-    pub fn finished(&self, session: Option<&str>, workflow: Option<&str>, ok: bool, detail: String, cost: Option<f64>, doer: &dyn Doer) -> Option<RunRow> {
+    pub fn finished(&self, session: Option<&str>, ok: bool, detail: String, cost: Option<f64>, doer: &dyn Doer) -> Option<RunRow> {
         let admit = self.admit.lock().unwrap();
-        let ended = Ended { session: session.map(String::from), workflow: workflow.map(String::from), ok, detail, cost };
+        let ended = Ended { session: session.map(String::from), ok, detail, cost };
         let found = self.all_runs().into_iter().find(|r| {
             let open = r.state == RunState::Running || (r.state == RunState::Cancelled && r.cost_usd.is_none());
             open && ended.of(r)
         });
         let Some(row) = found else {
             let mut pending = self.pending.lock().unwrap();
-            if !pending.starting.is_empty() && !pending.early.iter().any(|e| e.session == ended.session && e.workflow == ended.workflow) {
+            if !pending.starting.is_empty() && !pending.early.iter().any(|e| e.session == ended.session) {
                 pending.early.push(ended);
             }
             return None;
@@ -923,7 +954,7 @@ impl Automations {
                         Ok(log) if log.trim().is_empty() => {}
                         Ok(log) => out.push(Due { id: a.id.clone(), cause: "commit", event: Some(format!("New commits:\n{log}")) }),
                         // Git failing is not "nothing new". A commit capture runs, fails visibly and keeps its reviewed
-                        // commits; any other action (a paid role or workflow) waits for a check that works.
+                        // commits; any other action (a paid role) waits for a check that works.
                         Err(e) if matches!(a.action, Action::CommitCapture) => {
                             out.push(Due { id: a.id.clone(), cause: "commit", event: Some(format!("New commits (git could not list them: {e})")) })
                         }
@@ -1132,8 +1163,8 @@ mod tests {
         log_broken: Mutex<bool>,
         broke: bool,
         session: bool,
-        /// run starts the workflow `w1`.
-        workflow: bool,
+        /// run ends as a failure with a cost (a wiki rebuild with failed pages).
+        part_failed: bool,
         paused: Mutex<bool>,
         /// run waits (up to 10 s) for its cancel flag, then reports whether it saw it.
         slow: bool,
@@ -1167,6 +1198,9 @@ mod tests {
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 self.saw_cancel.store(cancel.is_set(), Ordering::Relaxed);
+                if self.part_failed {   // a wiki rebuild stopped part way: it spent something
+                    return Ok(Started::Failed { detail: "Build cancelled.".into(), cost: Some(0.4) });
+                }
                 return Err("Cancelled".into());
             }
             if self.commits {
@@ -1177,8 +1211,8 @@ mod tests {
             if self.session {
                 return Ok(Started::Session("s1".into()));
             }
-            if self.workflow {
-                return Ok(Started::Workflow("w1".into()));
+            if self.part_failed {
+                return Ok(Started::Failed { detail: "2 pages built, 1 failed".into(), cost: Some(0.3) });
             }
             Ok(Started::Done { detail: "done".into(), cost: Some(0.01) })
         }
@@ -1271,8 +1305,8 @@ mod tests {
         assert!(autos.fire(&a.id, "event", None, &doer).is_none(), "one run at a time");
         let row = autos.approve(&row.id, &doer).unwrap();
         assert_eq!((row.state, row.session.as_deref()), (RunState::Running, Some("s1")));
-        assert!(autos.finished(Some("s1"), None, false, "The session failed".into(), Some(0.2), &doer).is_some());
-        assert!(autos.finished(Some("s1"), None, false, "again".into(), Some(0.2), &doer).is_none(), "a run ends once");
+        assert!(autos.finished(Some("s1"), false, "The session failed".into(), Some(0.2), &doer).is_some());
+        assert!(autos.finished(Some("s1"), false, "again".into(), Some(0.2), &doer).is_none(), "a run ends once");
         let row = &autos.runs(&a.id)[0];
         assert_eq!((row.state, row.cost_usd), (RunState::Failed, Some(0.2)));
         assert!(doer.notes.lock().unwrap().iter().any(|n| n == "Asks: The session failed"), "failures are reported");
@@ -1345,7 +1379,7 @@ mod tests {
         assert_eq!(autos.fire(&role.id, "manual", None, &doer).unwrap().state, RunState::Running);
         // A folder where the temporary file goes: every write of this automation's runs fails.
         std::fs::create_dir(store.0.join("automation-runs").join(format!("{}.tmp", role.id))).unwrap();
-        let ended = autos.finished(Some("s1"), None, true, "done".into(), Some(0.2), &doer).unwrap();
+        let ended = autos.finished(Some("s1"), true, "done".into(), Some(0.2), &doer).unwrap();
         assert_eq!(ended.state, RunState::Succeeded);
         // A warning, not a notice: the app shows it even while the user looks at the Automations tab (Codex review F15-2).
         let warned = doer.warned.lock().unwrap().clone();
@@ -1546,6 +1580,29 @@ mod tests {
     }
 
     #[test]
+    fn a_cancelled_run_keeps_what_its_action_spent() {   // Codex review of 99ceaea, B2
+        let (dir, autos) = store();
+        let a = autos.put(Automation { id: String::new(), ..daily("Wiki") }, now_ms()).unwrap();
+        let doer = Fake { slow: true, part_failed: true, ..Default::default() };
+        let row = std::thread::scope(|s| {
+            let fired = s.spawn(|| autos.fire(&a.id, "manual", None, &doer));
+            let start = std::time::Instant::now();
+            let running = loop {
+                if let Some(r) = autos.runs(&a.id).into_iter().find(|r| r.state == RunState::Running) {
+                    break r;
+                }
+                assert!(start.elapsed() < Duration::from_secs(10), "the run never started");
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            autos.cancel(&running.id).unwrap();
+            fired.join().unwrap().unwrap()
+        });
+        assert_eq!((row.state, row.cost_usd), (RunState::Cancelled, Some(0.4)));
+        assert_eq!(autos.runs(&a.id)[0].cost_usd, Some(0.4));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_waiting_event_run_is_cancelled_when_its_automation_moves_to_another_project() {
         let (dir, autos) = store();
         let def = Automation { id: String::new(), enabled: true, ask_first: true, project: Some("p".into()), repo: Some("r".into()),
@@ -1580,34 +1637,60 @@ mod tests {
     }
 
     #[test]
-    fn a_workflow_that_ends_without_a_session_report_ends_its_run() {   // Codex review F15-3
+    fn a_run_that_fails_part_way_is_failed_keeps_its_cost_and_notifies() {   // WIKI-R2
         let store = store();
-        let (role, _) = starting(&store);
         let autos = &store.1;
-        let flow = autos.put(Automation { id: String::new(), action: Action::Workflow { goal: "g".into(), template: "feature".into() }, ..role }, now_ms()).unwrap();
-        let doer = Fake { workflow: true, ..Default::default() };
-        assert_eq!(autos.fire(&flow.id, "manual", None, &doer).unwrap().workflow.as_deref(), Some("w1"));
-        // The user cancels the workflow on the Workflows page while no session runs, so no session report comes.
-        let flows = crate::workflow::Workflows::new(store.0.join("workflows"));
-        let tasks = crate::workflow::templates().into_iter().find(|t| t.id == "feature").unwrap().tasks;
-        let new = crate::workflow::NewRun { goal: "g".into(), project: "p".into(), repo: "r".into(), tasks, ..Default::default() };
-        let mut run = flows.create(new, Some(format!("automation:{}", flow.id))).unwrap();
-        run.id = "w1".into();
-        run.state = crate::workflow::RunState::Cancelled;
-        run.tasks[0].session = Some("s7".into());
-        // A task whose first attempt cost 0.5 counts that, not what its session (retried or messaged since) shows now.
-        run.tasks[1].session = Some("s8".into());
-        run.tasks[1].cost_usd = Some(0.5);
-        let user_made = crate::workflow::Run { id: "w2".into(), origin: None, ..run.clone() };
-        let cost = |s: &str| match s { "s7" => Some(0.3), "s8" => Some(2.0), _ => None };
-        autos.workflows_ended(vec![run.clone(), user_made], cost, &doer);
-        let ended = autos.runs(&flow.id)[0].clone();
-        assert_eq!((ended.state, ended.cost_usd, ended.detail.as_deref()), (RunState::Failed, Some(0.8), Some("The workflow was cancelled")));
-        assert_eq!(*doer.charged.lock().unwrap(), [0.8]);
-        // Asked again (every session report asks), nothing changes.
-        autos.workflows_ended(vec![run], cost, &doer);
-        assert_eq!(*doer.charged.lock().unwrap(), [0.8]);
+        let a = autos.put(Automation { id: String::new(), notify: Notify::Failures, ..daily("Wiki") }, now_ms()).unwrap();
+        let doer = Fake { part_failed: true, ..Default::default() };
+        let row = autos.fire(&a.id, "manual", None, &doer).unwrap();
+        assert_eq!((row.state, row.cost_usd, row.detail.as_deref()), (RunState::Failed, Some(0.3), Some("2 pages built, 1 failed")));
+        assert_eq!(*doer.notes.lock().unwrap(), ["Wiki: 2 pages built, 1 failed"]);
         let _ = std::fs::remove_dir_all(&store.0);
+    }
+
+    #[test]
+    fn an_automation_that_no_longer_reads_is_dropped_and_the_file_kept_aside() {   // CON-20
+        let dir = std::env::temp_dir().join(format!("hivemind-automations-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let keep = |name: &str| serde_json::to_value(Automation { id: format!("id-{name}"), name: name.into(), ..daily(name) }).unwrap();
+        let mut flow = keep("Flow");
+        flow["action"] = serde_json::json!({ "kind": "workflow", "template": "feature", "goal": "g" });
+        let text = serde_json::to_string(&vec![keep("A"), flow, keep("B")]).unwrap();
+        std::fs::write(dir.join("automations.json"), &text).unwrap();
+        let autos = Automations::new(dir.clone());
+        assert_eq!(autos.list().iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["A", "B"]);
+        let asides: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with("automations.json.bak-")).collect();
+        assert_eq!(asides.len(), 1);
+        assert_eq!(std::fs::read_to_string(asides[0].path()).unwrap(), text);
+        // A file that reads whole makes no copy.
+        let clean = std::env::temp_dir().join(format!("hivemind-automations-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&clean).unwrap();
+        std::fs::write(clean.join("automations.json"), serde_json::to_string(&vec![keep("A")]).unwrap()).unwrap();
+        assert_eq!(Automations::new(clean.clone()).list().len(), 1);
+        assert_eq!(std::fs::read_dir(&clean).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&clean);
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_is_never_written() {   // Codex review of 99ceaea, C1
+        // A folder in the file's place reads as an error other than "not found": nothing is saved over it.
+        let dir = std::env::temp_dir().join(format!("hivemind-automations-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("automations.json")).unwrap();
+        let autos = Automations::new(dir.clone());
+        assert!(autos.list().is_empty());
+        let refused = autos.put(Automation { id: String::new(), ..daily("A") }, 1).unwrap_err();
+        assert!(refused.contains("not saved"), "{refused}");
+        assert!(dir.join("automations.json").is_dir());
+        // The refused schedule is not in the list the scheduler runs (Codex re-review of 55cfab2).
+        assert!(autos.list().is_empty());
+        // A missing file is an empty list that saves as usual.
+        let fresh = std::env::temp_dir().join(format!("hivemind-automations-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&fresh).unwrap();
+        assert!(Automations::new(fresh.clone()).put(Automation { id: String::new(), ..daily("A") }, 1).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&fresh);
     }
 
     #[test]
@@ -1629,7 +1712,7 @@ mod tests {
         });
         assert_eq!((row.state, row.session.as_deref()), (RunState::Running, Some("s1")));
         assert!(autos.pending.lock().unwrap().starting.is_empty());
-        let ended = autos.finished(Some("s1"), None, true, "done".into(), Some(0.2), &doer).unwrap();
+        let ended = autos.finished(Some("s1"), true, "done".into(), Some(0.2), &doer).unwrap();
         assert_eq!((ended.state, ended.cost_usd), (RunState::Succeeded, Some(0.2)));
         assert_eq!(*doer.charged.lock().unwrap(), [0.2]);
         let _ = std::fs::remove_dir_all(&store.0);
@@ -1645,9 +1728,9 @@ mod tests {
             let fired = s.spawn(|| autos.fire(&role.id, "manual", None, &doer));
             wait_until("the start", || doer.inside.load(Ordering::SeqCst));
             // The session reports before the run has saved its id: nothing matches yet, so the report is kept.
-            assert!(autos.finished(Some("s1"), None, false, "It failed".into(), Some(0.4), &doer).is_none());
+            assert!(autos.finished(Some("s1"), false, "It failed".into(), Some(0.4), &doer).is_none());
             // Reports of children no run started are kept only while a start is under way, and once.
-            assert!(autos.finished(Some("s1"), None, false, "It failed".into(), Some(0.4), &doer).is_none());
+            assert!(autos.finished(Some("s1"), false, "It failed".into(), Some(0.4), &doer).is_none());
             doer.hold.store(false, Ordering::SeqCst);
             fired.join().unwrap().unwrap()
         });
@@ -1659,7 +1742,7 @@ mod tests {
         assert!(pending.starting.is_empty() && pending.early.is_empty());
         drop(pending);
         // With no start under way, a report for no run is not kept.
-        assert!(autos.finished(Some("s9"), None, true, "x".into(), None, &doer).is_none());
+        assert!(autos.finished(Some("s9"), true, "x".into(), None, &doer).is_none());
         assert!(autos.pending.lock().unwrap().early.is_empty());
         let _ = std::fs::remove_dir_all(&store.0);
     }
@@ -1683,7 +1766,7 @@ mod tests {
         assert_eq!((row.state, row.session.as_deref()), (RunState::Cancelled, Some("s1")));
         assert_eq!(*doer.stopped.lock().unwrap(), [Started::Session("s1".into())], "the run stops the session it started");
         assert_eq!(autos.runs(&role.id)[0], row);
-        let ended = autos.finished(Some("s1"), None, false, "stopped".into(), Some(0.1), &doer).unwrap();
+        let ended = autos.finished(Some("s1"), false, "stopped".into(), Some(0.1), &doer).unwrap();
         assert_eq!((ended.state, ended.cost_usd), (RunState::Cancelled, Some(0.1)));
         assert_eq!(*doer.charged.lock().unwrap(), [0.1]);
         assert!(autos.pending.lock().unwrap().starting.is_empty());
@@ -1701,7 +1784,7 @@ mod tests {
             let fired = s.spawn(|| autos.fire(&role.id, "manual", None, &doer));
             wait_until("the start", || doer.inside.load(Ordering::SeqCst));
             // The first turn ends (the session stays open) before the run knows its session, then the user cancels.
-            assert!(autos.finished(Some("s1"), None, true, "turn done".into(), Some(0.2), &doer).is_none());
+            assert!(autos.finished(Some("s1"), true, "turn done".into(), Some(0.2), &doer).is_none());
             autos.cancel(&autos.runs(&role.id)[0].id).unwrap();
             doer.hold.store(false, Ordering::SeqCst);
             fired.join().unwrap().unwrap()
@@ -1729,9 +1812,9 @@ mod tests {
         assert_eq!(autos.runs(&a.id)[0].state, RunState::Waiting, "it keeps waiting");
         let row = autos.approve(&row.id, &rich).unwrap();
         assert_eq!(autos.cancel(&row.id).unwrap().state, RunState::Cancelled);
-        let ended = autos.finished(Some("s1"), None, false, "stopped".into(), Some(0.3), &rich).unwrap();
+        let ended = autos.finished(Some("s1"), false, "stopped".into(), Some(0.3), &rich).unwrap();
         assert_eq!((ended.state, ended.cost_usd), (RunState::Cancelled, Some(0.3)));
-        assert!(autos.finished(Some("s1"), None, false, "stopped".into(), Some(0.3), &rich).is_none(), "counted once");
+        assert!(autos.finished(Some("s1"), false, "stopped".into(), Some(0.3), &rich).is_none(), "counted once");
         let _ = std::fs::remove_dir_all(dir);
     }
 }
