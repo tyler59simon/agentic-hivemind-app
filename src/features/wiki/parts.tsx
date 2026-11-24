@@ -10,6 +10,7 @@ import { ArrowLink, Row, Section } from "../../ui/Page";
 import { HoverPreview } from "../preview/HoverPreview";
 import { remarkWikilinks, WIKI_PREFIX } from "../viewer/remarkWikilinks";
 import { citeIndex, citeLinks, CITE_PREFIX, noteAt, pageStatus, resolveLink, shortTitle, sourceState, type WikiIndex } from "./wiki";
+import { scrollBehavior } from "../../lib/motion";
 
 interface Nav { ix: WikiIndex; goTo: (at: string) => void }
 const NavContext = createContext<Nav | null>(null);
@@ -111,7 +112,7 @@ export function Toc({ items }: { items: TocItem[] }) {
       <ol>
         {items.map((it) => (
           <li key={it.id} className={it.sub ? "sub" : ""}>
-            <a href={`#${it.id}`} onClick={(e) => { e.preventDefault(); document.getElementById(it.id)?.scrollIntoView({ behavior: "smooth", block: "start" }); }}>
+            <a href={`#${it.id}`} onClick={(e) => { e.preventDefault(); document.getElementById(it.id)?.scrollIntoView({ behavior: scrollBehavior(), block: "start" }); }}>
               {it.num != null && <span className="num">{it.num}</span>}
               <span>{it.text}</span>
               {it.count != null && <span className="n">{it.count}</span>}

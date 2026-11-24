@@ -8,7 +8,7 @@ import { useProjectsEnabled } from "../../lib/connection";
 import { captureStatus, getSettings, saveSettings, type CaptureStatus, type Settings } from "../../lib/lm";
 import { applyPaperDefault, PAPER_DEFAULTS, usePaperDefault, type PaperDefault } from "../../lib/paper";
 import { prefs } from "../../lib/prefs";
-import { applyTheme, THEMES, useTheme, type Theme } from "../../lib/theme";
+import { applyTheme, THEME_CHOICES, useThemeChoice, type ThemeChoice } from "../../lib/theme";
 import { useHidden } from "../../shell/hidden";
 import { useAvailableSections } from "../../shell/Sidebar";
 import type { Mode } from "../../workspace/store";
@@ -25,7 +25,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
   const [status, setStatus] = useState<CaptureStatus | null>(null);
   const [mode, setMode] = useState<Mode>(prefs.defaultMode());
   const [error, setError] = useState<string | null>(null);
-  const theme = useTheme();
+  const theme = useThemeChoice();
   const zoom = useZoom();
   const docSize = useDocSize();
   const paper = usePaperDefault();
@@ -179,8 +179,8 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
       </label>
       <label className="field">
         <span>Theme</span>
-        <select value={theme} onChange={(e) => applyTheme(e.target.value as Theme)}>
-          {THEMES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+        <select value={theme} onChange={(e) => applyTheme(e.target.value as ThemeChoice)}>
+          {THEME_CHOICES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
         </select>
       </label>
       <label className="field">

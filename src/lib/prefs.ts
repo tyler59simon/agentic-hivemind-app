@@ -1,6 +1,6 @@
 // Per-device conveniences kept in localStorage (shared by the main and capture windows).
 import type { Mode } from "../workspace/store";
-import type { Theme } from "./theme";
+import type { ThemeChoice } from "./theme";
 import type { PaperDefault } from "./paper";
 
 const get = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };
@@ -27,11 +27,11 @@ export const prefs = {
   captureProject: () => get("hivemind.captureProject"),
   setCaptureProject: (slug: string) => set("hivemind.captureProject", slug),
   themeKey: "hivemind.theme",
-  theme: (): Theme => {
+  theme: (): ThemeChoice => {
     const saved = get("hivemind.theme");
-    return saved === "emerald" || saved === "emerald-light" ? saved : "purple";
+    return saved === "emerald" || saved === "emerald-light" || saved === "system" ? saved : "purple";
   },
-  setTheme: (theme: Theme) => set("hivemind.theme", theme),
+  setTheme: (theme: ThemeChoice) => set("hivemind.theme", theme),
   paperKey: "hivemind.documentBackground",
   paper: (): PaperDefault => (get("hivemind.documentBackground") === "white" ? "white" : "theme"),
   setPaper: (paper: PaperDefault) => set("hivemind.documentBackground", paper),

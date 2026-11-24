@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RunEvent, SeqEvent } from "../../lib/agent";
-import { apply, build, cost, duration, EMPTY, lastTurn, latestFiles, merge, pendingApprovals } from "./events";
+import { announcement, apply, build, cost, duration, EMPTY, lastTurn, latestFiles, merge, pendingApprovals } from "./events";
 
 const at = (seq: number, event: RunEvent): SeqEvent => ({ sessionId: "s", seq, at: 0, event });
 const finished: RunEvent = { type: "finished", status: "succeeded", reason: null, costUsd: 0.5, durationMs: 65000, turns: 4, result: "ok", structured: null, denials: 1 };
@@ -110,5 +110,21 @@ describe("transcript", () => {
     expect(duration(null)).toBe("");
     expect(cost(0.456)).toBe("$0.46");
     expect(cost(null)).toBe("");
+  });
+});
+
+describe("what a screen reader hears (DESK-7)", () => {
+  it("reads new permission requests urgently and finished turns politely, and nothing before the baseline", () => {
+    const t = build([at(0, turn()), at(1, turn()), at(2, request("r1"))]);
+    expect(announcement(t.items, 1, "Claude")).toEqual({ text: "Claude finished its turn. Claude asks to use Edit: a.ts", urgent: true });
+    expect(announcement(t.items, 0, "Claude")?.text.startsWith("Claude finished its turn. Claude finished its turn.")).toBe(true);
+    expect(announcement(t.items.slice(0, 1), 0, "Claude")).toEqual({ text: "Claude finished its turn.", urgent: false });
+    expect(announcement(t.items, 3, "Claude")).toBeNull();
+    // A finished turn withdraws a request that was still waiting, and it is not read out then.
+    expect(announcement(build([at(0, request("r1")), at(1, turn())]).items, 0, "Claude")).toEqual({ text: "Claude finished its turn.", urgent: false });
+    // A request already answered is not read out.
+    const answered = build([at(0, request("r1")), at(1, resolved("r1", "allow"))]);
+    expect(announcement(answered.items, 0, "Claude")).toBeNull();
+    expect(announcement(build([at(0, turn("stopped"))]).items, 0, "Codex")).toEqual({ text: "Codex stopped.", urgent: false });
   });
 });

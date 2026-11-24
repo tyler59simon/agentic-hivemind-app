@@ -13,6 +13,7 @@ import { inTauri } from "./lib/native";
 import { initPaperDefault } from "./lib/paper";
 import { initTheme } from "./lib/theme";
 import { initZoom } from "./lib/zoom";
+import { Announcer } from "./ui/announce";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
 
 initTheme();
@@ -47,5 +48,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
         {isCapture ? <QuickCapture /> : <App />}
       </QueryClientProvider>
     </ErrorBoundary>
+    {/* Outside the boundary, so screen readers still hear messages after a failure (DESK-7). */}
+    <Announcer />
   </React.StrictMode>,
 );

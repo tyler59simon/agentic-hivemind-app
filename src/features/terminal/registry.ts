@@ -21,6 +21,7 @@ import { isShellId, type ShellTab } from "./shells";
 import { setTerminalDrops } from "../notes/drops";
 import { fontPx, xtermTheme } from "./theme";
 import { makeWriter } from "./writer";
+import { prefersReducedMotion } from "../../lib/motion";
 
 export interface Live {
   id: string;
@@ -203,7 +204,7 @@ export function ensure(id: string, opts: { sessionId: string | null; engine: Eng
   box.className = "term-box-inner";
   const term = new Terminal({
     fontFamily: read("--font-mono"), fontSize: fontPx(rootPx()), theme: xtermTheme(read),
-    cursorBlink: true, scrollback: 10000, allowProposedApi: true,
+    cursorBlink: !prefersReducedMotion(), scrollback: 10000, allowProposedApi: true,
     linkHandler: { activate: openLink },
   });
   const fit = new FitAddon();

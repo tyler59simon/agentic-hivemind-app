@@ -75,6 +75,26 @@ describe("themes", () => {
       expect([ui, contrast(c(ui), c("--bg-alt")) >= 3 && contrast(c(ui), c("--bg")) >= 3]).toEqual([ui, true]);
   });
 
+  it("gives buttons, controls and switches enough contrast in every theme (DESK-3)", () => {
+    for (const [name, theme] of [["purple", values(":root")], ["emerald", emerald], ["light", light]] as const) {
+      const c = (token: string) => theme.get(token)!.replace(/^#(.)(.)(.)$/, "#$1$1$2$2$3$3");
+      const at = (fg: string, bg: string, min: number) => expect([name, fg, bg, contrast(c(fg), c(bg)) >= min]).toEqual([name, fg, bg, true]);
+      at("--on-primary", "--primary", 4.5);
+      at("--on-primary", "--primary-hover", 4.5);
+      for (const surface of ["--bg", "--bg-alt", "--bg-input"]) at("--control-border", surface, 3);
+      // A switch: the knob against its track in both states.
+      at("--switch-knob", "--switch-track", 3);
+      at("--switch-knob-on", "--primary", 3);
+    }
+    // The track's own edge is --control-border (an inset line), so it shows on the page in both states.
+    expect(css).toMatch(/\.switch span \{[^}]*box-shadow: inset 0 0 0 1px var\(--control-border\)/);
+  });
+
+  it("has no text under .8rem, except the tab dot glyph and the compact sidebar count", () => {
+    const small = css.split("\n").filter((l) => /font-size: ?\.[0-7]\d*rem/.test(l));
+    expect(small.map((l) => l.trim().split(" {")[0].trim())).toEqual([".note-tab-pill .dot", ".nav-item .nav-count"]);
+  });
+
   it("darkens the note-type colours for the light theme", () => {
     const shades = [...css.matchAll(/:root\[data-theme="emerald-light"\] \.type-[a-z, :\[\]="-.]*\{ color: (#[0-9a-f]{6}); \}/g)].map((m) => m[1]);
     expect(shades.length).toBe(13);
