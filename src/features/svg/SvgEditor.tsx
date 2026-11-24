@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { PanZoomViewport } from "../../ui/PanZoomViewport";
 import { toast } from "../../ui/toast";
 import { CodeEditor } from "../editor/CodeEditor";
+import { copyLater } from "../../lib/platform";
 import { inspectSvg, rasterizeSvgToPng, svgToDataUrl, type SvgInfo } from "./svg";
 
 export interface SvgEditorProps {
@@ -74,9 +75,8 @@ export default function SvgEditor(props: SvgEditorProps) {
     const src = inspected.ok ? debounced : lastValid?.text;
     if (!src) return;
     try {
-      if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
-        // The picture goes in as a promise: WKWebView allows the write only during the click (MACOS-1D).
-        await navigator.clipboard.write([new ClipboardItem({ "image/png": rasterizeSvgToPng(src) })]);
+      if (typeof ClipboardItem !== "undefined" && typeof navigator.clipboard?.write === "function") {
+        await copyLater("image/png", rasterizeSvgToPng(src));
         toast("PNG copied to clipboard");
       } else {
         toast("Clipboard image copy is not available here", "warn");

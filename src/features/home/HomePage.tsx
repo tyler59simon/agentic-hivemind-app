@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { sessionsQuery } from "../../lib/agent";
 import { useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
-import { commandKey } from "../../lib/platform";
+import { isMac, modKey } from "../../lib/platform";
 import type { Milestone } from "../../lib/executive";
 import { writeProject, type NoteRow, type Project } from "../../lib/lm";
 import { sections } from "../../lib/note";
@@ -51,7 +51,7 @@ function useCapture(projects: Project[], project: Project | undefined): { start:
   const go = useApp((s) => s.go);
   const [capturing, setCapturing] = useState(false);
   useEffect(() => {
-    const key = (e: KeyboardEvent) => { if (commandKey(e) && e.shiftKey && e.key.toLowerCase() === "c" && !modalOpen()) { e.preventDefault(); setCapturing(true); } };
+    const key = (e: KeyboardEvent) => { if ((isMac ? e.metaKey : e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "c" && !modalOpen()) { e.preventDefault(); setCapturing(true); } };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, []);
@@ -81,7 +81,7 @@ function useHomeTabs(): { tab: HomeTab; tabs: ReactNode } {
 }
 
 const CaptureButton = ({ onClick }: { onClick: () => void }) => (
-  <button className="primary" onClick={onClick} title="Ctrl+Shift+C"><Plus size="1em" aria-hidden /> Capture</button>
+  <button className="primary" onClick={onClick} title={`${modKey()}+Shift+C`}><Plus size="1em" aria-hidden /> Capture</button>
 );
 
 /** A slim line above the open list: the newest active plan note of the project, how far it is and the state of its session. */

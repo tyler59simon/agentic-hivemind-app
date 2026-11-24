@@ -83,7 +83,8 @@ mod tests {
     use super::*;
 
     fn roots() -> Vec<Root> {
-        vec![Root { id: "nb-1".into(), path: PathBuf::from(r"C:\Notes") }, Root { id: "nb-2".into(), path: PathBuf::from(r"D:\Journal") }]
+        use crate::test_path::native;
+        vec![Root { id: "nb-1".into(), path: native(r"C:\Notes") }, Root { id: "nb-2".into(), path: native(r"D:\Journal") }]
     }
 
     #[test]
@@ -93,17 +94,17 @@ mod tests {
         assert_eq!(serde_json::to_value(&changed[0]).unwrap(), serde_json::json!({ "notebook": "nb-1", "paths": ["a.md"] }));
     }
 
-    // Uses Windows paths (C:\...), which are relative elsewhere (MACOS-1D).
-    #[cfg(windows)]
     #[test]
     fn pages_are_located_in_their_notebook() {
-        assert_eq!(locate(&roots(), Path::new(r"C:\Notes\Projects\Roadmap.md")), Some(("nb-1".into(), "Projects/Roadmap.md".into())));
-        assert_eq!(locate(&roots(), Path::new(r"D:\Journal\2026-11-20.md")), Some(("nb-2".into(), "2026-11-20.md".into())));
-        assert_eq!(locate(&roots(), Path::new(r"C:\Notes\.hivemind\notebook.json")), Some(("nb-1".into(), SIDECAR.into())));
+        use crate::test_path::native;
+        assert_eq!(locate(&roots(), &native(r"C:\Notes\Projects\Roadmap.md")), Some(("nb-1".into(), "Projects/Roadmap.md".into())));
+        assert_eq!(locate(&roots(), &native(r"D:\Journal\2026-11-20.md")), Some(("nb-2".into(), "2026-11-20.md".into())));
+        assert_eq!(locate(&roots(), &native(r"C:\Notes\.hivemind\notebook.json")), Some(("nb-1".into(), SIDECAR.into())));
     }
 
     #[test]
     fn hidden_temp_and_outside_paths_are_dropped() {
+        use crate::test_path::native;
         for path in [
             r"C:\Notes\.git\index",
             r"C:\Notes\.obsidian\app.json",
@@ -115,7 +116,7 @@ mod tests {
             r"C:\Other\Page.md",
             r"C:\Notes",
         ] {
-            assert_eq!(locate(&roots(), Path::new(path)), None, "{path}");
+            assert_eq!(locate(&roots(), &native(path)), None, "{path}");
         }
     }
 

@@ -139,7 +139,20 @@ mod tests {
         dir
     }
 
-    // Uses Windows file locks (share mode) (MACOS-1D).
+    #[test]
+    fn a_newer_fallback_from_before_the_hash_is_read() {
+        let root = scratch();
+        let fallback = root.join("app").join("nb-1.json");
+        std::fs::create_dir_all(root.join(".hivemind")).unwrap();
+        std::fs::create_dir_all(root.join("app")).unwrap();
+        std::fs::write(root.join(".hivemind/notebook.json"), r#"{"version":1,"inbox":"Old.md"}"#).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&fallback, r#"{"version":1,"inbox":"Kept.md"}"#).unwrap();
+        assert_eq!(read(&root, &fallback), json!({ "version": 1, "inbox": "Kept.md" }));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    // The write half needs a Windows share-mode lock to make the notebook copy unwritable (MACOS-1D).
     #[cfg(windows)]
     #[test]
     fn the_fallback_keeps_its_base_inside_and_a_fallback_from_before_the_hash_keeps_the_old_rule() {

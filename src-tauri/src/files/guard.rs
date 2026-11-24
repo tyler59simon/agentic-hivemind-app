@@ -156,13 +156,12 @@ impl Protected {
 mod tests {
     use super::*;
 
-    // Uses Windows paths (C:\...), which are relative elsewhere (MACOS-1D).
-    #[cfg(windows)]
     #[test]
     fn reserved_folders_are_named_whatever_their_case() {   // Codex re-review of fa08348, P1
-        assert!(reserved(Path::new(r"C:\code\repo\.git\config")).unwrap().contains(".git folder"));
-        assert!(reserved(Path::new(r"C:\vault\.Obsidian\app.json")).unwrap().contains(".obsidian folder"));
-        assert!(reserved(Path::new(r"C:\code\repo\.github\ci.yml")).is_none());
+        use crate::test_path::native;
+        assert!(reserved(&native(r"C:\code\repo\.git\config")).unwrap().contains(".git folder"));
+        assert!(reserved(&native(r"C:\vault\.Obsidian\app.json")).unwrap().contains(".obsidian folder"));
+        assert!(reserved(&native(r"C:\code\repo\.github\ci.yml")).is_none());
     }
 
     #[cfg(windows)]

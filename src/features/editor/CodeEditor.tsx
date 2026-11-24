@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, type MutableRefObject } from "react";
 import { registerDropTarget } from "../notes/drops";
 import { livePreview } from "./livePreview";
 import { documentIsDark, onDocumentLook } from "../../lib/paper";
-import { commandKey } from "../../lib/platform";
+import { linkClick } from "../../lib/platform";
 import { dropPictures, RICH_LIMIT, richDark, richEditing, richLanguage, richLook, richPreview, richRefresh, slashSource, type RichContext } from "./rich";
 import { richContext as richContextFacet } from "./rich/context";
 import { Toolbar } from "./toolbar";
@@ -186,7 +186,7 @@ export function editorExtensions(props: CodeEditorProps, latest: MutableRefObjec
       mousedown: (e) => {
         const el = (e.target as HTMLElement).closest<HTMLElement>("[data-wikilink]");
         // Cmd+click on macOS, where Ctrl+click is a right click.
-        if (!el || e.button !== 0 || !commandKey(e)) return false;
+        if (!el || !linkClick(e)) return false;
         e.preventDefault();
         latest.current.onOpenLink(el.dataset.wikilink!, e.shiftKey);
         return true;

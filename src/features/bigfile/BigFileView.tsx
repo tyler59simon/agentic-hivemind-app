@@ -156,7 +156,7 @@ export function BigFileView({ file }: { file: FileRef }) {
     const text: string[] = [];
     try {
       const handle = big.handle;
-      await copyLater((async () => {
+      await copyLater("text/plain", (async () => {
         for (let at = from; at < from + wanted; at += 500) text.push(...(await bigfileLines(handle, at, Math.min(500, from + wanted - at))).lines.map((l) => l.text));
         return text.join("\n");
       })());

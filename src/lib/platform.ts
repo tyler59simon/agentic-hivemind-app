@@ -1,4 +1,5 @@
-// What differs on macOS in the webview (MACOS-1D): key names, file manager name, path separators.
+// What differs on macOS in the webview (MACOS-1D): key names, file manager name, path rules, clipboard writes.
+// Off macOS every helper keeps the behavior Hivemind had before.
 
 /** True in WKWebView on macOS. Read once; tests set it through `setMacForTests`. */
 export let isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent);
@@ -13,25 +14,30 @@ export const fileManager = () => (isMac ? "Finder" : "Explorer");
 /** The primary shortcut modifier as shown to the user. */
 export const modKey = () => (isMac ? "Cmd" : "Ctrl");
 
-/** The command modifier of a key or mouse event: Cmd on macOS (Ctrl+click there is a right click), Ctrl elsewhere,
- *  where Cmd (the Windows key) is also accepted as before. */
+/** The command modifier of a key event: Cmd on macOS (Ctrl+letter edits text there), Ctrl or the Windows key elsewhere. */
 export const commandKey = (e: { ctrlKey: boolean; metaKey: boolean }) => (isMac ? e.metaKey : e.ctrlKey || e.metaKey);
 
-/** The folder part of an absolute path, whichever separator it uses; "" when there is none. */
+/** A click that opens a link in an editor: Cmd+click with the main button on macOS, where Ctrl+click is a right click. */
+export const linkClick = (e: { ctrlKey: boolean; metaKey: boolean; button: number }) =>
+  isMac ? e.button === 0 && e.metaKey && !e.ctrlKey : e.ctrlKey || e.metaKey;
+
+/** The folder part of an absolute path: up to the last `\` on Windows; on macOS up to the last `/` (`/` for a file at the
+ *  root, "" when there is no `/`). A backslash is an ordinary character in a macOS name. */
 export function parentFolder(path: string): string {
-  const at = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-  return at > 0 ? path.slice(0, at) : "";
+  if (!isMac) return path.slice(0, path.lastIndexOf("\\"));
+  const at = path.lastIndexOf("/");
+  return at < 0 ? "" : at === 0 ? "/" : path.slice(0, at);
 }
 
-/** The last part of a path, whichever separator it uses. */
+/** The last part of a path, by the same rules as `parentFolder`. */
 export function baseName(path: string): string {
-  return path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1);
+  return path.slice(path.lastIndexOf(isMac ? "/" : "\\") + 1);
 }
 
-/** `rel` (a `/`-separated notebook path) under `base`, written with the separator `base` uses. */
+/** `rel` (a `/`-separated notebook path) under the notebook folder `base`, as the system writes paths. */
 export function joinPath(base: string, rel: string): string {
-  const sep = base.includes("\\") && !base.includes("/") ? "\\" : "/";
-  return `${base.replace(/[\\/]+$/, "")}${sep}${sep === "\\" ? rel.replace(/\//g, "\\") : rel}`;
+  if (!isMac) return `${base}\\${rel.replace(/\//g, "\\")}`;
+  return `${base.replace(/\/+$/, "")}/${rel}`;
 }
 
 /** Whether a key event's target takes text, where the platform's own word and line keys must keep working. */
@@ -41,13 +47,17 @@ export function editableTarget(target: EventTarget | null): boolean {
   return !!el.closest("input, textarea, select, [contenteditable=''], [contenteditable='true'], .cm-editor, .xterm");
 }
 
-/** Copy text that is still being fetched. WKWebView only lets a page write the clipboard in the click that asked for
- *  it, so the write starts now with a promise; elsewhere, or without ClipboardItem, the text is awaited first. */
-export async function copyLater(text: Promise<string>): Promise<void> {
-  if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
-    const blob = text.then((t) => new Blob([t], { type: "text/plain" }));
-    await navigator.clipboard.write([new ClipboardItem({ "text/plain": blob })]);
+/** Put data that is still being made (`type`: "text/plain" or "image/png") on the clipboard. WKWebView allows a write
+ *  only during the click that asked for it, so on macOS the write starts at once with a promise; elsewhere the data is
+ *  awaited first, as before. A failure to make the data is reported before a failure to write. */
+export async function copyLater(type: string, data: Promise<string | Blob>): Promise<void> {
+  if (!isMac || typeof ClipboardItem === "undefined") {
+    const value = await data;
+    if (typeof value === "string") await navigator.clipboard.writeText(value);
+    else await navigator.clipboard.write([new ClipboardItem({ [type]: value })]);
     return;
   }
-  await navigator.clipboard.writeText(await text);
+  const [made, written] = await Promise.allSettled([data, navigator.clipboard.write([new ClipboardItem({ [type]: data })])]);
+  if (made.status === "rejected") throw made.reason;
+  if (written.status === "rejected") throw written.reason;
 }

@@ -323,8 +323,6 @@ mod tests {
         serde_json::json!({"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}})
     }
 
-    // Uses Windows paths (C:\...), which are relative elsewhere (MACOS-1D).
-    #[cfg(windows)]
     #[test]
     fn codex_lists_rollouts_for_the_folder_with_index_titles_and_times() {
         let home = home("codex");

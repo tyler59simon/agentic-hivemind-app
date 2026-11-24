@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { agentAuthStatus, type EngineInfo } from "../../lib/agent";
+import { modKey } from "../../lib/platform";
 import { termClose } from "../../lib/term";
 import { dispose, useLive } from "../terminal/registry";
 import { TerminalView } from "../terminal/TerminalView";
@@ -34,7 +35,7 @@ export function ConnectionDialog({ engine, onClose }: { engine: EngineInfo; onCl
       {engine.engine === "codex" && <p className="muted small">Codex keeps its own list of trusted folders and its own session history. Sessions started here appear there too.</p>}
       <p role="status"><strong>{auth.label}</strong></p>
       {engine.engine === "codex" && (auth.signIn || opened) && <p className="warn-text small">Codex starts a new sign-in even when you are already signed in. If you close this before finishing it, Codex is left signed out.</p>}
-      <p className="muted small">In a terminal: Ctrl+Shift+K leaves the terminal. In Claude Code, hold Shift to select text with the mouse.</p>
+      <p className="muted small">In a terminal: {modKey()}+Shift+K leaves the terminal. In Claude Code, hold Shift to select text with the mouse.</p>
       {opened ? (
         <>
           <div className="term-box login">

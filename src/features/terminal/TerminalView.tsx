@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Engine } from "../../lib/agent";
+import { modKey } from "../../lib/platform";
 import type { StartMode } from "../../lib/term";
 import { reloadKey, swallow } from "./keys";
 import * as registry from "./registry";
@@ -85,7 +86,7 @@ export function TerminalView({ id, sessionId, engine, start, label, shell = fals
       <div className="term-host" ref={host} role="group" aria-label={`Terminal: ${label}`} />
       {live?.finding
         ? <FindBar id={id} />
-        : <button className="icon-button find-open" title="Find (Ctrl+Shift+F)" aria-label="Find in terminal" onClick={() => registry.openFind(id)}><Search size="1.1em" aria-hidden /></button>}
+        : <button className="icon-button find-open" title={`Find (${modKey()}+Shift+F)`} aria-label="Find in terminal" onClick={() => registry.openFind(id)}><Search size="1.1em" aria-hidden /></button>}
       {live?.error && (
         <p className="error pad">
           {live.error}

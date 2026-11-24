@@ -11,6 +11,7 @@ import { initDocSize } from "./lib/docSize";
 import { guardReload } from "./lib/keys";
 import { inTauri } from "./lib/native";
 import { initPaperDefault } from "./lib/paper";
+import { isMac } from "./lib/platform";
 import { initTheme } from "./lib/theme";
 import { initZoom } from "./lib/zoom";
 import { Announcer } from "./ui/announce";
@@ -21,6 +22,7 @@ initPaperDefault();
 initDocSize();
 guardReload();
 initZoom();
+if (isMac) document.documentElement.classList.add("mac");
 
 /** After the whole window failed, the app's own close guard is gone: closing hides instead, so running terminals and agent
  *  sessions are not killed (tray Quit, clicked twice, still exits). */

@@ -11,6 +11,7 @@ import { OTHER_FOLDERS } from "../lib/folders";
 import { useApp } from "../store";
 import { fileName, pageTitle } from "../lib/notebooks";
 import { isLoose } from "../lib/opens";
+import { commandKey } from "../lib/platform";
 import { useNotebookTitle } from "../features/notes/notebookTitle";
 import { activeTab, tabLabel, useWorkspace } from "../workspace/store";
 import { SECTIONS } from "./Sidebar";
@@ -62,7 +63,7 @@ export function Topbar() {
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || modalOpen()) return;
+      if (!commandKey(e) || modalOpen()) return;
       const key = e.key.toLowerCase();
       if ((key === "k" && !e.shiftKey) || (key === "f" && e.shiftKey)) {
         e.preventDefault();

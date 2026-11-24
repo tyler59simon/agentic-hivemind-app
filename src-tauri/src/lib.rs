@@ -36,6 +36,8 @@ mod shell_env;
 mod skills;
 mod studio;
 mod term;
+#[cfg(test)]
+mod test_path;
 mod uninstall;
 mod watcher;
 mod wiki_build;

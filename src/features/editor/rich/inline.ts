@@ -7,7 +7,7 @@ import type { EditorState, Range } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { replacedBlocks } from "./blocks";
 import { richContext, richRefresh } from "./context";
-import { commandKey } from "../../../lib/platform";
+import { linkClick, modKey } from "../../../lib/platform";
 import { footnoteDefs, footnoteRefs, isPicture, parseEmbed } from "./parse";
 import { FootnoteWidget, MathWidget, PictureWidget } from "./widgets";
 
@@ -60,7 +60,7 @@ function build(view: EditorView): DecorationSet {
   const tree = syntaxTree(state);
   const out: Range<Decoration>[] = [];
   const href = (from: number, to: number, url: string) =>
-    out.push(Decoration.mark({ attributes: { "data-href": url, title: `${url}\nCtrl+click to open` } }).range(from, to));
+    out.push(Decoration.mark({ attributes: { "data-href": url, title: `${url}\n${modKey()}+click to open` } }).range(from, to));
   for (const { from, to } of view.visibleRanges) {
     tree.iterate({
       from, to,
@@ -153,7 +153,7 @@ export const richLinks = EditorView.domEventHandlers({
   mousedown: (e, view) => {
     const link = (e.target as HTMLElement).closest<HTMLElement>("[data-href]");
     const ctx = view.state.facet(richContext);
-    if (!link || !ctx || e.button !== 0 || !commandKey(e)) return false;
+    if (!link || !ctx || !linkClick(e)) return false;
     e.preventDefault();
     ctx.openHref(link.dataset.href!, e.shiftKey);
     return true;

@@ -4,6 +4,7 @@ import { syntaxTree } from "@codemirror/language";
 import type { EditorState, Range } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
 import { wikilinks } from "../../lib/note";
+import { modKey } from "../../lib/platform";
 import { richContext } from "./rich/context";
 import { isPicture } from "./rich/parse";
 
@@ -115,7 +116,7 @@ function build(view: EditorView): DecorationSet {
       if (shown >= b - 2) continue;
       deco.push(hide.range(a, shown));
       deco.push(Decoration.mark({
-        class: "cm-wikilink", attributes: { "data-wikilink": link.target, title: "Ctrl+click to open" },
+        class: "cm-wikilink", attributes: { "data-wikilink": link.target, title: `${modKey()}+click to open` },
       }).range(shown, b - 2));
       deco.push(hide.range(b - 2, b));
     }

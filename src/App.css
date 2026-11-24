@@ -337,7 +337,9 @@
 :root[data-theme="emerald-light"] .sidebar, :root[data-theme="emerald-light"] .term-box { color-scheme: dark; color: var(--fg); }
 :root[data-theme="emerald-light"] .sidebar .overlay { color-scheme: light; color: var(--fg); }
 * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--scrollbar) transparent; }
-body { margin: 0; background: var(--bg); overscroll-behavior: none; }
+body { margin: 0; background: var(--bg); }
+/* WKWebView bounces the whole page past its edges; the root element owns that (MACOS-1D). */
+html.mac { overscroll-behavior: none; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; background: none; border: 1px solid var(--control-border); border-radius: .45rem; padding: .25rem .7rem; display: inline-flex; align-items: center; justify-content: center; gap: .4rem; }
 button:hover { background: var(--bg-hover); }

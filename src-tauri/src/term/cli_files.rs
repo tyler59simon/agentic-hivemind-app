@@ -297,8 +297,6 @@ mod tests {
         assert_eq!(parse_iso_ms("yesterday"), None);
     }
 
-    // Uses Windows paths (C:\...), which are relative elsewhere (MACOS-1D).
-    #[cfg(windows)]
     #[test]
     fn a_codex_thread_is_the_earliest_rollout_for_the_folder_after_the_start() {
         let home = home("codex");

@@ -16,7 +16,7 @@ import { onThemeChange } from "../../lib/theme";
 import { termClose, termLogin, termOpen, termResize, termShell, termWrite, type ShellTarget, type StartMode, type TermExit, type TermInfo } from "../../lib/term";
 import { keyAction } from "./keys";
 import { decodeOsc52 } from "./osc52";
-import { quotePaths } from "./paths";
+import { quotePaths, type PasteTarget } from "./paths";
 import { pasteAction } from "./paste";
 import { isShellId, type ShellTab } from "./shells";
 import { setTerminalDrops } from "../notes/drops";
@@ -129,6 +129,14 @@ function watchExits() {
   }).catch(() => { exitListener = false; });
 }
 
+/** How a dropped path is quoted for terminal `id`: shell tabs are PowerShell on Windows and the login shell on macOS
+ *  (term/launch.rs `posix_shell` labels fish tabs "fish"). */
+function pasteTarget(id: string): PasteTarget {
+  if (!sources.get(id)?.shell) return "other";
+  if (!isMac) return "powershell";
+  return shells.get(id)?.label === "fish" ? "fish" : "posix";
+}
+
 /** Files dropped on the window go to the visible terminal under the drop position, as a paste (WebView2's own drop event has no paths). */
 function watchDrops() {
   if (dropListener) return;
@@ -138,8 +146,8 @@ function watchDrops() {
     // The position is in physical pixels.
     const live = terminalAt(e.payload.position.x / window.devicePixelRatio, e.payload.position.y / window.devicePixelRatio);
     if (!live) return;
-    // A PowerShell tab expands `$` and backticks inside double quotes, so it gets single-quoted literals.
-    live.term.paste(quotePaths(e.payload.paths, sources.get(live.id)?.shell ? (isMac ? "posix" : "powershell") : "other"));
+    // A shell tab expands `$` inside double quotes, so it gets single-quoted literals in its own quoting.
+    live.term.paste(quotePaths(e.payload.paths, pasteTarget(live.id)));
     live.term.focus();
   }).catch(() => { dropListener = false; });
 }

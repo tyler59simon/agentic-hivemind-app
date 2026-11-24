@@ -195,13 +195,12 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    // Uses Windows paths (C:\...), which are relative elsewhere (MACOS-1D).
-    #[cfg(windows)]
     #[test]
     fn relative_paths_use_forward_slashes() {
-        let root = Path::new(r"C:\nb");
-        assert_eq!(relative(root, Path::new(r"C:\nb\a\b.md")).as_deref(), Some("a/b.md"));
-        assert_eq!(relative(root, Path::new(r"C:\nb")), None);
-        assert_eq!(relative(root, Path::new(r"C:\other\b.md")), None);
+        use crate::test_path::native;
+        let root = &native(r"C:\nb");
+        assert_eq!(relative(root, &native(r"C:\nb\a\b.md")).as_deref(), Some("a/b.md"));
+        assert_eq!(relative(root, &native(r"C:\nb")), None);
+        assert_eq!(relative(root, &native(r"C:\other\b.md")), None);
     }
 }

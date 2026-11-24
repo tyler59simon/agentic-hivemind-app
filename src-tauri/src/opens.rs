@@ -461,31 +461,31 @@ mod prune_tests {
         assert_eq!(drops.take(&early, &[0]).unwrap(), vec![PathBuf::from("C:/drops/early.md")]);
     }
 
-    // Uses Windows paths (C:\...), which are relative elsewhere (MACOS-1D).
-    #[cfg(windows)]
     #[test]
     fn knock_paths_touch_nothing_and_keep_only_usable_paths() {   // Codex review of 52051c8, I2
-        let open = vec!["--flag".to_string(), "rel.txt".to_string(), r"C:\nowhere\abs.md".to_string()];
-        assert_eq!(knock_paths(&open, Some(r"C:\work")), vec![PathBuf::from(r"C:\work\rel.txt"), PathBuf::from(r"C:\nowhere\abs.md")]);
-        assert_eq!(knock_paths(&open, None), vec![PathBuf::from(r"C:\nowhere\abs.md")], "a relative path needs the launch's folder");
-        let many: Vec<String> = (0..40).map(|i| format!(r"C:\f{i}.txt")).collect();
+        use crate::test_path::{native, native_str};
+        let open = vec!["--flag".to_string(), "rel.txt".to_string(), native_str(r"C:\nowhere\abs.md")];
+        assert_eq!(knock_paths(&open, Some(&native_str(r"C:\work"))), vec![native(r"C:\work").join("rel.txt"), native(r"C:\nowhere\abs.md")]);
+        assert_eq!(knock_paths(&open, None), vec![native(r"C:\nowhere\abs.md")], "a relative path needs the launch's folder");
+        let many: Vec<String> = (0..40).map(|i| native_str(&format!(r"C:\f{i}.txt"))).collect();
         assert_eq!(knock_paths(&many, None).len(), MAX_PATHS);
     }
 
     #[test]
     fn picture_grants_stay_only_for_notebooks_and_folders_of_recent_files() {
+        use crate::test_path::{native, native_str};
         let nb = |p: &str| crate::notebooks::Notebook { id: "nb-1".into(), path: p.into(), ..Default::default() };
         let grant = |p: &str| Grant { id: "g".into(), path: p.into(), opened: String::new() };
-        let (notebooks, grants) = (vec![nb(r"C:\nb")], vec![grant(r"C:\docs\a.txt")]);
-        assert!(in_use(Path::new(r"C:\nb"), &notebooks, &grants));
-        assert!(in_use(Path::new(r"C:\docs"), &notebooks, &grants));
-        assert!(!in_use(Path::new(r"C:\old"), &notebooks, &grants), "a folder whose last recent file was forgotten or evicted");
-        assert!(!in_use(Path::new(r"C:\nb\sub"), &notebooks, &grants), "only the exact folder");
+        let (notebooks, grants) = (vec![nb(&native_str(r"C:\nb"))], vec![grant(&native_str(r"C:\docs\a.txt"))]);
+        assert!(in_use(&native(r"C:\nb"), &notebooks, &grants));
+        assert!(in_use(&native(r"C:\docs"), &notebooks, &grants));
+        assert!(!in_use(&native(r"C:\old"), &notebooks, &grants), "a folder whose last recent file was forgotten or evicted");
+        assert!(!in_use(&native(r"C:\nb\sub"), &notebooks, &grants), "only the exact folder");
         let assets = crate::assets::AssetGrants::default();
-        let (kept, dropped) = (assets.grant(Path::new(r"C:\docs")), assets.grant(Path::new(r"C:\old")));
+        let (kept, dropped) = (assets.grant(&native(r"C:\docs")), assets.grant(&native(r"C:\old")));
         assets.retain(|root| in_use(root, &notebooks, &grants));
-        assert_eq!(assets.grant(Path::new(r"C:\docs")), kept);
-        assert_ne!(assets.grant(Path::new(r"C:\old")), dropped, "a pruned folder gets a new id, so old URLs stop loading");
+        assert_eq!(assets.grant(&native(r"C:\docs")), kept);
+        assert_ne!(assets.grant(&native(r"C:\old")), dropped, "a pruned folder gets a new id, so old URLs stop loading");
     }
 }
 

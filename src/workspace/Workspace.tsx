@@ -12,6 +12,7 @@ import { isUnsaved } from "../documents/session";
 import { newPageHere } from "../features/notes/actions";
 import { fileName, isMarkdown, isRichDoc } from "../lib/notebooks";
 import { announceDocumentLook, useWhitePaper } from "../lib/paper";
+import { commandKey } from "../lib/platform";
 import { useApp } from "../store";
 import { ErrorBoundary } from "../ui/ErrorBoundary";
 import { tabKey } from "../ui/focus";
@@ -149,6 +150,9 @@ export function Workspace() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || modalOpen()) return;
+      // Letters take the platform's command key (Ctrl+E and Ctrl+W edit text on macOS); Ctrl+Tab cycles tabs everywhere,
+      // since Cmd+Tab switches apps on macOS.
+      if (e.key !== "Tab" && !commandKey(e)) return;
       const ws = useWorkspace.getState();
       const pane = ws.panes.find((p) => p.id === ws.focused) ?? ws.panes[0];
       if (e.key.toLowerCase() === "w") { if (pane?.active) close.request(pane.id, pane.active); }

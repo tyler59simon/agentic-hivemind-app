@@ -9,6 +9,7 @@ import { PanZoomViewport } from "../../ui/PanZoomViewport";
 import { toast } from "../../ui/toast";
 import { CodeEditor } from "../editor/CodeEditor";
 import { saveCopy } from "../notes/actions";
+import { copyLater } from "../../lib/platform";
 import { rasterizeSvgToPng } from "../svg/svg";
 
 export interface MermaidEditorProps {
@@ -111,9 +112,8 @@ export default function MermaidEditor(props: MermaidEditorProps) {
   const copyPng = async () => {
     if (!currentSvg) return;
     try {
-      if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
-        // The picture goes in as a promise: WKWebView allows the write only during the click (MACOS-1D).
-        await navigator.clipboard.write([new ClipboardItem({ "image/png": rasterizeSvgToPng(currentSvg) })]);
+      if (typeof ClipboardItem !== "undefined" && typeof navigator.clipboard?.write === "function") {
+        await copyLater("image/png", rasterizeSvgToPng(currentSvg));
         toast("PNG copied to clipboard");
       } else {
         toast("Clipboard image copy is not available here", "warn");
