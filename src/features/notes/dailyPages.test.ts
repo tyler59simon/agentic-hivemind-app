@@ -1,8 +1,7 @@
-// NS-7A: the settings a notebook resolves to (folder notebooks from the sidecar and the vault's Obsidian files, Living
-// Memory notebooks from their `settings`), and making a day's page from its template.
+// NS-7A: the settings a notebook resolves to (from the sidecar and the vault's Obsidian files), and making a day's page from its
+// template.
 import { invoke } from "@tauri-apps/api/core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setTransport, type Invoke } from "../../lib/lm";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_DAILY } from "./daily";
 import { ensureDaily, loadNotebookInfo } from "./dailyPages";
 
@@ -21,7 +20,6 @@ beforeEach(() => {
     return handler((args ?? {}) as Record<string, unknown>);
   });
 });
-afterEach(() => setTransport(invoke as Invoke));
 
 const loaded = (text: string) => ({ text, sha256: "s", size: text.length, mtimeMs: 1, format: { encoding: "UTF-8", bom: false, eol: "lf" }, readOnly: null, binary: false });
 const day = new Date(2026, 10, 22, 9, 7);
@@ -32,7 +30,7 @@ describe("a folder notebook's settings", () => {
     rust.notebook_meta_get = () => ({ version: 1, daily: { folder: "Journal" }, templates: "Tpls", inbox: "Box.md" });
     rust.obsidian_setting = ({ name }) => (name === "daily-notes.json" ? { folder: "Ignored", format: "YYYY/MM/DD", template: "Tpls/Day" } : { folder: "ObsTemplates" });
     const info = await loadNotebookInfo("nb-1");
-    expect(info).toMatchObject({ title: "Work", editable: true, stored: { folder: "Journal" } });
+    expect(info).toMatchObject({ title: "Work", stored: { folder: "Journal" } });
     expect(info.settings).toEqual({ folder: "Journal", format: "YYYY/MM/DD", template: "Tpls/Day", templates: "Tpls", inbox: "Box.md" });
     expect(sent.filter((s) => s.cmd === "obsidian_setting").map((s) => s.args.name).sort()).toEqual(["daily-notes.json", "templates.json"]);
   });
@@ -42,25 +40,6 @@ describe("a folder notebook's settings", () => {
     rust.notebook_meta_get = () => ({});
     rust.obsidian_setting = () => { throw new Error(".obsidian/daily-notes.json is not valid JSON"); };
     expect((await loadNotebookInfo("nb-1")).settings).toEqual(DEFAULT_DAILY);
-  });
-});
-
-describe("a Living Memory notebook's settings", () => {
-  const rows = (settings?: object) => ({ notebooks: [{ domain: "demo", notebook: "daily", title: "Daily", visibility: "searchable", private: false, revision: "r", pages: 0, assets: 0, asset_bytes: 0, proposals: 0, updated: "", ...(settings ? { settings } : {}) }] });
-  const bridge = (result: unknown) => setTransport(async () => ({ exit_code: 0, error: null, result }));
-
-  it("come from the settings of its row", async () => {
-    bridge(rows({ daily: { folder: "Days", inbox: "In.md" } }));
-    const info = await loadNotebookInfo("lm:demo:daily");
-    expect(info).toMatchObject({ title: "Daily", editable: true });
-    expect(info.settings).toEqual({ ...DEFAULT_DAILY, folder: "Days", inbox: "In.md" });
-  });
-
-  it("are the defaults, and cannot be changed, when Living Memory reports no settings", async () => {
-    bridge(rows());
-    const info = await loadNotebookInfo("lm:demo:daily");
-    expect(info.settings).toEqual(DEFAULT_DAILY);
-    expect(info.editable).toBe(false);
   });
 });
 

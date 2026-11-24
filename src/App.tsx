@@ -267,8 +267,7 @@ export default function App() {
   useEffect(() => {
     if (!link.data) return;
     useConnection.getState().set(link.data.version);
-    // Living Memory pages belong to the store they were read from (Codex review of 32fee20, D1), and their requests to the
-    // bridge generation that serves it (re-review of 75ce884, R2-D1).
+    // Note sessions belong to the store they were read from, and their requests to the bridge generation that serves it.
     setBridgeGeneration(link.data.generation);
     setLmStore(link.data.root);
   }, [link.data]);

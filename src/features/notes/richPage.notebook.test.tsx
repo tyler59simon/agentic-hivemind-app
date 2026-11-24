@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// NS-3D: what a rich page's context gives its embeds: the page's own notebook's files, only for a folder notebook, with
+// NS-3D: what a rich page's context gives its embeds: the page's own notebook's files, only for a page of a folder notebook, with
 // URLs through the page's picture grant and paths checked as the file commands check them.
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -8,7 +8,6 @@ import { describe, expect, it, vi } from "vitest";
 const files = vi.hoisted(() => ({ readFile: vi.fn(async () => ({ text: "x" })), createFile: vi.fn(async () => ({})), saveFile: vi.fn(async () => ({ status: "saved" })), deleteFile: vi.fn(async () => "trash/x") }));
 vi.mock("../../documents/io", () => ({ readDoc: vi.fn(), attachBytes: vi.fn(), attachDropped: vi.fn() }));
 vi.mock("./actions", () => ({ openPage: vi.fn() }));
-vi.mock("../../documents/adapters/lmdoc", () => ({ openAttachment: vi.fn() }));
 vi.mock("../../ui/toast", () => ({ toast: vi.fn() }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 vi.mock("../../lib/notebooks", async (original) => ({ ...(await original<typeof import("../../lib/notebooks")>()), ...files }));
@@ -20,7 +19,7 @@ import { useRichPage, type RichPage } from "./richPage";
 
 async function richFor(page: Partial<RichPage>): Promise<RichContext> {
   let got!: RichContext;
-  function Probe() { got = useRichPage({ ref: { notebook: "nb-1", path: "Plans/A.hmdoc" }, files: ["Plans/A.hmdoc", "docs/Spec.pdf"], base: "http://hmfile.localhost/g1/", lm: false, loose: false, follow: vi.fn(), takesLink: () => true, own: () => true, ...page }); return null; }
+  function Probe() { got = useRichPage({ ref: { notebook: "nb-1", path: "Plans/A.hmdoc" }, files: ["Plans/A.hmdoc", "docs/Spec.pdf"], base: "http://hmfile.localhost/g1/", loose: false, follow: vi.fn(), takesLink: () => true, ...page }); return null; }
   const root = createRoot(document.createElement("div"));
   await act(async () => root.render(<Probe />));
   return got;
@@ -72,8 +71,7 @@ describe("the notebook of a rich page", () => {
     expect(files.deleteFile).not.toHaveBeenCalled();
   });
 
-  it("is absent for a loose file and for a Living Memory page", async () => {
+  it("is absent for a loose file", async () => {
     expect((await richFor({ loose: true })).notebook).toBeUndefined();
-    expect((await richFor({ lm: true, ref: { notebook: "lm:demo:plans", path: "Plans/A.md" } })).notebook).toBeUndefined();
   });
 });

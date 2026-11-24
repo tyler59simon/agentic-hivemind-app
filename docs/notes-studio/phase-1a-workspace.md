@@ -1,5 +1,7 @@
 # NS-1A: shared workspace, Notes page and folder notebooks
 
+> **Retired (CON-18, 2026-11-24).** Living Memory notebooks, the ones that kept their pages inside the store, no longer exist in Hivemind or in Living Memory. Where this document describes them (`lm:<domain>:<notebook>` pages, `doc notebooks`, `doc read`, `doc write`, `doc tasks`, `doc query`, the Living Memory group of search), read it as history. What it says about folder notebooks still holds.
+
 Read [README.md](README.md) first. This phase gives Hivemind a Notes page where the user registers folders as notebooks, browses them as a tree, and opens pages as tabs in the same workspace the Memory page uses. Pages are plain files on disk; saving is atomic and refuses to overwrite a file that changed underneath. Memory behaviour does not change.
 
 Out of scope here: loose files outside notebooks, encodings other than UTF-8, images (NS-1B); Living Memory notebooks (NS-2C); rich preview (NS-3A); the index and backlinks (NS-4A).

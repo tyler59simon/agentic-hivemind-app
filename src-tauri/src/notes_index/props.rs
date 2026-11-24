@@ -1,6 +1,6 @@
 //! The tasks and the properties of a Markdown page, for the index (NS-7B). They are read the way Living Memory reads
-//! them (`core/docs_index.py`, `tasks` and `properties`), so a saved query or the Tasks list means the same over a folder
-//! notebook and a Living Memory notebook: a task is a `- [ ]` or `- [x]` line outside fenced code and the frontmatter, and
+//! them (`core/docs_index.py`, which still indexes the tasks of folder notebooks for `open`), so a saved query or the Tasks list
+//! means what it does there: a task is a `- [ ]` or `- [x]` line outside fenced code and the frontmatter, and
 //! a property is a flat key of the frontmatter (a list gives one value per item; nested maps are skipped). The fields of a task
 //! (`due`, `owner`, `priority`) follow one rule, shared with Living Memory (`core/note_format.py`, `item_fields`) and with
 //! `src/features/notes/tasks.ts`; `src/features/notes/fixtures/task_lines.json` holds the cases all three are checked against.

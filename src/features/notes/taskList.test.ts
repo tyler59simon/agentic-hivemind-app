@@ -28,14 +28,14 @@ describe("the rows", () => {
   it("filter by notebook, action items, due bucket, done and the words of the text or the page title", () => {
     const items = [
       task("overdue one", {}, "2026-12-01"), task("due today", {}, today), task("this week", {}, "2026-12-08"), task("no date"),
-      task("finished late", { done: true }, "2026-12-01"), task("other book", { notebook: "lm:d:n", notebookTitle: "d · N" }),
+      task("finished late", { done: true }, "2026-12-01"), task("other book", { notebook: "nb-9", notebookTitle: "Other" }),
       task("an action", { kind: "action", notebook: "d", notebookTitle: "d · action items" }),
     ];
     const f = (over: Partial<Parameters<typeof filterTasks>[1]>) => filterTasks(items, { notebook: "", due: "any", done: "open", text: "", ...over }, today).map((t) => t.text);
     expect(f({})).toEqual(["overdue one", "due today", "this week", "no date", "other book", "an action"]);
     expect(f({ done: "done" })).toEqual(["finished late"]);
     expect(f({ done: "all" })).toHaveLength(7);
-    expect(f({ notebook: "lm:d:n" })).toEqual(["other book"]);
+    expect(f({ notebook: "nb-9" })).toEqual(["other book"]);
     expect(f({ notebook: "@actions" })).toEqual(["an action"]);
     expect(f({ notebook: "nb-1" })).toEqual(["overdue one", "due today", "this week", "no date"]);
     expect(f({ due: "overdue" })).toEqual(["overdue one"]);

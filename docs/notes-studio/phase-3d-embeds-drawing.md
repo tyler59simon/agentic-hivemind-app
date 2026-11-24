@@ -1,5 +1,7 @@
 # NS-3D: `.hmdoc` embeds and drawing
 
+> **Retired (CON-18, 2026-11-24).** Living Memory notebooks, the ones that kept their pages inside the store, no longer exist in Hivemind or in Living Memory. Where this document describes them (`lm:<domain>:<notebook>` pages, `doc notebooks`, `doc read`, `doc write`, `doc tasks`, `doc query`, the Living Memory group of search), read it as history. What it says about folder notebooks still holds.
+
 Read [phase-3c-hmdoc.md](phase-3c-hmdoc.md) first. This phase adds typed live embeds, an Excalidraw block, freehand ink and OneNote-style free-positioned blocks to `.hmdoc` pages. No embed is ever an iframe.
 
 ## Changes from the NS-0 review

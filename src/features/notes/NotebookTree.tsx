@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { classify } from "../../lib/errors";
 import { fileManager } from "../../lib/platform";
 import { treeQuery } from "../../documents/io";
-import type { DocNotebook } from "../../lib/lm";
+import type { Visibility } from "../../lib/lm";
 import { isCanvas, isDocx, isDrawio, isMarkdown, isMermaid, isPdf, isRichDoc, isSvg, metaQuery, revealFile, type Notebook } from "../../lib/notebooks";
 import { Menu } from "../../ui/Menu";
 import { toast } from "../../ui/toast";
@@ -84,22 +84,21 @@ export function useRowDrag(root: string, onDrop: (from: string, target: Node | n
 }
 
 /** How far agents reach, when it is not the default (searchable): shown beside the notebook's name. */
-function reachLabel(reach: { visibility?: DocNotebook["visibility"]; private?: boolean }) {
+function reachLabel(reach: { visibility?: Visibility; private?: boolean }) {
   if (reach.private) return "Private";
   return reach.visibility && reach.visibility !== "searchable" ? REACH_TEXT[reach.visibility].label : null;
 }
 
-/** One notebook: its header, and its sections and pages as an expandable tree. A Living Memory notebook (`lm`, NS-2C)
- *  has no folder on disk to show, no empty sections and no section delete, and shows its agents' proposals. */
-export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onEdits }: {
-  notebook: Notebook; onSettings: () => void; lm?: DocNotebook; onProposals?: () => void;
+/** One notebook: its header, and its sections and pages as an expandable tree. */
+export function NotebookTree({ notebook, onSettings, edits, onEdits }: {
+  notebook: Notebook; onSettings: () => void;
   /** Page edits agents proposed to a folder notebook (CON-9) wait in the Inbox's Pages group; `onEdits` opens it. */
   edits?: number; onEdits?: () => void;
 }) {
   const client = useQueryClient();
   const tree = useQuery(treeQuery(notebook.id));
-  const meta = useQuery({ ...metaQuery(notebook.id), enabled: !lm });
-  const reach = reachLabel(lm ?? stricter(notebook, (meta.data ?? {}) as Parameters<typeof stricter>[1]));
+  const meta = useQuery(metaQuery(notebook.id));
+  const reach = reachLabel(stricter(notebook, (meta.data ?? {}) as Parameters<typeof stricter>[1]));
   const [open, setOpen] = useState(() => loadOpen(notebook.id));
   const [collapsed, setCollapsed] = useState(false);
   const [renaming, setRenaming] = useState<{ path: string; value: string } | null>(null);
@@ -147,7 +146,7 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
 
   const pick = (node: Node, e: { ctrlKey: boolean; metaKey: boolean }) => {
     if (node.kind === "dir") return toggle(node.path);
-    if (node.kind === "other" && (lm || SYSTEM_VIEWED.test(node.path))) return void revealFile(notebook.id, node.path, true).catch(fail);
+    if (node.kind === "other" && SYSTEM_VIEWED.test(node.path)) return void revealFile(notebook.id, node.path, true).catch(fail);
     openPage({ notebook: notebook.id, path: node.path }, { split: e.ctrlKey || e.metaKey });
   };
   /** The folder new pages go into from a row: a section itself, or a page's subpage folder. */
@@ -160,12 +159,10 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
     const folder = folderFor(node);
     newPage(client, notebook.id, folder).then(() => { if (node) toggle(node.path, true); }, fail);
   };
-  /** A rich page (NS-3C) is a file of a folder notebook: Living Memory notebooks have none. */
   const createRich = (node: Node | null) => {
     const folder = folderFor(node);
     newRichPage(client, notebook.id, folder).then(() => { if (node) toggle(node.path, true); }, fail);
   };
-  /** A canvas board (NS-7C) is a file of a folder notebook: Living Memory notebooks have none. */
   const createCanvas = (node: Node | null) => {
     const folder = folderFor(node);
     newCanvas(client, notebook.id, folder).then(() => { if (node) toggle(node.path, true); }, fail);
@@ -207,7 +204,7 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
     if (contextMenuKey(e)) { e.preventDefault(); setMenu({ node, ...menuPointFor(e.currentTarget), from: e.currentTarget }); return; }
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(node, e); return; }
     if (e.key === "F2") { e.preventDefault(); setRenaming({ path: node.path, value: label(node) }); return; }
-    if (e.key === "Delete" && !(lm && node.kind === "dir")) { e.preventDefault(); remove(node); return; }
+    if (e.key === "Delete") { e.preventDefault(); remove(node); return; }
     const move = treeMove(rows, at, e.key);
     if (!move) return;
     e.preventDefault();
@@ -232,13 +229,9 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
           <span className="grow">{notebook.title}</span>
           {reach && <span className="badge">{reach}</span>}
         </button>
-        {!lm && !!edits && (
+        {!!edits && (
           <button className="icon-button proposals-badge" title={`${edits} proposed ${edits === 1 ? "edit" : "edits"} from agents, waiting in the Inbox`}
             onClick={onEdits}><Inbox size="1em" aria-hidden />{edits} agent {edits === 1 ? "edit" : "edits"}</button>
-        )}
-        {lm && lm.proposals > 0 && (
-          <button className="icon-button proposals-badge" title={`${lm.proposals} proposed ${lm.proposals === 1 ? "edit" : "edits"} from agents`}
-            aria-label={`${lm.proposals} agent ${lm.proposals === 1 ? "proposal" : "proposals"}`} onClick={onProposals}><Inbox size="1em" aria-hidden />{lm.proposals}</button>
         )}
         <button className="icon-button" title="Today's daily page" aria-label="Today" onClick={() => openToday(client, notebook.id).catch(fail)}><CalendarDays size="1.1em" aria-hidden /></button>
         <button className="icon-button" title="New page" aria-label="New page" onClick={() => create(null)}><Plus size="1.1em" aria-hidden /></button>
@@ -247,17 +240,15 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
           {(close) => (
             <>
               <li><button role="menuitem" onClick={() => { close(); useTemplateIntent.getState().open(notebook.id); }}>New page from template…</button></li>
-              {!lm && <li><button role="menuitem" onClick={() => { close(); createRich(null); }}>New rich page</button></li>}
-              {!lm && <li><button role="menuitem" onClick={() => { close(); createCanvas(null); }}>New canvas</button></li>}
-              {!lm && <li><button role="menuitem" onClick={() => { close(); createMermaid(null); }}>New Mermaid diagram</button></li>}
-              {!lm && <li><button role="menuitem" onClick={() => { close(); createDrawio(null); }}>New Draw.io diagram</button></li>}
-              {!lm && <li><button role="menuitem" onClick={() => { close(); createSvg(null); }}>New SVG</button></li>}
-              {!lm && <li><button role="menuitem" onClick={() => { close(); createDocx(null); }}>New Word document</button></li>}
+              {<li><button role="menuitem" onClick={() => { close(); createRich(null); }}>New rich page</button></li>}
+              {<li><button role="menuitem" onClick={() => { close(); createCanvas(null); }}>New canvas</button></li>}
+              {<li><button role="menuitem" onClick={() => { close(); createMermaid(null); }}>New Mermaid diagram</button></li>}
+              {<li><button role="menuitem" onClick={() => { close(); createDrawio(null); }}>New Draw.io diagram</button></li>}
+              {<li><button role="menuitem" onClick={() => { close(); createSvg(null); }}>New SVG</button></li>}
+              {<li><button role="menuitem" onClick={() => { close(); createDocx(null); }}>New Word document</button></li>}
               <li><button role="menuitem" onClick={() => { close(); onSettings(); }}>Notebook settings…</button></li>
-              {lm
-                ? <li><button role="menuitem" onClick={() => { close(); onProposals?.(); }}>Agent proposals…</button></li>
-                : <li><button role="menuitem" onClick={() => { close(); revealFile(notebook.id, null).catch(fail); }}>Show in {fileManager()}</button></li>}
-              {!lm && <li><button role="menuitem" onClick={() => { close(); openFindInFiles({ notebook: notebook.id }); }}>Find in files…</button></li>}
+              <li><button role="menuitem" onClick={() => { close(); revealFile(notebook.id, null).catch(fail); }}>Show in {fileManager()}</button></li>
+              {<li><button role="menuitem" onClick={() => { close(); openFindInFiles({ notebook: notebook.id }); }}>Find in files…</button></li>}
               <li><button role="menuitem" onClick={() => { close(); client.invalidateQueries({ queryKey: ["notebook-tree", notebook.id] }); }}>Refresh</button></li>
             </>
           )}
@@ -323,22 +314,22 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
               <>
                 {n.kind !== "dir" && item("Open beside", () => openPage({ notebook: notebook.id, path: n.path }, { split: true }))}
                 {n.kind !== "other" && !sharesFolder(n) && item(n.kind === "dir" ? "New page here" : "New subpage", () => create(n))}
-                {!lm && n.kind !== "other" && !sharesFolder(n) && item(n.kind === "dir" ? "New rich page here" : "New rich subpage", () => createRich(n))}
-                {!lm && n.kind === "dir" && item("New canvas here", () => createCanvas(n))}
-                {!lm && n.kind === "dir" && item("New Mermaid diagram here", () => createMermaid(n))}
-                {!lm && n.kind === "dir" && item("New Draw.io diagram here", () => createDrawio(n))}
-                {!lm && n.kind === "dir" && item("New SVG here", () => createSvg(n))}
-                {!lm && n.kind === "dir" && item("New Word document here", () => createDocx(n))}
+                {n.kind !== "other" && !sharesFolder(n) && item(n.kind === "dir" ? "New rich page here" : "New rich subpage", () => createRich(n))}
+                {n.kind === "dir" && item("New canvas here", () => createCanvas(n))}
+                {n.kind === "dir" && item("New Mermaid diagram here", () => createMermaid(n))}
+                {n.kind === "dir" && item("New Draw.io diagram here", () => createDrawio(n))}
+                {n.kind === "dir" && item("New SVG here", () => createSvg(n))}
+                {n.kind === "dir" && item("New Word document here", () => createDocx(n))}
                 {n.kind === "dir" && item("New page from template…", () => useTemplateIntent.getState().open(notebook.id, folderFor(n)))}
-                {!lm && n.kind === "page" && isMarkdown(n.path) && item("Convert to rich page", () => convertToRich(client, { notebook: notebook.id, path: n.path }).catch(fail))}
-                {!lm && n.kind === "page" && isRichDoc(n.path) && item("Export to Markdown…", () => runExport(client, { notebook: notebook.id, path: n.path }, setDialog))}
+                {n.kind === "page" && isMarkdown(n.path) && item("Convert to rich page", () => convertToRich(client, { notebook: notebook.id, path: n.path }).catch(fail))}
+                {n.kind === "page" && isRichDoc(n.path) && item("Export to Markdown…", () => runExport(client, { notebook: notebook.id, path: n.path }, setDialog))}
                 {n.kind === "dir" && item("New section here", () => { toggle(n.path, true); setNaming({ folder: n.path, value: "" }); })}
-                {!lm && n.kind === "dir" && item("Find in files…", () => openFindInFiles({ notebook: notebook.id, sub: n.path }))}
+                {n.kind === "dir" && item("Find in files…", () => openFindInFiles({ notebook: notebook.id, sub: n.path }))}
                 {item("Rename", () => setRenaming({ path: n.path, value: label(n) }))}
                 {item("Move to…", () => moveTo(n))}
-                {!lm && n.kind === "other" && item("Open with default app", () => revealFile(notebook.id, n.path, true).catch(fail))}
-                {!lm && item(`Show in ${fileManager()}`, () => revealFile(notebook.id, n.path).catch(fail))}
-                {!(lm && n.kind === "dir") && item(n.kind === "dir" ? "Delete section…" : "Delete…", () => remove(n), "danger-text")}
+                {n.kind === "other" && item("Open with default app", () => revealFile(notebook.id, n.path, true).catch(fail))}
+                {item(`Show in ${fileManager()}`, () => revealFile(notebook.id, n.path).catch(fail))}
+                {item(n.kind === "dir" ? "Delete section…" : "Delete…", () => remove(n), "danger-text")}
               </>
             );
           })()}

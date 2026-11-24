@@ -1,7 +1,6 @@
 //! Reading the tasks and properties tables (NS-7B): the Tasks list, and the saved queries of the Notes page. A query is
-//! evaluated here over the folder notebooks' pages with the rules of Living Memory's `doc query`
-//! (`core/docs_index.py`, `_matches` and `query`), so one query reads the same over both kinds of notebook: every condition
-//! must hold, a property with several values holds when any value does, comparisons are numeric when both sides are numbers
+//! evaluated here over the folder notebooks' pages with the rules Living Memory's `doc query` had before CON-18 removed it
+//! (2026-11-24): every condition must hold, a property with several values holds when any value does, comparisons are numeric when both sides are numbers
 //! and by lower-case text otherwise, and a page without the sort key comes last.
 use rusqlite::types::Value as Sql;
 use rusqlite::{params_from_iter, Connection};
@@ -51,7 +50,7 @@ pub struct TaskRow {
 }
 
 /// The tasks of the indexed pages, open before done, then by due date (those with none last), notebook, page and line: the
-/// order of Living Memory's `doc tasks`.
+/// order `doc tasks` had before CON-18 removed it.
 pub fn tasks(conn: &Connection, filters: &TaskFilters) -> rusqlite::Result<Vec<TaskRow>> {
     let mut sql = String::from("SELECT p.notebook, p.path, p.title, t.line, t.done, t.text, t.due, t.owner, t.priority, p.sha256 FROM tasks t JOIN pages p ON p.id = t.page WHERE 1 = 1");
     let mut args: Vec<Sql> = Vec::new();

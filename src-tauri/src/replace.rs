@@ -1045,7 +1045,7 @@ mod tests {
         put(&other, "a.md", b"x");
         let below = docs_below(&t.root, vec![doc("nb-9", "a.md", true)], |d| Some(other.join(&d.path)));
         assert!(below.is_empty());
-        let none = docs_below(&t.root, vec![doc("lm:d:n", "a.md", true)], |_| None);
+        let none = docs_below(&t.root, vec![doc("nb-gone", "a.md", true)], |_| None);
         assert!(none.is_empty());
     }
 

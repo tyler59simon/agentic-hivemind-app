@@ -1,6 +1,5 @@
 // NS-7B: ticking a task, setting a property from a board or a table and clearing one write one change to one page, against
-// the hash or revision the list showed. A page that moved on is refused; an open page keeps its unsaved edits; a Living
-// Memory page read truncated is never written.
+// the hash the list showed. A page that moved on is refused; an open page keeps its unsaved edits.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /** Folder notebook `nb-1`: the raw bytes of each page (so Windows line endings can be seen), read as LF text with the format. */
@@ -9,12 +8,6 @@ const drafts = new Map<string, unknown>();
 const saves: string[] = [];
 const sha = (raw: string) => `sha-${raw}`;
 const format = (raw: string) => ({ encoding: "UTF-8", bom: false, eol: raw.includes("\r\n") ? "crlf" : "lf" });
-
-/** Living Memory notebook `demo/plans`. `revision` is the real hash, which `pageText`'s check needs. */
-const lmPages = new Map<string, { text: string; truncated?: boolean }>();
-const lmWrites: { path: string; body: string; expected: string }[] = [];
-let lmStale = false;
-const hash = async (text: string) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))), (b) => b.toString(16).padStart(2, "0")).join("");
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string, a: Record<string, unknown>) => {
@@ -38,20 +31,6 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "draft_put": drafts.set(a.key as string, a.value); return null;
       case "draft_get": return drafts.get(a.key as string) ?? null;
       case "draft_delete": drafts.delete(a.key as string); return null;
-      case "lm": {
-        const argv = a.argv as string[];
-        const page = lmPages.get(argv[argv.length - 1]);
-        if (argv[1] !== "read" || !page) return { exit_code: 4, error: { code: "not_found", message: "not_found: no such page" }, result: null };
-        return { exit_code: 0, error: null, result: { domain: "demo", notebook: "plans", path: argv[argv.length - 1], text: page.text, revision: await hash(page.text), size: page.text.length, updated: "", ...(page.truncated ? { truncated: true } : {}) } };
-      }
-      case "lm_body": {
-        const argv = a.argv as string[];
-        const at = argv.indexOf("--expected-revision");
-        lmWrites.push({ path: argv[argv.length - 1], body: a.body as string, expected: argv[at + 1] });
-        if (lmStale) return { exit_code: 6, error: { code: "stale", message: "stale: the page changed" }, result: null };
-        lmPages.set(argv[argv.length - 1], { text: a.body as string });
-        return { exit_code: 0, error: null, result: { operation_id: "op", revision: await hash(a.body as string) } };
-      }
     }
     throw new Error(`unexpected ${cmd}`);
   }),
@@ -68,7 +47,7 @@ const state = (path: string) => docs.useDocuments.getState().docs[key(path)];
 const task = (path: string, line: number, text: string, extra: Record<string, unknown> = {}) => ({ notebook: "nb-1", path, line, done: false, text, sha256: sha(files.get(path)!), ...extra });
 
 beforeEach(() => {
-  files.clear(); drafts.clear(); saves.length = 0; lmPages.clear(); lmWrites.length = 0; lmStale = false;
+  files.clear(); drafts.clear(); saves.length = 0; 
   useWorkspace.setState({ panes: [{ id: "p0", tabs: [], active: null }], focused: "p0", dirty: {}, reveal: null });
   useApp.setState({ route: { page: "notes" }, back: [] });
   docs.useDocuments.setState({ docs: {}, refs: {} });
@@ -173,34 +152,6 @@ describe("ticking a task on a page that is open", () => {
   });
 });
 
-describe("ticking a task of a Living Memory page", () => {
-  const lm = (line: number, text: string, extra: Record<string, unknown> = {}) => ({ notebook: "lm:demo:plans", path: "Page.md", line, done: false, text, ...extra });
-
-  it("writes the page against the revision it read, with the line ending it had", async () => {
-    lmPages.set("Page.md", { text: "# P\r\n- [ ] one 📅 2026-12-01\r\n" });
-    const revision = await hash("# P\r\n- [ ] one 📅 2026-12-01\r\n");
-    expect(await setTaskDone(lm(2, "one 📅 2026-12-01"), true)).toBe("saved");
-    expect(lmWrites).toEqual([{ path: "Page.md", body: "# P\r\n- [x] one 📅 2026-12-01\r\n", expected: revision }]);
-  });
-
-  it("refuses a page Living Memory gave only the start of, and writes nothing", async () => {
-    lmPages.set("Page.md", { text: "# P\n- [ ] one\n", truncated: true });
-    await expect(setTaskDone(lm(2, "one"), true)).rejects.toThrow(/too long for Hivemind to change/);
-    expect(lmWrites).toEqual([]);
-  });
-
-  it("refuses a line that changed and a revision that moved on", async () => {
-    lmPages.set("Page.md", { text: "# P\n- [ ] other\n" });
-    await expect(setTaskDone(lm(2, "one"), true)).rejects.toThrow(/no longer there/);
-    expect(lmWrites).toEqual([]);
-    lmPages.set("Page.md", { text: "# P\n- [ ] one\n" });
-    await expect(setTaskDone(lm(2, "one", { sha256: "an older revision" }), true)).rejects.toThrow(/changed since it was read/);
-    expect(lmWrites).toEqual([]);
-    lmStale = true;
-    await expect(setTaskDone(lm(2, "one"), true)).rejects.toThrow(/changed since it was read/);
-  });
-});
-
 describe("setting a property from a board or a table", () => {
   const PAGE = "---\nstatus: todo # keep\ntags: [a]\n---\n# B\n";
 
@@ -235,14 +186,5 @@ describe("setting a property from a board or a table", () => {
     expect(await setPageProperty({ notebook: "nb-1", path: "B.md", hash: sha(PAGE) }, "status", "done")).toBe("unsaved");
     expect(state("B.md").text).toBe("---\nstatus: done # keep\ntags: [a]\n---\n# B\nmore text\n");
     expect(files.get("B.md")).toBe(PAGE);
-  });
-
-  it("writes a Living Memory page against its revision", async () => {
-    lmPages.set("Page.md", { text: PAGE });
-    const revision = await hash(PAGE);
-    await setPageProperty({ notebook: "lm:demo:plans", path: "Page.md", hash: revision }, "status", "done");
-    expect(lmWrites).toEqual([{ path: "Page.md", body: "---\nstatus: done # keep\ntags: [a]\n---\n# B\n", expected: revision }]);
-    await expect(setPageProperty({ notebook: "lm:demo:plans", path: "Page.md", hash: "old" }, "status", "x")).rejects.toThrow(/changed since it was read/);
-    expect(lmWrites).toHaveLength(1);
   });
 });

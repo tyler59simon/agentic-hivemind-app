@@ -21,7 +21,8 @@ pub fn note_domain(domains_dir: &Path, path: &Path) -> Option<String> {
     is_note.then(|| parts[0].clone())
 }
 
-/// Files of one Living Memory notebook that changed (NS-2C): paths inside the notebook, `/`-separated.
+/// Staged edits of one folder notebook's pages that changed in the store: the proposals' paths, `/`-separated, each with a
+/// `.folder-proposals/` prefix. (Hosted notebook pages, which were `domains/<d>/notebooks/<nb>/` files, were retired by CON-18.)
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct DocsChanged {
     pub domain: String,
@@ -29,9 +30,9 @@ pub struct DocsChanged {
     pub paths: Vec<String>,
 }
 
-/// The notebook a changed path belongs to, if it lies under `domains/<d>/notebooks/<nb>/` or `domains/<d>/folder-proposals/<nb>/`:
-/// its domain, notebook and path. Folder proposals carry a `.folder-proposals/` prefix so the UI refreshes proposals without
-/// treating the folder notebook's `nb-` id as a store notebook.
+/// The folder notebook a changed path belongs to, if it is a proposal file under `domains/<d>/folder-proposals/<nb>/`: its
+/// domain, Living Memory's `nb-` id for the folder, and the path with a `.folder-proposals/` prefix, so the UI refreshes the
+/// proposals.
 pub fn doc_change(domains_dir: &Path, path: &Path) -> Option<(String, String, String)> {
     let rel = path.strip_prefix(domains_dir).ok()?;
     let parts: Vec<String> = rel
@@ -41,19 +42,13 @@ pub fn doc_change(domains_dir: &Path, path: &Path) -> Option<(String, String, St
             _ => None,
         })
         .collect();
-    if parts.len() < 4 {
+    if parts.len() < 4 || parts[1] != "folder-proposals" {
         return None;
     }
-    if parts[1] == "notebooks" {
-        return Some((parts[0].clone(), parts[2].clone(), parts[3..].join("/")));
-    }
-    if parts[1] == "folder-proposals" {
-        return Some((parts[0].clone(), parts[2].clone(), format!(".folder-proposals/{}", parts[3..].join("/"))));
-    }
-    None
+    Some((parts[0].clone(), parts[2].clone(), format!(".folder-proposals/{}", parts[3..].join("/"))))
 }
 
-/// Changed notebook files grouped by notebook.
+/// Changed proposal files grouped by folder notebook.
 pub fn docs_changed(domains_dir: &Path, paths: impl IntoIterator<Item = impl AsRef<Path>>) -> Vec<DocsChanged> {
     let mut by: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
     for path in paths {
@@ -71,7 +66,7 @@ pub fn store_file(root: &Path, path: &Path) -> Option<String> {
 }
 
 /// Watch note folders (recursively) and the store root (non-recursively, for config files).
-/// `on_change` gets affected domains; `on_store` gets changed config file names; `on_docs` gets changed notebook files.
+/// `on_change` gets affected domains; `on_store` gets changed config file names; `on_docs` gets changed proposal files.
 pub fn watch_all(
     root: &Path,
     on_change: impl Fn(Vec<String>) + Send + 'static,
@@ -126,26 +121,23 @@ mod tests {
     }
 
     #[test]
-    fn notebook_files_map_to_their_notebook() {
+    fn proposal_files_map_to_their_folder_notebook() {
         let base = PathBuf::from("store").join("domains");
+        let proposal = base.join("demo").join("folder-proposals").join("nb-1234567890").join("abcdef123456.json");
+        assert_eq!(doc_change(&base, &proposal), Some(("demo".into(), "nb-1234567890".into(), ".folder-proposals/abcdef123456.json".into())));
+        // What hosted notebooks kept in the store is not watched for any more (CON-18).
         let nb = base.join("demo").join("notebooks").join("plans");
-        assert_eq!(doc_change(&base, &nb.join("Ideas").join("First.md")), Some(("demo".into(), "plans".into(), "Ideas/First.md".into())));
-        assert_eq!(doc_change(&base, &nb.join("assets").join("1a2b-pic.png")).map(|c| c.2).as_deref(), Some("assets/1a2b-pic.png"));
-        assert_eq!(doc_change(&base, &nb.join("notebook.json")).map(|c| c.2).as_deref(), Some("notebook.json"));
-        assert_eq!(doc_change(&base, &nb.join(".proposals").join("abc.json")).map(|c| c.2).as_deref(), Some(".proposals/abc.json"));
-        assert_eq!(
-            doc_change(&base, &base.join("demo").join("folder-proposals").join("nb-1234567890").join("abcdef123456.json")),
-            Some(("demo".into(), "nb-1234567890".into(), ".folder-proposals/abcdef123456.json".into())),
-        );
-        assert_eq!(doc_change(&base, &nb), None, "the notebook folder itself");
-        assert_eq!(doc_change(&base, &base.join("demo").join("docs.sqlite3")), None);
-        assert_eq!(doc_change(&base, &base.join("demo").join("docs.sqlite3-wal")), None);
+        assert_eq!(doc_change(&base, &nb.join("Ideas").join("First.md")), None);
+        assert_eq!(doc_change(&base, &nb.join(".proposals").join("abc.json")), None);
+        assert_eq!(doc_change(&base, &base.join("demo").join("folder-proposals").join("nb-1234567890")), None, "the folder itself");
         assert_eq!(doc_change(&base, &base.join("demo").join("notebook-sync.json")), None);
         assert_eq!(doc_change(&base, &base.join("demo").join("notes").join("a.md")), None, "notes are not pages");
         assert_eq!(note_domain(&base, &nb.join("Ideas").join("First.md")), None, "pages are not notes");
-        let grouped = docs_changed(&base, [nb.join("B.md"), nb.join("A.md"), nb.join("A.md"), base.join("jot").join("notebooks").join("daily").join("Today.md")]);
+        let second = base.join("demo").join("folder-proposals").join("nb-1234567890").join("000000000001.json");
+        let other = base.join("jot").join("folder-proposals").join("nb-0000000001").join("aaaaaaaaaaaa.json");
+        let grouped = docs_changed(&base, [proposal.clone(), second, proposal, other]);
         assert_eq!(grouped.len(), 2);
-        assert_eq!(grouped[0], DocsChanged { domain: "demo".into(), notebook: "plans".into(), paths: vec!["A.md".into(), "B.md".into()] });
+        assert_eq!(grouped[0], DocsChanged { domain: "demo".into(), notebook: "nb-1234567890".into(), paths: vec![".folder-proposals/000000000001.json".into(), ".folder-proposals/abcdef123456.json".into()] });
     }
 
     #[test]

@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
-// NS-2C UI pass: the rail beside a Living Memory page named its notebook by container id (`lm:demo:plans`); it now
-// names it as the tree does, domain and title.
+// The rail beside a page names its notebook by its title, as the tree does.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -13,9 +12,7 @@ vi.mock("../features/links/LinksPanel", () => ({ LinksPanel: () => null, LocalGr
 
 const { PageRail } = await import("./RightSidebar");
 const { useWorkspace } = await import("./store");
-const { notebookTitle } = await import("../features/notes/notebookTitle");
 
-const lmRow = { domain: "demo", notebook: "plans", title: "Release plans" } as never;
 let root: Root | null = null;
 
 beforeEach(() => {
@@ -29,7 +26,6 @@ afterEach(async () => {
 
 async function rail(notebook: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  client.setQueryData(["lm-notebooks"], { notebooks: [lmRow], damaged: [] });
   client.setQueryData(["notebooks"], [{ id: "nb-1", path: "C:\\nb", title: "Garden", added: "" }]);
   useWorkspace.getState().openTab({ kind: "file", file: { notebook, path: "Release 2.0.md" }, mode: "source" });
   const el = document.createElement("div");
@@ -41,17 +37,8 @@ async function rail(notebook: string) {
 }
 
 describe("the notebook named beside a page", () => {
-  it("a Living Memory page shows its domain and notebook title, not its container id", async () => {
-    expect(await rail("lm:demo:plans")).toBe("demo · Release plans");
-  });
-
   it("a folder notebook page shows the notebook's title", async () => {
     expect(await rail("nb-1")).toBe("Garden");
-  });
-
-  it("a Living Memory notebook missing from the list falls back to its name, still with its domain", () => {
-    expect(notebookTitle("lm:jot:daily", [], [lmRow])).toBe("jot · daily");
-    expect(notebookTitle("nb-2", [], [lmRow])).toBeUndefined();
   });
 });
 
@@ -143,12 +130,7 @@ describe("the Related section (NS-4B)", () => {
     expect(titles()).toEqual(["On this page", "Backlinks", "Outgoing links", "Related", "History", "File"]);
   });
 
-  it("is not beside a Living Memory page, which the index does not hold", async () => {
-    await rail("lm:demo:plans");
-    expect(titles()).toEqual(["On this page", "History", "File"]);
-  });
-
-  it("is not beside a loose file", async () => {
+  it("is not beside a loose file, which the index does not hold", async () => {
     await rail("@abc123");
     expect(titles()).toEqual(["On this page", "History", "File"]);
   });

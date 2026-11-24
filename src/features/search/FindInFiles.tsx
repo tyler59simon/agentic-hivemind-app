@@ -32,10 +32,10 @@ const scopeValue = (s: FindScope) => (s.notebook ? `nb:${s.notebook}` : s.folder
 const scopeOf = (value: string, sub?: string): FindScope => (value.startsWith("nb:") ? { notebook: value.slice(3), ...(sub ? { sub } : {}) } : value.startsWith("folder:") ? { folder: value.slice(7) } : {});
 
 /** The documents open in a tab, with whether each has unsaved edits. Rust matches them to the scope's files by where they
- *  resolve to, for a notebook and a folder alike (Codex review of 7320d7f, NOTES-4). A Living Memory page has no file. */
+ *  resolve to, for a notebook and a folder alike (Codex review of 7320d7f, NOTES-4). */
 function openDocs(): OpenDoc[] {
   const { docs, refs } = useDocuments.getState();
-  return Object.entries(refs).filter(([, ref]) => !ref.notebook.startsWith("lm:")).map(([key, ref]) => ({ notebook: ref.notebook, path: ref.path, unsaved: isUnsaved(docs[key]) }));
+  return Object.entries(refs).map(([key, ref]) => ({ notebook: ref.notebook, path: ref.path, unsaved: isUnsaved(docs[key]) }));
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
@@ -49,7 +49,7 @@ export function FindInFilesTab() {
   const notebooks = useQuery(notebooksQuery());
   const folders = useQuery({ queryKey: ["settings", "other-folders"], queryFn: otherFolders });
   const launch = useLaunch();
-  const current = useWorkspace((s) => { const t = activeTab(s); return t?.kind === "file" && t.file && !isLoose(t.file) && !t.file.notebook.startsWith("lm:") ? t.file.notebook : ""; });
+  const current = useWorkspace((s) => { const t = activeTab(s); return t?.kind === "file" && t.file && !isLoose(t.file) ? t.file.notebook : ""; });
   const [where, setWhere] = useState(() => (launch.scope ? scopeValue(launch.scope) : ""));
   const [sub, setSub] = useState(launch.scope?.sub ?? "");
   const [pattern, setPattern] = useState("");

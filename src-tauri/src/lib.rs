@@ -154,38 +154,15 @@ async fn lm(state: State<'_, AppState>, argv: Vec<String>, stdin: Option<String>
     blocking(move || bridge.call_at(generation, &argv, stdin.as_deref())).await
 }
 
-/// Run a Living Memory `doc` command that carries a page body; a large body goes through a staging file (NS-2C). `flag`
-/// names the file option the body goes through when it is staged: `--body-file` (the default), or `--settings-file` for a
-/// notebook's settings, which always go through a file (NS-7A).
+/// Run a Living Memory command that carries a body: a folder page proposal's merge (`proposals accept --edited`) or a query
+/// view's spec. A large body goes through a staging file. `flag` names the file option the body goes through when it is staged:
+/// `--body-file` (the default), or `--spec-file` for a query, which always goes through a file (NS-7B, CON-13).
 #[tauri::command]
 async fn lm_body(state: State<'_, AppState>, argv: Vec<String>, body: String, generation: Option<u64>, flag: Option<String>) -> Result<Reply, String> {
     let (bridge, staging) = (state.bridge.clone(), state.lm_staging.clone());
     blocking(move || match flag {
         None => lmdoc::call_with_body(&bridge, generation, &staging, &argv, &body),
         Some(flag) => lmdoc::call_with_file(&bridge, generation, &staging, &argv, &body, &flag),
-    })
-    .await
-}
-
-/// Move a Living Memory page or section with the drafts of its pages (NS-2C).
-#[tauri::command]
-async fn lmdoc_move(state: State<'_, AppState>, notebook: String, from: String, to: String, generation: Option<u64>) -> Result<(), String> {
-    let (bridge, drafts) = (state.bridge.clone(), state.drafts_dir.clone());
-    let store = state.store_root.lock().unwrap().clone();
-    blocking(move || lmdoc::move_with_drafts(&bridge, generation, &drafts, store.as_deref(), &notebook, &from, &to)).await
-}
-
-/// Ask for a file with the native dialog and attach it to a Living Memory notebook; returns its path in the notebook,
-/// or None when the user cancelled (NS-2C).
-#[tauri::command]
-async fn lmdoc_attach(app: AppHandle, notebook: String, generation: Option<u64>) -> Result<Option<String>, String> {
-    use tauri_plugin_dialog::DialogExt;
-    let handle = app.clone();
-    blocking(move || {
-        let Some(picked) = handle.dialog().file().blocking_pick_file() else { return Ok(None) };
-        let path = picked.into_path().map_err(|e| e.to_string())?;
-        let state = handle.state::<AppState>();
-        lmdoc::attach(&state.bridge, generation, &notebook, &path).map(Some)
     })
     .await
 }
@@ -2078,7 +2055,6 @@ pub fn run() {
                 replace_undos: replace::Undos::default(),
             });
             lmdoc::clear_staging(&app.state::<AppState>().lm_staging);
-            lmdoc::clear_open_copies();
             studio::rewatch(app.handle());
             conductor::run(report_queue, vec![session_notices(app.handle().clone()), learning_reports(app.handle().clone()), orchestration_reports(app.handle().clone()), executive_reports(app.handle().clone())]);
             {
@@ -2155,7 +2131,7 @@ pub fn run() {
             system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export, wiki_agent_build, wiki_agent_cancel, wiki_agent_running,
             studio::notebooks_list, studio::notebook_add, studio::notebook_remove, studio::notebook_rename, studio::notebook_tree, studio::notebook_meta_get,
             studio::notebook_meta_set, studio::notebook_append, studio::obsidian_setting, studio::file_read, studio::file_reopen, studio::file_save, studio::file_create, studio::file_mkdir, studio::file_rename, studio::file_delete,
-            studio::file_reveal, studio::asset_base, studio::lmdoc_assets, studio::notebook_add_dropped, studio::file_attach_bytes, studio::file_attach_dropped, opens::open_dropped, opens::claim_drop, opens::unclaimed_drops, studio::notebook_reach_record, lm_body, lmdoc_move, lmdoc_attach, studio::lmdoc_open_asset, opens::open_dialog, opens::open_pending, opens::open_recent,
+            studio::file_reveal, studio::asset_base, studio::notebook_add_dropped, studio::file_attach_bytes, studio::file_attach_dropped, opens::open_dropped, opens::claim_drop, opens::unclaimed_drops, studio::notebook_reach_record, lm_body, opens::open_dialog, opens::open_pending, opens::open_recent,
             opens::open_forget, opens::file_save_as, bigfile::bigfile_open, bigfile::bigfile_lines, bigfile::bigfile_search, bigfile::bigfile_bytes, bigfile::bigfile_find_bytes, bigfile::bigfile_close, replace::replace_preview, replace::replace_apply, replace::replace_undo, history::history_list, history::history_read, history::history_pin, history::history_snapshot, history::git_file_log, history::git_file_commit,
             notes_index::commands::index_search, notes_index::commands::index_links, notes_index::commands::index_incoming, notes_index::commands::index_pages,
             notes_index::commands::index_tags, notes_index::commands::index_graph, notes_index::commands::index_tasks, notes_index::commands::index_query, notes_index::commands::index_status, notes_index::commands::index_rebuild, notes_index::commands::index_related,

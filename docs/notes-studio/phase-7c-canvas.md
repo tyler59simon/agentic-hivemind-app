@@ -1,5 +1,7 @@
 # NS-7C: canvas boards
 
+> **Retired (CON-18, 2026-11-24).** Living Memory notebooks, the ones that kept their pages inside the store, no longer exist in Hivemind or in Living Memory. Where this document describes them (`lm:<domain>:<notebook>` pages, `doc notebooks`, `doc read`, `doc write`, `doc tasks`, `doc query`, the Living Memory group of search), read it as history. What it says about folder notebooks still holds.
+
 Read [README.md](README.md) first. Canvas boards use the open JSON Canvas format (`.canvas`, as Obsidian writes it), so boards move between Hivemind and Obsidian.
 
 ## Changes from the code survey before NS-7C

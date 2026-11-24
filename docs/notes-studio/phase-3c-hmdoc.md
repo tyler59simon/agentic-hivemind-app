@@ -1,5 +1,7 @@
 # NS-3C: `.hmdoc` core
 
+> **Retired (CON-18, 2026-11-24).** Living Memory notebooks, the ones that kept their pages inside the store, no longer exist in Hivemind or in Living Memory. Where this document describes them (`lm:<domain>:<notebook>` pages, `doc notebooks`, `doc read`, `doc write`, `doc tasks`, `doc query`, the Living Memory group of search), read it as history. What it says about folder notebooks still holds.
+
 Read [README.md](README.md) and [phase-3b-wysiwyg.md](phase-3b-wysiwyg.md) first. `.hmdoc` is a rich JSON page format for folder notebooks only, for content Markdown cannot hold. This phase defines the format and ships power tables and layout and styling; embeds and drawing follow in NS-3D.
 
 ## Changes from the code survey before NS-3C

@@ -1,13 +1,10 @@
 // NS-4A / CON-11: result grouping for the unified top-bar search box, and the arrow keys' walk over it.
 import { describe, expect, it } from "vitest";
-import type { DocSearchHit, SearchHit } from "../../lib/lm";
+import type { SearchHit } from "../../lib/lm";
 import { MARK_CLOSE, MARK_OPEN, marked, type IndexHit } from "../../lib/noteindex";
 import { buildGroups, flatRows, isRelatedNote, isRelevantPage, moveActive, type GroupInput } from "./groups";
 
 const page = (notebook: string, path: string, title = path): IndexHit => ({ notebook, path, kind: "md", title, titleMarked: `${MARK_OPEN}${title}${MARK_CLOSE}`, mtimeMs: 1, snippet: "a snippet" });
-const lmHit = (domain: string, notebook: string, path: string): DocSearchHit => ({
-  domain, notebook, notebook_title: `${notebook} title`, title: path, path, heading: "Part", snippet: "in a page", line_start: 3, line_end: 4, revision: "r", score: 1, relevance: 1,
-});
 const note = (id: string, over: Partial<SearchHit> = {}): SearchHit => ({
   id, domain: "demo", title: `Note ${id}`, type: "knowledge", status: "active", tags: [], snippet: "words", ...over,
 } as SearchHit);
@@ -15,46 +12,25 @@ const note = (id: string, over: Partial<SearchHit> = {}): SearchHit => ({
 const input = (over: Partial<GroupInput> = {}): GroupInput => ({
   current: "nb-1", titles: new Map([["nb-1", "Main"], ["nb-2", "Work"]]),
   here: [page("nb-1", "Projects/Plan.md", "Plan")], other: [page("nb-2", "Plan.md", "Plan")],
-  lmSearch: true, lm: [lmHit("demo", "plans", "Roadmap.md")], lmNotebooks: [{ domain: "demo", notebook: "plans" }],
   memory: [note("demo:1")], ...over,
 });
 
 describe("buildGroups", () => {
-  it("makes four groups in one fixed order (Memory notes first), each in the order its own source gave", () => {
+  it("makes three groups in one fixed order (Memory notes first), each in the order its own source gave, and none for Living Memory pages (CON-18)", () => {
     const groups = buildGroups(input({ here: [page("nb-1", "B.md"), page("nb-1", "A.md")] }));
-    expect(groups.map((g) => g.id)).toEqual(["memory", "here", "other", "lm"]);
-    expect(groups.map((g) => g.title)).toEqual(["Memory notes", "This notebook", "Other notebooks", "Living Memory pages"]);
+    expect(groups.map((g) => g.id)).toEqual(["memory", "here", "other"]);
+    expect(groups.map((g) => g.title)).toEqual(["Memory notes", "This notebook", "Other notebooks"]);
     expect(groups[1].rows.map((r) => r.title)).toEqual(["B.md", "A.md"]);
   });
 
   it("describes each row by its origin/project and says where it opens", () => {
-    const [memory, here, other, lm] = buildGroups(input({
+    const [memory, here, other] = buildGroups(input({
       projectNames: new Map([["project/pay", "Paystream"]]),
       memory: [note("1", { tags: ["project/pay"], status: "archived" })],
     }));
     expect(memory.rows[0]).toMatchObject({ detail: "Paystream · knowledge · archived", open: { note: { ref: "demo:1", domain: "demo", title: "Note 1" } } });
     expect(here.rows[0]).toMatchObject({ detail: "Projects", open: { page: { notebook: "nb-1", path: "Projects/Plan.md" } }, snippet: "a snippet" });
     expect(other.rows[0]).toMatchObject({ detail: "Work", open: { page: { notebook: "nb-2", path: "Plan.md" } } });
-    expect(lm.rows[0]).toMatchObject({ detail: "plans title · Part", open: { lm: { domain: "demo", notebook: "plans", path: "Roadmap.md" } } });
-  });
-
-  it("has no Living Memory group without the docs.search capability, whatever it was handed", () => {
-    const groups = buildGroups(input({ lmSearch: false }));
-    expect(groups.map((g) => g.id)).toEqual(["memory", "here", "other"]);
-  });
-
-  it("shows only the Living Memory notebooks Hivemind lists, since those are the ones a tab can open", () => {
-    const groups = buildGroups(input({ lm: [lmHit("demo", "plans", "A.md"), lmHit("demo", "hidden-one", "B.md"), lmHit("elsewhere", "plans", "C.md")] }));
-    expect(groups.find((g) => g.id === "lm")!.rows.map((r) => r.title)).toEqual(["A.md"]);
-    expect(buildGroups(input({ lmNotebooks: [] })).some((g) => g.id === "lm")).toBe(false);
-  });
-
-  it("drops the pages Living Memory returns only to fill the list: relevance 0 and no near similarity (NS-4B follow-up)", () => {
-    const hit = (path: string, relevance: number, similarity?: number): DocSearchHit => ({ ...lmHit("demo", "plans", path), relevance, ...(similarity === undefined ? {} : { similarity }) });
-    const lm = [hit("Real.md", 1), hit("Pad.md", 0), hit("Padded-similar.md", 0, 0.0443), hit("Near.md", 0, 0.45), hit("Both.md", 0.3, 0.2), hit("Edge.md", 0, 0.449)];
-    expect(buildGroups(input({ lm })).find((g) => g.id === "lm")!.rows.map((r) => r.title)).toEqual(["Real.md", "Near.md", "Both.md"]);
-    // Everything was padding: no group at all.
-    expect(buildGroups(input({ lm: [hit("A.md", 0), hit("B.md", 0)] })).some((g) => g.id === "lm")).toBe(false);
   });
 
   it("isRelevantPage and isRelatedNote apply the floor of 0.45 and the relevance rule", () => {
@@ -63,14 +39,14 @@ describe("buildGroups", () => {
   });
 
   it("leaves out a group with nothing in it, and calls the pages 'Notebooks' when no page is being read", () => {
-    expect(buildGroups(input({ here: [], lm: [], memory: [] })).map((g) => g.id)).toEqual(["other"]);
+    expect(buildGroups(input({ here: [], memory: [] })).map((g) => g.id)).toEqual(["other"]);
     expect(buildGroups(input({ current: undefined, here: [], memory: [] }))[0].title).toBe("Notebooks");
-    expect(buildGroups(input({ here: [], other: [], lm: [], memory: [] }))).toEqual([]);
+    expect(buildGroups(input({ here: [], other: [], memory: [] }))).toEqual([]);
   });
 
   it("never merges or reorders across groups: memory notes stay ahead of notebook pages", () => {
     const rows = flatRows(buildGroups(input({ memory: [note("a"), note("b")] })));
-    expect(rows.map((r) => r.group)).toEqual(["memory", "memory", "here", "other", "lm"]);
+    expect(rows.map((r) => r.group)).toEqual(["memory", "memory", "here", "other"]);
   });
 });
 

@@ -1,5 +1,5 @@
 // The search index of folder notebooks (NS-4A): the Tauri commands of src-tauri/src/notes_index. The index holds pages,
-// not Living Memory notes or Living Memory notebook pages; those are searched through Living Memory.
+// not Living Memory notes; those are searched through Living Memory.
 import { invoke } from "@tauri-apps/api/core";
 
 /** The index marks the matches in a title or a snippet with these two characters, so page text never becomes markup. */

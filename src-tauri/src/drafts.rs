@@ -76,25 +76,12 @@ pub struct Moving {
 }
 
 /// The drafts of every page of `notebook` at or below `from`, as they will be once it has moved to `to`.
-/// Whether a draft may be moved or counted while Hivemind is connected to `store`. A Living Memory page's draft names
-/// the store it was written in, and one of another store stays where it is: that store's page did not move (Codex
-/// re-review of 75ce884, R2-D7). A draft that names no store, or a call without one (folder notebooks), matches.
-fn of_store(draft: &Value, store: Option<&Path>) -> bool {
-    // Exact apart from separators: `connect` reports the root as the filesystem names it, so letter case tells two
-    // stores in a case-sensitive folder apart (Codex review of dd4c1b0, R3-D8).
-    let id = |root: &str| root.replace('\\', "/").trim_end_matches('/').to_string();
-    match (draft.get("store").and_then(Value::as_str), store) {
-        (Some(named), Some(store)) => id(named) == id(&store.to_string_lossy()),
-        _ => true,
-    }
-}
-
-pub fn moving(dir: &Path, store: Option<&Path>, notebook: &str, from: &str, to: &str) -> Vec<Moving> {
+pub fn moving(dir: &Path, notebook: &str, from: &str, to: &str) -> Vec<Moving> {
     entries(dir)
         .into_iter()
         .filter_map(|(file, mut draft)| {
             let (nb, path) = page_of(&draft)?;
-            if nb != notebook || !of_store(&draft, store) {
+            if nb != notebook {
                 return None;
             }
             let new = if path == from { to.to_string() } else { format!("{to}{}", path.strip_prefix(from).filter(|rest| rest.starts_with('/'))?) };
@@ -189,10 +176,9 @@ pub fn list(dir: &Path) -> Vec<Value> {
 }
 
 /// Whether a page draft of `notebook` is kept for `path` or anything below it.
-pub fn any_under(dir: &Path, store: Option<&Path>, notebook: &str, path: &str) -> bool {
+pub fn any_under(dir: &Path, notebook: &str, path: &str) -> bool {
     list(dir)
         .iter()
-        .filter(|draft| of_store(draft, store))
         .filter_map(page_of)
         .any(|(nb, p)| nb == notebook && (p == path || p.strip_prefix(path).is_some_and(|rest| rest.starts_with('/'))))
 }
@@ -219,7 +205,7 @@ mod tests {
 
     /// Move the drafts as `file_rename` does around a successful move.
     fn retarget(dir: &Path, notebook: &str, from: &str, to: &str) {
-        let moves = moving(dir, None, notebook, from, to);
+        let moves = moving(dir, notebook, from, to);
         copy_moved(dir, &moves).unwrap();
         finish_moved(dir, &moves);
     }
@@ -233,7 +219,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hivemind-drafts-stuck-{}", uuid::Uuid::new_v4().simple()));
         put(&dir, &file_key("nb-1", "Area/A.md"), &page("Area/A.md")).unwrap();
         put(&dir, &file_key("nb-1", "Area/B.md"), &page("Area/B.md")).unwrap();
-        let moves = moving(&dir, None, "nb-1", "Area", "Moved");
+        let moves = moving(&dir, "nb-1", "Area", "Moved");
         // The second copy's key is taken by a folder, so it fails after the first copy was written.
         std::fs::create_dir_all(file_for(&dir, &moves[1].key).unwrap()).unwrap();
         assert!(copy_moved(&dir, &moves).unwrap_err().contains("nothing moved"));
@@ -304,29 +290,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hivemind-drafts-under-{}", std::process::id()));
         let draft = |path: &str| json!({ "key": file_key("nb-1", path), "kind": "file", "target": { "notebook": "nb-1", "path": path }, "mine": "x" });
         put(&dir, &file_key("nb-1", "Area/B.md"), &draft("Area/B.md")).unwrap();
-        assert!(any_under(&dir, None, "nb-1", "Area/B.md"));
-        assert!(any_under(&dir, None, "nb-1", "Area"));
-        assert!(!any_under(&dir, None, "nb-1", "Are"));
-        assert!(!any_under(&dir, None, "nb-2", "Area"));
-        assert!(!any_under(&dir, None, "nb-1", "area/b.md"), "letter case counts, as in the keys");
-        std::fs::remove_dir_all(dir).ok();
-    }
-
-    /// Codex re-review of 75ce884, R2-D7: a page of store B moves; the draft store A keeps for its page of the same name
-    /// stays where it is and does not block the move.
-    #[test]
-    fn a_draft_of_another_store_is_neither_moved_nor_counted() {
-        let dir = std::env::temp_dir().join(format!("hivemind-drafts-store-{}", uuid::Uuid::new_v4().simple()));
-        let nb = "lm:demo:plans";
-        let draft = json!({ "key": file_key(nb, "A.md"), "kind": "file", "target": { "notebook": nb, "path": "A.md" }, "mine": "x", "store": "C:\\stores\\a" });
-        put(&dir, &file_key(nb, "A.md"), &draft).unwrap();
-        let (a, b) = (Path::new("C:/stores/a/"), Path::new("C:\\stores\\b"));
-        assert!(moving(&dir, Some(b), nb, "A.md", "B.md").is_empty());
-        assert!(!any_under(&dir, Some(b), nb, "A.md"));
-        assert_eq!(moving(&dir, Some(a), nb, "A.md", "B.md").len(), 1, "the same store, written another way");
-        assert!(any_under(&dir, Some(a), nb, "A.md"));
-        // Codex review of dd4c1b0, R3-D8: two stores whose names differ only in letter case are two stores.
-        assert!(moving(&dir, Some(Path::new("C:/stores/A")), nb, "A.md", "B.md").is_empty());
+        assert!(any_under(&dir, "nb-1", "Area/B.md"));
+        assert!(any_under(&dir, "nb-1", "Area"));
+        assert!(!any_under(&dir, "nb-1", "Are"));
+        assert!(!any_under(&dir, "nb-2", "Area"));
+        assert!(!any_under(&dir, "nb-1", "area/b.md"), "letter case counts, as in the keys");
         std::fs::remove_dir_all(dir).ok();
     }
 

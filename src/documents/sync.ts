@@ -5,7 +5,6 @@ import { movedPath } from "./keys";
 import { isDocx, isPdf, type FilesChanged } from "../lib/notebooks";
 import { docxKey, isDocxDirty, refreshDocxOnDisk, releaseDocx, retargetDocx, useDocxStore } from "../features/docx/store";
 import { isPdfDirty, pdfKey, refreshPdfOnDisk, releasePdf, retargetPdf, usePdfStore } from "../features/pdf/store";
-import { lmContainer } from "./adapters/lmdoc";
 import { useWorkspace } from "../workspace/store";
 import { toast } from "../ui/toast";
 import { keyOf, onReleaseRefused, refresh, release, retarget, useDocuments } from "./store";
@@ -111,34 +110,14 @@ export function retargetAll(notebook: string, from: string, to: string) {
   apply();
 }
 
-/** The `docs-changed` event: files of a Living Memory notebook changed (NS-2C). */
+/** The `docs-changed` event: staged edits of folder notebook pages changed in the store (a proposal was written, accepted or rejected). */
 export interface DocsChanged { domain: string; notebook: string; paths: string[] }
 
-/** Living Memory changed a notebook's files (an agent's proposal, an Obsidian edit, Hivemind's own saves). The tree
- *  follows, open pages follow or warn, and the notebook list and proposals refresh when their files changed. */
-export function onDocsChanged(client: QueryClient, { domain, notebook, paths }: DocsChanged) {
-  const hasFolderProposals = paths.some((p) => p.startsWith(".folder-proposals/"));
-  if (hasFolderProposals) {
-    client.invalidateQueries({ queryKey: ["lm-proposals", "*"] });
-    client.invalidateQueries({ queryKey: ["lm-proposal"] });
-  }
-  const rest = paths.filter((p) => !p.startsWith(".folder-proposals/"));
-  if (!rest.length) return;
-  const container = lmContainer(domain, notebook);
-  client.invalidateQueries({ queryKey: ["notebook-tree", container] });
-  if (rest.some((p) => p === "notebook.json" || p.startsWith(".proposals/"))) client.invalidateQueries({ queryKey: ["lm-notebooks"] });
-  if (rest.some((p) => p === "notebook.json")) client.invalidateQueries({ queryKey: ["daily-settings", container] });
-  if (rest.some((p) => p.startsWith(".proposals/"))) {
-    client.invalidateQueries({ queryKey: ["lm-proposals", domain, notebook] });
-    client.invalidateQueries({ queryKey: ["lm-proposals", "*"] });
-  }
-  // `![[picture.png]]` looks among the notebook's attachments (Codex re-review of 87a0a1f).
-  if (rest.some((p) => /^assets\//i.test(p))) client.invalidateQueries({ queryKey: ["lm-assets", container] });
-  const pages = rest.filter((p) => /\.md$/i.test(p) && !p.startsWith(".") && !/^assets\//i.test(p));
-  // The proposal open in the inbox compares against its page as it is now: either changing asks for it again, so the
-  // inbox moves from Accept to Merge when the page moves on (Codex review of 32fee20, U1).
-  if (pages.length || rest.some((p) => p.startsWith(".proposals/"))) client.invalidateQueries({ queryKey: ["lm-proposal"] });
-  if (pages.length) void refresh(container, pages);
+/** Living Memory staged, settled or removed a folder page proposal: the Inbox's list and the open proposal read again. */
+export function onDocsChanged(client: QueryClient, { paths }: DocsChanged) {
+  if (!paths.some((p) => p.startsWith(".folder-proposals/"))) return;
+  client.invalidateQueries({ queryKey: ["lm-proposals", "*"] });
+  client.invalidateQueries({ queryKey: ["lm-proposal"] });
 }
 
 /** Another program (or Hivemind's own tree actions) changed files in a notebook. */

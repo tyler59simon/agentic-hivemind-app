@@ -51,7 +51,7 @@ function Picker({ start }: { start: FileRef | null }) {
   const [left, setLeft] = useState(start ? keyOf(start) : "");
   const [right, setRight] = useState(others[0]?.key ?? "");
   const byKey = (key: string) => choices.find((c) => c.key === key)?.ref ?? (start && keyOf(start) === key ? start : null);
-  // A start file that is not an open tab (a Living Memory page opened elsewhere) still appears.
+  // A start file that is not an open tab still appears.
   const all = start && !choices.some((c) => c.key === keyOf(start)) ? [{ ref: start, key: keyOf(start), label: fileName(start.path) }, ...choices] : choices;
   const fromDisk = (set: (key: string) => void) => async () => {
     try {

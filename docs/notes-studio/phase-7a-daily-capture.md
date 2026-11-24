@@ -1,5 +1,7 @@
 # NS-7A: daily notes, templates and Quick capture targets
 
+> **Retired (CON-18, 2026-11-24).** Living Memory notebooks, the ones that kept their pages inside the store, no longer exist in Hivemind or in Living Memory. Where this document describes them (`lm:<domain>:<notebook>` pages, `doc notebooks`, `doc read`, `doc write`, `doc tasks`, `doc query`, the Living Memory group of search), read it as history. What it says about folder notebooks still holds.
+
 Read [README.md](README.md) and [phase-2c-lm-notebooks.md](phase-2c-lm-notebooks.md) first.
 
 ## Changes from the NS-0 review

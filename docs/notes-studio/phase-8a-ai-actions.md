@@ -1,5 +1,7 @@
 # NS-8A: AI engine and page actions
 
+> **Retired (CON-18, 2026-11-24).** Living Memory notebooks, the ones that kept their pages inside the store, no longer exist in Hivemind or in Living Memory. Where this document describes them (`lm:<domain>:<notebook>` pages, `doc notebooks`, `doc read`, `doc write`, `doc tasks`, `doc query`, the Living Memory group of search), read it as history. What it says about folder notebooks still holds.
+
 Read [README.md](README.md) section 5.9 and the S6 spike verdict first. This phase adds the Notes AI engine (Claude or Codex per action, with its own budget) and selection and page actions that return a diff the user accepts, edits or rejects.
 
 ## Changes from the NS-0 review

@@ -2,9 +2,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef, useState } from "react";
-import { lmContainer } from "../../documents/adapters/lmdoc";
 import { classify, type Problem } from "../../lib/errors";
-import { capture, domains, lmNotebooksQuery, projects, showMain, taxonomy, type CapturePayload, type NoteType } from "../../lib/lm";
+import { capture, domains, projects, showMain, taxonomy, type CapturePayload, type NoteType } from "../../lib/lm";
 import { notebooksQuery } from "../../lib/notebooks";
 import { defaultTags, HEADINGS } from "../../lib/note";
 import { NOT_CAPTURED, typeOptions, useNoteTypes } from "../../lib/noteTypes";
@@ -66,13 +65,9 @@ export function QuickCapture() {
   // Custom note types the same way: asked for, with the built-ins when Living Memory has no `types` command.
   const types = useNoteTypes(true);
   const [target, setTarget] = useState<CaptureTarget>(() => prefs.captureTarget());
-  // Notebooks the same way as the main window asks for them; a Living Memory without notebook pages just has none.
+  // Folder notebooks the same way as the main window asks for them. A target saved for a retired Living Memory notebook is not one of them.
   const folderBooks = useQuery({ ...notebooksQuery(), retry: false });
-  const lmBooks = useQuery({ ...lmNotebooksQuery(), retry: false });
-  const books = [
-    ...(folderBooks.data ?? []).map((n) => ({ id: n.id, label: n.title })),
-    ...(lmBooks.data?.notebooks ?? []).map((n) => ({ id: lmContainer(n.domain, n.notebook), label: `${n.domain} · ${n.title}` })),
-  ];
+  const books = (folderBooks.data ?? []).map((n) => ({ id: n.id, label: n.title }));
   const notebook = books.some((b) => b.id === target.notebook) ? target.notebook : books[0]?.id ?? "";
   const toPage = target.kind !== "memory";
   const [project, setProject] = useState(prefs.captureProject() ?? "");
@@ -154,7 +149,7 @@ export function QuickCapture() {
           <select value={notebook} onChange={(e) => setTarget({ kind: target.kind, notebook: e.target.value })} aria-label="Notebook">
             {books.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
           </select>
-        ) : <p className="muted small">{folderBooks.isLoading || lmBooks.isLoading ? "Looking for notebooks…" : "There is no notebook yet. Add one on the Notes page."}</p>
+        ) : <p className="muted small">{folderBooks.isLoading ? "Looking for notebooks…" : "There is no notebook yet. Add one on the Notes page."}</p>
       )}
       {!toPage && (
         <div className="row">

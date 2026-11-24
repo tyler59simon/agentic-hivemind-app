@@ -9,7 +9,7 @@ import type { EmbedPage } from "../editor/rich/context";
 import { section, splitSize } from "../editor/rich/parse";
 import { MATH_MARK, prepare, remarkCallouts, remarkEmbeds, remarkHighlights, WIKI_PICTURE } from "../editor/rich/reading";
 import { remarkWikilinks, WIKI_PREFIX } from "../viewer/remarkWikilinks";
-import { findFile, pictureUrl, relativeTarget } from "./pictures";
+import { findFile, pictureUrl } from "./pictures";
 import { QueryBlock } from "./QueryView";
 import { folderOf } from "../../lib/notebooks";
 import { scrollBehavior } from "../../lib/motion";
@@ -27,9 +27,9 @@ export interface Pictures { base?: string; folder: string; files?: string[] }
 
 /** The page `![[Page]]` names, drawn read-only inside the page. Its own embeds show as links, so a page that embeds
  *  itself shows once. */
-function Embed({ target, heading, read, onLink, onFile, pictures }: {
+function Embed({ target, heading, read, onLink, pictures }: {
   target: string; heading?: string; read: (target: string) => Promise<EmbedPage | null>;
-  onLink: Follow; onFile?: (path: string) => void; pictures?: Pictures;
+  onLink: Follow; pictures?: Pictures;
 }) {
   const [page, setPage] = useState<EmbedPage | null | undefined>(undefined);
   useEffect(() => {
@@ -48,19 +48,18 @@ function Embed({ target, heading, read, onLink, onFile, pictures }: {
       {page === undefined ? <p className="muted">Loading…</p>
         : !page ? <p className="muted">No page is named {target}.</p>
           : text === null ? <p className="muted">{page.title} has no heading {heading}.</p>
-            : <PageView text={text} tabId={`embed-${target}`} onLink={(t, split) => onLink(t, split, page.path)} onFile={onFile}
+            : <PageView text={text} tabId={`embed-${target}`} onLink={(t, split) => onLink(t, split, page.path)}
               pictures={pictures && { ...pictures, folder: folderOf(page.path) }} nested />}
     </div>
   );
 }
 
-/** A Markdown page as it reads. `[[links]]` call `onLink`; web links open in the browser; a relative link calls
- *  `onFile` with the path it names under the grant's root (an attachment, NS-2C), when given; nothing navigates the app.
+/** A Markdown page as it reads. `[[links]]` call `onLink`; web links open in the browser; nothing else navigates the app.
  *  Pictures beside the page load through `hmfile` from `pictures.base` (the grant's prefix), relative to `folder`.
  *  Callouts, highlights, math, picture widths and `![[embeds]]` render as in Live (NS-3A); `embed` reads an embedded
  *  page, and without it an embed shows as a link. */
-export function PageView({ text, tabId, onLink, onFile, pictures, embed, nested }: {
-  text: string; tabId: string; onLink: Follow; onFile?: (path: string) => void;
+export function PageView({ text, tabId, onLink, pictures, embed, nested }: {
+  text: string; tabId: string; onLink: Follow;
   pictures?: Pictures; embed?: (target: string) => Promise<EmbedPage | null>; nested?: boolean;
 }) {
   const reveal = useWorkspace((s) => s.reveal);
@@ -86,10 +85,7 @@ export function PageView({ text, tabId, onLink, onFile, pictures, embed, nested 
       return <a href={href} onClick={(e) => {
         e.preventDefault();
         if (!href) return;
-        if (/^https?:/i.test(href)) { openUrl(href).catch(() => undefined); return; }
-        // A link Attach file wrote opens its attachment (Codex review of 32fee20, U2).
-        const path = onFile ? relativeTarget(href, pictures?.folder ?? "") : null;
-        if (path) onFile!(path);
+        if (/^https?:/i.test(href)) openUrl(href).catch(() => undefined);
       }}>{children}</a>;
     };
     return {
@@ -130,11 +126,11 @@ export function PageView({ text, tabId, onLink, onFile, pictures, embed, nested 
         if (!embed || nested) {
           return <p><a href="#" className="wikilink" onClick={(e) => { e.preventDefault(); onLink(target, e.ctrlKey || e.metaKey); }}>{heading ? `${target} › ${heading}` : target}</a></p>;
         }
-        return <Embed target={target} heading={heading} read={embed} onLink={onLink} onFile={onFile} pictures={pictures} />;
+        return <Embed target={target} heading={heading} read={embed} onLink={onLink} pictures={pictures} />;
       },
       h1: heading("h1"), h2: heading("h2"), h3: heading("h3"), h4: heading("h4"), h5: heading("h5"), h6: heading("h6"),
     };
-  }, [tabId, onLink, onFile, base, folder, files, embed, nested]);
+  }, [tabId, onLink, base, folder, files, embed, nested]);
   const body = text.trim()
     ? <Markdown remarkPlugins={PLUGINS} components={components} urlTransform={keepUrl}>{prepared.text}</Markdown>
     : nested ? null : <p className="muted">This page is empty. Press <kbd>Ctrl</kbd>+<kbd>E</kbd> to write.</p>;

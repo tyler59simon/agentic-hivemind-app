@@ -49,7 +49,7 @@ export function dueBucket(due: string | null, today: string): "overdue" | "today
   return due <= addDays(today, 6) ? "week" : "later";
 }
 
-/** An item from a task line's text and what an index or `doc tasks` row said of it. */
+/** An item from a task line's text and what an index row said of it. */
 export function itemOf(base: Omit<TaskItem, "due" | "priority" | "owner">, due: string | null): TaskItem {
   const fields = fieldsOf(base.text);
   return { ...base, due: due ?? fields.due, priority: fields.priority, owner: fields.owner };
@@ -71,7 +71,7 @@ export function filterTasks(items: TaskItem[], f: TaskFilters, today: string): T
   });
 }
 
-/** Open before done, then by due date (none last), priority, notebook, page and line: the order of `doc tasks` with the
+/** Open before done, then by due date (none last), priority, notebook, page and line: the order Living Memory's `doc tasks` had, with the
  *  priority added. */
 export function sortTasks(items: TaskItem[]): TaskItem[] {
   return [...items].sort((a, b) =>

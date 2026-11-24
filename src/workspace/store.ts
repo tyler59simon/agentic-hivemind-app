@@ -197,12 +197,12 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
   };
 }, {
   name: "hivemind.workspace",
-  version: 3,
+  version: 4,
   storage: createJSONStorage(() => safeStorage),
   // Version 1 also kept graph, project, system and session tabs; those are pages now. Version 2 had notes only and loads
-  // as it is.
+  // as it is. Version 4 drops the tabs of hosted notebooks, which CON-18 retired (2026-11-24).
   migrate: (stored, version) =>
-    version >= 2 ? (stored as WorkspaceState) : notesOnly(stored as { panes?: Pane[]; focused?: string; panel?: string | null }),
+    withoutHostedTabs(version >= 2 ? (stored as WorkspaceState) : notesOnly(stored as { panes?: Pane[]; focused?: string; panel?: string | null })),
   // Tabs of a kind this build does not know (written by a newer one) are dropped.
   merge: (stored, current) => ({ ...current, ...knownKinds(stored as Partial<WorkspaceState>) }),
   partialize: (s) => ({
@@ -224,6 +224,17 @@ export function notesOnly(stored: { panes?: Pane[]; focused?: string; panel?: st
   const panes = kept.filter((p) => p.tabs.length);
   const all = panes.length ? panes : [kept[0] ?? firstPane()];
   return { panes: all, focused: all.some((p) => p.id === stored.focused) ? stored.focused! : all[0].id, rail: stored.panel !== null };
+}
+
+/** A stored layout without the tabs of hosted notebooks (container `lm:<domain>:<notebook>`, retired by CON-18). A pane whose
+ *  active tab went shows its first tab; a pane left with none stays empty, as a pane of closed tabs does. */
+export function withoutHostedTabs<T extends { panes?: Pane[] }>(stored: T): T {
+  if (!stored?.panes) return stored;
+  const panes = stored.panes.map((p) => {
+    const tabs = p.tabs.filter((t) => !(t.kind === "file" && t.file?.notebook.startsWith("lm:")));
+    return tabs.length === p.tabs.length ? p : { ...p, tabs, active: tabs.some((t) => t.id === p.active) ? p.active : tabs[0]?.id ?? null };
+  });
+  return { ...stored, panes };
 }
 
 /** A stored layout without tabs of unknown kinds. A tab saved in Rich mode, which was deleted (CON-19), opens in Live. */

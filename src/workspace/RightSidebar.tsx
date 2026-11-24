@@ -13,7 +13,6 @@ import { PersonItems } from "../features/people/PersonItems";
 import { Backlinks, OutgoingLinks } from "../features/links/BacklinksPanel";
 import { LinksPanel, LocalGraphPanel } from "../features/links/LinksPanel";
 import { RelatedPages } from "../features/links/RelatedPanel";
-import { isLm } from "../documents/adapters/lmdoc";
 import { DailyCalendar } from "../features/notes/DailyViews";
 import { Outline } from "../features/outline/Outline";
 import { NoteDetails, noteQuery } from "../features/viewer/NoteView";
@@ -114,8 +113,8 @@ export function PageRail() {
   return (
     <aside className="note-rail">
       <Section title="On this page"><PageOutline tab={tab} /></Section>
-      {/* The index covers folder notebooks; a loose file or a Living Memory page has no backlinks to show. */}
-      {!isLoose(tab.file) && !isLm(tab.file) && (
+      {/* The index covers folder notebooks; a loose file has no backlinks to show. */}
+      {!isLoose(tab.file) && (
         <>
           <PersonItems file={tab.file} />
           <Section title="Backlinks"><Backlinks file={tab.file} /></Section>
@@ -133,7 +132,7 @@ export function PageRail() {
           {calendar && <DailyCalendar notebook={tab.file.notebook} page={tab.file.path} />}
         </details>
       )}
-      {!isLoose(tab.file) && !isLm(tab.file) && (
+      {!isLoose(tab.file) && (
         <details className="rail-more" open={graph} onToggle={(e) => setGraph(e.currentTarget.open)}>
           <summary>Local graph</summary>
           {graph && <LocalGraphPanel key={keyOf(tab.file)} focusFile={tab.file} />}

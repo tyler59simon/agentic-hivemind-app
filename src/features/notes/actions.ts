@@ -2,12 +2,9 @@
 // a Rust command; open tabs, documents and drafts follow renames, and tabs of a deleted page close.
 import type { QueryClient } from "@tanstack/react-query";
 import { movedPath, type FileRef } from "../../documents/keys";
-import { beforeMove, connectedStore, discard, edit, hold, keyOf, open, refresh, unsavedUnder, useDocuments } from "../../documents/store";
+import { beforeMove, discard, edit, hold, keyOf, open, refresh, unsavedUnder, useDocuments } from "../../documents/store";
 import { retargetAll } from "../../documents/sync";
-import { isLm, lmContainer } from "../../documents/adapters/lmdoc";
-import { docsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
-import { bridgeGeneration, lmNotebooksQuery } from "../../lib/lm";
 import { forgetMoved } from "../../lib/drafts";
 import { createDoc, createSection, deleteDoc, moveDoc, readDoc } from "../../documents/io";
 import { NEW_CANVAS_TEXT } from "../canvas/model";
@@ -70,24 +67,16 @@ export async function newPage(client: QueryClient, notebook: string, folder = ""
   return path;
 }
 
-/** Rich pages are files of folder notebooks: Living Memory keeps Markdown pages only. */
-function folderOnly(notebook: string) {
-  if (isLm({ notebook })) throw new Error("Living Memory notebooks hold Markdown pages only");
-}
-
 /** A new rich page (NS-3C): `Untitled.hmdoc` with one empty paragraph, under a free name. */
 export async function newRichPage(client: QueryClient, notebook: string, folder = "", title = "Untitled") {
-  folderOnly(notebook);
   const path = await createUnique(notebook, folder, title, newPageText, "hmdoc");
   client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
   openPage({ notebook, path });
   return path;
 }
 
-/** A new canvas board (NS-7C): `Untitled.canvas` with no cards, under a free name. A folder notebook only: Living Memory
- *  keeps Markdown pages. */
+/** A new canvas board (NS-7C): `Untitled.canvas` with no cards, under a free name. */
 export async function newCanvas(client: QueryClient, notebook: string, folder = "", title = "Untitled") {
-  folderOnly(notebook);
   const path = await createUnique(notebook, folder, title, NEW_CANVAS_TEXT, "canvas");
   client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
   openPage({ notebook, path });
@@ -96,7 +85,6 @@ export async function newCanvas(client: QueryClient, notebook: string, folder = 
 
 /** A new Mermaid diagram: `Untitled.mmd` with a starter flowchart. */
 export async function newMermaid(client: QueryClient, notebook: string, folder = "", title = "Untitled") {
-  folderOnly(notebook);
   const path = await createUnique(notebook, folder, title, NEW_MERMAID_TEXT, "mmd");
   client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
   openPage({ notebook, path });
@@ -105,7 +93,6 @@ export async function newMermaid(client: QueryClient, notebook: string, folder =
 
 /** A new Draw.io diagram: `Untitled.drawio` with one blank page. */
 export async function newDrawio(client: QueryClient, notebook: string, folder = "", title = "Untitled") {
-  folderOnly(notebook);
   const path = await createUnique(notebook, folder, title, NEW_DRAWIO_TEXT, "drawio");
   client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
   openPage({ notebook, path });
@@ -114,7 +101,6 @@ export async function newDrawio(client: QueryClient, notebook: string, folder = 
 
 /** A new SVG file: `Untitled.svg` with a starter viewBox. */
 export async function newSvg(client: QueryClient, notebook: string, folder = "", title = "Untitled") {
-  folderOnly(notebook);
   const path = await createUnique(notebook, folder, title, NEW_SVG_TEXT, "svg");
   client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
   openPage({ notebook, path });
@@ -123,7 +109,6 @@ export async function newSvg(client: QueryClient, notebook: string, folder = "",
 
 /** A new Word document: `Untitled.docx` with minimal OOXML structure. */
 export async function newDocx(client: QueryClient, notebook: string, folder = "", title = "Untitled") {
-  folderOnly(notebook);
   for (let n = 1; n < 100; n++) {
     const name = n === 1 ? title : `${title} ${n}`;
     const path = join(folder, `${name}.docx`);
@@ -148,7 +133,6 @@ async function currentText(ref: FileRef): Promise<string> {
 /** Convert a Markdown page to a rich page beside it (the Markdown page is not changed) and open it. `text` is the text to
  *  convert when the caller has it (an open page). */
 export async function convertToRich(client: QueryClient, ref: FileRef, text?: string) {
-  folderOnly(ref.notebook);
   const source = text ?? await currentText(ref);
   const { convertMarkdown } = await import("../hmdoc/convert");
   const converted = convertMarkdown(source, pageTitle(ref.path));
@@ -160,7 +144,6 @@ export async function convertToRich(client: QueryClient, ref: FileRef, text?: st
 
 /** Export a rich page to a Markdown page beside it. Returns where it went and what the Markdown could not keep. */
 export async function exportToMarkdown(client: QueryClient, ref: FileRef, text?: string) {
-  folderOnly(ref.notebook);
   const source = text ?? await currentText(ref);
   const { exportText } = await import("../hmdoc/toMarkdown");
   const out = exportText(source, folderOf(ref.path));
@@ -173,7 +156,6 @@ export async function exportToMarkdown(client: QueryClient, ref: FileRef, text?:
 /** A conflict on a rich page or a canvas: the user's version goes to `Name (my edits).hmdoc` (or `.canvas`) beside it, under
  *  a free name. */
 export async function saveBothVersions(client: QueryClient, ref: FileRef, text: string) {
-  folderOnly(ref.notebook);
   const canvas = isCanvas(ref.path);
   const drawio = isDrawio(ref.path);
   const ext = canvas ? "canvas" : drawio ? (ref.path.toLowerCase().endsWith(".dio") ? "dio" : "drawio") : "hmdoc";
@@ -185,10 +167,8 @@ export async function saveBothVersions(client: QueryClient, ref: FileRef, text: 
 
 export async function newSection(client: QueryClient, notebook: string, folder: string, name: string) {
   const path = join(folder, name.trim());
-  // A Living Memory section is made with its first page, which opens (NS-2C).
-  const first = await createSection(notebook, path);
+  await createSection(notebook, path);
   client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
-  if (first) openPage({ notebook, path: first });
   return path;
 }
 
@@ -197,8 +177,6 @@ export async function newSection(client: QueryClient, notebook: string, folder: 
  *  it moves and offered for rewriting once it has (NS-4A). */
 export async function movePath(client: QueryClient, notebook: string, from: string, to: string) {
   if (from === to) return;
-  // The store the move was asked in: Hivemind may switch stores while the move waits (Codex review of dd4c1b0, R3-D1).
-  const at = bridgeGeneration();
   const done = await beforeMove(notebook, from);
   // The destination is held too: a page opened there before its draft arrives would load without it (Codex review of
   // 52051c8, F2), and one open there takes no edits the move would replace (final review of a34fafd, F2a).
@@ -216,7 +194,7 @@ export async function movePath(client: QueryClient, notebook: string, from: stri
       throw new Error(`${to} has unsaved edits; save or discard them first`);
     }
     plan = await planFor(client, notebook, from, to);
-    await moveDoc(notebook, from, to, at);
+    await moveDoc(notebook, from, to);
     forgetMoved(notebook, from);
     retargetAll(notebook, from, to);
   } finally {
@@ -305,7 +283,6 @@ export function closeTabsUnder(notebook: string, path: string) {
  *  pages are held: one opened from the tree meanwhile shows the delete instead of an editor, and a failed delete
  *  gives every page back with its edits (Codex re-reviews of c496e1c and b82e9ab, D8). */
 export async function trashPath(client: QueryClient, notebook: string, path: string) {
-  const at = bridgeGeneration(), store = connectedStore();
   const done = await hold(notebook, path, "delete");
   try {
     await Promise.all([waitDocxSaves(notebook, path), waitPdfSaves(notebook, path)]);
@@ -316,14 +293,14 @@ export async function trashPath(client: QueryClient, notebook: string, path: str
       ?? undefined;
     const closed = closeTabsUnder(notebook, path);
     try {
-      await deleteDoc(notebook, path, doc?.base?.stamp ?? binStamp, at);
+      await deleteDoc(notebook, path, doc?.base?.stamp ?? binStamp);
     } catch (e) {
       for (const closedRef of closed.values()) openPage(closedRef);
       throw e;
     }
     closeTabsUnder(notebook, path);
     for (const [key, r] of Object.entries(useDocuments.getState().refs)) {
-      if (r.notebook === notebook && movedPath(r.path, path, path) !== null) discard(key, store);
+      if (r.notebook === notebook && movedPath(r.path, path, path) !== null) discard(key);
     }
     discardDocxUnder(notebook, path);
     discardPdfUnder(notebook, path);
@@ -333,20 +310,12 @@ export async function trashPath(client: QueryClient, notebook: string, path: str
   client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
 }
 
-/** The first notebook shown on the Notes page: a folder notebook, else a Living Memory one. */
+/** The first notebook shown on the Notes page. */
 export async function firstNotebook(client: QueryClient): Promise<string | undefined> {
-  const notebooks = await client.ensureQueryData(notebooksQuery());
-  let first = notebooks[0]?.id;
-  if (!first && docsEnabled()) {
-    const lm = (await client.ensureQueryData(lmNotebooksQuery()).catch(() => null))?.notebooks ?? [];
-    const top = [...lm].sort((a, b) => a.domain.localeCompare(b.domain) || a.title.localeCompare(b.title))[0];
-    first = top && lmContainer(top.domain, top.notebook);
-  }
-  return first;
+  return (await client.ensureQueryData(notebooksQuery()))[0]?.id;
 }
 
-/** Ctrl+N on the Notes page: a new page in the focused page's notebook and folder, else the first notebook shown: a
- *  folder notebook, else a Living Memory one (Codex review of 32fee20, U3). */
+/** Ctrl+N on the Notes page: a new page in the focused page's notebook and folder, else the first notebook shown. */
 export async function newPageHere(client: QueryClient) {
   const { notebook, folder } = currentNotebook(await firstNotebook(client));
   // With no notebook yet, Ctrl+N starts an untitled text file (NS-1B).
@@ -354,14 +323,7 @@ export async function newPageHere(client: QueryClient) {
   await newPage(client, notebook, folder).catch((e) => toast(classify(e).message, "error"));
 }
 
-/** Why a page a missing `[[link]]` names cannot be made, or null. A rich page is a file of a folder notebook (R1-16). */
-export function missingPageProblem(notebook: string, path: string): string | null {
-  return isRichDoc(path) && isLm({ notebook }) ? `Living Memory notebooks hold Markdown pages only, so ${path} was not created.` : null;
-}
-
 /** Make the page a missing `[[link]]` names: a rich page starts as a valid one, any other page is empty. */
 export async function createMissingPage(notebook: string, path: string) {
-  const problem = missingPageProblem(notebook, path);
-  if (problem) throw new Error(problem);
   await createDoc(notebook, path, isRichDoc(path) ? newPageText(pageTitle(path)) : "");
 }

@@ -16,12 +16,11 @@ export interface FolderPolicy { domain: string; visibility: Visibility; private:
 const norm = (p: string) => p.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
 
 /** The memory domain a folder notebook belongs to: the bound domain whose folder holds it (the longest such folder),
- *  else `fallback`. Notebook-only domains are never chosen: no agent session resolves to one. */
+ *  else `fallback`. */
 export function domainForFolder(path: string, known: DomainInfo[], fallback: string | null): string | null {
   const folder = norm(path);
   let best: { name: string; length: number } | null = null;
   for (const d of known) {
-    if (d.kind === "notebook") continue;
     for (const prefix of d.prefixes) {
       const p = norm(prefix);
       if ((folder === p || folder.startsWith(`${p}\\`)) && (!best || p.length > best.length)) best = { name: d.name, length: p.length };

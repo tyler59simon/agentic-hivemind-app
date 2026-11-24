@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// NS-7B: the Tasks view mounted for real: tasks of folder notebooks, of Living Memory pages and the open action items,
+// NS-7B: the Tasks view mounted for real: tasks of folder notebooks (from Hivemind's own index) and the open action items,
 // the filters and grouping, and a tick that writes back with the hash the list was read at (or says why it did not).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
@@ -41,8 +41,6 @@ vi.mock("@tauri-apps/api/core", () => ({
       }
       case "lm": {
         const argv = args.argv as string[];
-        if (argv[0] === "doc" && argv[1] === "notebooks") return { exit_code: 0, error: null, result: { notebooks: [{ domain: "demo", notebook: "plans", title: "Plans", visibility: "searchable", private: false, revision: "r", pages: 1, assets: 0, asset_bytes: 0, proposals: 0, updated: "" }] } };
-        if (argv[0] === "doc" && argv[1] === "tasks") return { exit_code: 0, error: null, result: { ok: true, tasks: [{ domain: "demo", notebook: "plans", path: "Roadmap.md", title: "Roadmap", line: 3, done: false, text: "ship it", due: null }] } };
         if (argv[0] === "open") return { exit_code: 0, error: null, result: { ok: true, domain: null, notes: 1, count: 1, items: [{ ref: "demo:abc", short_ref: "abc", title: "Release work", type: "plan", updated: "", index: 1, item: "write the notes" }] } };
         if (argv[0] === "check") return { exit_code: 0, error: null, result: { ok: true, item: "write the notes", index: 1, done: true, open: 0 } };
         return { exit_code: 0, error: null, result: {} };
@@ -71,8 +69,8 @@ const select = async (label: string, value: string) => {
 };
 const tickBox = (text: string) => rows().find((r) => r.textContent?.includes(text))!.querySelector<HTMLInputElement>("input[type=checkbox]")!;
 
-async function mount(search = true) {
-  useConnection.setState({ commands: ["doc", "open"], api: 2, capabilities: { docs: { version: 1, max_page_bytes: 1, max_asset_bytes: 1, ...(search ? { search: true } : {}) } } });
+async function mount() {
+  useConnection.setState({ commands: ["doc", "open"], api: 2, capabilities: { docs: { version: 1, max_page_bytes: 1 } } });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const el = document.createElement("div");
   document.body.append(el);
@@ -95,21 +93,20 @@ afterEach(async () => { await act(async () => root?.unmount()); root = null; doc
 describe("the Tasks view", () => {
   it("lists open tasks of every source, the ones with the earliest due date first, without the fields their columns show", async () => {
     await mount();
-    // Due dates first (overdue, then today), then those with none, by notebook: the action items, a Living Memory page, a folder page.
-    expect(texts()).toEqual(["pay the bill", "call Ana", "write the notes", "ship it", "no date at all"]);
+    // Due dates first (overdue, then today), then those with none, by notebook: the action items, a folder page.
+    expect(texts()).toEqual(["pay the bill", "call Ana", "write the notes", "no date at all"]);
     const first = rows()[0];
     expect(first.querySelector(".chip.overdue")?.textContent).toBe(day(-2));
     expect(first.textContent).toContain("high");
     expect(first.textContent).toContain("Plan");
     expect(rows()[2].textContent).toContain("demo · action items");
-    expect(rows()[3].textContent).toContain("demo · Plans");
-    expect(rows()[4].textContent).toContain("Main");
+    expect(rows()[3].textContent).toContain("Main");
   });
 
-  it("does not ask Living Memory for page tasks without docs.search", async () => {
-    await mount(false);
-    expect(texts()).toEqual(["pay the bill", "call Ana", "write the notes", "no date at all"]);
-    expect(calls.some((c) => c.cmd === "lm" && (c.args.argv as string[])[1] === "tasks")).toBe(false);
+  it("reads page tasks from Hivemind's own index only: no doc command is sent", async () => {
+    await mount();
+    expect(calls.some((c) => c.cmd === "index_tasks")).toBe(true);
+    expect(calls.some((c) => c.cmd === "lm" && (c.args.argv as string[])[0] === "doc")).toBe(false);
   });
 
   it("filters by due date, notebook, done and text, and groups", async () => {
@@ -119,17 +116,15 @@ describe("the Tasks view", () => {
     await select("Due", "today");
     expect(texts()).toEqual(["call Ana"]);
     await select("Due", "none");
-    expect(texts()).toEqual(["write the notes", "ship it", "no date at all"]);
+    expect(texts()).toEqual(["write the notes", "no date at all"]);
     await select("Due", "any");
-    await select("Notebook", "lm:demo:plans");
-    expect(texts()).toEqual(["ship it"]);
     await select("Notebook", "@actions");
     expect(texts()).toEqual(["write the notes"]);
     await select("Notebook", "");
     await select("Done", "done");
     expect(texts()).toEqual(["already finished"]);
     await select("Done", "all");
-    expect(texts()).toHaveLength(6);
+    expect(texts()).toHaveLength(5);
     const text = document.querySelector<HTMLInputElement>("input[aria-label='Text']")!;
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(text, "ANA"); text.dispatchEvent(new Event("input", { bubbles: true })); });
     expect(texts()).toEqual(["call Ana"]);
@@ -137,7 +132,7 @@ describe("the Tasks view", () => {
     await select("Group by", "due");
     expect([...document.querySelectorAll(".task-group h2")].map((h) => h.textContent?.replace(/\d+$/, "").trim())).toEqual(["Overdue", "Today", "No due date"]);
     await select("Group by", "page");
-    expect([...document.querySelectorAll(".task-group h2")].map((h) => h.textContent?.replace(/\d+$/, "").trim())).toEqual(["Plan", "Release work", "Roadmap"]);
+    expect([...document.querySelectorAll(".task-group h2")].map((h) => h.textContent?.replace(/\d+$/, "").trim())).toEqual(["Plan", "Release work"]);
   });
 
   it("ticking a task writes that one line against the hash the list was read at", async () => {

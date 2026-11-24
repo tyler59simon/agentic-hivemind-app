@@ -67,8 +67,8 @@ export interface Capabilities {
   systems?: { project?: number };
   /** 2: `views` also holds query views (`kinds` lists `note` and `query`); a row without `kind` is a note view. */
   views?: { version: number; kinds: string[] };
-  /** Notebook pages (NS-2A, NS-2B). */
-  docs?: { version: number; max_page_bytes: number; max_asset_bytes: number; notebook_only_domains?: boolean; search?: boolean; folder_policy?: boolean | number; accept_edited?: boolean;
+  /** Folder notebook pages: `doc read --file` and `doc propose --file`, and the proposals Living Memory stages for them. */
+  docs?: { version: number; max_page_bytes: number; folder_policy?: boolean | number; accept_edited?: boolean;
     /** 1: `doc read --file` and `doc propose --file` for folder notebook pages, and folder proposals in `proposals`. */
     folder_proposals?: number };
 }
@@ -114,19 +114,14 @@ export const saveSettings = (value: Settings) => call("save_settings", { value }
 export const captureStatus = () => call("capture_status", {}) as Promise<CaptureStatus>;
 export const showMain = () => call("show_main", {}) as Promise<void>;
 
-/** `kind` is "notebook" for a domain that holds notebooks only (NS-2A); older stores leave it out. */
-export interface DomainInfo { name: string; bound: boolean; prefixes: string[]; active: number; archived: number; kind?: "memory" | "notebook"; pages?: number }
+export interface DomainInfo { name: string; bound: boolean; prefixes: string[]; active: number; archived: number }
 export interface Domains {
   domains: DomainInfo[];
   aliases: Record<string, string>;
   global_domains: string[];
   foreign_domains: string[];
 }
-/** Every domain, notebook-only ones included: for the Notes page. */
-export const allDomains = () => run<Domains>(view(["domains"]));
-/** Memory domains only. A notebook-only domain holds no notes, so no memory picker (capture, new note, library, graph,
- *  history, wiki, work, the default domain) offers it (NS-2C). */
-export const domains = () => allDomains().then((d) => ({ ...d, domains: d.domains.filter((x) => x.kind !== "notebook") }));
+export const domains = () => run<Domains>(view(["domains"]));
 
 export interface NoteRow {
   ref: string; id: string; domain: string; title: string; type: NoteType; status: Status;
@@ -589,30 +584,24 @@ export const agentWikiModel = (domain: string, project?: string) =>
   run<{ ok: boolean; model: WikiModel }>(view(["wiki", "--agent", "--format", "json", "--domain", domain, ...(project ? ["--project", project] : [])]))
     .then((r) => r.model, (e: unknown) => { if (isNoAgentWiki(e)) return null; throw e; });
 
-// Notebook pages (NS-2A, NS-2B, used by NS-2C). Hivemind sees private notebooks (`--include-private`, its bridge only)
-// and hidden ones (`--include-hidden`). Reads run as the viewer; writes as the main actor.
+// Folder notebook pages through Living Memory (NS-2A, NS-2B, CON-9): staged page edits, one page read by its file path, and the
+// folder registry. Hivemind sees private folder notebooks (`--include-private`, its bridge only). Reads run as the viewer;
+// writes as the main actor. Notebooks that kept their pages inside the store were retired by CON-18 (2026-11-24).
 export type Visibility = "hidden" | "searchable" | "injectable";
-export interface DocNotebook {
-  domain: string; notebook: string; title: string; visibility: Visibility; private: boolean; revision: string;
-  pages: number; assets: number; asset_bytes: number; proposals: number; updated: string;
-  /** The `settings` object of its `notebook.json` (daily notes, templates; NS-7A), `{}` when it has none. A Living Memory
-   *  from before NS-7A sends no `settings`, and the notebook then has no settings of this kind to offer. */
-  settings?: Record<string, unknown>;
-}
-export interface DocEntry { path: string; kind: "folder" | "page"; size?: number; revision?: string; updated?: string }
-export interface DocPage { domain: string; notebook: string; path: string; text: string; revision: string; size: number; updated: string; truncated?: boolean }
-/** What a `doc` write returns: the operation and, for page writes, the new revision. */
+/** What a `doc` write returns: the operation and, for a page write, the new revision. */
 export interface DocReceipt { operation_id: string; revision?: string; path?: string; summary?: Record<string, unknown> }
+/** A folder notebook's page read through Living Memory. */
+export interface DocPage { domain: string; notebook: string; path: string; text: string; revision: string; size: number; updated: string; truncated?: boolean }
 export interface DocProposalRow {
-  id: string; domain: string; notebook: string; path: string; base_revision: string | null; note: string | null;
+  id: string; domain: string; base_revision: string | null; note: string | null;
   created: string; status: "pending" | "accepted" | "rejected"; reason: string | null; settled: string | null; size: number;
-  /** A folder notebook's page (CON-9): `notebook` is then Living Memory's `nb-` id for the folder, `folder` the folder's canonical path
-   *  and `file` the page's full path. `orphaned`: the folder is no longer registered, so the edit can be rejected but not accepted. */
-  folder?: string | null; file?: string | null; orphaned?: boolean; applied?: boolean;
+  /** `notebook` is Living Memory's `nb-` id for the folder, `folder` the folder's canonical path, `path` the page's path inside it and
+   *  `file` the page's full path. `orphaned`: the folder is no longer registered, so the edit can be rejected but not accepted. */
+  notebook: string; path: string; folder: string; file?: string | null; orphaned?: boolean; applied?: boolean;
 }
 export interface DocProposal extends Omit<DocProposalRow, "reason" | "settled" | "size"> {
   body: string; session?: string | null;
-  /** A folder proposal keeps the page as the agent read it (base64 of its bytes; null over 1 MiB), so the merge has its base. */
+  /** The proposal keeps the page as the agent read it (base64 of its bytes; null over 1 MiB), so the merge has its base. */
   base?: string | null;
 }
 /** The page as the agent read it, from a folder proposal's `base`: the bytes decoded as UTF-8, a byte order mark kept for `pageText`. */
@@ -620,11 +609,10 @@ export function decodeBase(base: string): string {
   const bytes = Uint8Array.from(atob(base), (c) => c.charCodeAt(0));
   return new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes);
 }
-export interface DocHistoryRow { operation_id: string; kind: string; state: string; created: string; before_revision: string | null; after_revision: string | null }
 
 const PRIVATE = "--include-private";
 /** A command that carries a page body: Rust sends it as stdin, or through a staging file when it is large (NS-2C). */
-async function runBody<T>(argv: string[], body: string, flag?: "--settings-file" | "--payload-file" | "--spec-file"): Promise<T> {
+async function runBody<T>(argv: string[], body: string, flag?: "--spec-file"): Promise<T> {
   const reply = (await call("lm_body", { argv, body, ...(flag ? { flag } : {}), ...bound(argv) })) as Reply<T>;
   if (reply.exit_code !== 0) {
     const error = reply.error ?? { code: "invalid", message: `Exit code ${reply.exit_code}` };
@@ -633,88 +621,17 @@ async function runBody<T>(argv: string[], body: string, flag?: "--settings-file"
   return reply.result;
 }
 
-/** A `doc` command: options first, then `--` and the operands, so a page named `-Draft.md` is never read as an option
- *  (Codex review of 32fee20, C4). Free text goes as `--option=value` for the same reason. Rust's `lm_body` puts
- *  `--body-file` before the `--`. A command without operands gets no `--`: argparse refuses one where the command takes
- *  no positional arguments, as `doc notebooks` does (Codex re-review of 75ce884, R2-C1). */
+/** A `doc` command: options first, then `--` and the operands, so a path named `-Draft.md` is never read as an option
+ *  (Codex review of 32fee20, C4). Free text goes as `--option=value` for the same reason. A command without operands gets no
+ *  `--`: argparse refuses one where the command takes no positional arguments. */
 function doc(action: string[], operands: string[], options: string[] = [], how: { viewer?: boolean; priv?: boolean } = {}) {
   return ["doc", ...action, ...options, ...(how.priv === false ? [] : [PRIVATE]), ...(how.viewer ? ["--actor", "viewer"] : []), ...(operands.length ? ["--", ...operands] : [])];
 }
 
-/** A notebook Living Memory cannot read (its `notebook.json` is damaged): `error` says why. */
-export interface DocNotebookProblem { domain: string; notebook: string; error: string }
-/** Every notebook: those Living Memory can read, and the damaged ones apart, so one damaged notebook never takes the
- *  list down (Codex review of 32fee20, C2). */
-export interface DocNotebooks { notebooks: DocNotebook[]; damaged: DocNotebookProblem[] }
-export async function docNotebooks(): Promise<DocNotebooks> {
-  const rows = (await run<{ notebooks: unknown[] }>(doc(["notebooks"], [], ["--all-domains", "--include-hidden"], { viewer: true }))).notebooks ?? [];
-  const out: DocNotebooks = { notebooks: [], damaged: [] };
-  for (const row of rows as Record<string, unknown>[]) {
-    if (typeof row.title === "string" && typeof row.error !== "string") out.notebooks.push(row as unknown as DocNotebook);
-    else out.damaged.push({ domain: String(row.domain ?? ""), notebook: String(row.notebook ?? ""), error: String(row.error ?? "Living Memory could not read this notebook") });
-  }
-  return out;
-}
-/** A paragraph of a Living Memory notebook page that matches a search (`search --pages`, NS-2B). */
-export interface DocSearchHit {
-  domain: string; notebook: string; notebook_title: string; title: string; path: string; heading: string | null; snippet: string;
-  line_start: number; line_end: number; revision: string | null; score: number; relevance: number;
-  /** The cosine of a hit found by meaning, when Living Memory's semantic search is on. */
-  similarity?: number;
-}
-/** Search the notebook pages of every domain, private notebooks included (Hivemind's bridge only). Needs `docs.search`.
- *  A hidden notebook never appears here. `search --pages` also returns folder pages, which alternate with these by rank and
- *  which Hivemind's own index serves instead, so twice the rows are asked for and only the Living Memory ones kept. */
-export const docSearch = (query: string, limit = 10) =>
-  run<{ pages: (DocSearchHit & { origin?: string })[] }>(["search", "--pages", "--all-domains", "--limit", String(Math.min(50, limit * 2)), PRIVATE, "--actor", "viewer", "--", query])
-    .then((r) => (r.pages ?? []).filter((p) => !p.origin || p.origin === "lm").slice(0, limit));
-/** A task line of a Living Memory notebook page (`doc tasks`, NS-7B): its line number (from 1, as the page reads), its box, its
- *  text (at most 500 characters) and the due date Living Memory found in it. */
-export interface DocTask { domain: string; notebook: string; path: string; title: string; line: number; done: boolean; text: string; due: string | null }
-/** The task lines of every Living Memory notebook's pages, open ones first. `open` leaves the done ones out. Needs `docs.search`. */
-export const docTasks = (o: { open?: boolean } = {}) =>
-  run<{ tasks: DocTask[] }>(doc(["tasks"], [], ["--all-domains", ...(o.open ? ["--open"] : [])], { viewer: true })).then((r) => r.tasks ?? []);
-/** A page `doc query` found: its flat frontmatter properties (a value, or a list for a key with several) and its revision. */
-export interface DocQueryPage { domain: string; notebook: string; path: string; title: string; revision: string; properties: Record<string, string | string[]> }
-/** Ask which pages of every Living Memory notebook meet a query (`{ where: [{ key, op, value }], sort: [{ key, order }], limit,
- *  notebook }`, NS-7B). The payload goes through a staged `--payload-file`. */
-export const docQuery = (payload: object) =>
-  runBody<{ pages: DocQueryPage[] }>(doc(["query"], [], ["--all-domains"], { viewer: true }), JSON.stringify(payload), "--payload-file").then((r) => r.pages ?? []);
-export const lmNotebooksQuery = () => ({ queryKey: ["lm-notebooks"], queryFn: docNotebooks });
-/** Pending proposals of one notebook. */
-export const proposalsQuery = (domain: string, notebook: string) => ({ queryKey: ["lm-proposals", domain, notebook], queryFn: () => docProposals(domain, notebook) });
-/** Pending page edits of every notebook, folder notebooks included (`proposals list --kind page`), for the Inbox. */
-export const allProposalsQuery = () => ({ queryKey: ["lm-proposals", "*"], queryFn: () => docProposals() });
-export const docNotebookCreate = (domain: string, notebook: string, title: string) =>
-  run<DocReceipt>(doc(["notebook", "create"], [domain, notebook], [`--title=${title}`], { priv: false }));
-/** `settings` is merged into the notebook's `settings` object one key at a time (a key given replaces that key). It goes as
- *  a staged `--settings-file`, so the call carries a body (NS-7A). */
-export const docNotebookUpdate = (domain: string, notebook: string, patch: { title?: string; visibility?: Visibility; private?: boolean; settings?: Record<string, unknown> }) => {
-  const argv = doc(["notebook", "update"], [domain, notebook], [
-    ...(patch.title !== undefined ? [`--title=${patch.title}`] : []),
-    ...(patch.visibility ? ["--visibility", patch.visibility] : []),
-    ...(patch.private === undefined ? [] : [patch.private ? "--private" : "--no-private"]),
-  ]);
-  return patch.settings ? runBody<DocReceipt>(argv, JSON.stringify(patch.settings), "--settings-file") : run<DocReceipt>(argv);
-};
-export const docList = (domain: string, notebook: string) =>
-  run<{ title: string; entries: DocEntry[] }>(doc(["list"], [domain, notebook], [], { viewer: true }));
-export const docRead = (domain: string, notebook: string, path: string, at?: number) => run<DocPage>(doc(["read"], [domain, notebook, path], [], { viewer: true }), undefined, at);
 /** A Markdown page of a folder notebook, read by its file path (`doc read --file`, needs `docs.folder_proposals`): `notebook` is
  *  Living Memory's `nb-` id for the folder, `folder` its canonical path and `path` the page's path inside it. */
 export interface DocFilePage extends DocPage { origin: "folder"; folder: string; file: string }
 export const docReadFile = (file: string, at?: number) => run<DocFilePage>(doc(["read"], [], [`--file=${file}`], { viewer: true }), undefined, at);
-export const docWrite = (domain: string, notebook: string, path: string, body: string, expected: string) =>
-  runBody<DocReceipt>(doc(["write"], [domain, notebook, path], ["--expected-revision", expected]), body);
-export const docCreate = (domain: string, notebook: string, path: string, body: string) =>
-  runBody<DocReceipt>(doc(["create"], [domain, notebook, path]), body);
-export const docDelete = (domain: string, notebook: string, path: string, expected: string, at?: number) =>
-  run<DocReceipt>(doc(["delete"], [domain, notebook, path], ["--expected-revision", expected]), undefined, at);
-export const docHistory = (domain: string, notebook: string, path: string, limit = 50) =>
-  run<{ history: DocHistoryRow[] }>(doc(["history"], [domain, notebook, path], ["--limit", String(limit)], { viewer: true })).then((r) => r.history);
-/** The page as operation `op` left it. */
-export const docVersion = (domain: string, notebook: string, path: string, op: string) =>
-  run<DocPage>(doc(["history"], [domain, notebook, path], ["--version", op], { viewer: true }));
 /** A `proposals` command for page edits: the ID follows the action (an ID is hex, never an option), then the options. */
 function proposals(action: string, id?: string, options: string[] = [], viewer = false) {
   return ["proposals", action, ...(id ? [id] : []), ...options, PRIVATE, ...(viewer ? ["--actor", "viewer"] : [])];
@@ -723,13 +640,14 @@ export const docProposals = (domain?: string, notebook?: string) =>
   run<{ proposals: DocProposalRow[] }>(proposals("list", undefined, ["--kind", "page", ...(domain ? ["--domain", domain] : []), ...(notebook ? [`--notebook=${notebook}`] : [])], true)).then((r) => r.proposals);
 export const docProposal = (id: string) => run<{ proposal: DocProposal }>(proposals("show", id, [], true)).then((r) => r.proposal);
 export const docAccept = (id: string) => run<DocReceipt>(proposals("accept", id));
+/** Pending page edits of every folder notebook (`proposals list --kind page`), for the Inbox. */
+export const allProposalsQuery = () => ({ queryKey: ["lm-proposals", "*"], queryFn: () => docProposals() });
 /** Write the user's merge of a proposal and settle it as accepted, in one Living Memory operation, against the page's
  *  revision the merge was made from (null: the page must not exist). Needs `docs.accept_edited` (Codex review of
  *  32fee20, D3). */
 export const docAcceptEdited = (id: string, body: string, expected: string | null) =>
   runBody<DocReceipt>(proposals("accept", id, ["--edited", ...(expected ? ["--expected-revision", expected] : [])]), body);
 export const docReject = (id: string, reason?: string) => run<DocReceipt>(proposals("reject", id, reason ? [`--reason=${reason}`] : []));
-export const domainCreateNotebook = (name: string) => run<{ domain: string; kind: string }>(["domain", "create", name, "--notebook-only"]);
 /** Register a folder notebook outside the store, or change how far agents reach into it. A field left undefined keeps
  *  what Living Memory holds: a folder registered again keeps the visibility and private flag kept for it, and a new one
  *  is searchable (Codex review of 32fee20, P1). */

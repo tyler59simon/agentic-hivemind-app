@@ -41,12 +41,8 @@ export interface DocState {
 export type FormatChange = Partial<Pick<FileFormat, "encoding" | "bom" | "eol">>;
 
 export type DocEvent =
-  // foreign: the draft is another Living Memory store's, shown even when its text equals the page (R3-U1).
   // reformat: the format the draft's page was to be saved in (a line ending or encoding the user chose).
-  | { type: "loaded"; loaded: Loaded; draft?: { text: string; at: string }; convert?: boolean; foreign?: boolean; reformat?: FileFormat }
-  // Hivemind switched to another store while this page's latest edits were not in a draft: they stay, read-only,
-  // until their store is back (Codex review of dd4c1b0, R3-D2).
-  | { type: "parked"; reason: string }
+  | { type: "loaded"; loaded: Loaded; draft?: { text: string; at: string }; convert?: boolean; reformat?: FileFormat }
   | { type: "edited"; text: string; outside?: boolean } // outside: not typed in the editor (an attachment link), so it shows the text
   | { type: "saveStarted" }
   | { type: "saved"; stamp: Stamp }
@@ -90,7 +86,7 @@ export function reduce(s: DocState, e: DocEvent): DocState {
       const loaded = convert ? converted(e.loaded) : again ? { ...e.loaded, format: e.reformat!, readOnly: null, chooseEol: false } : e.loaded;
       if (loaded.readOnly || loaded.binary) {
         // Its draft stays where it is and is shown, so it can be saved elsewhere (Codex re-review of fa08348, D3).
-        const kept = e.draft && (e.draft.text !== loaded.text || e.foreign) ? e.draft : undefined;
+        const kept = e.draft && (e.draft.text !== loaded.text) ? e.draft : undefined;
         return { status: "readOnly", base: loaded, text: loaded.text, version: s.version + 1, kept };
       }
       if (e.draft && (e.draft.text !== loaded.text || convert || again)) {
@@ -151,8 +147,6 @@ export function reduce(s: DocState, e: DocEvent): DocState {
       return reduce({ ...s, banner: undefined, theirs: undefined, saving: undefined }, { type: "loaded", loaded: e.theirs });
     case "failed":
       return s.base ? { ...s, status: s.status === "saving" ? "dirty" : s.status, saving: undefined, error: e.error } : { ...s, status: "error", error: e.error, kept: e.kept };
-    case "parked":
-      return s.base ? { ...s, status: "readOnly", base: { ...s.base, readOnly: e.reason }, saving: undefined, kept: { text: s.text, at: new Date().toISOString() } } : s;
     case "keptDropped":
       return { ...s, kept: undefined };
     case "draft":

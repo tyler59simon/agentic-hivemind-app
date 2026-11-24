@@ -1,17 +1,17 @@
 //! Pictures pasted into a page or dropped on it, saved as attachments of its notebook (NS-3A). A folder notebook gets
-//! the file in its attachments folder under a name no other file has; a Living Memory page gets it through
-//! `doc attach`. Either way the caller links the returned path, relative to the notebook's root.
+//! the file in its attachments folder under a name no other file has. The caller links the returned path, relative to the
+//! notebook's root.
 use std::io::Write;
 use std::path::Path;
 
-/// The largest picture Hivemind attaches, as Living Memory's own asset cap.
+/// The largest picture Hivemind attaches.
 pub const MAX_BYTES: u64 = 25 * 1024 * 1024;
 /// Picture kinds the `hmfile` scheme serves (`assets::content_type`), less icons.
 const PICTURES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "svg"];
-/// Characters no file name may hold on Windows, and Living Memory's page-name rules (`docs._check_part`).
+/// Characters no file name may hold on Windows.
 const BAD: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
 const DEVICES: &[&str] = &["con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"];
-/// Room for Living Memory's `<sha8>-` prefix and a ` 99` suffix within its 120-character part limit.
+/// The longest a picture's name is kept, leaving room for a ` 99` suffix when the name is taken.
 const NAME_KEEP: usize = 100;
 
 /// Whether `name` is a picture by its extension.
@@ -19,7 +19,7 @@ pub fn is_picture(name: &str) -> bool {
     Path::new(name).extension().map(|e| e.to_string_lossy().to_lowercase()).is_some_and(|e| PICTURES.contains(&e.as_str()))
 }
 
-/// A file name both Windows and Living Memory take: forbidden and control characters become `-`, outer spaces and
+/// A file name Windows takes: forbidden and control characters become `-`, outer spaces and
 /// trailing dots go, a device name gets a `_` in front, and a long name is cut before its extension. Only pictures.
 pub fn clean_name(name: &str) -> Result<String, String> {
     let mapped: String = name.chars().map(|c| if BAD.contains(&c) || c.is_control() { '-' } else { c }).collect();

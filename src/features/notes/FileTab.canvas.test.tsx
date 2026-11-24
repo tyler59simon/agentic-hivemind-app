@@ -271,7 +271,6 @@ describe("making and opening a canvas", () => {
     expect(ws().panes[0].tabs[0]).toMatchObject({ kind: "file", mode: "board", file: { notebook: "nb-1", path: "Untitled.canvas" } });
     expect(await actions.newCanvas(client, "nb-1", "Sub")).toBe("Sub/Untitled.canvas");
     expect(await actions.newCanvas(client, "nb-1")).toBe("Untitled 2.canvas");
-    await expect(actions.newCanvas(client, "lm:demo:plans")).rejects.toThrow(/Living Memory notebooks hold Markdown pages only/);
   });
 
   it("opening a canvas from the tree or a link shows the board, and a split of its tab shows a board too", async () => {

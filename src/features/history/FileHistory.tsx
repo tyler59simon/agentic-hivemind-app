@@ -1,7 +1,7 @@
 // History of a notebook page or opened file (NS-5): the History mode of its tab, and a short list in the page rail. The
-// timeline merges the versions Hivemind kept at every save with the commits of the file's git repository; a Living
-// Memory page shows Living Memory's own history instead. A version can be read, compared with the page as it is, and
-// restored as a new version; a Hivemind version can be pinned past retention; a file in a git repository can be committed.
+// timeline merges the versions Hivemind kept at every save with the commits of the file's git repository. A version can be
+// read, compared with the page as it is, and restored as a new version; a Hivemind version can be pinned past retention; a
+// file in a git repository can be committed.
 import { MergeView } from "@codemirror/merge";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -9,12 +9,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GitCommitHorizontal, Pin, PinOff } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePick } from "./pick";
-import { pageText, parseLm } from "../../documents/adapters/lmdoc";
 import type { FileRef } from "../../documents/keys";
 import { keyOf, reload, restore, useDocuments } from "../../documents/store";
 import { classify } from "../../lib/errors";
 import { gitFileCommit, gitFileLog, historyList, historyPin, historyRead, type Version } from "../../lib/history";
-import { docHistory, docVersion } from "../../lib/lm";
 import { Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 import { rowDetail, rowLabel, timeline, type Row } from "./timeline";
@@ -28,22 +26,19 @@ const when = (time: number) => (time ? new Date(time).toLocaleString() : "unknow
  *  saved version, so a save brings the new version in. */
 export function useFileHistory(file: FileRef) {
   const stamp = useDocuments((s) => s.docs[keyOf(file)]?.base?.stamp.sha256);
-  const lm = parseLm(file.notebook);
   const key = [file.notebook, file.path, stamp];
-  const kept = useQuery({ queryKey: ["file-history", ...key], queryFn: () => historyList(file.notebook, file.path), enabled: !lm });
-  const git = useQuery({ queryKey: ["file-git", ...key], queryFn: () => gitFileLog(file.notebook, file.path), enabled: !lm });
-  const operations = useQuery({ queryKey: ["lm-file-history", ...key], queryFn: () => docHistory(lm!.domain, lm!.notebook, file.path, 100), enabled: !!lm });
-  const rows = useMemo(() => timeline(kept.data?.entries ?? [], git.data?.commits ?? [], operations.data ?? []), [kept.data, git.data, operations.data]);
+  const kept = useQuery({ queryKey: ["file-history", ...key], queryFn: () => historyList(file.notebook, file.path) });
+  const git = useQuery({ queryKey: ["file-git", ...key], queryFn: () => gitFileLog(file.notebook, file.path) });
+  const rows = useMemo(() => timeline(kept.data?.entries ?? [], git.data?.commits ?? []), [kept.data, git.data]);
   return {
     rows,
-    loading: kept.isLoading || operations.isLoading,
+    loading: kept.isLoading,
     // Git failing (a timeout, a broken repository) does not hide the versions Hivemind kept.
-    error: kept.error ?? operations.error,
+    error: kept.error,
     gitError: git.error,
     tooLarge: !!kept.data?.tooLarge,
     repo: git.data?.repo ?? null,
     changed: !!git.data?.changed,
-    lm: !!lm,
   };
 }
 
@@ -86,14 +81,8 @@ function Compare({ was, now }: { was: string; now: string }) {
   );
 }
 
-/** The text of a version: a snapshot or commit through Rust, a Living Memory operation through Living Memory. */
-async function readVersion(file: FileRef, row: Row): Promise<Version> {
-  const lm = parseLm(file.notebook);
-  if (!lm) return historyRead(file.notebook, file.path, row.id);
-  const page = await docVersion(lm.domain, lm.notebook, file.path, row.id);
-  const { text, readOnly } = pageText(page.text);
-  return { text, binary: false, readOnly, size: page.size };
-}
+/** The text of a version: a snapshot or commit, through Rust. */
+const readVersion = (file: FileRef, row: Row): Promise<Version> => historyRead(file.notebook, file.path, row.id);
 
 /** The commit message dialog. The file is committed alone and nothing is pushed. */
 export function CommitDialog({ file, onClose, onDone }: { file: FileRef; onClose: () => void; onDone: () => void }) {
@@ -183,7 +172,7 @@ function VersionPane({ file, row, current, state, tooLarge, onChanged }: { file:
 export function FileHistory({ file, tabId }: { file: FileRef; tabId: string }) {
   const client = useQueryClient();
   const doc = useDocuments((s) => s.docs[keyOf(file)]);
-  const { rows, loading, error, gitError, tooLarge, repo, changed, lm } = useFileHistory(file);
+  const { rows, loading, error, gitError, tooLarge, repo, changed } = useFileHistory(file);
   const [selected, setSelected] = useState<string | null>(null);
   const [committing, setCommitting] = useState(false);
   const list = useRef<HTMLOListElement>(null);
@@ -212,7 +201,7 @@ export function FileHistory({ file, tabId }: { file: FileRef; tabId: string }) {
           {gitError != null && <p className="muted small">Git history is not available: {classify(gitError).message}</p>}
           {loading && <p className="muted">Loading…</p>}
           {error != null && <p className="error">{classify(error).message}</p>}
-          {!loading && !error && !rows.length && <p className="muted">{lm ? "Living Memory has no recorded changes to this page." : "No versions yet. One is kept each time you save."}</p>}
+          {!loading && !error && !rows.length && <p className="muted">No versions yet. One is kept each time you save.</p>}
           <ol className="history-list" aria-label="Versions" ref={list}>
             {rows.map((r) => (
               <li key={`${r.kind}:${r.id}`}>

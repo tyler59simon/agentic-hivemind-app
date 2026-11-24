@@ -1,5 +1,7 @@
 # NS-2C: Living Memory notebooks in Hivemind
 
+> **Retired (CON-18, 2026-11-24).** Living Memory notebooks, the ones that kept their pages inside the store, no longer exist in Hivemind or in Living Memory. Where this document describes them (`lm:<domain>:<notebook>` pages, `doc notebooks`, `doc read`, `doc write`, `doc tasks`, `doc query`, the Living Memory group of search), read it as history. What it says about folder notebooks still holds.
+
 Read [README.md](README.md), [phase-1a-workspace.md](phase-1a-workspace.md) and `agentic-living-memory/docs/notebooks-design.md` first. This phase shows Living Memory notebooks (NS-2A, NS-2B) in the Notes page beside folder notebooks, lets the user edit their pages in the shared workspace, attach files, review agents' proposed edits, and set agent reach and Private for both notebook kinds. Before starting, re-check this document's anchors against the code; NS-1A and NS-1B will have moved things.
 
 ## Changes from the NS-0 review

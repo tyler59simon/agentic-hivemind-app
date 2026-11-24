@@ -3,7 +3,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { create } from "zustand";
 import { movedPath } from "../../documents/keys";
-import { isLm } from "../../documents/adapters/lmdoc";
 import { indexIncoming } from "../../lib/noteindex";
 import { loadEnv } from "./env";
 import { planRewrite, type Plan } from "./rewrite";
@@ -14,7 +13,6 @@ export const useRewritePlan = create<{ plan: Plan | null }>(() => ({ plan: null 
 /** The links in the notebook's pages (and in other notebooks') that reach the page or folder `from`, and what each says once
  *  it is `to`. Null when nothing needs writing, and when the index cannot say: a move never waits for it. */
 export async function planFor(client: QueryClient, notebook: string, from: string, to: string): Promise<Plan | null> {
-  if (isLm({ notebook })) return null;
   try {
     const env = await loadEnv(client, 0);
     const moved = (env.pagesOf(notebook) ?? []).filter((p) => movedPath(p, from, to) !== null);

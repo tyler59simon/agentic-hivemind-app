@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
-// Codex review of 32fee20, U2: a link Attach file wrote into a Living Memory page opens its attachment from the reading
-// view; web links still go to the browser, and nothing else navigates.
+// Links in the reading view: web links go to the browser, and nothing else navigates.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -14,27 +13,22 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn(async () => {}) }))
 let root: Root | null = null;
 afterEach(async () => { await act(async () => root?.unmount()); root = null; document.body.innerHTML = ""; });
 
-async function show(text: string, onFile?: (path: string) => void) {
+async function show(text: string) {
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
-  await act(async () => { root!.render(<PageView text={text} tabId="t1" onLink={() => {}} onFile={onFile} pictures={{ folder: "Week" }} />); });
+  await act(async () => { root!.render(<PageView text={text} tabId="t1" onLink={() => {}} pictures={{ folder: "Week" }} />); });
   return (label: string) => act(async () => { [...el.querySelectorAll("a")].find((a) => a.textContent === label)!.click(); });
 }
 
 describe("links in the reading view", () => {
-  it("open an attachment by its path in the notebook", async () => {
-    const onFile = vi.fn();
-    const click = await show("[plan.pdf](../assets/1a2b3c4d-plan.pdf) [web](https://example.com) [up](../../x.pdf)", onFile);
-    await click("plan.pdf");
-    expect(onFile).toHaveBeenCalledWith("assets/1a2b3c4d-plan.pdf");
+  it("open a web link in the browser", async () => {
+    const click = await show("[web](https://example.com)");
     await click("web");
     expect(openUrl).toHaveBeenCalledWith("https://example.com");
-    await click("up");
-    expect(onFile).toHaveBeenCalledTimes(1);
   });
 
-  it("do nothing for a relative link where no handler is given (a folder notebook)", async () => {
+  it("do nothing for a relative link", async () => {
     const click = await show("[plan.pdf](plan.pdf)");
     await click("plan.pdf");
     expect(location.hash).toBe("");

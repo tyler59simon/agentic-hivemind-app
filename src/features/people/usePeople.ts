@@ -22,7 +22,7 @@ export function usePeople() {
     queryKey: [INDEX_KEY, "people", location?.notebook, location?.folder],
     queryFn: async () => {
       const spec = { ...newSpec(), from: { notebooks: [location!.notebook], folder: location!.folder, tag: null }, sort: [{ prop: "title", dir: "asc" as const }] };
-      return (await runQuery(spec, false)).rows.map(personOf);
+      return (await runQuery(spec)).rows.map(personOf);
     },
     enabled: !!location,
   });

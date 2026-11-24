@@ -596,12 +596,12 @@ fn rename_in(root: &Path, protected: &Protected, drafts_dir: &Path, notebook: &s
     }
     // The moved drafts would overwrite unsaved edits kept for a page at the destination (Codex re-review of fa08348,
     // F2).
-    if crate::drafts::any_under(drafts_dir, None, notebook, to) {
+    if crate::drafts::any_under(drafts_dir, notebook, to) {
         return Err(format!("{to} has unsaved edits kept as a draft; open it and save or discard them first"));
     }
     // The drafts are copied to their new keys first, and the old ones go only once the files moved (Codex final review
     // of a34fafd, W1b).
-    let moves = crate::drafts::moving(drafts_dir, None, notebook, from, to);
+    let moves = crate::drafts::moving(drafts_dir, notebook, from, to);
     crate::drafts::copy_moved(drafts_dir, &moves)?;
     if let Err(e) = files::rename(&source, &dest) {
         crate::drafts::undo_moved(drafts_dir, &moves);
@@ -624,33 +624,6 @@ pub async fn file_delete(state: State<'_, AppState>, notebook: String, path: Str
         let moved = files::trash(&root, &path, &chrono::Local::now().format("%Y%m%d-%H%M%S").to_string(), pre.as_ref())?;
         touched(&index, &notebook, &root, vec![path]);
         Ok(contain::relative(&root, &moved).unwrap_or_default())
-    })
-    .await
-}
-
-/// Open an attachment of a Living Memory notebook (`assets/...`) with the program Windows associates with its kind: a
-/// read-only copy, so nothing but Living Memory writes the store (Codex review of 32fee20, U2).
-#[tauri::command]
-pub async fn lmdoc_open_asset(app: AppHandle, notebook: String, path: String) -> Result<(), String> {
-    use tauri_plugin_opener::OpenerExt;
-    let state = app.state::<AppState>();
-    let store = store_root(&state).ok_or("Hivemind does not know where the Living Memory store is")?;
-    let copy = blocking(move || crate::lmdoc::attachment(&store, &notebook, &path).and_then(|full| crate::lmdoc::copy_to_open(&full))).await?;
-    // A copy no program opened goes now; the others go at the next start (Codex re-review of 75ce884, R2-P2).
-    app.opener().open_path(copy.display().to_string(), None::<&str>).map_err(|e| {
-        crate::lmdoc::remove_copy(&copy);
-        e.to_string()
-    })
-}
-
-/// The attachments of a Living Memory notebook (`assets/<sha8>-<name>`), for `![[picture.png]]`: `doc list` names pages
-/// only (Codex review of 398b956, P2). Read here, as the `hmfile` grant serves them; links are left out.
-#[tauri::command]
-pub async fn lmdoc_assets(state: State<'_, AppState>, notebook: String) -> Result<Vec<String>, String> {
-    let store = store_root(&state).ok_or("Hivemind does not know where the Living Memory store is")?;
-    blocking(move || {
-        let assets = crate::lmdoc::folder(&store, &notebook)?.join("assets");
-        Ok(crate::lmdoc::asset_names(&assets))
     })
     .await
 }
@@ -685,12 +658,6 @@ pub async fn file_reveal(app: AppHandle, notebook: String, path: Option<String>,
 /// file's folder for a loose file. The webview adds the picture's path relative to that folder.
 #[tauri::command]
 pub fn asset_base(state: State<'_, AppState>, notebook: String, path: String) -> Result<String, String> {
-    // A Living Memory notebook: its folder in the store, serving its attachments only (NS-2C).
-    if crate::lmdoc::parse(&notebook).is_some() {
-        let store = store_root(&state).ok_or("Hivemind does not know where the Living Memory store is")?;
-        let folder = crate::lmdoc::folder(&store, &notebook)?;
-        return Ok(crate::assets::base_url(&state.assets.grant_lm(&folder)));
-    }
     let root = match loose_id(&notebook) {
         Some(id) => loose(&state, id, &path)?.0.parent().map(Path::to_path_buf).ok_or("This file has no folder")?,
         None => root_of(&state, &notebook)?.0,
@@ -698,8 +665,8 @@ pub fn asset_base(state: State<'_, AppState>, notebook: String, path: String) ->
     Ok(crate::assets::base_url(&state.assets.grant(&root)))
 }
 
-/// A picture pasted into a page (NS-3A). The bytes are the raw request body; the notebook, the page, the picture's name
-/// and the bridge generation come as percent-encoded headers. Returns the attachment's path from the notebook's root.
+/// A picture pasted into a page (NS-3A). The bytes are the raw request body; the notebook, the page and the picture's name
+/// come as percent-encoded headers. Returns the attachment's path from the notebook's root.
 #[tauri::command]
 pub async fn file_attach_bytes(state: State<'_, AppState>, request: tauri::ipc::Request<'_>) -> Result<String, String> {
     let header = |key: &str| {
@@ -707,15 +674,14 @@ pub async fn file_attach_bytes(state: State<'_, AppState>, request: tauri::ipc::
         value.and_then(crate::assets::decode).ok_or_else(|| format!("The picture came without its {key}"))
     };
     let (notebook, page, name) = (header("notebook")?, header("page")?, header("name")?);
-    let generation = request.headers().get("generation").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok());
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("The picture came without its bytes".into()) };
     crate::attach::check_size(bytes.len() as u64)?;
-    attach_picture(&state, notebook, page, name, bytes.clone(), generation).await
+    attach_picture(&state, notebook, page, name, bytes.clone()).await
 }
 
 /// A picture dropped on a page (NS-3A): the file at `index` of the drop `token`, attached like a pasted one.
 #[tauri::command]
-pub async fn file_attach_dropped(state: State<'_, AppState>, token: String, index: usize, notebook: String, page: String, generation: Option<u64>) -> Result<String, String> {
+pub async fn file_attach_dropped(state: State<'_, AppState>, token: String, index: usize, notebook: String, page: String) -> Result<String, String> {
     let file = state.dropped_files.file(&token, index)?;
     let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     crate::attach::clean_name(&name)?;
@@ -732,17 +698,13 @@ pub async fn file_attach_dropped(state: State<'_, AppState>, token: String, inde
         Ok(bytes)
     })
     .await?;
-    attach_picture(&state, notebook, page, name, bytes, generation).await
+    attach_picture(&state, notebook, page, name, bytes).await
 }
 
-/// Save a picture as an attachment of `page`: through `doc attach` for a Living Memory notebook, or as a new file in a
-/// folder notebook's attachments folder (`attach::folder_for`), never replacing a file. A loose file takes none.
-async fn attach_picture(state: &AppState, notebook: String, page: String, name: String, bytes: Vec<u8>, generation: Option<u64>) -> Result<String, String> {
+/// Save a picture as a new file in a folder notebook's attachments folder (`attach::folder_for`), never replacing a file. A
+/// loose file takes none.
+async fn attach_picture(state: &AppState, notebook: String, page: String, name: String, bytes: Vec<u8>) -> Result<String, String> {
     let name = crate::attach::clean_name(&name)?;
-    if crate::lmdoc::parse(&notebook).is_some() {
-        let (bridge, staging) = (state.bridge.clone(), state.lm_staging.clone());
-        return blocking(move || crate::lmdoc::attach_bytes(&bridge, generation, &staging, &notebook, &name, &bytes)).await;
-    }
     let (root, protected) = root_of(state, &notebook)?;
     visible(&page)?;
     let fallback = meta_fallback(state, &notebook);

@@ -70,6 +70,29 @@ describe("workspace with notebook pages", () => {
     expect(migrated.panes[0].tabs.map((t) => t.kind)).toEqual(["note"]);
   });
 
+  // CON-18: a tab of a hosted notebook (container lm:<domain>:<notebook>) has no notebook to read from any more.
+  it("is version 4, and drops the tabs of hosted notebooks, keeping the rest and a sensible active tab", () => {
+    expect(options().version).toBe(4);
+    const file = (id: string, notebook: string, path = "A.md") => ({ id, kind: "file" as const, file: { notebook, path } });
+    const stored = {
+      panes: [
+        { id: "p1", tabs: [file("a", "lm:demo:plans"), file("b", "nb-1"), { id: "n", kind: "note", ref: "d:1" }], active: "a" },
+        { id: "p2", tabs: [file("c", "lm:demo:plans", "B.md")], active: "c" },
+        { id: "p3", tabs: [file("d", "nb-1", "C.md"), file("e", "lm:jot:daily")], active: "d" },
+      ],
+      focused: "p2",
+    };
+    for (const version of [3, 2]) {
+      const migrated = options().migrate!(JSON.parse(JSON.stringify(stored)), version) as { panes: Pane[]; focused: string };
+      expect(migrated.panes.map((p) => p.tabs.map((t) => t.id))).toEqual([["b", "n"], [], ["d"]]);
+      expect(migrated.panes.map((p) => p.active)).toEqual(["b", null, "d"]);
+      expect(migrated.focused).toBe("p2");
+    }
+    // The merge that loads it keeps every pane, so the workspace never holds a tab of a notebook that is gone.
+    const merged = options().merge!(options().migrate!(stored, 3), ws()) as { panes: Pane[] };
+    expect(merged.panes.flatMap((p) => p.tabs.map((t) => t.file?.notebook ?? t.ref))).toEqual(["nb-1", "d:1", "nb-1"]);
+  });
+
   it("drops tabs of unknown kinds and file tabs without a file", () => {
     const stored = {
       panes: [{ id: "p", tabs: [{ id: "a", kind: "canvas" }, { id: "b", kind: "file" }, { id: "c", kind: "file", file: { notebook: "nb", path: "x.md" } }], active: "a" }],

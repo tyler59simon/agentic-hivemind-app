@@ -11,7 +11,7 @@ import { useApp } from "../../store";
 import { Confirm, Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
-import { createMissingPage, missingPageProblem, openPage } from "../notes/actions";
+import { createMissingPage, openPage } from "../notes/actions";
 import { mapLinks } from "./rewrite";
 import { loadEnv } from "./env";
 import { resolveLink, samePage, type Choice, type Linked, type MemoryNote, type PageEnv } from "./resolve";
@@ -73,9 +73,6 @@ export function useFollowLink(from: FileRef, pages: string[], ask: (node: ReactN
         </Modal>,
       );
     }
-    // A rich page is not made in a Living Memory notebook (R1-16).
-    const problem = missingPageProblem(from.notebook, hit.missing);
-    if (problem) { toast(problem, "warn"); return; }
     ask(
       <Confirm title="Create this page?" action="Create page" message={<p>No page called <b>{target}</b> exists yet. Create <code>{hit.missing}</code>?</p>}
         onAnswer={(yes) => {

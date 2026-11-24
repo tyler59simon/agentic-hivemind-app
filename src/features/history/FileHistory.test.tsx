@@ -19,11 +19,6 @@ let git: { repo: string | null; changed: boolean } = { repo: null, changed: fals
 let tooLarge = false;
 let commitFails: string | null = null;
 let saveFails: string | null = null;
-/** A Living Memory page's revision is the sha256 of its bytes, and the adapter checks it. */
-const revisionOf = async (text: string) =>
-  Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))), (b) => b.toString(16).padStart(2, "0")).join("");
-const PLAN = await revisionOf("# Plan\n");
-let lmPage = { text: "# Plan\n", revision: PLAN };
 const sha = (n: number) => `sha-${n}`;
 const COMMIT = "c".repeat(40);
 
@@ -58,26 +53,10 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "asset_base": return "http://hmfile.localhost/g/";
       case "draft_get": return null;
       case "draft_put": case "draft_delete": return null;
-      case "lm": case "lm_body": return lmReply(a.argv as string[]);
     }
     return null;
   }),
 }));
-
-function lmReply(argv: string[]) {
-  const ok = (result: unknown) => ({ exit_code: 0, result, error: null });
-  const [, action] = argv;
-  if (action === "read") return ok({ domain: "demo", notebook: "plans", path: "Plan.md", text: lmPage.text, revision: lmPage.revision, size: lmPage.text.length, updated: "2026-11-21T00:00:00Z", truncated: false });
-  if (action === "history" && argv.includes("--version")) return ok({ domain: "demo", notebook: "plans", path: "Plan.md", text: "# Plan, version 1\n", revision: "rev-1", size: 18, updated: "2026-11-20T00:00:00Z" });
-  if (action === "history") {
-    return ok({ history: [
-      { operation_id: "d-2", kind: "doc_write", state: "committed", created: "2026-11-21T10:00:00Z", before_revision: "rev-1", after_revision: "rev-2" },
-      { operation_id: "d-1", kind: "doc_create", state: "committed", created: "2026-11-20T10:00:00Z", before_revision: null, after_revision: "rev-1" },
-    ] });
-  }
-  if (action === "write") { lmPage = { text: "# Plan, version 1\n", revision: "rev-4" }; return ok({ operation_id: "d-3", revision: "rev-4" }); }
-  return ok({});
-}
 
 const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 const { FileTab } = await import("../notes/FileTab");
@@ -134,7 +113,6 @@ beforeEach(() => {
   commits = [{ sha: "a".repeat(40), author: "Ada", date: "2026-11-20T12:00:00+00:00", subject: "Tidy the plan", path: "Plan.md", text: "tidy\n" }];
   git = { repo: null, changed: false };
   tooLarge = false; commitFails = null; saveFails = null;
-  lmPage = { text: "# Plan\n", revision: PLAN };
   useWorkspace.setState({ panes: [{ id: "p0", tabs: [], active: null }], focused: "p0", dirty: {}, reveal: null });
   useApp.setState({ route: { page: "notes" }, back: [] });
   docs.useDocuments.setState({ docs: {}, refs: {} });
@@ -314,32 +292,6 @@ describe("Commit", () => {
     await act(async () => { docs.edit(docs.keyOf(file), "typed\n"); });
     await settle();
     expect((byText(".history-commit button", /Commit/) as HTMLButtonElement).disabled).toBe(true);
-  });
-});
-
-describe("a Living Memory page", () => {
-  const lm = { notebook: "lm:demo:plans", path: "Plan.md" };
-  const open = async () => {
-    docs.setLmStore("C:\\store");
-    await historyTab(lm);
-  };
-
-  it("shows Living Memory's own history, with no snapshot or git calls", async () => {
-    await open();
-    expect(rows()).toEqual(["Page edited", "Page created"]);
-    expect(sent.some((c) => c.cmd === "history_list" || c.cmd === "git_file_log")).toBe(false);
-  });
-
-  it("Restore writes the old text with the page's revision as the precondition", async () => {
-    await open();
-    await click(byText(".history-list button", /Page created/));
-    expect(document.querySelector(".history-text")?.textContent).toBe("# Plan, version 1\n");
-    await click(byText(".history-pane button", "Restore"));
-    await click(byText(".history-pane button.primary", "Restore"));
-    const write = sent.find((c) => c.cmd === "lm_body" && (c.args.argv as string[])[1] === "write")!;
-    const argv = write.args.argv as string[];
-    expect(argv[argv.indexOf("--expected-revision") + 1]).toBe(PLAN);
-    expect(write.args.body).toBe("# Plan, version 1\n");
   });
 });
 

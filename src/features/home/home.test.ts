@@ -77,7 +77,6 @@ describe("project scope", () => {
   const items = [
     action("pay:p1", "Pay action"), action("led:l1", "Ledger action"), action("x:c1", "Loose commitment (due: 2026-11-30)", { title: "Commitments: Cross-project" }),
     line("nb-pay", "Plan.md", 1, "Pay page task"), line("nb-led", "Plan.md", 1, "Ledger page task"), line("nb-misc", "Plan.md", 1, "Unrelated page task"),
-    line("lm:demo:plans", "Roadmap.md", 1, "A Living Memory page task"),
   ];
   const folders = [notebook("nb-pay", "C:\\Work\\PayStream\\docs"), notebook("nb-led", "C:/work/ledger"), notebook("nb-misc", "C:/elsewhere"), notebook("nb-sibling", "C:/work/paystream-tools")];
 

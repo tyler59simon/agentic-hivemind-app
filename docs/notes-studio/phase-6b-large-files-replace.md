@@ -1,5 +1,7 @@
 # NS-6B: large files and replace in files
 
+> **Retired (CON-18, 2026-11-24).** Living Memory notebooks, the ones that kept their pages inside the store, no longer exist in Hivemind or in Living Memory. Where this document describes them (`lm:<domain>:<notebook>` pages, `doc notebooks`, `doc read`, `doc write`, `doc tasks`, `doc query`, the Living Memory group of search), read it as history. What it says about folder notebooks still holds.
+
 Read [README.md](README.md) and [phase-5-history.md](phase-5-history.md) first. This phase opens files too big for the editor (and binary files) in a fast viewer, follows growing logs, shows a hex view, and adds find and replace across a folder or notebook with a preview of every change.
 
 ## Changes from the NS-0 review

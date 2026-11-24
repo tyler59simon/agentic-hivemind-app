@@ -73,11 +73,13 @@ const whenFree = (move: () => void) => { if (!stopped(move)) move(); };
  *  Version 8 moves Dashboards into Notes > Views (CON-13): `ref` is the view the route names.
  *  Version 9 moves the Wiki into Notes (CON-14): the project it named becomes the picked project.
  *  Version 10 removes the Workflows page (CON-20): its schedules are in Settings, so a saved Workflows route opens Home.
- *  Version 11 moves Skills into Notes > Skills and Maintenance into Settings (CON-22); a saved Maintenance route opens Home. */
+ *  Version 11 moves Skills into Notes > Skills and Maintenance into Settings (CON-22); a saved Maintenance route opens Home.
+ *  Version 12 retires hosted notebooks (CON-18): a saved Notes route naming a page of one (`lm:<domain>:<notebook>`) opens Notes. */
 export function migrateNav(persisted: unknown, version = 1): unknown {
-  const saved = persisted as { route?: { page?: string; view?: string; q?: string; capture?: string; briefing?: string; system?: string; ref?: string; domain?: string; at?: string; edition?: string; project?: string; skill?: string } } | null;
+  const saved = persisted as { route?: { page?: string; view?: string; q?: string; capture?: string; briefing?: string; system?: string; ref?: string; domain?: string; at?: string; edition?: string; project?: string; skill?: string; notebook?: string } } | null;
   const route = saved?.route;
   if (!route) return persisted;
+  if (version < 12 && route.page === "notes" && route.notebook?.startsWith("lm:")) return { ...saved, route: { page: "notes" } };
   if (version < 11 && route.page === "skills") return { ...saved, route: { page: "notes", view: "skills", ...(route.skill ? { skill: route.skill } : {}) } };
   if (version < 11 && route.page === "maintenance") return { ...saved, route: { page: "home" } };
   if (version < 10 && route.page === "workflows") return { ...saved, route: { page: "home" } };
@@ -129,7 +131,7 @@ export const useApp = create<AppState>()(persist((set) => ({
   },
 }), {
   name: "hivemind.nav",
-  version: 11,
+  version: 12,
   storage: createJSONStorage(() => safeStorage),
   migrate: (persisted, version) => migrateNav(persisted, version) as AppState,
   partialize: (s) => ({ project: s.project, domain: s.domain, route: s.route }),

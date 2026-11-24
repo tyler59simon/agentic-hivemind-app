@@ -11,7 +11,7 @@ export const RICH_LIMIT = 1_000_000;
 export interface EmbedPage { title: string; text: string; path: string }
 
 /** The files of the page's own notebook, for the embeds of a rich page (NS-3D). Every path is from the notebook's root.
- *  Absent for a page that is not in a folder notebook (a loose file, a Living Memory page). */
+ *  Absent for a page that is not in a folder notebook (a loose file). */
 export interface NotebookFiles {
   /** Every file of the notebook, from its tree. */
   files: string[];

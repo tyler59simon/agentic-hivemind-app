@@ -29,8 +29,7 @@ export interface UndatedGroup {
 
 export interface HomeSections { overdue: Entry[]; today: Entry[]; week: Entry[]; later: Entry[]; undated: UndatedGroup[] }
 
-/** The items of a project: action items of the notes that carry its tag, and tasks of pages in notebooks inside its repositories.
- *  Tasks of Living Memory notebook pages belong to no folder, so they belong to no project. */
+/** The items of a project: action items of the notes that carry its tag, and tasks of pages in notebooks inside its repositories. */
 export function projectItems(items: TaskItem[], project: Pick<Project, "tag" | "repos">, rows: NoteRow[], folders: Notebook[]): TaskItem[] {
   const inside = new Set(folders.filter((f) => insideRepos(f.path, project.repos)).map((f) => f.id));
   return [

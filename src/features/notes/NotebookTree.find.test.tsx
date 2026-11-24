@@ -15,13 +15,13 @@ let root: Root | null = null;
 const notebook = { id: "nb-1", path: "C:\\notes", title: "Notes", added: "" };
 const entries = [{ path: "Projects", kind: "dir", size: 0, mtimeMs: 0 }, { path: "Projects/Plan.md", kind: "page", size: 5, mtimeMs: 0 }, { path: "Inbox.md", kind: "page", size: 5, mtimeMs: 0 }];
 
-async function mount(nb = notebook, lm?: unknown) {
+async function mount(nb = notebook) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   client.setQueryData(["notebook-tree", nb.id], { entries, truncated: false });
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
-  await act(async () => root!.render(<QueryClientProvider client={client}><NotebookTree notebook={nb} lm={lm as never} onSettings={() => {}} /></QueryClientProvider>));
+  await act(async () => root!.render(<QueryClientProvider client={client}><NotebookTree notebook={nb} onSettings={() => {}} /></QueryClientProvider>));
 }
 const find = () => useWorkspace.getState().panes[0].tabs.filter((t) => t.kind === "find");
 const menuTexts = () => [...document.querySelectorAll("[role=menuitem]")].map((i) => i.textContent);
@@ -51,13 +51,6 @@ describe("find in files from the notebook tree", () => {
     expect(find()).toHaveLength(1);
     // A page's menu has no such item.
     await act(async () => { rowOf("Inbox").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })); });
-    expect(menuTexts()).not.toContain("Find in files…");
-  });
-
-  it("is not offered for a Living Memory notebook, which is not a folder on disk", async () => {
-    const lm = { domain: "demo", notebook: "plans", title: "Plans", visibility: "searchable", private: false, revision: "r", pages: 1, assets: 0, asset_bytes: 0, proposals: 0, updated: "" };
-    await mount({ id: "lm:demo:plans", path: "demo · plans", title: "Plans", added: "" }, lm);
-    await act(async () => { (document.querySelector("[aria-label='Notebook actions']") as HTMLElement).click(); });
     expect(menuTexts()).not.toContain("Find in files…");
   });
 });

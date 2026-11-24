@@ -142,10 +142,18 @@ describe("Settings", () => {
 describe("saved navigation", () => {
   const migrate = (route: object, version = 1) => useApp.persist.getOptions().migrate!({ project: "pay", domain: "demo", route }, version);
 
-  it("is version 11, and moves the Overview, Executive and Recap pages to Home", () => {
-    expect(useApp.persist.getOptions().version).toBe(11);
+  it("is version 12, and moves the Overview, Executive and Recap pages to Home", () => {
+    expect(useApp.persist.getOptions().version).toBe(12);
     for (const page of ["overview", "executive", "recap"]) expect(migrate({ page })).toEqual({ project: "pay", domain: "demo", route: { page: "home" } });
     expect(migrate({ page: "overview", view: "work" })).toMatchObject({ route: { page: "home" } });
+  });
+
+  // CON-18: a Notes route that named a page of a hosted notebook has no notebook to open.
+  it("sends a saved route to a hosted notebook's page to Notes, and leaves a folder notebook's page alone", () => {
+    expect(migrate({ page: "notes", notebook: "lm:demo:plans", path: "Ideas/A.md" }, 11)).toEqual({ project: "pay", domain: "demo", route: { page: "notes" } });
+    expect(migrate({ page: "notes", notebook: "lm:demo:plans", path: "A.md" }, 7)).toEqual({ project: "pay", domain: "demo", route: { page: "notes" } });
+    expect(migrate({ page: "notes", notebook: "nb-1", path: "A.md" }, 11)).toEqual({ project: "pay", domain: "demo", route: { page: "notes", notebook: "nb-1", path: "A.md" } });
+    expect(migrate({ page: "notes", view: "tasks" }, 11)).toMatchObject({ route: { page: "notes", view: "tasks" } });
   });
 
   it("moves Memory Graph/Tags/notes to Notes and retires Memory Activity/History/bare routes on v7", () => {

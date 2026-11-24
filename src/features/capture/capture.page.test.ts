@@ -1,8 +1,7 @@
-// NS-7A: Quick capture's Today and Inbox targets, for a folder notebook (Rust appends) and a Living Memory notebook (the
-// webview reads, changes and writes the page).
+// NS-7A: Quick capture's Today and Inbox targets for a folder notebook (Rust appends). Living Memory notebooks were retired by
+// CON-18.
 import { invoke } from "@tauri-apps/api/core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setTransport, type Invoke } from "../../lib/lm";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 // The capture window module imports Tauri window APIs.
@@ -31,7 +30,6 @@ beforeEach(() => {
     return rust[cmd]((args ?? {}) as Record<string, unknown>);
   });
 });
-afterEach(() => setTransport(invoke as Invoke));
 
 describe("capturing to a folder notebook", () => {
   it("adds a line under ## Captured on today's page, made from the template first", async () => {
@@ -63,26 +61,13 @@ describe("capturing to a folder notebook", () => {
   });
 });
 
-describe("capturing to a Living Memory notebook", () => {
-  it("makes today's page from the template and writes the line into it", async () => {
-    const pages = new Map<string, string>([["Templates/Daily.md", "# {{title}}\n\n## Captured\n"]]);
-    const calls: string[] = [];
-    const hex = async (text: string) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))), (b) => b.toString(16).padStart(2, "0")).join("");
-    setTransport(async (_cmd, args) => {
-      const argv = args.argv as string[];
-      const path = argv[argv.length - 1];
-      calls.push(`${argv[1]} ${path}`);
-      const ok = (result: unknown) => ({ exit_code: 0, error: null, result });
-      if (argv[1] === "notebooks") return ok({ notebooks: [{ domain: "demo", notebook: "daily", title: "Daily", visibility: "searchable", private: false, revision: "r", pages: 0, assets: 0, asset_bytes: 0, proposals: 0, updated: "", settings: { daily: { template: "Templates/Daily" } } }] });
-      if (argv[1] === "read") {
-        const text = pages.get(path);
-        return text === undefined ? { exit_code: 2, result: null, error: { code: "invalid", message: `not_found: no page ${path}` } } : ok({ path, text, revision: await hex(text), size: text.length, updated: "", truncated: false });
-      }
-      if (argv[1] === "create" || argv[1] === "write") { pages.set(path, args.body as string); return ok({ operation_id: "op", revision: "new" }); }
-      throw new Error(`unexpected ${argv.join(" ")}`);
-    });
-    expect(await captureToPage("today", "lm:demo:daily", form, now)).toBe("Daily/2026-11-22.md");
-    expect(pages.get("Daily/2026-11-22.md")).toBe("# 2026-11-22\n\n## Captured\n\n- 14:05 Call Ann: About the plan.\n  - ask for the date\n");
-    expect(calls).toContain("write Daily/2026-11-22.md");
+describe("a target saved for a retired Living Memory notebook (CON-18)", () => {
+  it("is not sent anywhere: hosted notebooks are gone, so captureToPage asks Rust, which refuses an unknown notebook", async () => {
+    rust.notebooks_list = () => [];
+    rust.notebook_meta_get = () => { throw new Error("no notebook lm:demo:daily"); };
+    rust.file_create = () => { throw new Error("no notebook lm:demo:daily"); };
+    rust.notebook_append = () => { throw new Error("no notebook lm:demo:daily"); };
+    await expect(captureToPage("today", "lm:demo:daily", form, now)).rejects.toThrow(/no notebook/);
+    expect(sent.some((s) => s.cmd === "lm" || s.cmd === "lm_body")).toBe(false);
   });
 });

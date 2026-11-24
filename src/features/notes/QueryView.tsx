@@ -1,12 +1,9 @@
 // A query's answer as a table or a board (NS-7B). A table cell edits the property in place; dragging a card to another column
-// of a board sets the board's property to that column. Each write goes to that one page against the hash or revision the
+// of a board sets the board's property to that column. Each write goes to that one page against the hash the
 // answer showed it at (`writes.ts`), so a page that changed meanwhile is refused and the answer is read again.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { lmContainer } from "../../documents/adapters/lmdoc";
-import { useDocsEnabled, useDocsSearch } from "../../lib/connection";
 import { classify } from "../../lib/errors";
-import { lmNotebooksQuery } from "../../lib/lm";
 import { notebooksQuery, pageTitle } from "../../lib/notebooks";
 import { INDEX_KEY } from "../../lib/noteindex";
 import { toast } from "../../ui/toast";
@@ -135,21 +132,17 @@ function Board({ spec, rows, write }: { spec: QuerySpec; rows: QueryRow[]; write
 export function QueryResults({ spec, rows }: { spec: QuerySpec; rows: QueryRow[] }) {
   const write = useWriteProp();
   const folders = useQuery(notebooksQuery());
-  const docs = useDocsEnabled();
-  const living = useQuery({ ...lmNotebooksQuery(), enabled: docs });
   const names = useMemo(() => {
     const map = new Map((folders.data ?? []).map((n) => [n.id, n.title]));
-    for (const n of living.data?.notebooks ?? []) map.set(lmContainer(n.domain, n.notebook), `${n.domain} · ${n.title}`);
     return (r: QueryRow) => map.get(r.notebook) ?? r.notebook;
-  }, [folders.data, living.data]);
+  }, [folders.data]);
   if (!rows.length) return <p className="muted pad">No page matches this query.</p>;
   return spec.view === "board" && spec.groupBy ? <Board spec={spec} rows={rows} write={write} /> : <Table spec={spec} rows={rows} names={names} write={write} />;
 }
 
 /** Run a query and show its answer. */
 export function QueryRun({ spec }: { spec: QuerySpec }) {
-  const search = useDocsSearch();
-  const result = useQuery({ queryKey: [INDEX_KEY, "query", JSON.stringify(spec), search], queryFn: () => runQuery(spec, search) });
+  const result = useQuery({ queryKey: [INDEX_KEY, "query", JSON.stringify(spec)], queryFn: () => runQuery(spec) });
   return (
     <div className="query-run">
       {result.isLoading && <p className="muted pad">Running the query…</p>}

@@ -21,11 +21,12 @@ describe("pictureUrl", () => {
 });
 
 describe("findFile", () => {
-  it("finds a Living Memory attachment by its name without the hash prefix (Codex review of 398b956)", () => {
-    const files = ["Plans.md", "assets/1a2b3c4d-image.png", "assets/00aa11bb-other.png"];
-    expect(findFile("image.png", files)).toBe("assets/1a2b3c4d-image.png");
-    expect(findFile("IMAGE.PNG", files)).toBe("assets/1a2b3c4d-image.png");
+  it("finds a file by its path or by its name in the shallowest folder, whatever its case, and a Living Memory hash prefix names nothing (CON-18)", () => {
+    const files = ["Plans.md", "assets/1a2b3c4d-image.png", "img/Deep/image.png", "img/image.png"];
+    expect(findFile("img/image.png", files)).toBe("img/image.png");
+    expect(findFile("IMAGE.PNG", files)).toBe("img/image.png");
+    expect(findFile("image.png", files)).toBe("img/image.png");
+    expect(findFile("image.png", ["assets/1a2b3c4d-image.png"])).toBeNull();
     expect(findFile("missing.png", files)).toBeNull();
-    expect(findFile("image.png", ["img/image.png", ...files])).toBe("img/image.png");
   });
 });

@@ -1,20 +1,16 @@
-// Edits agents staged for a notebook page (`alm doc propose`, NS-2C; `doc propose --file` for a folder notebook, CON-9). The user
-// reads each as a diff against the page as it is now, then accepts, merges by hand or rejects it. Agents can only propose.
-// `ProposalDetail` is one proposal's diff and decisions: the notebook's modal below and the Inbox's Pages group both use it.
+// Edits agents staged for a folder notebook page (`alm doc propose --file`, CON-9). The user reads each as a diff against the
+// page as it is now, then accepts, merges by hand or rejects it. Agents can only propose. `ProposalDetail` is one proposal's
+// diff and decisions, used by the Inbox's Pages group.
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
-import { lmContainer, pageBody, pageText, readFolderPage, readPage } from "../../documents/adapters/lmdoc";
+import { pageBody, pageText, readFolderPage } from "../../documents/pageText";
 import { isMissing } from "../../documents/store";
 import { onFilesChanged } from "../../documents/sync";
 import { useAcceptEditedEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { historySnapshot } from "../../lib/history";
-import {
-  decodeBase, docAccept, docAcceptEdited, docHistory, docProposal, docReject, docVersion, LmError, proposalsQuery,
-  type DocNotebook, type DocProposal, type DocProposalRow,
-} from "../../lib/lm";
+import { decodeBase, docAccept, docAcceptEdited, docProposal, docReject, LmError, type DocProposal, type DocProposalRow } from "../../lib/lm";
 import { notebooksQuery, readFile, type Loaded as Page, type Notebook } from "../../lib/notebooks";
-import { Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 import { PageMergeDialog } from "../editor/MergeDialog";
 import { CodeDiff } from "../review/CodeDiff";
@@ -23,41 +19,34 @@ import { notebookForFolder } from "./reach";
 
 /** A proposal with the page as it is now (null when there is no such page), both read the way the editor reads a page:
  *  LF text, the format a save writes back, and why it could not be saved unchanged (Codex review of 32fee20, D2). `nb` is
- *  Hivemind's notebook for a folder proposal's folder, null for a store notebook's proposal or a folder Hivemind does not have. */
+ *  Hivemind's notebook for the proposal's folder, null for a folder Hivemind does not have. */
 export interface Loaded { proposal: DocProposal; page: Page | null; proposed: ReturnType<typeof pageText>; nb: Notebook | null }
 
-/** A page that is not there: `readPage` and `readFolderPage` say so as "no page ...: it does not exist", the file service as its own error. */
+/** A page that is not there: `readFolderPage` says so as "no page ...: it does not exist", the file service as its own error. */
 const gone = isMissing;
 
-/** A folder proposal's page is read by Hivemind's own file service when it has the folder as a notebook, else through Living Memory. */
+/** A proposal's page is read by Hivemind's own file service when it has the folder as a notebook, else through Living Memory. */
 async function loadOne(id: string, client: QueryClient, orphaned = false): Promise<Loaded> {
   const proposal = await docProposal(id);
-  const nb = proposal.folder ? notebookForFolder(await client.fetchQuery({ ...notebooksQuery(), staleTime: 30_000 }), proposal.folder) : null;
-  const reading = !proposal.folder ? readPage(proposal, proposal.path)
-    : orphaned ? Promise.resolve(null)
+  const nb = notebookForFolder(await client.fetchQuery({ ...notebooksQuery(), staleTime: 30_000 }), proposal.folder);
+  const reading = orphaned ? Promise.resolve(null)
     : nb ? readFile(nb.id, proposal.path)
     : readFolderPage(`${proposal.folder.replace(/[\\/]+$/, "")}/${proposal.path}`);
   const page = await reading.catch((e) => { if (gone(e)) return null; throw e; });
   return { proposal, page, proposed: pageText(proposal.body), nb };
 }
 
-/** Where a page proposal lands, as the Inbox says it: a store notebook as `domain / notebook`, a folder notebook by the title of
- *  Hivemind's notebook for the folder or else the folder's own name (its `nb-` id means nothing to the user). */
-export function proposalWhere(row: Pick<DocProposalRow, "domain" | "notebook" | "folder">, notebooks: Pick<Notebook, "path" | "title">[]): { short: string; long: string } {
-  if (!row.folder) return { short: row.notebook, long: `${row.domain} / ${row.notebook}` };
+/** Where a page proposal lands, as the Inbox says it: the title of Hivemind's notebook for the folder or else the folder's own
+ *  name (its `nb-` id means nothing to the user). */
+export function proposalWhere(row: Pick<DocProposalRow, "folder">, notebooks: Pick<Notebook, "path" | "title">[]): { short: string; long: string } {
   const name = notebookForFolder(notebooks, row.folder)?.title ?? (row.folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || row.folder);
   return { short: name, long: name };
 }
 
-/** The page as the agent read it: the version the operation that left it at the proposal's base revision wrote. Null
- *  when retention has removed that operation, or the proposal is for a new page. */
+/** The page as the agent read it, kept with the proposal. "" for a new page; null when none was kept. */
 export async function baseText(p: DocProposal): Promise<string | null> {
   if (!p.base_revision) return "";
-  if (p.folder) return p.base != null ? decodeBase(p.base) : null;   // the proposal kept the page as it read it; none kept (over 1 MiB): the merge uses the page as it is
-  const rows = await docHistory(p.domain, p.notebook, p.path, 200).catch(() => []);
-  const op = rows.find((r) => r.after_revision === p.base_revision)?.operation_id;
-  if (!op) return null;
-  return docVersion(p.domain, p.notebook, p.path, op).then((v) => v.text, () => null);
+  return p.base != null ? decodeBase(p.base) : null;   // the proposal kept the page as it read it; none kept (over 1 MiB): the merge uses the page as it is
 }
 
 /** Whether the page moved on since the agent read it. */
@@ -93,21 +82,21 @@ export function ProposalDetail({ row, onSettled, onBusy }: { row: DocProposalRow
   const [rejecting, setRejecting] = useState(false);
   const [dialog, setDialog] = useState<ReactNode>(null);
   const loaded = one.data;
-  // The notebook the page opens in: a store notebook's container, or Hivemind's notebook for the folder (none when it has none).
-  const container = row.folder ? loaded?.nb?.id ?? null : lmContainer(row.domain, row.notebook);
+  // The notebook the page opens in: Hivemind's notebook for the folder (none when it has none).
+  const container = loaded?.nb?.id ?? null;
   const orphaned = !!row.orphaned;
   const blocked = loaded && (unmergeable(loaded) ?? (canMerge ? null : "Merging needs a newer Living Memory (with proposals accept --edited)"));
 
   const settled = (text: string) => {
     toast(text);
     setRejecting(false);
-    for (const key of [["lm-proposals"], ["lm-notebooks"], ["notebook-tree", container]]) client.invalidateQueries({ queryKey: key });
+    for (const key of [["lm-proposals"], ["notebook-tree", container]]) client.invalidateQueries({ queryKey: key });
     onSettled();
   };
   /** Living Memory writes a folder notebook's page itself, outside Hivemind's save path, so its file history is kept here: the page as it
    *  is before the write (`disk`; when that cannot be kept nothing is written) and as it is after (`agent`), then open tabs read it again. */
   const written = async ({ proposal, page, nb }: Loaded, write: () => Promise<unknown>) => {
-    const where = proposal.folder && nb ? { notebook: nb.id, path: proposal.path } : null;
+    const where = nb ? { notebook: nb.id, path: proposal.path } : null;
     if (where) await historySnapshot(where.notebook, where.path, page?.sha256 ?? null, "disk");
     await write();
     if (where) {
@@ -199,35 +188,5 @@ export function ProposalDetail({ row, onSettled, onBusy }: { row: DocProposalRow
       )}
       {dialog}
     </>
-  );
-}
-
-export function ProposalInbox({ nb, onClose }: { nb: DocNotebook; onClose: () => void }) {
-  const list = useQuery(proposalsQuery(nb.domain, nb.notebook));
-  const [selected, setSelected] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const pending = (list.data ?? []).filter((p) => p.status === "pending");
-
-  return (
-    <Modal title={`Agent proposals · ${nb.title}`} onClose={onClose} locked={busy} wide>
-      {list.isLoading && <p className="muted">Loading proposals…</p>}
-      {list.error && <p className="error">{classify(list.error).message}</p>}
-      {list.data && !pending.length && <p className="muted">No edits are waiting. Agents propose with <code>alm doc propose</code>; you decide here.</p>}
-      <div className="form">
-        {pending.map((row) => {
-          const open = selected === row.id;
-          return (
-            <div key={row.id} className="proposal">
-              <div className="note-top">
-                <button className="link" onClick={() => setSelected(open ? null : row.id)} aria-expanded={open}><b>{row.path}</b></button>
-                <span className="muted small">{row.base_revision ? "edit" : "new page"} · {age(row.created)}</span>
-              </div>
-              {row.note && <p className="small">{row.note}</p>}
-              {open && <ProposalDetail row={row} onSettled={() => setSelected(null)} onBusy={setBusy} />}
-            </div>
-          );
-        })}
-      </div>
-    </Modal>
   );
 }

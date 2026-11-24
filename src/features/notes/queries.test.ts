@@ -1,29 +1,27 @@
-// NS-7B: the query definition, the form that makes it, its translation for Living Memory's `doc query`, and running it over
-// both kinds of notebook.
+// NS-7B: the query definition, the form that makes it, and running it over the folder notebooks. `doc query` and the Living
+// Memory notebooks it served were retired by CON-18, so a query naming one finds nothing.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const calls: { cmd: string; args: Record<string, unknown> }[] = [];
 let folderRows: unknown[] = [];
-let lmPages: unknown[] = [];
-let lmFails = false;
+let indexFails = false;
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string, args: Record<string, unknown>) => {
     calls.push({ cmd, args });
-    if (cmd === "index_query") return folderRows;
-    if (cmd === "lm_body") {
-      if (lmFails) return { exit_code: 1, error: { code: "invalid", message: "Unknown query fields: x" }, result: null };
-      return { exit_code: 0, error: null, result: { ok: true, pages: lmPages } };
+    if (cmd === "index_query") {
+      if (indexFails) throw "The index is being rebuilt";
+      return folderRows;
     }
     return null;
   }),
 }));
 
-const { compareValues, forIndex, formOf, newSpec, parseSpec, parseSpecText, runQuery, sortRows, specOf, toLmPayload, columnsOf, valueOf } = await import("./queries");
+const { compareValues, forIndex, formOf, newSpec, parseSpec, parseSpecText, runQuery, sortRows, specOf, columnsOf, valueOf } = await import("./queries");
 type QueryRow = import("./queries").QueryRow;
 
-const row = (notebook: string, path: string, props: Record<string, string | string[]> = {}, title = path): QueryRow => ({ notebook, path, title, hash: "h", props, lm: notebook.startsWith("lm:") });
+const row = (notebook: string, path: string, props: Record<string, string | string[]> = {}, title = path): QueryRow => ({ notebook, path, title, hash: "h", props });
 
-beforeEach(() => { calls.length = 0; folderRows = []; lmPages = []; lmFails = false; });
+beforeEach(() => { calls.length = 0; folderRows = []; indexFails = false; });
 afterEach(() => vi.clearAllMocks());
 
 describe("the query definition", () => {
@@ -74,40 +72,17 @@ describe("the form", () => {
   });
 });
 
-describe("the same query for Living Memory", () => {
-  it("renames the keys and operators, makes a folder a range over path and a tag the tags property", () => {
-    const spec = parseSpec({ version: 1, from: { notebooks: ["lm:demo:plans", "nb-1"], folder: "Projects", tag: "work" },
-      where: [{ prop: "status", op: "ne", value: "done" }, { prop: "n", op: "ge", value: 2 }, { prop: "due", op: "missing" }, { prop: "title", op: "contains", value: "plan" }],
-      sort: [{ prop: "due", dir: "desc" }, { prop: "title" }], limit: 40 });
-    expect(spec.ok && toLmPayload(spec.spec)).toEqual({
-      where: [
-        { key: "status", op: "!=", value: "done" }, { key: "n", op: ">=", value: "2" }, { key: "due", op: "missing" }, { key: "title", op: "contains", value: "plan" },
-        { key: "path", op: ">=", value: "Projects/" }, { key: "path", op: "<", value: "Projects0" }, { key: "tags", op: "=", value: "work" },
-      ],
-      sort: [{ key: "due", order: "desc" }, { key: "title", order: "asc" }], limit: 40, notebook: "plans",
-    });
-  });
-
-  it("names no notebook when several or none are chosen, and keeps Living Memory's own limits", () => {
-    const two = parseSpec({ version: 1, from: { notebooks: ["lm:demo:a1", "lm:demo:b2"] } });
-    const none = parseSpec({ version: 1 });
-    expect(two.ok && "notebook" in toLmPayload(two.spec)).toBe(false);
-    expect(none.ok && toLmPayload(none.spec)).toEqual({ where: [], sort: [], limit: 500 });
-    // Ten conditions, a folder (two) and a tag stay under Living Memory's 20.
-    const most = parseSpec({ version: 1, from: { folder: "f", tag: "t" }, where: Array(10).fill({ prop: "a", op: "exists" }) });
-    expect(most.ok && toLmPayload(most.spec).where.length).toBe(13);
-  });
-
+describe("the query for the index", () => {
   it("sends the index only the folder notebooks", () => {
     const spec = parseSpec({ version: 1, from: { notebooks: ["nb-1", "lm:demo:plans"] }, where: [{ prop: "a", op: "eq", value: "b" }] });
     expect(spec.ok && forIndex(spec.spec)).toEqual({ from: { notebooks: ["nb-1"], folder: null, tag: null }, where: [{ prop: "a", op: "eq", value: "b" }], sort: [], limit: 500 });
   });
 });
 
-describe("sorting and merging the two answers", () => {
+describe("sorting and running", () => {
   it("orders numbers by value and text by lower case, numbers first, and a row without the key last", () => {
     expect(["b", "10", "A", "9", "a"].sort(compareValues)).toEqual(["9", "10", "A", "a", "b"]);
-    const rows = [row("nb-1", "a", { p: "10" }), row("nb-1", "b"), row("lm:d:nb", "c", { p: "9" }), row("nb-1", "d", { p: "text" })];
+    const rows = [row("nb-1", "a", { p: "10" }), row("nb-1", "b"), row("nb-2", "c", { p: "9" }), row("nb-1", "d", { p: "text" })];
     expect(sortRows(rows, [{ prop: "p", dir: "asc" }]).map((r) => r.path)).toEqual(["c", "a", "d", "b"]);
     expect(sortRows(rows, [{ prop: "p", dir: "desc" }]).map((r) => r.path)).toEqual(["d", "a", "c", "b"]);
     // The last key is applied first, so the first key decides and the later ones break its ties.
@@ -117,42 +92,30 @@ describe("sorting and merging the two answers", () => {
     expect(valueOf(row("nb-1", "p", {}, "T"), "title")).toBe("T");
   });
 
-  it("asks the index and Living Memory, and merges their rows in one order within the limit", async () => {
-    folderRows = [{ notebook: "nb-1", path: "A.md", title: "A", sha256: "sha-a", mtimeMs: 1, props: { n: "5" } }, { notebook: "nb-1", path: "C.md", title: "C", sha256: "sha-c", mtimeMs: 1, props: { n: "30" } }];
-    lmPages = [{ domain: "d", notebook: "plans", path: "B.md", title: "B", revision: "rev-b", properties: { n: "7" } }, { domain: "d", notebook: "plans", path: "D.md", title: "D", revision: "rev-d", properties: { n: "100" } }];
+  it("asks the index and keeps its rows in one order within the limit", async () => {
+    folderRows = [{ notebook: "nb-1", path: "C.md", title: "C", sha256: "sha-c", mtimeMs: 1, props: { n: "30" } }, { notebook: "nb-1", path: "A.md", title: "A", sha256: "sha-a", mtimeMs: 1, props: { n: "5" } },
+      { notebook: "nb-2", path: "B.md", title: "B", sha256: "sha-b", mtimeMs: 1, props: { n: "7" } }, { notebook: "nb-2", path: "D.md", title: "D", sha256: "sha-d", mtimeMs: 1, props: { n: "100" } }];
     const spec = parseSpec({ version: 1, sort: [{ prop: "n", dir: "asc" }], limit: 3 });
-    const got = await runQuery(spec.ok ? spec.spec : newSpec(), true);
-    expect(got.rows.map((r) => [r.notebook, r.path, r.hash, r.lm])).toEqual([["nb-1", "A.md", "sha-a", false], ["lm:d:plans", "B.md", "rev-b", true], ["nb-1", "C.md", "sha-c", false]]);
+    const got = await runQuery(spec.ok ? spec.spec : newSpec());
+    expect(got.rows.map((r) => [r.notebook, r.path, r.hash])).toEqual([["nb-1", "A.md", "sha-a"], ["nb-2", "B.md", "sha-b"], ["nb-1", "C.md", "sha-c"]]);
     expect(got.problems).toEqual([]);
-    const lm = calls.find((c) => c.cmd === "lm_body")!;
-    expect(lm.args).toMatchObject({ flag: "--payload-file" });
-    expect(lm.args.argv).toEqual(["doc", "query", "--all-domains", "--include-private", "--actor", "viewer"]);
-    expect(JSON.parse(lm.args.body as string)).toEqual({ where: [], sort: [{ key: "n", order: "asc" }], limit: 3 });
-  });
-
-  it("asks only the kind of notebook the query names, and only when Living Memory can answer", async () => {
-    await runQuery({ ...newSpec(), from: { notebooks: ["nb-1"], folder: null, tag: null } }, true);
-    expect(calls.map((c) => c.cmd)).toEqual(["index_query"]);
-    calls.length = 0;
-    await runQuery({ ...newSpec(), from: { notebooks: ["lm:d:plans"], folder: null, tag: null } }, true);
-    expect(calls.map((c) => c.cmd)).toEqual(["lm_body"]);
-    calls.length = 0;
-    await runQuery(newSpec(), false);
     expect(calls.map((c) => c.cmd)).toEqual(["index_query"]);
   });
 
-  it("filters the answer to the chosen Living Memory notebooks when it was asked for several", async () => {
-    lmPages = [{ domain: "d", notebook: "a1", path: "x.md", title: "x", revision: "r", properties: {} }, { domain: "d", notebook: "c3", path: "y.md", title: "y", revision: "r", properties: {} }];
-    const got = await runQuery({ ...newSpec(), from: { notebooks: ["lm:d:a1", "lm:d:b2"], folder: null, tag: null } }, true);
-    expect(got.rows.map((r) => r.notebook)).toEqual(["lm:d:a1"]);
+  it("never sends a doc command, and a query that names only a retired Living Memory notebook finds nothing without asking the index", async () => {
+    const got = await runQuery({ ...newSpec(), from: { notebooks: ["lm:d:plans"], folder: null, tag: null } });
+    expect(got).toEqual({ rows: [], problems: [] });
+    expect(calls).toEqual([]);
+    // Named beside a folder notebook, the retired name is dropped and the folder notebook still answers.
+    await runQuery({ ...newSpec(), from: { notebooks: ["nb-1", "lm:d:plans"], folder: null, tag: null } });
+    expect(calls.map((c) => [c.cmd, (c.args.query as { from: { notebooks: string[] } }).from.notebooks])).toEqual([["index_query", ["nb-1"]]]);
   });
 
-  it("keeps the answer of the source that works and says which one failed", async () => {
-    folderRows = [{ notebook: "nb-1", path: "A.md", title: "A", sha256: "s", mtimeMs: 1, props: {} }];
-    lmFails = true;
-    const got = await runQuery(newSpec(), true);
-    expect(got.rows.map((r) => r.path)).toEqual(["A.md"]);
-    expect(got.problems).toEqual(["Living Memory notebooks: Unknown query fields: x"]);
+  it("says when the index could not answer", async () => {
+    indexFails = true;
+    const got = await runQuery(newSpec());
+    expect(got.rows).toEqual([]);
+    expect(got.problems).toEqual(["The index is being rebuilt"]);
   });
 });
 

@@ -1,23 +1,21 @@
-// Saved queries (NS-7B): the query definition, the form that makes it, and running it over both kinds of notebook. A query
+// Saved queries (NS-7B): the query definition, the form that makes it, and running it over the folder notebooks. A query
 // is a small JSON document (version 1) kept in a ```query block of a page or as a query view in Living Memory (`views add
 // --spec-file`, CON-13; `parseSpec` and Living Memory's `check_spec` follow the same rules). Folder notebooks answer it from
-// the index (`index_query`); Living Memory notebooks answer it through `doc query`, to which it is translated. Both follow the
-// same rules (`notes_index/structured.rs`), so the two answers can be merged and sorted again here.
+// the index (`index_query`, rules in `notes_index/structured.rs`). A query saved before CON-18 (2026-11-24) may still name a
+// retired Living Memory notebook (`lm:<domain>:<notebook>`); that name finds nothing.
 import { invoke } from "@tauri-apps/api/core";
-import { lmContainer } from "../../documents/adapters/lmdoc";
-import { docQuery, type DocQueryPage } from "../../lib/lm";
 
 export type Op = "eq" | "ne" | "lt" | "le" | "gt" | "ge" | "contains" | "exists" | "missing";
-export const OPS: { id: Op; label: string; lm: string; valued: boolean }[] = [
-  { id: "eq", label: "is", lm: "=", valued: true },
-  { id: "ne", label: "is not", lm: "!=", valued: true },
-  { id: "lt", label: "is less than", lm: "<", valued: true },
-  { id: "le", label: "is at most", lm: "<=", valued: true },
-  { id: "gt", label: "is more than", lm: ">", valued: true },
-  { id: "ge", label: "is at least", lm: ">=", valued: true },
-  { id: "contains", label: "contains", lm: "contains", valued: true },
-  { id: "exists", label: "has a value", lm: "exists", valued: false },
-  { id: "missing", label: "has no value", lm: "missing", valued: false },
+export const OPS: { id: Op; label: string; valued: boolean }[] = [
+  { id: "eq", label: "is", valued: true },
+  { id: "ne", label: "is not", valued: true },
+  { id: "lt", label: "is less than", valued: true },
+  { id: "le", label: "is at most", valued: true },
+  { id: "gt", label: "is more than", valued: true },
+  { id: "ge", label: "is at least", valued: true },
+  { id: "contains", label: "contains", valued: true },
+  { id: "exists", label: "has a value", valued: false },
+  { id: "missing", label: "has no value", valued: false },
 ];
 
 export interface Cond { prop: string; op: Op; value?: string }
@@ -26,7 +24,7 @@ export type ViewKind = "table" | "board";
 
 export interface QuerySpec {
   version: 1;
-  /** `notebooks` holds container ids (a folder notebook's id, or `lm:<domain>:<notebook>`); none means every notebook. */
+  /** `notebooks` holds folder notebook ids; none means every notebook. */
   from: { notebooks: string[]; folder: string | null; tag: string | null };
   where: Cond[];
   sort: SortKey[];
@@ -133,10 +131,10 @@ export function specOf(form: QueryForm) {
 
 // ---- running a query -----------------------------------------------------------------------------------------------
 
-/** A page a query found, from either kind of notebook. `notebook` is the container id; `hash` is the hash or revision the
- *  page had when it was indexed, which a write checks. Every value is text, or a list of text for a key with several. */
+/** A page a query found. `notebook` is the folder notebook's id; `hash` is the hash the page had when it was indexed, which a
+ *  write checks. Every value is text, or a list of text for a key with several. */
 export interface QueryRow {
-  notebook: string; path: string; title: string; hash: string; props: Record<string, string | string[]>; lm: boolean;
+  notebook: string; path: string; title: string; hash: string; props: Record<string, string | string[]>;
 }
 
 interface RustRow { notebook: string; path: string; title: string; sha256: string; mtimeMs: number; props: Record<string, string | string[]> }
@@ -149,21 +147,7 @@ export const forIndex = (spec: QuerySpec) => ({
   where: spec.where, sort: spec.sort, limit: spec.limit,
 });
 
-/** The payload of `doc query` for the same query: `prop` and `dir` become `key` and `order`, the operators become Living
- *  Memory's, a folder becomes a range over `path` (every path from `folder/` up to `folder0`, since `0` comes right after
- *  `/`), and a tag becomes the `tags` property. One Living Memory notebook is named in `notebook`; with several, the rows
- *  are filtered after the answer. */
-export function toLmPayload(spec: QuerySpec) {
-  const where: { key: string; op: string; value?: string }[] = spec.where.map((c) => ({ key: c.prop, op: OPS.find((o) => o.id === c.op)!.lm, ...(c.value !== undefined ? { value: c.value } : {}) }));
-  if (spec.from.folder) where.push({ key: "path", op: ">=", value: `${spec.from.folder}/` }, { key: "path", op: "<", value: `${spec.from.folder}0` });
-  if (spec.from.tag) where.push({ key: "tags", op: "=", value: spec.from.tag });
-  const lm = spec.from.notebooks.filter(isLmId);
-  const one = lm.length === 1 ? lm[0].slice(lm[0].lastIndexOf(":") + 1) : undefined;
-  return { where, sort: spec.sort.map((s) => ({ key: s.prop, order: s.dir })), limit: spec.limit, ...(one ? { notebook: one } : {}) };
-}
-
-const lmRow = (p: DocQueryPage): QueryRow => ({ notebook: lmContainer(p.domain, p.notebook), path: p.path, title: p.title ?? "", hash: p.revision, props: p.properties ?? {}, lm: true });
-const folderRow = (r: RustRow): QueryRow => ({ notebook: r.notebook, path: r.path, title: r.title, hash: r.sha256, props: r.props, lm: false });
+const folderRow = (r: RustRow): QueryRow => ({ notebook: r.notebook, path: r.path, title: r.title, hash: r.sha256, props: r.props });
 
 const NUMBER = /^\s*[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$/;
 const number = (v: string) => (NUMBER.test(v) ? Number(v) : null);
@@ -201,20 +185,14 @@ export function sortRows(rows: QueryRow[], sort: SortKey[]): QueryRow[] {
 
 export interface QueryResult { rows: QueryRow[]; /** One line for each source that could not answer. */ problems: string[] }
 
-/** Run a query over the notebooks it names (every one when it names none). `lm` says Living Memory can answer `doc query`.
- *  A source that fails is said in `problems` while the other still answers. */
-export async function runQuery(spec: QuerySpec, lm: boolean): Promise<QueryResult> {
+/** Run a query over the notebooks it names (every one when it names none). A query that names only retired Living Memory
+ *  notebooks has nothing to read. A failure is said in `problems`. */
+export async function runQuery(spec: QuerySpec): Promise<QueryResult> {
   const named = spec.from.notebooks;
-  const wantFolder = !named.length || named.some((n) => !isLmId(n));
-  const wantLm = lm && (!named.length || named.some(isLmId));
+  if (named.length && named.every(isLmId)) return { rows: [], problems: [] };
   const problems: string[] = [];
-  const [folder, living] = await Promise.all([
-    wantFolder ? invoke<RustRow[]>("index_query", { query: forIndex(spec) }).then((r) => (r ?? []).map(folderRow), (e) => { problems.push(String(e)); return [] as QueryRow[]; }) : [],
-    wantLm ? docQuery(toLmPayload(spec)).then((r) => r.map(lmRow), (e) => { problems.push(`Living Memory notebooks: ${e instanceof Error ? e.message : String(e)}`); return [] as QueryRow[]; }) : [],
-  ]);
-  const lmNamed = named.filter(isLmId);
-  const kept = lmNamed.length > 1 ? living.filter((r) => lmNamed.includes(r.notebook)) : living;
-  return { rows: sortRows([...folder, ...kept], spec.sort).slice(0, spec.limit), problems };
+  const rows = await invoke<RustRow[]>("index_query", { query: forIndex(spec) }).then((r) => (r ?? []).map(folderRow), (e) => { problems.push(String(e)); return [] as QueryRow[]; });
+  return { rows: sortRows(rows, spec.sort).slice(0, spec.limit), problems };
 }
 
 /** The columns a table shows: its own, or the title and the properties the query asks about. */

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { LmError, addAction, archiveNote, isPlan, supersedeNote, taxonomyAdd, undo, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, ruleAllowed, setPin, setRule, list, listArgs, openArgs, writeProject, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setTransport, writeSystem, systemsArgs, update, setBridgeGeneration, noteTypes, typeWrite, timelineArgs, links, docSearch, deletePlan, wikiModel, agentWikiModel, type Invoke } from "./lm";
+import { LmError, addAction, archiveNote, isPlan, supersedeNote, taxonomyAdd, undo, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, ruleAllowed, setPin, setRule, list, listArgs, openArgs, writeProject, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setTransport, writeSystem, systemsArgs, update, setBridgeGeneration, noteTypes, typeWrite, timelineArgs, links, deletePlan, wikiModel, agentWikiModel, type Invoke } from "./lm";
 
 afterEach(() => setTransport(invoke as Invoke));
 
@@ -204,13 +204,5 @@ describe("one search command", () => {
     await links({ domain: "demo", status: "active" });
     expect(argvOf(calls, 0)).toEqual(["search", "--links", "--all-domains", "--status", "any", "--actor", "viewer"]);
     expect(argvOf(calls, 1)).toEqual(["search", "--links", "--domain", "demo", "--status", "active", "--actor", "viewer"]);
-  });
-
-  it("docSearch is search --pages over every domain with private notebooks, and keeps only Living Memory pages", async () => {
-    const page = (origin: string, path: string) => ({ origin, domain: "demo", notebook: "nb", notebook_title: "NB", title: path, path, heading: null, snippet: "", line_start: 1, line_end: 1, revision: null, score: 1, relevance: 1 });
-    const calls = fake({ exit_code: 0, result: { ok: true, mode: "pages", pages: [page("lm", "a.md"), page("folder", "b.md"), page("lm", "c.md")] }, error: null });
-    const found = await docSearch("quokka", 2);
-    expect(argvOf(calls)).toEqual(["search", "--pages", "--all-domains", "--limit", "4", "--include-private", "--actor", "viewer", "--", "quokka"]);
-    expect(found.map((p) => p.path)).toEqual(["a.md", "c.md"]);
   });
 });

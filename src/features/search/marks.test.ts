@@ -1,9 +1,8 @@
-// UI-1 and UI-2 of NS-4A: a match stays visible on the selected row in every theme, and Living Memory's unmarked snippets
-// get their matches marked on the client.
+// UI-1 and UI-2 of NS-4A: a match stays visible on the selected row in every theme, and Living Memory's unmarked memory note
+// snippets get their matches marked on the client.
 // @ts-expect-error no @types/node package (as in vite.config.ts); vitest empties CSS imports, so the file is read directly
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import type { DocSearchHit } from "../../lib/lm";
 import { MARK_CLOSE, MARK_OPEN, markWords, marked, queryTerms } from "../../lib/noteindex";
 import { buildGroups } from "./groups";
 
@@ -80,15 +79,13 @@ describe("UI-2: marking a query's words in a snippet", () => {
     expect(on(markWords("Über Straße naïve", "uber über"))).toEqual(["Über"]);
   });
 
-  it("marks Living Memory page and memory note snippets in the grouped results, while keeping folder page marks intact", () => {
-    const lm = { domain: "demo", notebook: "plans", notebook_title: "Plans", title: "Roadmap.md", path: "Roadmap.md", heading: null, snippet: "Release 2.0 is out", line_start: 1, line_end: 1, revision: "r", score: 1, relevance: 1 } as DocSearchHit;
+  it("marks memory note snippets in the grouped results, while keeping folder page marks intact", () => {
     const groups = buildGroups({
-      titles: new Map(), query: "release", lmSearch: true, lm: [lm], lmNotebooks: [{ domain: "demo", notebook: "plans" }],
+      titles: new Map(), query: "release",
       here: [{ notebook: "nb-1", path: "A.md", kind: "md", title: "A", titleMarked: "A", mtimeMs: 1, snippet: `the ${MARK_OPEN}release${MARK_CLOSE} plan` }], other: [],
       memory: [{ id: "demo:1", domain: "demo", title: "N", type: "decision", snippet: "Release notes" } as never], current: "nb-1",
     });
     const snippet = (id: string) => groups.find((g) => g.id === id)!.rows[0].snippet;
-    expect(snippet("lm")).toBe(`${MARK_OPEN}Release${MARK_CLOSE} 2.0 is out`);
     expect(snippet("here")).toBe(`the ${MARK_OPEN}release${MARK_CLOSE} plan`);
     expect(snippet("memory")).toBe(`${MARK_OPEN}Release${MARK_CLOSE} notes`);
   });

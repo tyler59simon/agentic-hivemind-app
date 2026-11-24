@@ -5,10 +5,9 @@
 // the table or board in the page's Reading view.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { lmContainer } from "../../documents/adapters/lmdoc";
-import { useDocsEnabled, useQueryViewsEnabled, useViewsEnabled } from "../../lib/connection";
+import { useQueryViewsEnabled, useViewsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
-import { addQueryView, lmNotebooksQuery, removeView, updateQueryView, viewKey, type ViewRow } from "../../lib/lm";
+import { addQueryView, removeView, updateQueryView, viewKey, type ViewRow } from "../../lib/lm";
 import { notebooksQuery } from "../../lib/notebooks";
 import { recordOperation } from "../../lib/oplog";
 import { useApp } from "../../store";
@@ -28,15 +27,10 @@ export function ViewsPage() {
   const go = useApp((s) => s.go);
   const ref = useApp((s) => (s.route.page === "notes" ? s.route.ref : undefined));
   const folders = useQuery(notebooksQuery());
-  const docs = useDocsEnabled();
-  const living = useQuery({ ...lmNotebooksQuery(), enabled: docs });
   const viewsOn = useViewsEnabled();
   const savingOn = useQueryViewsEnabled();
   const { query, rows } = useViews({ fresh: true });
-  const choices = useMemo(() => [
-    ...(folders.data ?? []).map((n) => ({ id: n.id, title: n.title })),
-    ...(living.data?.notebooks ?? []).map((n) => ({ id: lmContainer(n.domain, n.notebook), title: `${n.domain} · ${n.title}` })),
-  ], [folders.data, living.data]);
+  const choices = useMemo(() => (folders.data ?? []).map((n) => ({ id: n.id, title: n.title })), [folders.data]);
 
   const picked = rows.find((r) => viewKey(r) === ref);
   const queryView = picked?.kind === "query" ? picked : undefined;

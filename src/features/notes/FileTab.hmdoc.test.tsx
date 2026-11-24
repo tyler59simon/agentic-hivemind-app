@@ -250,13 +250,6 @@ describe("rich pages in their tab", () => {
     expect(files.get("Notes.md")).toBe("");
   });
 
-  it("R1-16: a rich page is not made for a missing link in a Living Memory notebook", async () => {
-    expect(actions.missingPageProblem("lm:demo:plans", "Plan.hmdoc")).toContain("Markdown pages only");
-    expect(actions.missingPageProblem("lm:demo:plans", "Plan.md")).toBeNull();
-    expect(actions.missingPageProblem("nb-1", "Plan.hmdoc")).toBeNull();
-    await expect(actions.createMissingPage("lm:demo:plans", "Plan.hmdoc")).rejects.toThrow("Markdown pages only");
-  });
-
   it("R1-18: a cover named 100% complete.png is drawn from its literal name", async () => {
     files.set("100% complete.png", "png");
     files.set("Plan.hmdoc", stringifyEnvelope({
@@ -355,14 +348,6 @@ describe("new rich page, convert and export", () => {
     await actions.convertToRich(client, ref("Note.md"));
     expect(JSON.stringify(JSON.parse(files.get("Note.hmdoc")!).content)).toContain("Edited");
   });
-
-  it("Living Memory notebooks hold Markdown pages only", async () => {
-    const client = new QueryClient();
-    await expect(actions.newRichPage(client, "lm:demo:plans")).rejects.toThrow("Markdown pages only");
-    await expect(actions.convertToRich(client, { notebook: "lm:demo:plans", path: "A.md" }, "x")).rejects.toThrow("Markdown pages only");
-    await expect(actions.exportToMarkdown(client, { notebook: "lm:demo:plans", path: "A.hmdoc" }, "x")).rejects.toThrow("Markdown pages only");
-    await expect(actions.saveBothVersions(client, { notebook: "lm:demo:plans", path: "A.hmdoc" }, "x")).rejects.toThrow("Markdown pages only");
-  });
 });
 
 describe("the tree", () => {
@@ -413,12 +398,11 @@ describe("the tree", () => {
     expect([...el.querySelectorAll(".tree-label")].map((l) => l.textContent)).toEqual(["Plan", "Plan"]);
   });
 
-  async function menu(path: string, lm?: boolean, paths = ["Note.md", "Plan.hmdoc", "Section"]) {
-    const notebook = lm ? { id: "lm:demo:plans", path: "demo", title: "Plans", added: "" } : { id: "nb-1", path: "C:\\nb", title: "Notebook", added: "" };
+  async function menu(path: string, paths = ["Note.md", "Plan.hmdoc", "Section"]) {
+    const notebook = { id: "nb-1", path: "C:\\nb", title: "Notebook", added: "" };
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
     client.setQueryData(["notebook-tree", notebook.id], { entries: entries(...paths), truncated: false });
-    const lmInfo = lm ? { domain: "demo", notebook: "plans", title: "Plans", visibility: "searchable", private: false, revision: "r", pages: 1, assets: 0, asset_bytes: 0, proposals: 0, updated: "" } : undefined;
-    const el = await mount(<NotebookTree notebook={notebook} lm={lmInfo as never} onSettings={() => {}} onProposals={() => {}} />, client);
+    const el = await mount(<NotebookTree notebook={notebook} onSettings={() => {}} />, client);
     await settle();
     await act(async () => { el.querySelector(`[data-tree-path="${path}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })); });
     return { el, labels: [...document.querySelectorAll(".menu-list.context [role='menuitem']")].map((b) => b.textContent) };
@@ -453,22 +437,13 @@ describe("the tree", () => {
       expect(tree.find((n) => n.name === "Plan.md")!.children.map((n) => n.path)).toEqual(["Plan/Sub.md"]);
       expect(tree.find((n) => n.name === "Plan.hmdoc")!.children).toEqual([]);
     }
-    const rich = await menu("Plan.hmdoc", false, paths);
+    const rich = await menu("Plan.hmdoc", paths);
     expect(rich.labels).toContain("Export to Markdown…");
     expect(rich.labels.some((l) => /subpage/i.test(l ?? ""))).toBe(false);
     await act(async () => root?.unmount());
-    const md = await menu("Plan.md", false, paths);
+    const md = await menu("Plan.md", paths);
     expect(md.labels).toContain("New subpage");
     expect(md.labels).toContain("New rich subpage");
-  });
-
-  it("a Living Memory notebook offers none of them", async () => {
-    const md = await menu("Note.md", true);
-    expect(md.labels.length).toBeGreaterThan(0);
-    expect(md.labels.some((l) => /rich|Export to Markdown/i.test(l ?? ""))).toBe(false);
-    await act(async () => root?.unmount());
-    const section = await menu("Section", true);
-    expect(section.labels.some((l) => /rich/i.test(l ?? ""))).toBe(false);
   });
 
   it("the notebook's actions menu has New rich page for a folder notebook", async () => {

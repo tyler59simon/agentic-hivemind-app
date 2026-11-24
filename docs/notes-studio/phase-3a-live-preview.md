@@ -1,5 +1,7 @@
 # NS-3A: rich live preview
 
+> **Retired (CON-18, 2026-11-24).** Living Memory notebooks, the ones that kept their pages inside the store, no longer exist in Hivemind or in Living Memory. Where this document describes them (`lm:<domain>:<notebook>` pages, `doc notebooks`, `doc read`, `doc write`, `doc tasks`, `doc query`, the Living Memory group of search), read it as history. What it says about folder notebooks still holds.
+
 Read [README.md](README.md) first. This phase grows the CodeMirror live preview for pages (not memory notes) into an Obsidian-style editor: the Markdown text is always the file, and rich blocks render in place until the cursor enters them. Re-check anchors against the code before starting.
 
 ## Changes from the NS-0 review

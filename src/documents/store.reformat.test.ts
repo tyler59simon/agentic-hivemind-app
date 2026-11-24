@@ -113,13 +113,6 @@ describe("reopening with an encoding", () => {
     await expect(store.reopenAs(keyOf(ref("a.txt")), "windows-1252")).rejects.toThrow(/cannot reopen/);
     expect(doc("a.txt")).toMatchObject({ status: "clean", text: "one" });
   });
-
-  it("is not offered for a Living Memory page", async () => {
-    const lm = { notebook: "lm:demo:plans", path: "P.md" };
-    useDocuments.setState({ docs: { [keyOf(lm)]: { status: "clean", base: null, text: "", version: 1 } }, refs: { [keyOf(lm)]: lm } });
-    expect(await store.reopenAs(keyOf(lm), "windows-1252")).toBe(false);
-    expect(calls).toEqual([]);
-  });
 });
 
 describe("choosing an encoding or line ending for the next save", () => {

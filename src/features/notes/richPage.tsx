@@ -3,7 +3,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { createRoot } from "react-dom/client";
 import { useMemo } from "react";
-import { openAttachment } from "../../documents/adapters/lmdoc";
 import { attachBytes, attachDropped, readDoc } from "../../documents/io";
 import type { FileRef } from "../../documents/keys";
 import { keyOf, useDocuments } from "../../documents/store";
@@ -25,34 +24,20 @@ export interface RichPage {
   files: string[];
   /** The page's picture grant prefix, once known. */
   base?: string;
-  lm: boolean;
   loose: boolean;
   /** Follow a `[[link]]` as the page does; `from` is an embedded page's path. */
   follow: (target: string, split: boolean, from?: string) => void;
-  /** Whether the page can take a link now (not read-only, loading or in another store). */
+  /** Whether the page can take a link now (not read-only or loading). */
   takesLink: () => boolean;
-  /** Whether the page belongs to the store connected now. A parked page of another store reads, opens and embeds
-   *  nothing from this one (R3-P3; Codex review of 398b956, P1). */
-  own: () => boolean;
 }
 
 export function useRichPage(page: RichPage): RichContext {
-  const { ref, files, base, lm, loose, follow: followHere, takesLink, own } = page;
+  const { ref, files, base, loose, follow, takesLink } = page;
   return useMemo<RichContext>(() => {
     const folder = loose ? "" : folderOf(ref.path);
     /** The link to an attachment saved at `path` (from the notebook's root). */
-    const linkTo = (path: string) => {
-      // Living Memory names an asset `<sha8>-<name>`; the link shows the name.
-      const name = lm ? fileName(path).replace(/^[0-9a-f]{8}-/, "") : fileName(path);
-      return attachmentLink(relativePath(folder, path), name);
-    };
+    const linkTo = (path: string) => attachmentLink(relativePath(folder, path), fileName(path));
     const checked = () => { if (!takesLink()) throw new Error("this page cannot take a link now"); };
-    const elsewhere = () => {
-      if (own()) return false;
-      toast("This page belongs to another Living Memory store, so its links do not open here.", "warn");
-      return true;
-    };
-    const follow = (target: string, split: boolean, from?: string) => { if (!elsewhere()) followHere(target, split, from); };
     return {
       pictureUrl: (src, wiki) => {
         if (!wiki) return pictureUrl(src, base, folder);
@@ -61,7 +46,7 @@ export function useRichPage(page: RichPage): RichContext {
         return found ? pictureUrl(found.split("/").map(encodeURIComponent).join("/"), base, "") : null;
       },
       readEmbed: async (target) => {
-        if (loose || !own()) return null;
+        if (loose) return null;
         const hit = resolvePage(target, ref, files.filter(isMarkdown));
         if (!("ref" in hit)) return null;
         // A page open in a tab shows as it is there, unsaved edits included.
@@ -72,7 +57,6 @@ export function useRichPage(page: RichPage): RichContext {
       renderEmbed: (el, embedded) => {
         const root = createRoot(el);
         root.render(<PageView text={embedded.text} tabId={`embed-${++embeds}`} onLink={(target, split) => follow(target, split, embedded.path)}
-          onFile={lm ? (path) => { if (!elsewhere()) openAttachment(ref.notebook, path).catch((e) => toast(classify(e).message, "error")); } : undefined}
           pictures={{ base, folder: folderOf(embedded.path), files }} nested />);
         // Unmounted after the editor's own update, never in the middle of a render.
         return () => queueMicrotask(() => root.unmount());
@@ -80,12 +64,10 @@ export function useRichPage(page: RichPage): RichContext {
       openPage: follow,
       openHref: (href, split) => {
         if (/^https?:/i.test(href) || /^mailto:/i.test(href)) { openUrl(href).catch(() => undefined); return; }
-        if (elsewhere()) return;
         const path = loose ? null : relativeTarget(href, folder);
         if (!path) { toast(`Hivemind does not open ${href} from here.`, "warn"); return; }
         if (isMarkdown(path)) { openPage({ notebook: ref.notebook, path }, { split }); return; }
-        const opened = lm ? openAttachment(ref.notebook, path) : revealFile(ref.notebook, path, true);
-        opened.catch((e) => toast(classify(e).message, "error"));
+        revealFile(ref.notebook, path, true).catch((e) => toast(classify(e).message, "error"));
       },
       attach: loose ? undefined : async (bytes, name) => {
         checked();
@@ -103,8 +85,8 @@ export function useRichPage(page: RichPage): RichContext {
         checked();
         return attachDropped(token, index, ref.notebook, ref.path);
       },
-      // The page's own notebook, for the embeds of a rich page (NS-3D): a folder notebook only.
-      notebook: loose || lm ? undefined : {
+      // The page's own notebook, for the embeds of a rich page (NS-3D).
+      notebook: loose ? undefined : {
         files,
         url: (path) => (base && isNotebookPath(path) ? pictureUrl(path.split("/").map(encodeURIComponent).join("/"), base, "") : null),
         read: (path) => readFile(ref.notebook, path),
@@ -114,5 +96,5 @@ export function useRichPage(page: RichPage): RichContext {
       },
       fail: (message) => toast(message, "error"),
     };
-  }, [ref, files, base, lm, loose, followHere, takesLink, own]);
+  }, [ref, files, base, loose, follow, takesLink]);
 }

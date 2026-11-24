@@ -1,9 +1,7 @@
 // The Tasks view of the Notes page (NS-7B): every `- [ ]` and `- [x]` line of the folder notebooks' pages (from the index) and
-// of Living Memory notebook pages (`doc tasks`), and the open action items of Living Memory work notes, read by `useTaskItems`.
-// Ticking one writes back through `tickTask`.
+// the open action items of Living Memory work notes, read by `useTaskItems`. Ticking one writes back through `tickTask`.
 import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { lmContainer } from "../../documents/adapters/lmdoc";
 import { classify } from "../../lib/errors";
 import { toast } from "../../ui/toast";
 import { OwnerChip } from "../people/OwnerChip";
@@ -22,7 +20,7 @@ export function TasksView() {
   const [text, setText] = useState("");
   const [group, setGroup] = useState<Grouping>("none");
   const [busy, setBusy] = useState<string | null>(null);
-  const { items, problems, loading, folders, living, actionsOn } = useTaskItems(done);
+  const { items, problems, loading, folders, actionsOn } = useTaskItems(done);
   const today = isoDate(new Date());
   const shown = useMemo(() => sortTasks(filterTasks(items, { notebook, due, done, text }, today)), [items, notebook, due, done, text, today]);
   const groups = useMemo(() => groupTasks(shown, group, today), [shown, group, today]);
@@ -49,7 +47,6 @@ export function TasksView() {
         <select aria-label="Notebook" value={notebook} onChange={(e) => setNotebook(e.target.value)}>
           <option value="">All notebooks</option>
           {folders.map((n) => <option key={n.id} value={n.id}>{n.title}</option>)}
-          {living.map((n) => <option key={lmContainer(n.domain, n.notebook)} value={lmContainer(n.domain, n.notebook)}>{n.domain} · {n.title}</option>)}
           {actionsOn && <option value={ACTIONS}>Memory action items</option>}
         </select>
         <select aria-label="Due" value={due} onChange={(e) => setDue(e.target.value as DueFilter)}>

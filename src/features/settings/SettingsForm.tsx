@@ -68,8 +68,8 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
     <form className="settings" onSubmit={(e) => {
       e.preventDefault();
       prefs.setDefaultMode(mode);
-      // Living Memory pages wait while the store may change, so none saves into the store being switched to (Codex
-      // review of 32fee20, D1); connecting again names the store. Settings that were not saved change nothing.
+      // Notes wait while the store may change, so none saves into the store being switched to; connecting again names
+      // the store. Settings that were not saved change nothing.
       const resume = pauseLmStore();
       let saved = false;
       saveSettings(value).then(() => { saved = true; return captureStatus().then(setStatus); }).then(onSaved)

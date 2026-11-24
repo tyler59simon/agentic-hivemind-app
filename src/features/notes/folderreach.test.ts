@@ -1,19 +1,18 @@
-// NS-2C: the rules behind Living Memory notebooks in Hivemind that need no UI: which domain a folder notebook belongs
-// to, the stricter of two reach settings, the notebook list grouped by domain, ids from titles, the memory-domain
-// filter, the watcher route and the proposal merge base.
+// NS-2C, CON-9: the rules behind folder notebooks and Living Memory in Hivemind that need no UI: which domain a folder
+// notebook belongs to, the stricter of two reach settings, the watcher route and the proposal merge base. Hosted notebooks
+// (pages kept inside the store) were retired by CON-18, so their wrappers and tests are gone.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { QueryClient } from "@tanstack/react-query";
 import {
-  decodeBase, docAccept, docAcceptEdited, docNotebooks, docProposal, docProposals, docReadFile, docReject, domains, proposalAccept, proposalAcceptWith, proposalReject, proposalShow,
+  decodeBase, docAccept, docAcceptEdited, docProposal, docProposals, docFolderUnset, docReadFile, docReject, domains, proposalAccept, proposalAcceptWith, proposalReject, proposalShow,
   proposalsList, setBridgeGeneration, setTransport, type DocProposal, type DocProposalRow, type DomainInfo, type Invoke,
 } from "../../lib/lm";
 import { folderPolicyEnabled, useConnection } from "../../lib/connection";
 import type { Notebook } from "../../lib/notebooks";
-import { pageText, parseLm } from "../../documents/adapters/lmdoc";
+import { pageText } from "../../documents/pageText";
 import { useWorkspace } from "../../workspace/store";
 import { agentEdits, domainForFolder, notebookForFolder, registerFolder, setFolderReach, stricter } from "./reach";
-import { notebookId } from "./NewNotebook";
 import { baseText, isStale, mergedBody, proposalWhere, unmergeable } from "./ProposalInbox";
 import { newPageHere } from "./actions";
 import { onDocsChanged } from "../../documents/sync";
@@ -28,10 +27,10 @@ const answer = (fn: (argv: string[]) => unknown) => {
   setTransport(async (_cmd, a) => { seen.push(a.argv as string[]); return { exit_code: 0, result: fn(a.argv as string[]), error: null }; });
   return seen;
 };
-const domain = (name: string, prefixes: string[], kind: DomainInfo["kind"] = "memory") => ({ name, prefixes, kind } as DomainInfo);
+const domain = (name: string, prefixes: string[]) => ({ name, prefixes } as DomainInfo);
 
 describe("the domain of a folder notebook", () => {
-  const known = [domain("sandbox", ["C:\\Users\\me\\sandbox"]), domain("app", ["C:/Users/me/sandbox/app"]), domain("jot", ["C:\\Users\\me\\jot"], "notebook")];
+  const known = [domain("sandbox", ["C:\\Users\\me\\sandbox"]), domain("app", ["C:/Users/me/sandbox/app"])];
 
   it("is the bound domain with the longest folder holding it", () => {
     expect(domainForFolder("C:\\Users\\me\\sandbox\\app\\docs", known, "fallback")).toBe("app");
@@ -39,7 +38,7 @@ describe("the domain of a folder notebook", () => {
     expect(domainForFolder("C:\\Users\\me\\sandbox", known, null)).toBe("sandbox");
   });
 
-  it("is never a notebook-only domain, and falls back to Hivemind's default", () => {
+  it("falls back to Hivemind's default when no bound domain holds the folder", () => {
     expect(domainForFolder("C:\\Users\\me\\jot\\daily", known, "fallback")).toBe("fallback");
     expect(domainForFolder("C:\\Users\\me\\sandboxed", known, null)).toBeNull();
   });
@@ -58,47 +57,27 @@ describe("stricter reach", () => {
   });
 });
 
-describe("notebook ids from titles", () => {
-  it("are lowercase letters, digits and hyphens, 2 to 40 long", () => {
-    expect(notebookId("Plans")).toBe("plans");
-    expect(notebookId("  Café notes: 2026! ")).toBe("cafe-notes-2026");
-    expect(notebookId("x")).toBe("notebook");
-    expect(notebookId("a".repeat(39) + " b")).toBe("a".repeat(39));
-    expect(notebookId("日本")).toBe("notebook");
-  });
-});
-
-describe("memory domain pickers", () => {
-  it("leave out notebook-only domains", async () => {
-    answer(() => ({ domains: [domain("sandbox", ["C:\\x"]), domain("jot", [], "notebook"), { name: "old", prefixes: [] }] }));
-    expect((await domains()).domains.map((d) => d.name)).toEqual(["sandbox", "old"]);
-  });
-});
-
 describe("docs-changed", () => {
-  it("refreshes the tree, open pages, and the notebook list and proposals when their files changed", () => {
+  it("asks again for the proposals when a folder proposal's file changed, and for the open one", () => {
     const client = new QueryClient();
     const spy = vi.spyOn(client, "invalidateQueries");
-    onDocsChanged(client, { domain: "demo", notebook: "plans", paths: ["A.md", "S/B.MD", ".proposals/x.json", "assets/p.png", "notebook.json"] });
+    onDocsChanged(client, { domain: "demo", notebook: "nb-0123456789", paths: [".folder-proposals/abcdef123456.json"] });
     const keys = spy.mock.calls.map(([f]) => JSON.stringify((f as { queryKey: unknown }).queryKey));
-    expect(keys).toEqual(expect.arrayContaining(['["notebook-tree","lm:demo:plans"]', '["lm-notebooks"]', '["lm-proposals","demo","plans"]', '["lm-assets","lm:demo:plans"]']));
-    expect(refresh).toHaveBeenCalledWith("lm:demo:plans", ["A.md", "S/B.MD"]);
+    expect(keys).toEqual(['["lm-proposals","*"]', '["lm-proposal"]']);
   });
 
-  it("leaves the notebook list alone for page edits, and asks again for the proposal open in the inbox (U1)", () => {
+  it("does nothing for any other path: there is no hosted notebook to follow (CON-18)", () => {
     const client = new QueryClient();
     const spy = vi.spyOn(client, "invalidateQueries");
-    onDocsChanged(client, { domain: "demo", notebook: "plans", paths: ["A.md"] });
-    expect(spy.mock.calls.map(([f]) => (f as { queryKey: string[] }).queryKey[0])).toEqual(["notebook-tree", "lm-proposal"]);
-    spy.mockClear();
-    onDocsChanged(client, { domain: "demo", notebook: "plans", paths: ["assets/p.png"] });
-    expect(spy.mock.calls.map(([f]) => (f as { queryKey: string[] }).queryKey[0])).toEqual(["notebook-tree", "lm-assets"]);
+    onDocsChanged(client, { domain: "demo", notebook: "plans", paths: ["A.md", ".proposals/x.json", "assets/p.png", "notebook.json"] });
+    expect(spy).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
   });
 });
 
 describe("proposals", () => {
   const proposal = (base: string | null): DocProposal => ({
-    id: "p1", domain: "demo", notebook: "plans", path: "A.md", base_revision: base, note: null, created: "", status: "pending", body: "theirs",
+    id: "p1", domain: "demo", notebook: "nb-0123456789", path: "A.md", base_revision: base, note: null, created: "", status: "pending", body: "theirs", folder: "C:/Wiki",
   } as DocProposal);
   const pageAt = (sha256: string) => ({ sha256, text: "now" }) as never;
 
@@ -110,18 +89,11 @@ describe("proposals", () => {
     expect(isStale({ proposal: proposal(null), page: pageAt("r9") })).toBe(true);
   });
 
-  it("merge against the version the agent read, found through the operation that wrote it", async () => {
-    const seen = answer((argv) => argv.includes("--version")
-      ? { text: "as the agent read it", revision: "r1" }
-      : { history: [{ operation_id: "op2", after_revision: "r2" }, { operation_id: "op1", after_revision: "r1" }] });
-    expect(await baseText(proposal("r1"))).toBe("as the agent read it");
-    expect(seen[1]).toEqual(["doc", "history", "--version", "op1", "--include-private", "--actor", "viewer", "--", "demo", "plans", "A.md"]);
-  });
-
-  it("have no base once retention removed it, and an empty one for a new page", async () => {
-    answer(() => ({ history: [{ operation_id: "op2", after_revision: "r2" }] }));
-    expect(await baseText(proposal("r1"))).toBeNull();
+  it("merge against the page as the agent read it, which the proposal carries, and an empty one for a new page", async () => {
+    const seen = answer(() => ({}));
+    expect(await baseText({ ...proposal("r1"), base: btoa("as the agent read it") })).toBe("as the agent read it");
     expect(await baseText(proposal(null))).toBe("");
+    expect(seen).toEqual([]);   // no history lookup: Living Memory has no page history for a folder page
   });
 });
 
@@ -207,10 +179,9 @@ describe("folder proposals (CON-9)", () => {
 
   it("the Inbox names a folder page's notebook by its title, else by the folder, never by the nb- id", () => {
     const books = [{ path: "C:\\Users\\me\\Wiki", title: "Team wiki" }];
-    const row = (folderPath?: string) => ({ domain: "demo", notebook: folderPath ? "nb-0123456789" : "plans", folder: folderPath });
+    const row = (folder: string) => ({ folder });
     expect(proposalWhere(row("C:/Users/me/Wiki"), books)).toEqual({ short: "Team wiki", long: "Team wiki" });
     expect(proposalWhere(row("C:/Users/me/Notes/"), books)).toEqual({ short: "Notes", long: "Notes" });
-    expect(proposalWhere(row(), books)).toEqual({ short: "plans", long: "demo / plans" });
   });
 
   it("a page is read by its file path, as an option of its own with no operands", async () => {
@@ -222,25 +193,27 @@ describe("folder proposals (CON-9)", () => {
 
 describe("Codex re-review of 75ce884", () => {
   it("R2-C1: a doc command without operands has no `--`, which argparse would refuse", async () => {
-    const seen = answer(() => ({ notebooks: [] }));
-    await docNotebooks();
-    expect(seen[0]).toEqual(["doc", "notebooks", "--all-domains", "--include-hidden", "--include-private", "--actor", "viewer"]);
+    const seen = answer(() => ({ ok: true }));
+    await docFolderUnset("C:/Wiki");
+    await docReadFile("C:/Wiki/A.md");
+    expect(seen[0]).toEqual(["doc", "folder", "unset", "--", "C:/Wiki"]);
+    expect(seen[1]).toEqual(["doc", "read", "--file=C:/Wiki/A.md", "--include-private", "--actor", "viewer"]);
   });
 
   it("R2-C2: folder reach needs version 2 of the folder policy, which keeps the fields it is not given", () => {
-    useConnection.setState({ commands: ["doc"], capabilities: { docs: { version: 1, max_page_bytes: 1, max_asset_bytes: 1, folder_policy: true } } });
+    useConnection.setState({ commands: ["doc"], capabilities: { docs: { version: 1, max_page_bytes: 1, folder_policy: true } } });
     expect(folderPolicyEnabled()).toBe(false);
-    useConnection.setState({ commands: ["doc"], capabilities: { docs: { version: 1, max_page_bytes: 1, max_asset_bytes: 1, folder_policy: 2 } } });
+    useConnection.setState({ commands: ["doc"], capabilities: { docs: { version: 1, max_page_bytes: 1, folder_policy: 2 } } });
     expect(folderPolicyEnabled()).toBe(true);
     useConnection.setState({ commands: [], capabilities: undefined });
   });
 
   it("R2-D1: doc requests carry the bridge generation; other commands do not", async () => {
     const args: Record<string, unknown>[] = [];
-    setTransport(async (_cmd, a) => { args.push(a); return { exit_code: 0, result: { notebooks: [], domains: [] }, error: null }; });
+    setTransport(async (_cmd, a) => { args.push(a); return { exit_code: 0, result: { domains: [] }, error: null }; });
     setBridgeGeneration(7);
     try {
-      await docNotebooks();
+      await docReadFile("C:/Wiki/A.md");
       await domains();
     } finally {
       setBridgeGeneration(undefined);
@@ -278,25 +251,11 @@ describe("Codex review of 32fee20", () => {
   });
 
   it("C1: folder reach needs Living Memory's folder policy, not only notebook pages", () => {
-    useConnection.setState({ commands: ["doc"], capabilities: { docs: { version: 1, max_page_bytes: 1, max_asset_bytes: 1 } } });
+    useConnection.setState({ commands: ["doc"], capabilities: { docs: { version: 1, max_page_bytes: 1 } } });
     expect(folderPolicyEnabled()).toBe(false);
-    useConnection.setState({ commands: ["doc"], capabilities: { docs: { version: 1, max_page_bytes: 1, max_asset_bytes: 1, folder_policy: 2 } } });
+    useConnection.setState({ commands: ["doc"], capabilities: { docs: { version: 1, max_page_bytes: 1, folder_policy: 2 } } });
     expect(folderPolicyEnabled()).toBe(true);
     useConnection.setState({ commands: [], capabilities: undefined });
-  });
-
-  it("C2: a damaged notebook is listed apart, so the healthy ones still sort", async () => {
-    answer(() => ({ notebooks: [
-      { domain: "demo", notebook: "b", title: "B" }, { domain: "demo", notebook: "x", error: "notebook.json is damaged" }, { domain: "demo", notebook: "a", title: "A" },
-    ] }));
-    const listed = await docNotebooks();
-    expect(listed.notebooks.map((n) => n.notebook)).toEqual(["b", "a"]);
-    expect(listed.damaged).toEqual([{ domain: "demo", notebook: "x", error: "notebook.json is damaged" }]);
-  });
-
-  it("C3: container ids follow Living Memory's names", () => {
-    expect(parseLm(`lm:${"d".repeat(121)}:plans`)).not.toBeNull();
-    for (const bad of ["lm:-demo:plans", "lm:demo:-plans", "lm:demo:Plans", "lm:demo:a", "lm:.x:plans", "lm:demo:p_q"]) expect(parseLm(bad), bad).toBeNull();
   });
 
   it("C4: options go before `--` and free text is joined to its option", async () => {
@@ -324,16 +283,14 @@ describe("Codex review of 32fee20", () => {
     expect(mergedBody("a\nb\n", { page: null, proposed: pageText("\uFEFFa\r\n") })).toBe("\uFEFFa\r\nb\r\n");
   });
 
-  it("U3: Ctrl+N with only Living Memory notebooks makes a page in the first one", async () => {
+  it("U3: Ctrl+N with no folder notebook starts an untitled text file (CON-18: there is no hosted notebook to fall back to)", async () => {
     vi.mocked(invoke).mockImplementation(async (cmd) => (cmd === "notebooks_list" ? [] : null));
-    useConnection.setState({ commands: ["doc"], capabilities: { docs: { version: 1, max_page_bytes: 1, max_asset_bytes: 1 } } });
+    useConnection.setState({ commands: ["doc"], capabilities: { docs: { version: 1, max_page_bytes: 1 } } });
     useWorkspace.setState({ panes: [{ id: "p0", tabs: [], active: null }], focused: "p0" });
-    const seen = answer((argv) => (argv[1] === "notebooks"
-      ? { notebooks: [{ domain: "zeta", notebook: "z1", title: "Z" }, { domain: "demo", notebook: "plans", title: "Plans" }] }
-      : { revision: "r1" }));
+    const seen = answer(() => ({}));
     await newPageHere(new QueryClient());
-    expect(seen[1]).toEqual(["doc", "create", "--include-private", "--", "demo", "plans", "Untitled.md"]);
-    expect(useWorkspace.getState().panes[0].tabs[0].file).toEqual({ notebook: "lm:demo:plans", path: "Untitled.md" });
+    expect(seen).toEqual([]);
+    expect(useWorkspace.getState().panes[0].tabs[0]).toMatchObject({ kind: "new-file" });
     vi.mocked(invoke).mockImplementation(async () => null);
     useConnection.setState({ commands: [], capabilities: undefined });
   });

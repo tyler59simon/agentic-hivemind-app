@@ -131,16 +131,14 @@ pub fn index_rebuild(state: State<'_, AppState>, notebook: Option<String>) -> Re
     Ok(())
 }
 
-/// The task lines of the folder notebooks' pages (NS-7B), open before done and by due date. Living Memory notebooks' tasks
-/// come from `doc tasks`.
+/// The task lines of the folder notebooks' pages (NS-7B), open before done and by due date.
 #[tauri::command]
 pub async fn index_tasks(state: State<'_, AppState>, filters: Option<TaskFilters>) -> Result<Vec<TaskRow>, String> {
     let index = state.index.clone();
     blocking(move || index.read(|c| structured::tasks(c, &filters.unwrap_or_default()))).await
 }
 
-/// The folder notebooks' pages that meet a saved query's conditions, sorted (NS-7B). Living Memory notebooks' pages are asked
-/// of `doc query`, with the same rules.
+/// The folder notebooks' pages that meet a saved query's conditions, sorted (NS-7B).
 #[tauri::command]
 pub async fn index_query(state: State<'_, AppState>, query: Query) -> Result<Vec<QueryRow>, String> {
     let index = state.index.clone();

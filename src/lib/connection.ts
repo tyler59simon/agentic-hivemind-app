@@ -29,19 +29,11 @@ export const useQueryViewsEnabled = () => useConnection((s) => (s.capabilities?.
 /** The domain wiki needs an LM that has the `wiki` command. */
 export const useWikiEnabled = () => useConnection((s) => s.commands.includes("wiki"));
 
-/** Living Memory notebooks (NS-2C) need the `docs` capability and the `doc` command. */
+/** Folder notebook pages through Living Memory need the `docs` capability and the `doc` command. */
 const docsOn = (s: { commands: string[]; capabilities?: Capabilities }) => (s.capabilities?.docs?.version ?? 0) >= 1 && s.commands.includes("doc");
 export const useDocsEnabled = () => useConnection(docsOn);
-/** The same check outside React. */
-export const docsEnabled = () => docsOn(useConnection.getState());
 
-/** Searching Living Memory's notebook pages needs `docs.search` (NS-2B); before it, the Living Memory group of the Notes
- *  search is absent. */
-const docsSearchOn = (s: { commands: string[]; capabilities?: Capabilities }) => docsOn(s) && !!s.capabilities?.docs?.search;
-export const useDocsSearch = () => useConnection(docsSearchOn);
-
-/** Agent reach for folder notebooks needs `doc folder` (`docs.folder_policy`, NS-2B); notebook pages alone (NS-2A) have
- *  no such command (Codex review of 32fee20, C1). */
+/** Agent reach for folder notebooks needs `doc folder` (`docs.folder_policy`, NS-2B). */
 // Version 2: `doc folder set` keeps the fields it is not given. Hivemind registers a folder and changes one field at a
 // time that way, which version 1 (`true`) refuses (Codex re-review of 75ce884, R2-C2).
 const folderPolicyOn = (s: { commands: string[]; capabilities?: Capabilities }) => docsOn(s) && Number(s.capabilities?.docs?.folder_policy ?? 0) >= 2;
@@ -53,7 +45,7 @@ export const folderPolicyEnabled = () => folderPolicyOn(useConnection.getState()
 export const useAcceptEditedEnabled = () => useConnection((s) => docsOn(s) && !!s.capabilities?.docs?.accept_edited);
 
 /** Folder notebook pages can be read and proposed to (`doc read --file`, `doc propose --file`), and their proposals settle through
- *  `proposals`: the Inbox then reads, merges and accepts them like a store notebook's (CON-9). */
+ *  `proposals`: the Inbox then reads, merges and accepts them (CON-9). */
 const folderProposalsOn = (s: { commands: string[]; capabilities?: Capabilities }) => docsOn(s) && Number(s.capabilities?.docs?.folder_proposals ?? 0) >= 1;
 export const useFolderProposalsEnabled = () => useConnection(folderProposalsOn);
 

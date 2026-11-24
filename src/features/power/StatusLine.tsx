@@ -60,10 +60,8 @@ function useLanguageName(fileName: string, override: string | undefined, markdow
   return markdown ? "Markdown" : name ?? "";
 }
 
-export function StatusLine({ doc, docKey, tabId, fileName, markdown, language, onLanguage, living }: {
+export function StatusLine({ doc, docKey, tabId, fileName, markdown, language, onLanguage }: {
   doc: DocState; docKey: string; tabId: string; fileName: string; markdown: boolean; language?: string; onLanguage: (name: string | undefined) => void;
-  /** A Living Memory page is always UTF-8 with its own line endings: no encoding actions. */
-  living?: boolean;
 }) {
   const [names, setNames] = useState<string[]>([]);
   const languageName = useLanguageName(fileName, language, markdown);
@@ -75,7 +73,6 @@ export function StatusLine({ doc, docKey, tabId, fileName, markdown, language, o
   const f = doc.base.format;
   const binary = doc.base.binary;
   const encoding = binary ? "Not text" : `${encodingLabel(f)}${f.confidence === "guess" ? " (guessed)" : ""}${doc.convert ? " (converted, not saved yet)" : ""}${doc.reformat && !doc.convert ? " (not saved yet)" : ""}`;
-  if (living) return <div className="file-status muted">{[encoding, EOL_NAMES[f.eol], size(doc.base.stamp.size)].filter(Boolean).join(" · ")}</div>;
   const canReopen = (doc.status === "clean" || doc.status === "readOnly") && !doc.kept;
   const whyNot = isUnsaved(doc) ? "Save or discard your edits to reopen the file in another encoding." : doc.kept ? "Discard the draft kept beside this page first." : "This file cannot be reopened now.";
   // The next save can write another encoding or line ending for a page that is open for editing; a mixed-endings page

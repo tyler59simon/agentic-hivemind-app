@@ -1,13 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ellipsis, Save } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { convertToUtf8, discardKept, edit, inOwnStore, isArriving, isDeleting, keyOf, open, recreate as recreatePageAgain, reformat, reload, resolveMerge, save, useDocuments } from "../../documents/store";
+import { convertToUtf8, discardKept, edit, isArriving, isDeleting, keyOf, open, recreate as recreatePageAgain, reformat, reload, resolveMerge, save, useDocuments } from "../../documents/store";
 import { isUnsaved, mergeable, type DocState } from "../../documents/session";
 import { classify } from "../../lib/errors";
 import { baseName, fileManager, joinPath, parentFolder } from "../../lib/platform";
-import { assetLink, attachFile, openAttachment, parseLm } from "../../documents/adapters/lmdoc";
-import { lmAssets, treeQuery } from "../../documents/io";
-import { lmNotebooksQuery } from "../../lib/lm";
+import { treeQuery } from "../../documents/io";
 import { fileName, folderOf, isCanvas, isDocx, isDrawio, isMarkdown, isMermaid, isPdf, isRichDoc, isSvg, notebooksQuery, pageTitle, revealFile, type Notebook } from "../../lib/notebooks";
 import { assetBase, isLoose, recentQuery, recentRef } from "../../lib/opens";
 import { useWhitePaper } from "../../lib/paper";
@@ -275,11 +273,7 @@ function TextFileTab({ tab }: { tab: Tab }) {
   const reveal = useWorkspace((s) => (s.reveal?.tabId === tab.id ? s.reveal : null));
   const client = useQueryClient();
   const notebooks = useQuery(notebooksQuery());
-  // A Living Memory page (NS-2C) is named `domain · notebook title` and has no file on disk to show or open.
-  const lm = parseLm(ref.notebook);
-  const lmList = useQuery({ ...lmNotebooksQuery(), enabled: !!lm });
-  const lmTitle = lm && (lmList.data?.notebooks.find((n) => n.domain === lm.domain && n.notebook === lm.notebook)?.title ?? lm.notebook);
-  const notebook: Notebook | undefined = lm ? { id: ref.notebook, path: "", title: `${lm.domain} · ${lmTitle}`, added: "" } : notebooks.data?.find((n) => n.id === ref.notebook);
+  const notebook: Notebook | undefined = notebooks.data?.find((n) => n.id === ref.notebook);
   const pages = usePages(ref.notebook);
   const [dialog, setDialog] = useState<ReactNode>(null);
   const follow = useFollowLink(tab.file!, pages, setDialog);
@@ -297,9 +291,7 @@ function TextFileTab({ tab }: { tab: Tab }) {
   // Pictures load from the notebook's root (a page's folder inside it) or a loose file's folder.
   // Every mount asks again, and nothing is kept once the page closes: a grant withdrawn meanwhile gets a new id (Codex
   // review of 52051c8, A3, and its re-review: the app's 30-second staleTime would otherwise reuse the old one).
-  // A parked page of another store shows no attachments: they would come from the store connected now (R3-P3).
-  const own = inOwnStore(key);
-  const pictures = useQuery({ queryKey: ["asset-base", ref.notebook, ref.path], queryFn: () => assetBase(ref.notebook, ref.path), refetchOnMount: "always", gcTime: 0, enabled: (markdown || richDoc || canvas) && own });
+  const pictures = useQuery({ queryKey: ["asset-base", ref.notebook, ref.path], queryFn: () => assetBase(ref.notebook, ref.path), refetchOnMount: "always", gcTime: 0, enabled: markdown || richDoc || canvas });
   const mode: Mode = tab.mode === "history" ? "history"
     : markdown ? (MARKDOWN_MODES.some((m) => m.id === tab.mode) ? tab.mode! : "live")
     : canvas || drawio ? (tab.mode === "source" ? "source" : "board")
@@ -317,7 +309,7 @@ function TextFileTab({ tab }: { tab: Tab }) {
     setDrawioIssue(reason);
     updateTab(tab.id, { mode: "source" });
   }, [tab.id, updateTab]);
-  const boardPictures = useMemo(() => ({ base: own ? pictures.data : undefined, folder: "", files: pages }), [own, pictures.data, pages]);
+  const boardPictures = useMemo(() => ({ base: pictures.data, folder: "", files: pages }), [pictures.data, pages]);
   const openFileCard = useCallback((path: string) => {
     if (SYSTEM_VIEWED.test(path)) revealFile(ref.notebook, path, true).catch((e) => toast(classify(e).message, "error"));
     else openPage({ notebook: ref.notebook, path });
@@ -355,42 +347,17 @@ function TextFileTab({ tab }: { tab: Tab }) {
   const recreate = () => {
     const d = useDocuments.getState().docs[key];
     if (!d) return;
-    if (!inOwnStore(key)) { toast("This page belongs to another Living Memory store, so it was not created here.", "warn"); return; }
-    // A Living Memory page comes back with the line endings and byte order mark it had (Codex review of 32fee20, D5).
     // Text typed while the file is created stays as unsaved edits of the new file (Codex review of 7320d7f, DATA-3).
     recreatePageAgain(key).catch((e) => toast(classify(e).message, "error"));
   };
-  /** Copy a file the user picks into the notebook's attachments and link it at the end of the page (NS-2C). A page that
-   *  cannot take the link is said before anything is copied (Codex review of 32fee20, U2). */
-  const ownNow = useCallback(() => inOwnStore(key), [key]);
   const takesLink = useCallback(() => {
     const d = useDocuments.getState().docs[key];
-    return !!d && d.status !== "readOnly" && d.status !== "loading" && d.status !== "error" && !arriving && inOwnStore(key);
+    return !!d && d.status !== "readOnly" && d.status !== "loading" && d.status !== "error" && !arriving;
   }, [key, arriving]);
-  // Live editing of a Markdown page (NS-3A); a page of another store shows and attaches nothing from this one.
-  // A Living Memory notebook's attachments are not in its tree; `![[picture.png]]` looks among them too.
-  const assets = useQuery({ queryKey: ["lm-assets", ref.notebook], queryFn: () => lmAssets(ref.notebook), enabled: markdown && own && !!lm });
-  const files = useMemo(() => (assets.data?.length ? [...pages, ...assets.data] : pages), [pages, assets.data]);
-  const rich = useRichPage({ ref, files, base: own ? pictures.data : undefined, lm: !!lm, loose, follow, takesLink, own: ownNow });
-  // A change of store redraws embeds too, so a parked page shows none from the store connected now.
-  const richStamp = useMemo(() => ({}), [pictures.data, files, own]); // eslint-disable-line react-hooks/exhaustive-deps
-  const attach = () => {
-    if (!takesLink()) { toast("This page cannot take a link now, so nothing was attached.", "warn"); return; }
-    return attachFile(ref.notebook).then((asset) => { if (asset) linkAsset(asset); }, (e) => toast(classify(e).message, "error"));
-  };
-  const linkAsset = (asset: string) => {
-    const d = useDocuments.getState().docs[key];
-    const name = fileName(asset).replace(/^[0-9a-f]{8}-/, "");
-    if (!d || !takesLink()) { toast(`Attached ${name}; this page cannot take a link to it now.`, "warn"); return; }
-    const link = `${/\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i.test(asset) ? "!" : ""}[${name}](${assetLink(ref.path, asset)})`;
-    edit(key, `${d.text}${d.text && !d.text.endsWith("\n") ? "\n" : ""}${link}\n`, true);
-  };
-  /** A relative link in a Living Memory page: an attachment opens in its own program, a page opens in a tab. */
-  const openLinked = useCallback((path: string) => {
-    if (!inOwnStore(key)) { toast("This page belongs to another Living Memory store, so its links do not open here.", "warn"); return; }
-    if (/^assets\//.test(path)) openAttachment(ref.notebook, path).catch((e) => toast(classify(e).message, "error"));
-    else if (isMarkdown(path)) openPage({ notebook: ref.notebook, path });
-  }, [ref.notebook, key]);
+  // Live editing of a Markdown page (NS-3A).
+  const files = pages;
+  const rich = useRichPage({ ref, files, base: pictures.data, loose, follow, takesLink });
+  const richStamp = useMemo(() => ({}), [pictures.data, files]); // eslint-disable-line react-hooks/exhaustive-deps
   const pictureFiles = useMemo(() => files.filter(isPicture), [files]);
   const remove = () => setDialog(
     <DeleteConfirm notebook={ref.notebook} path={ref.path} section={false}
@@ -404,8 +371,7 @@ function TextFileTab({ tab }: { tab: Tab }) {
   // A file over 64 MB and a binary file open in the large file viewer instead of the editor; the menu offers it and the hex
   // view for any file (NS-6B).
   const unsaved = doc?.status === "dirty" || doc?.status === "stale";
-  const viewing: "bigfile" | "hex" | null = lm ? null
-    : tab.mode === "bigfile" || tab.mode === "hex" ? tab.mode
+  const viewing: "bigfile" | "hex" | null = tab.mode === "bigfile" || tab.mode === "hex" ? tab.mode
     : doc?.status === "error" && /larger than 64 MB/.test(doc.error ?? "") ? "bigfile"
     : doc?.status === "readOnly" && doc.base?.binary ? "hex"
     : null;
@@ -485,7 +451,6 @@ function TextFileTab({ tab }: { tab: Tab }) {
             {(close) => {
               const item = (label: string, act: () => void, cls = "") => <li><button role="menuitem" className={cls} onClick={() => { close(); act(); }}>{label}</button></li>;
               const paper = item(white ? "Theme background" : "White background", () => updateTab(tab.id, { paper: !white }));
-              if (lm) return <>{item("Attach file…", () => void attach())}{paper}{item("Delete page…", remove, "danger-text")}</>;
               return (
                 <>
                   {item(`Show in ${fileManager()}`, () => revealFile(ref.notebook, ref.path).catch((e) => toast(classify(e).message, "error")))}
@@ -509,7 +474,7 @@ function TextFileTab({ tab }: { tab: Tab }) {
       <Banners doc={doc} docKey={key} onMerge={merge} onRecreate={recreate} conflict={richDoc || canvas || drawio ? { mine: keepMine, both: loose ? undefined : saveBoth } : undefined} />
       {canvas && canvasIssue && mode !== "history" && <div className="banner warn note-banner">This canvas cannot be shown as a board: {canvasIssue}. It is open as source, and nothing was written.</div>}
       {drawio && drawioIssue && mode !== "history" && <div className="banner warn note-banner">This Draw.io file cannot be shown as a board: {drawioIssue}. It is open as source, and nothing was written.</div>}
-      {markdown && mode !== "history" && <PropertiesPanel docKey={key} readOnly={doc.status === "readOnly" || arriving || !own} onOpenLink={(target) => follow(target, false)} />}
+      {markdown && mode !== "history" && <PropertiesPanel docKey={key} readOnly={doc.status === "readOnly" || arriving} onOpenLink={(target) => follow(target, false)} />}
       {markdown && mode === "live" && doc.text.length > RICH_LIMIT && (
         <div className="banner note-banner">This page is over 1 MB, so Live shows plain Markdown styling without tables, pictures or diagrams.</div>
       )}
@@ -567,8 +532,8 @@ function TextFileTab({ tab }: { tab: Tab }) {
           </div>
         )
         : mode === "reading"
-        ? <PageView text={doc.text} tabId={tab.id} onLink={follow} onFile={lm ? openLinked : undefined}
-          pictures={{ base: own ? pictures.data : undefined, folder: loose ? "" : folderOf(ref.path), files }} embed={loose ? undefined : rich.readEmbed} />
+        ? <PageView text={doc.text} tabId={tab.id} onLink={follow}
+          pictures={{ base: pictures.data, folder: loose ? "" : folderOf(ref.path), files }} embed={loose ? undefined : rich.readEmbed} />
         : (
           <div className="note file-editor">
             <CodeEditor key={key} doc={doc.text} docVersion={doc.version} follow language={markdown ? "markdown" : "text"} live={mode === "live"}
@@ -578,7 +543,7 @@ function TextFileTab({ tab }: { tab: Tab }) {
               power={{ id: tab.id, fileName: fileName(ref.path), language: tab.language, on: mode === "source" }} />
           </div>
         )}
-      <StatusLine doc={doc} docKey={key} tabId={tab.id} fileName={fileName(ref.path)} markdown={markdown} language={tab.language} living={!!lm}
+      <StatusLine doc={doc} docKey={key} tabId={tab.id} fileName={fileName(ref.path)} markdown={markdown} language={tab.language}
         onLanguage={(language) => updateTab(tab.id, { language })} />
       {dialog}
     </div>

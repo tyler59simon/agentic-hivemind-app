@@ -1,12 +1,11 @@
 // One search box on every page with grouped results (NS-4A, CON-11): Memory notes first, then This notebook, Other
-// notebooks / Notebooks, and Living Memory pages. Supports project scoping, status/type filters for memory notes,
+// notebooks / Notebooks. Supports project scoping, status/type filters for memory notes,
 // page filters, semantic Meaning toggle, and keyboard navigation (arrows, Enter, Ctrl+Enter, Escape).
 import { useQuery } from "@tanstack/react-query";
 import { Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { lmContainer } from "../../documents/adapters/lmdoc";
-import { useConnection, useDocsSearch, useProjectsEnabled } from "../../lib/connection";
-import { docSearch, domains, list, lmNotebooksQuery, search, taxonomy } from "../../lib/lm";
+import { useConnection, useProjectsEnabled } from "../../lib/connection";
+import { domains, list, search, taxonomy } from "../../lib/lm";
 import { notebooksQuery } from "../../lib/notebooks";
 import { indexSearch, marked, tagsQuery, INDEX_KEY, type IndexFilters, type PageKind } from "../../lib/noteindex";
 import { useNoteTypes } from "../../lib/noteTypes";
@@ -38,7 +37,7 @@ function useSettled(value: string, ms = SETTLE_MS) {
 /** The notebook of the page being read, when it is a folder notebook's. */
 const useCurrentNotebook = () => useWorkspace((s) => {
   const tab = activeTab(s);
-  return tab?.kind === "file" && tab.file && !isLoose(tab.file) && !tab.file.notebook.startsWith("lm:") ? tab.file.notebook : undefined;
+  return tab?.kind === "file" && tab.file && !isLoose(tab.file) ? tab.file.notebook : undefined;
 });
 
 const asIndexFilters = (f: SearchFilters): IndexFilters => ({
@@ -56,7 +55,6 @@ function Marked({ text }: { text: string }) {
 export function openRow(row: ResultRow, split: boolean) {
   const target = row.open;
   if ("page" in target) openPage(target.page, { split });
-  else if ("lm" in target) openPage({ notebook: lmContainer(target.lm.domain, target.lm.notebook), path: target.lm.path }, { split });
   else {
     useApp.getState().setDomain(target.note.domain);
     useWorkspace.getState().openNote(target.note.ref, { split, title: target.note.title });
@@ -135,11 +133,9 @@ export function NotesSearchBox({ inputRef }: { inputRef: RefObject<HTMLInputElem
   const known = useQuery({ queryKey: ["domains"], queryFn: domains, enabled: open && !domain });
   const searchDomain = domain ?? known.data?.domains[0]?.name ?? null;
   const current = useCurrentNotebook();
-  const lmSearch = useDocsSearch();
   const canSearchMem = useConnection((s) => s.commands.includes("search"));
   const canListMem = useConnection((s) => s.commands.includes("search"));
   const notebooks = useQuery(notebooksQuery());
-  const lmNotebooks = useQuery({ ...lmNotebooksQuery(), enabled: lmSearch });
   const settled = useSettled(query);
   const trimmed = settled.trim();
   const wrap = useRef<HTMLDivElement>(null);
@@ -198,12 +194,6 @@ export function NotesSearchBox({ inputRef }: { inputRef: RefObject<HTMLInputElem
     queryFn: () => indexSearch(settled, { ...base, excludeNotebook: current }, 20, meaning),
     enabled: open && askedPages && !chosen,
   });
-  const lm = useQuery({
-    queryKey: ["doc-search", trimmed],
-    queryFn: () => docSearch(trimmed, 8),
-    enabled: open && lmSearch && trimmed.length > 0 && !pageOnly && !memOnly && !filters.tag,
-  });
-
   const memoryItems = useMemo(() => {
     if (!askedMemory) return [];
     const required = [projectTag, filters.tag || undefined].filter(Boolean) as string[];
@@ -223,19 +213,16 @@ export function NotesSearchBox({ inputRef }: { inputRef: RefObject<HTMLInputElem
     current, titles,
     here: askedPages && chosenHere ? here.data?.hits ?? [] : [],
     other: askedPages ? (chosen && !chosenHere ? here.data?.hits ?? [] : other.data?.hits ?? []) : [],
-    lmSearch: lmSearch && !pageOnly && !memOnly && !filters.tag,
-    lm: lm.data ?? [],
-    lmNotebooks: lmNotebooks.data?.notebooks ?? [],
     memory: memoryItems,
     projectNames,
     query: settled,
-  }), [current, titles, askedPages, chosen, chosenHere, here.data, other.data, lmSearch, pageOnly, memOnly, filters.tag, lm.data, lmNotebooks.data, memoryItems, projectNames, settled]);
+  }), [current, titles, askedPages, chosen, chosenHere, here.data, other.data, memoryItems, projectNames, settled]);
   const rows = useMemo(() => flatRows(groups), [groups]);
   useEffect(() => setActive(rows.length ? 0 : -1), [rows]);
 
   const scanning = (here.data?.state ?? other.data?.state) === "scanning";
   const how = meaning ? here.data?.meaning ?? other.data?.meaning : undefined;
-  const busy = here.isFetching || other.isFetching || memSearch.isFetching || memBrowse.isFetching || lm.isFetching;
+  const busy = here.isFetching || other.isFetching || memSearch.isFetching || memBrowse.isFetching;
   const choose = (row: ResultRow | undefined, split: boolean) => { if (!row) return; close(); inputRef.current?.blur(); openRow(row, split); };
   const placeholder = project && !filters.allProjects ? `Search ${project.name} and notebooks` : "Search notes and pages";
 

@@ -4,7 +4,6 @@ import { create } from "zustand";
 import { deleteDraft, getFileDraft, putDraft } from "../lib/drafts";
 import { isCanvas, isDrawio, isRichDoc, type Loaded as RawLoaded } from "../lib/notebooks";
 import { mergeBody } from "../features/editor/merge";
-import { isLm } from "./adapters/lmdoc";
 import { createDoc, readDoc, reopenDoc, saveDoc } from "./io";
 import { docKey, draftKeyOf, movedPath, type FileRef } from "./keys";
 import { initial, isUnsaved, reduce, type DocEvent, type DocState, type FormatChange, type Loaded } from "./session";
@@ -80,76 +79,23 @@ let draftLost: (line: string) => void = () => {};
 /** Called when a page no tab shows any more could not keep its last edits as a draft. */
 export function onDraftLost(listener: (line: string) => void) { draftLost = listener; }
 
-/** The Living Memory store Hivemind is connected to (the root `connect` reports); undefined while it may be changing.
- *  Each open Living Memory page belongs to the store it was read from: it saves only into that store, and its draft
- *  names it, so an edit never lands in another store that has a page of the same name (Codex review of 32fee20, D1). */
+/** The Living Memory store Hivemind is connected to (the root `connect` reports); undefined while it may be changing. Memory
+ *  note sessions are kept per store (`noteSessions.ts`), so a note edit never lands in another store. */
 let lmStore: string | undefined;
-const pageStores = new Map<string, string>();
 // Exact apart from separators: `connect` reports the root as the filesystem names it, so letter case tells two stores in
 // a case-sensitive folder apart (Codex review of dd4c1b0, R3-D8).
 export const storeId = (root: string) => root.replace(/\\/g, "/").replace(/\/+$/, "");
-const sameStore = (a: string | undefined, b: string | undefined) => a !== undefined && b !== undefined && storeId(a) === storeId(b);
-const otherStore = (key: string, ref: FileRef | undefined) => !!ref && isLm(ref) && !sameStore(pageStores.get(key), lmStore);
-/** Pages parked by a store switch, with the session they had: it comes back when their store does (R3-D2, R3-U2). */
-const retained = new Map<string, DocState>();
 
 /** The store Hivemind is connected to, for an action to remember where it started. */
 export const connectedStore = () => lmStore;
 
-/** Whether the page at `key` may reach Living Memory now: not a page of another store, and not parked. Commands that
- *  write or open files for it (Recreate, Attach, attachments) check this (Codex review of dd4c1b0, R3-D2 and R3-P3). */
-export function inOwnStore(key: string): boolean {
-  const ref = useDocuments.getState().refs[key];
-  return !ref || !isLm(ref) || (!otherStore(key, ref) && !retained.has(key));
-}
-
-/** Hivemind connected to the store at `root`. A Living Memory page read from another store keeps its unsaved edits as
- *  that store's draft and shows this store's page; one waiting for a store loads now. */
+/** Hivemind connected to the store at `root`. */
 export function setLmStore(root: string) {
   lmStore = root;
-  for (const key of Object.keys(useDocuments.getState().refs)) rebind(key);
 }
 
-/** Bring an open Living Memory page to the store Hivemind is connected to. A page under a move or delete waits for it to
- *  end (`hold` calls this again), and one loading or saving waits for that (Codex re-review of 75ce884, R2-D3). Edits
- *  whose draft could not be written stay on screen, with the draft error, instead of giving way to the other store's
- *  page (R2-D2); they save once Hivemind is back on their store. */
-function rebind(key: string) {
-  const ref = useDocuments.getState().refs[key], root = lmStore;
-  if (!ref || !isLm(ref) || !get(key) || root === undefined || isHeld(key)) return;
-  if (sameStore(pageStores.get(key), root)) {
-    // Back on its store: a parked page takes its edits again, and drafts and saves them as if just typed (R3-U2).
-    const was = retained.get(key);
-    if (!was) return;
-    retained.delete(key);
-    useDocuments.setState((st) => ({ docs: { ...st.docs, [key]: was } }));
-    scheduleDraft(key);
-    scheduleSave(key);
-    return;
-  }
-  if (retained.has(key)) return;
-  const busy = loads.get(key) ?? saves.get(key);
-  if (busy) { void busy.then(() => rebind(key)); return; }
-  clearTimeout(autosaves.get(key));
-  autosaves.delete(key);
-  void flushDraft(key).then(() => {
-    const s = get(key);
-    if (!s || !sameStore(lmStore, root) || sameStore(pageStores.get(key), root) || isHeld(key)) return;
-    if (loads.has(key) || saves.has(key)) { rebind(key); return; }
-    // Edits not in a draft stay on screen, read-only, so nothing in this store is written from them (R3-D2).
-    if (isUnsaved(s) && kept.get(key) !== s.text) {
-      retained.set(key, s);
-      const from = pageStores.get(key);
-      dispatch(key, { type: "parked", reason: `this page has unsaved edits made in another Living Memory store${from ? ` (${from})` : ""} that could not be kept as a draft. Switch back to that store to save them, or save them as a copy` });
-      return;
-    }
-    useDocuments.setState((st) => ({ docs: { ...st.docs, [key]: initial } }));
-    return startLoad(key, ref);
-  });
-}
-
-/** Living Memory may be about to change (the settings are being saved): its pages neither load nor save until
- *  `setLmStore` names the store. The returned function undoes it when the settings were not saved. */
+/** Living Memory may be about to change (the settings are being saved): the store is unknown until `setLmStore` names it.
+ *  The returned function undoes it when the settings were not saved. */
 export function pauseLmStore(): () => void {
   const before = lmStore;
   lmStore = undefined;
@@ -198,12 +144,6 @@ function startLoad(key: string, ref: FileRef, convertNow = false) {
   generations.set(key, generation);
   // What an earlier session drafted says nothing about this one (Codex review of dd4c1b0, R3-D5).
   kept.delete(key);
-  retained.delete(key);
-  // A Living Memory page waits for the store to be known (`setLmStore` loads it), and belongs to the store it is read from.
-  if (isLm(ref)) {
-    if (lmStore === undefined) { pageStores.delete(key); return Promise.resolve(); }
-    pageStores.set(key, lmStore);
-  }
   const run = load(key, ref, generation, convertNow).finally(() => { if (loads.get(key) === run) loads.delete(key); });
   loads.set(key, run);
   return run;
@@ -222,7 +162,6 @@ async function draftOf(key: string, ref: FileRef) {
 
 async function load(key: string, ref: FileRef, attempt: number, convertNow = false) {
   let loaded: Loaded;
-  const store = pageStores.get(key);
   try {
     loaded = toLoaded(await readDoc(ref));
   } catch (e) {
@@ -239,14 +178,6 @@ async function load(key: string, ref: FileRef, attempt: number, convertNow = fal
       throw new Error(`Hivemind could not check this page for unsaved edits, so it did not open it: ${String(e)}`);
     });
     if (!current(key, attempt)) return;
-    // A draft written while Hivemind used another Living Memory store holds edits to that store's page: shown beside this
-    // one, which stays read-only so the draft is never saved here or written over (D1).
-    if (draft && isLm(ref) && !sameStore((draft as { store?: string }).store, store)) {
-      const where = (draft as { store?: string }).store;
-      loaded = { ...loaded, readOnly: `This page has unsaved edits made in another Living Memory store${where ? ` (${where})` : ""}. Switch back to that store to save them, or discard them here.` };
-      dispatch(key, { type: "loaded", loaded, draft: { text: draft.mine, at: draft.savedAt }, foreign: true });
-      return;
-    }
     // A draft written after Convert to UTF-8 comes back converted, whether the file is unchanged, still undecodable
     // or changed since; the file's own encoding no longer decides (Codex review of 52051c8, D3).
     const convert = (convertNow || !!draft?.convert) && !loaded.binary && (!loaded.readOnly || !!loaded.convertible);
@@ -258,7 +189,6 @@ async function load(key: string, ref: FileRef, attempt: number, convertNow = fal
     }
     if (draft.precondition.sha256 === loaded.stamp.sha256) {
       dispatch(key, { type: "loaded", loaded, draft: { text: draft.mine, at: draft.savedAt }, convert, reformat: draft.reformat });
-      autosaveRestored(key, ref);
       return;
     }
     // The file changed after the draft was written: merge the draft into the current file when it can be done cleanly,
@@ -271,7 +201,6 @@ async function load(key: string, ref: FileRef, attempt: number, convertNow = fal
     const merged = base !== undefined && !isRichDoc(ref.path) && !isCanvas(ref.path) && !isDrawio(ref.path) ? mergeBody(base, draft.mine, loaded.text) : null;
     if (merged && merged.conflicts === 0) {
       dispatch(key, { type: "loaded", loaded, draft: { text: merged.text, at: draft.savedAt }, convert, reformat: draft.reformat });
-      autosaveRestored(key, ref);
     } else {
       const original: Loaded = { ...loaded, text: base ?? "", stamp: draft.precondition };
       dispatch(key, { type: "loaded", loaded: original, draft: { text: draft.mine, at: draft.savedAt }, convert, reformat: draft.reformat });
@@ -283,26 +212,6 @@ async function load(key: string, ref: FileRef, attempt: number, convertNow = fal
 }
 
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
-/** Living Memory pages save 5 seconds after typing stops (and on Ctrl+S); folder pages only on Ctrl+S. Never per
- *  keystroke, so Living Memory's journal does not fill with saves (NS-2C). */
-const autosaves = new Map<string, ReturnType<typeof setTimeout>>();
-export const AUTOSAVE_MS = 5000;
-function scheduleSave(key: string) {
-  clearTimeout(autosaves.get(key));
-  autosaves.set(key, setTimeout(() => {
-    autosaves.delete(key);
-    // A save still running, a move holding the page or a store being switched would make this one a no-op: try again
-    // once they settle. A page of another store does not save here (D1); `setLmStore` reloads it.
-    if (isHeld(key) || get(key)?.status === "saving" || lmStore === undefined) scheduleSave(key);
-    else void save(key);
-  }, AUTOSAVE_MS));
-}
-
-/** A Living Memory page that came back with unsaved edits saves itself like one just edited (Codex review of 32fee20,
- *  D6): a tab closed before its autosave leaves a draft, and the page saves once it is open again. */
-function autosaveRestored(key: string, ref: FileRef) {
-  if (isLm(ref) && get(key)?.status === "dirty") scheduleSave(key);
-}
 
 /** Keep a draft of unsaved edits, a little after typing stops. */
 function scheduleDraft(key: string) {
@@ -322,8 +231,7 @@ function writeDraft(key: string): Promise<void> {
     if (s && isUnsaved(s)) scheduleDraft(key);
     return writing.get(key) ?? Promise.resolve();
   }
-  const store = pageStores.get(key);
-  const run = (writing.get(key) ?? Promise.resolve()).then(() => keepDraft(key, s, ref, store));
+  const run = (writing.get(key) ?? Promise.resolve()).then(() => keepDraft(key, s, ref));
   writing.set(key, run);
   void run.finally(() => { if (writing.get(key) === run) writing.delete(key); });
   return run;
@@ -340,7 +248,7 @@ function drafted(key: string, ref: FileRef, error: string | null) {
   draftLost(line);
 }
 
-async function keepDraft(key: string, s: DocState | undefined, ref: FileRef | undefined, store?: string) {
+async function keepDraft(key: string, s: DocState | undefined, ref: FileRef | undefined) {
   if (!s?.base || !ref) return;
   const draftKey = await draftKeyOf(key);
   if (!isUnsaved(s)) {
@@ -361,7 +269,6 @@ async function keepDraft(key: string, s: DocState | undefined, ref: FileRef | un
       base: utf8Bytes(s.base.text) <= BASE_LIMIT ? s.base.text : undefined, mine: s.text, savedAt: new Date().toISOString(),
       convert: s.convert || undefined,
       reformat: s.reformat ? s.base.format : undefined,
-      ...(isLm(ref) ? { store } : {}),
     });
     kept.set(key, s.text);
     drafted(key, ref, null);
@@ -434,7 +341,7 @@ export function reformat(key: string, change: FormatChange) {
 export async function reopenAs(key: string, encoding: string): Promise<boolean> {
   const ref = useDocuments.getState().refs[key];
   const before = get(key), generation = generations.get(key);
-  if (!ref || !before || isLm(ref)) return false;
+  if (!ref || !before) return false;
   if (before.status !== "clean" && before.status !== "readOnly") throw new Error("Save or discard your edits before reopening the file with another encoding");
   if (before.kept) throw new Error("This page has a draft kept beside it. Discard the draft before reopening the file with another encoding");
   const theirs = toLoaded(await reopenDoc(ref, encoding));
@@ -450,7 +357,6 @@ export function edit(key: string, text: string, outside = false) {
   if (ref && isArriving(useDocuments.getState().held, ref)) return;
   dispatch(key, { type: "edited", text, outside });
   scheduleDraft(key);
-  if (ref && isLm(ref)) scheduleSave(key);
 }
 
 /** Restore a version (NS-5): the page takes `text` and saves it at once, so the version is a new one and nothing before it
@@ -464,25 +370,17 @@ export async function restore(key: string, text: string) {
   return save(key, "restore");
 }
 
-/** Discard the draft shown beside a page that cannot take it (its file is gone, or read-only). A Living Memory page that
- *  was read-only because the draft came from another store then loads again and takes edits (Codex re-review of
- *  75ce884, R2-U1). */
+/** Discard the draft shown beside a page that cannot take it (its file is gone, or read-only). */
 export async function discardKept(key: string) {
   await deleteDraft(await draftKeyOf(key));
   kept.delete(key);
-  retained.delete(key);
   dispatch(key, { type: "keptDropped" });
-  const ref = useDocuments.getState().refs[key];
-  if (!ref || !isLm(ref) || get(key)?.status !== "readOnly") return;
-  // During a move or delete the page loads once it ends (R3-U1).
-  if (isHeld(key)) useDocuments.setState((s) => ({ docs: { ...s.docs, [key]: initial } }));
-  else await startLoad(key, ref);
 }
 
 /** Save the document. Returns the state after the attempt. `source` says what asks for it, for the file's history. */
 export async function save(key: string, source?: string) {
   const s = get(key), ref = useDocuments.getState().refs[key];
-  if (!s?.base || !ref || s.status !== "dirty" || isHeld(key) || otherStore(key, ref)) return get(key);
+  if (!s?.base || !ref || s.status !== "dirty" || isHeld(key)) return get(key);
   dispatch(key, { type: "saveStarted" });
   const text = get(key).saving!;
   const generation = generations.get(key);
@@ -562,7 +460,7 @@ export async function recreate(key: string) {
   const ref = useDocuments.getState().refs[key], d = get(key);
   if (!ref || !d) return;
   const sent = d.text;
-  await createDoc(ref.notebook, ref.path, sent, d.base?.format);
+  await createDoc(ref.notebook, ref.path, sent);
   await reload(key, sent);
 }
 
@@ -570,8 +468,7 @@ export async function recreate(key: string) {
  *  reason than the file being gone (a lock, a scanner) changes nothing (Codex review of 32fd236, S3). */
 async function recheck(key: string) {
   const ref = useDocuments.getState().refs[key], generation = generations.get(key);
-  // A parked page shows another store's edits: this store's file says nothing about them.
-  if (!ref || !get(key) || get(key).status === "loading" || retained.has(key)) return;
+  if (!ref || !get(key) || get(key).status === "loading") return;
   try {
     const theirs = toLoaded(await readDoc(ref));
     if (!current(key, generation)) return;
@@ -627,8 +524,6 @@ export async function hold(notebook: string, from: string, kind: Held["kind"]): 
     for (const [key, doc] of Object.entries(docs)) {
       if (doc.status === "loading" && !loads.has(key) && refs[key] && !isHeld(key)) void startLoad(key, refs[key]);
     }
-    // Living Memory pages the hold kept from following a store switch follow it now (R2-D3).
-    for (const key of Object.keys(refs)) rebind(key);
   };
 }
 
@@ -650,12 +545,9 @@ export function retarget(notebook: string, from: string, to: string) {
       refs[next] = { notebook, path };
       generations.delete(key);
       generations.set(next, ++generationCount);
-      if (pageStores.has(key)) { pageStores.set(next, pageStores.get(key)!); pageStores.delete(key); }
       if (kept.has(key)) { kept.set(next, kept.get(key)!); kept.delete(key); }
       const timer = timers.get(key);
       if (timer) { clearTimeout(timer); timers.delete(key); scheduleDraft(next); }
-      const autosave = autosaves.get(key);
-      if (autosave) { clearTimeout(autosave); autosaves.delete(key); scheduleSave(next); }
     }
     return { docs, refs };
   });
@@ -677,14 +569,8 @@ export function release(key: string) {
   if (isHeld(key)) return;
   const doc = get(key);
   if (doc && isUnsaved(doc) && kept.get(key) !== doc.text && (timers.has(key) || writing.has(key) || doc.draftError)) { void keepThenRelease(key); return; }
-  const ref = useDocuments.getState().refs[key];
-  if (retained.delete(key) && ref) draftLost(`${ref.path}: its unsaved edits belonged to another Living Memory store and could not be kept as a draft`);
   void flushDraft(key);
-  // A pending autosave goes with the session; the draft keeps the edits, and the page saves when it opens again (D6).
-  clearTimeout(autosaves.get(key));
-  autosaves.delete(key);
   generations.delete(key);
-  pageStores.delete(key);
   useDocuments.setState((s) => {
     const docs = { ...s.docs }, refs = { ...s.refs };
     delete docs[key]; delete refs[key];
@@ -712,33 +598,19 @@ async function keepThenRelease(key: string) {
   useDocuments.setState((st) => ({ ...st }));
 }
 
-/** Drop a document and its draft (the file was deleted on purpose). `store` is the Living Memory store the delete ran in
- *  (by default the one connected). A draft that another store keeps for its page of the same name stays (R2-D7), and so
- *  does a page of another store shown in a tab, with its session (Codex review of dd4c1b0, R3-D4). */
-export function discard(key: string, store = lmStore) {
-  const ref = useDocuments.getState().refs[key];
-  if (ref && isLm(ref) && pageStores.has(key) && !sameStore(pageStores.get(key), store)) return;
+/** Drop a document and its draft (the file was deleted on purpose). */
+export function discard(key: string) {
   clearTimeout(timers.get(key));
   timers.delete(key);
-  clearTimeout(autosaves.get(key));
-  autosaves.delete(key);
   generations.delete(key);
-  pageStores.delete(key);
   kept.delete(key);
   unkept.delete(key);
-  retained.delete(key);
   useDocuments.setState((s) => {
     const docs = { ...s.docs }, refs = { ...s.refs };
     delete docs[key]; delete refs[key];
     return { docs, refs };
   });
-  void (writing.get(key) ?? Promise.resolve()).then(() => draftKeyOf(key)).then(async (draftKey) => {
-    if (ref && isLm(ref)) {
-      const draft = await getFileDraft(draftKey);
-      if (draft?.store !== undefined && !sameStore(draft.store, store)) return;
-    }
-    await deleteDraft(draftKey);
-  }).catch(() => {});
+  void (writing.get(key) ?? Promise.resolve()).then(() => draftKeyOf(key)).then((draftKey) => deleteDraft(draftKey)).catch(() => {});
 }
 
 /** The pages under `path` (a page, or a section and everything in it) that hold unsaved edits. */
