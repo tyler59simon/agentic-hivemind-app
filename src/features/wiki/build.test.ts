@@ -6,7 +6,8 @@ const listen = vi.fn((name: string, handler: (e: { payload: unknown }) => void) 
 vi.mock("@tauri-apps/api/event", () => ({ listen }));
 const wikiAgentBuild = vi.fn();
 const wikiAgentCancel = vi.fn(() => Promise.resolve());
-vi.mock("../../lib/wiki", () => ({ wikiAgentBuild, wikiAgentCancel }));
+const wikiAgentRunning = vi.fn<() => Promise<{ domain: string; scope: string } | null>>(() => Promise.resolve(null));
+vi.mock("../../lib/wiki", () => ({ wikiAgentBuild, wikiAgentCancel, wikiAgentRunning }));
 const automationList = vi.fn();
 const automationAct = vi.fn(() => Promise.resolve(null));
 vi.mock("../../lib/automations", () => ({ automationList, automationAct }));
@@ -84,6 +85,7 @@ describe("a scheduled rebuild", () => {
     useToasts.setState({ items: [] });
     automationAct.mockClear();
     wikiAgentCancel.mockClear();
+    wikiAgentRunning.mockResolvedValue(null);
     await listenOnce(client);
   });
 
@@ -119,6 +121,16 @@ describe("a scheduled rebuild", () => {
     expect(useToasts.getState().items.map((t) => t.text)).toEqual(["Wiki build cancelled. The pages already written are kept."]);
   });
 
+  // A rebuild run whose definition was edited meanwhile is still stopped while Rust runs that same build (re-review of 55cfab2).
+  it("Cancel stops the build directly when Rust still runs it but no rebuild run matches", async () => {
+    automationList.mockResolvedValue({ automations: [], runs: [], templates: [] });
+    progress({ event: "start", calls: 2 });
+    wikiAgentRunning.mockResolvedValue({ domain: "demo", scope: "core" });
+    cancelWikiBuild();
+    await vi.waitFor(() => expect(wikiAgentCancel).toHaveBeenCalled());
+    expect(automationAct).not.toHaveBeenCalled();
+  });
+
   // W1, W3: with no rebuild run left nothing is stopped (a build started since is not this one), and Cancel works again.
   it("Cancel stops nothing when the rebuild run has ended, and can be pressed again", async () => {
     automationList.mockResolvedValue({ automations: [], runs: [], templates: [] });
@@ -130,16 +142,15 @@ describe("a scheduled rebuild", () => {
     expect(useWikiBuild.getState().cancelling).toBe(false);
   });
 
-  // W2: a lost done event does not leave the strip up once the rebuild's automation run is over.
-  it("ends when its automation run is no longer running, and not while it is", async () => {
-    automationList.mockResolvedValue({ automations: [{ id: "a1", project: "core", action: { kind: "wiki_rebuild", domain: "demo" } }],
-      runs: [{ id: "r1", automation: "a1", state: "running" }], templates: [] });
+  // W2: a lost done event does not leave the strip up once Rust no longer runs the build, whatever the automation says
+  // (its definition may have been edited meanwhile; Codex re-review of 55cfab2).
+  it("ends when Rust no longer runs the build, and not while it does", async () => {
     progress({ event: "start", calls: 2 });
+    wikiAgentRunning.mockResolvedValue({ domain: "demo", scope: "core" });
     handlers.get("automations-changed")!({ payload: null });
     await new Promise((r) => setTimeout(r, 10));
     expect(useWikiBuild.getState().running).not.toBeNull();
-    automationList.mockResolvedValue({ automations: [{ id: "a1", project: "core", action: { kind: "wiki_rebuild", domain: "demo" } }],
-      runs: [{ id: "r1", automation: "a1", state: "succeeded" }], templates: [] });
+    wikiAgentRunning.mockResolvedValue(null);
     handlers.get("automations-changed")!({ payload: null });
     await vi.waitFor(() => expect(useWikiBuild.getState().running).toBeNull());
     expect(useToasts.getState().items).toEqual([]);

@@ -18,6 +18,7 @@ import { useAttentionEvents } from "./features/terminal/attention";
 import { QuitDialog } from "./features/terminal/QuitDialog";
 import { runningSummary } from "./features/terminal/running";
 import { listenOnce, useWikiBuild } from "./features/wiki/build";
+import { wikiAgentRunning } from "./lib/wiki";
 import { invalidateWiki } from "./features/wiki/useWiki";
 import { needsLmUpdate, useConnection } from "./lib/connection";
 import { refreshStore } from "./lib/refresh";
@@ -61,7 +62,10 @@ function useShortcuts() {
 /** What runs now: terminals, chat turns and a wiki build, one line each. The terminal and chat lines are left out when their lists cannot be read. */
 async function running(): Promise<string[]> {
   const lists = await Promise.all([termList(), agentSessions()]).catch(() => null);
-  return runningSummary(lists?.[0] ?? [], lists?.[1] ?? [], useWikiBuild.getState().running);
+  // Rust's own view covers a rebuild the window has not heard of yet (Codex re-review of 55cfab2).
+  const native = useWikiBuild.getState().running ? null : await wikiAgentRunning().catch(() => null);
+  const wiki = useWikiBuild.getState().running ?? (native && { domain: native.domain, project: native.scope === "domain" ? "" : native.scope });
+  return runningSummary(lists?.[0] ?? [], lists?.[1] ?? [], wiki);
 }
 
 /** Before any quit: write every pending notebook page draft and wait for it. Edits that cannot be kept are named, and

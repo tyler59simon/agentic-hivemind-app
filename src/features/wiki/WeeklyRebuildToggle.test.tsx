@@ -68,6 +68,15 @@ describe("the Rebuild weekly switch", () => {
     expect(puts()[1]).toMatchObject({ id: "id-core", enabled: true });
   });
 
+  // Codex re-review of 55cfab2: renamed in Settings, Schedules, the rebuild is still this switch's, so no second one is made.
+  it("still finds the rebuild after it was renamed", async () => {
+    saved = [rebuild("core", { name: "Sunday rebuild" })];
+    const el = await mount();
+    expect(box(el).checked).toBe(true);
+    await flip(el);
+    expect(puts()).toEqual([expect.objectContaining({ id: "id-core", name: "Sunday rebuild", enabled: false })]);
+  });
+
   it("finds the project's own rebuild, and says its cap and when it last ran", async () => {
     saved = [rebuild("pay", { enabled: true }), rebuild("core", { enabled: false, lastRun: Date.UTC(2026, 10, 22, 3, 0) })];
     const el = await mount("core");

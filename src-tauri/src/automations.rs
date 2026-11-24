@@ -469,6 +469,10 @@ impl Automations {
 
     /// Add or replace a definition. Turning on a schedule sets its next time; nothing runs at once.
     pub fn put(&self, mut a: Automation, now: u64) -> Result<Automation, String> {
+        // Refused before the list in memory changes, so a schedule that was not saved never runs (Codex re-review of 55cfab2).
+        if let Some(why) = &self.blocked {
+            return Err(why.clone());
+        }
         check(&a)?;
         let mut list = self.state.lock().unwrap();
         if a.id.is_empty() {
@@ -503,6 +507,9 @@ impl Automations {
     }
 
     pub fn delete(&self, id: &str) -> Result<(), String> {
+        if let Some(why) = &self.blocked {
+            return Err(why.clone());
+        }
         let mut list = self.state.lock().unwrap();
         if !valid_id(id) || !list.iter().any(|a| a.id == id) {
             return Err("Unknown automation".into());
@@ -1676,6 +1683,8 @@ mod tests {
         let refused = autos.put(Automation { id: String::new(), ..daily("A") }, 1).unwrap_err();
         assert!(refused.contains("not saved"), "{refused}");
         assert!(dir.join("automations.json").is_dir());
+        // The refused schedule is not in the list the scheduler runs (Codex re-review of 55cfab2).
+        assert!(autos.list().is_empty());
         // A missing file is an empty list that saves as usual.
         let fresh = std::env::temp_dir().join(format!("hivemind-automations-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&fresh).unwrap();

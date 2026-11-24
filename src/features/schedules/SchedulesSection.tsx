@@ -285,6 +285,10 @@ export function SchedulesSection() {
   const custom = useShowCustom();
   // A link to one automation (a session's Automation chip, Home's activity) shows it even while custom ones are hidden.
   const linked = useApp((s) => s.settings?.automation);
+  // The linked row draws only once the list has loaded, after Settings scrolled to the section (Codex re-review of 55cfab2).
+  useEffect(() => {
+    if (linked && data.isSuccess) document.getElementById(`automation-${linked}`)?.scrollIntoView?.({ block: "start" });
+  }, [linked, data.isSuccess]);
   const [editing, setEditing] = useState<Automation | null>(null);
   const [asking, setAsking] = useState<Automation | null>(null);
   const list = data.data?.automations ?? [];

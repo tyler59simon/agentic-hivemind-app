@@ -7,7 +7,7 @@ import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
 import { automationAct, automationList } from "../../lib/automations";
 import { classify } from "../../lib/errors";
-import { wikiAgentBuild, wikiAgentCancel, type WikiBuildDone, type WikiBuildEvent } from "../../lib/wiki";
+import { wikiAgentBuild, wikiAgentCancel, wikiAgentRunning, type WikiBuildDone, type WikiBuildEvent } from "../../lib/wiki";
 import { toast } from "../../ui/toast";
 import { applyProgress, buildOutcome, type BuildProgress } from "./wiki";
 
@@ -48,14 +48,29 @@ export const listenOnce = (client: QueryClient) => (listening ??= Promise.all([
     if (s.running) return { progress: applyProgress(s.progress, e.payload) };
     // A build nobody here started is a scheduled rebuild: take it up, unless this is its last line.
     if (e.payload.event === "end") return s;
-    const project = e.payload.scope === "domain" ? "" : e.payload.scope;
-    return { running: { domain: e.payload.domain, project, scheduled: true }, progress: applyProgress(null, e.payload), cancelling: false };
+    return { running: { domain: e.payload.domain, project: projectOf(e.payload.scope), scheduled: true }, progress: applyProgress(null, e.payload), cancelling: false };
   })),
   listen<WikiBuildDone>("wiki-build-done", (e) => finish(client, e.payload, true)),
   // A scheduled rebuild has no command result to fall back on: when its automation run is over and the done event was lost,
   // the build ends here instead of showing forever (W2).
   listen("automations-changed", () => { void settleScheduled(client); }),
-]));
+]).then((stops) => { void adoptRunning(); return stops; }));
+
+/** Where a build's scope names its project: "domain" is the whole domain (""). */
+const projectOf = (scope: string) => (scope === "domain" ? "" : scope);
+
+/** Rust's own view of the running build, for a rebuild that started before the listeners did (Codex re-review of 55cfab2). */
+async function adoptRunning() {
+  const native = await wikiAgentRunning().catch(() => null);
+  if (!native || useWikiBuild.getState().running) return;
+  useWikiBuild.setState({ running: { domain: native.domain, project: projectOf(native.scope), scheduled: true }, progress: null, cancelling: false });
+}
+
+/** Whether Rust still runs the build shown here. Unknown (the call failed) counts as yes. */
+async function stillRunning(running: { domain: string; project: string }) {
+  const native = await wikiAgentRunning().catch(() => "unknown" as const);
+  return native === "unknown" || (!!native && native.domain === running.domain && projectOf(native.scope) === running.project);
+}
 
 /** The running automation run of the scheduled rebuild shown here, if any. */
 async function scheduledRun(running: { domain: string; project: string }) {
@@ -66,11 +81,12 @@ async function scheduledRun(running: { domain: string; project: string }) {
   return list.runs.find((r) => r.state === "running" && mine.has(r.automation));
 }
 
+/** A scheduled rebuild ends here when Rust no longer runs it, whatever its automation definition says now (the user may have
+ *  edited it meanwhile; Codex re-review of 55cfab2). */
 async function settleScheduled(client: QueryClient) {
   const { running } = useWikiBuild.getState();
   if (!running?.scheduled) return;
-  const run = await scheduledRun(running).catch(() => "unknown" as const);
-  if (run || useWikiBuild.getState().running !== running) return;
+  if (await stillRunning(running) || useWikiBuild.getState().running !== running) return;
   finish(client, { ok: false, error: CANCELLED }, true);
 }
 
@@ -107,6 +123,9 @@ export function cancelWikiBuild() {
  *  someone else's (Codex review of 99ceaea, W1). */
 async function cancelScheduled(running: { domain: string; project: string }) {
   const run = await scheduledRun(running);
-  if (!run) throw new Error("The scheduled rebuild has already ended.");
-  await automationAct("cancel", run.id);
+  if (run) { await automationAct("cancel", run.id); return; }
+  // No run matches (its definition was edited meanwhile, or it ended): stop the build only when Rust still runs this one.
+  const native = await wikiAgentRunning();
+  if (native && native.domain === running.domain && projectOf(native.scope) === running.project) { await wikiAgentCancel(); return; }
+  throw new Error("The scheduled rebuild has already ended.");
 }

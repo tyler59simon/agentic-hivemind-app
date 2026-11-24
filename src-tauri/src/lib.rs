@@ -610,7 +610,7 @@ impl automations::Doer for AppDoer {
                         }
                     });
                     // The build gets the budget the fit check counted (WIKI-R3).
-                    let budget = run_budget(a.budget_usd, saved.agent_budget_usd());
+                    let budget = rebuild_budget(a.budget_usd, saved.agent_budget_usd());
                     let outcome = wiki_build::run(&emit, &launch, domain, Some(&project), Some(budget), false, false, &claude);
                     finished.store(true, std::sync::atomic::Ordering::Relaxed);
                     outcome
@@ -746,18 +746,23 @@ impl automations::Doer for AppDoer {
     }
 }
 
-/// An automation run's budget: its own when it has a valid one, never above the settings' cap per agent run
-/// (agent::start_task caps a session the same way). The fit check and a wiki rebuild's --budget both use it (WIKI-R3).
 /// Sessions whose events never fire event automations: an automation's own, and the task sessions of deleted workflows.
 fn fires_no_events(origin: &str) -> bool {
     origin.starts_with("automation:") || origin.starts_with("workflow:")
 }
 
+/// An automation run's budget: its own when it has a valid one, never above the settings' cap per agent run
+/// (agent::start_task caps a session the same way). The fit check counts this unrounded, so admission never approves less than
+/// a run can spend (WIKI-R3; Codex re-review of 55cfab2).
 fn run_budget(own: Option<f64>, agent_cap: f64) -> f64 {
-    let budget = own.filter(|b| b.is_finite() && *b > 0.0).map_or(agent_cap, |b| b.min(agent_cap));
-    // Whole cents, rounded down: `--budget` is written with two decimals, and rounding up there would pass more than was
-    // admitted or than the cap allows (Codex review of 99ceaea, B1). The epsilon keeps 0.29 from becoming 0.28.
-    ((budget * 100.0 + 1e-9).floor() / 100.0).max(0.0)
+    own.filter(|b| b.is_finite() && *b > 0.0).map_or(agent_cap, |b| b.min(agent_cap))
+}
+
+/// A wiki rebuild's `--budget`: `run_budget` in whole cents, rounded down, since the flag is written with two decimals and
+/// rounding up there would pass more than was admitted or than the cap allows (Codex review of 99ceaea, B1). The epsilon keeps
+/// 0.29 from becoming 0.28.
+fn rebuild_budget(own: Option<f64>, agent_cap: f64) -> f64 {
+    ((run_budget(own, agent_cap) * 100.0 + 1e-9).floor() / 100.0).max(0.0)
 }
 
 /// Automations finish on session reports; failed and approved sessions the user started fire event automations. Work that starts sessions runs on its own thread so the conductor never waits on a worktree.
@@ -1441,6 +1446,12 @@ async fn wiki_agent_build(app: AppHandle, state: State<'_, AppState>, domain: St
     .await
 }
 
+/// The wiki build running now (`{ domain, scope }`), or null.
+#[tauri::command]
+fn wiki_agent_running() -> Option<Value> {
+    wiki_build::active()
+}
+
 /// Stop the running wiki build. The pages it already wrote are kept.
 #[tauri::command]
 fn wiki_agent_cancel() {
@@ -1918,7 +1929,7 @@ pub fn run() {
             skills_upkeep, skill_from_note,
             automation_list, automation_put, automation_delete, automation_spend, automation_act, architecture_drift, architecture_rules_set, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, uninstall_inventory, uninstall_remove_worktree, uninstall_delete_branch, repo_branches,
             agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_stop_and_approve, review_ask_codex, review_request_changes, review_request_terminal_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
-            system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export, wiki_agent_build, wiki_agent_cancel,
+            system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export, wiki_agent_build, wiki_agent_cancel, wiki_agent_running,
             studio::notebooks_list, studio::notebook_add, studio::notebook_remove, studio::notebook_rename, studio::notebook_tree, studio::notebook_meta_get,
             studio::notebook_meta_set, studio::notebook_append, studio::obsidian_setting, studio::file_read, studio::file_reopen, studio::file_save, studio::file_create, studio::file_mkdir, studio::file_rename, studio::file_delete,
             studio::file_reveal, studio::asset_base, studio::lmdoc_assets, studio::notebook_add_dropped, studio::file_attach_bytes, studio::file_attach_dropped, opens::open_dropped, opens::claim_drop, opens::unclaimed_drops, studio::notebook_reach_record, lm_body, lmdoc_move, lmdoc_attach, studio::lmdoc_open_asset, opens::open_dialog, opens::open_pending, opens::open_recent,
@@ -1961,10 +1972,13 @@ mod tests {
         assert_eq!(run_budget(None, 5.0), 5.0);
         assert_eq!(run_budget(Some(0.0), 5.0), 5.0);
         assert_eq!(run_budget(Some(f64::NAN), 5.0), 5.0);
-        // Whole cents, rounded down, so the two-decimal --budget never exceeds what was admitted (Codex review, B1).
-        assert_eq!(run_budget(Some(1.006), 5.0), 1.0);
-        assert_eq!(run_budget(Some(3.0), 1.009), 1.0);
-        assert_eq!(run_budget(Some(0.29), 5.0), 0.29);
+        // Admission counts what a role session gets, unrounded (Codex re-review of 55cfab2).
+        assert_eq!(run_budget(Some(3.0), 1.009), 1.009);
+        // A rebuild's --budget is whole cents, rounded down, so it never exceeds what was admitted (Codex review, B1).
+        assert_eq!(rebuild_budget(Some(1.006), 5.0), 1.0);
+        assert_eq!(rebuild_budget(Some(3.0), 1.009), 1.0);
+        assert_eq!(rebuild_budget(Some(0.29), 5.0), 0.29);
+        assert_eq!(rebuild_budget(None, 5.0), 5.0);
     }
 
     /// Codex review of dd4c1b0, R3-D8: a store written in another letter case or with another separator gets the name

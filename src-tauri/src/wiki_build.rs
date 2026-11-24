@@ -22,6 +22,9 @@ pub const CANCELLED: &str = "Build cancelled.";
 struct Running {
     pid: Option<u32>,
     cancelled: bool,
+    /// What is being built, for `active`: the domain and the scope (a project, or "domain").
+    domain: String,
+    scope: String,
 }
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
 
@@ -254,6 +257,12 @@ fn mark_cancelled() -> Option<u32> {
     r.pid
 }
 
+/// The build running now, as `{ domain, scope }`, whoever started it: the frontend asks when it cannot rely on the events it
+/// saw (a rebuild that started before it listened, or one whose done event was lost; Codex re-review of 55cfab2).
+pub fn active() -> Option<Value> {
+    running().as_ref().map(|r| json!({ "domain": r.domain, "scope": r.scope }))
+}
+
 /// Stop the running build, if any. The edition keeps the pages it already wrote. It returns at once; on Unix the stop can take up
 /// to `TERM_GRACE`, on a thread of its own.
 pub fn cancel() {
@@ -312,7 +321,7 @@ pub fn run(emit: &dyn Fn(&str, Value), launch: &Launch, domain: &str, project: O
         if slot.is_some() {
             return Err("A wiki build is already running.".into());
         }
-        *slot = Some(Running { pid: None, cancelled: false });
+        *slot = Some(Running { pid: None, cancelled: false, domain: domain.into(), scope: scope.into() });
         Some(Clear)
     };
     let claude = if dry_run { None } else { claude() };
@@ -554,7 +563,8 @@ mod tests {
         seen.lock().unwrap().clear();
 
         // A cancel that came before the child existed (the slot is taken, no pid yet) keeps the child from starting.
-        *running() = Some(Running { pid: None, cancelled: true });
+        *running() = Some(Running { pid: None, cancelled: true, domain: "demo".into(), scope: "domain".into() });
+        assert_eq!(active(), Some(json!({ "domain": "demo", "scope": "domain" })));
         assert_eq!(spawn(&launch, &build_argv("demo", None, None, false, false), None, true).err(), Some(CANCELLED.to_string()));
         *running() = None;
         assert_eq!(mark_cancelled(), None); // nothing to cancel when no build runs
