@@ -10,8 +10,10 @@ import { WIKI_REBUILD_CAP_USD } from "../wiki/WeeklyRebuildToggle";
 const usd = (n: number | string) => `$${Number(n).toFixed(2)}`;
 
 export function SpendToday() {
-  const automations = useQuery({ ...automationSpendQuery(), retry: false });
-  const learning = useQuery({ ...learningQuery(), retry: false });
+  // A briefing or rebuild can settle while Settings is open, and the totals start again at midnight UTC: refetch while shown
+  // (Codex review of 99ceaea, B3).
+  const automations = useQuery({ ...automationSpendQuery(), retry: false, refetchInterval: 60_000 });
+  const learning = useQuery({ ...learningQuery(), retry: false, refetchInterval: 60_000 });
   const maintenanceOn = useMaintenanceEnabled();
   const maintenance = useQuery({ queryKey: ["maintenance", "status"], queryFn: maintenanceStatus, enabled: maintenanceOn, retry: false });
   const m = maintenance.data;

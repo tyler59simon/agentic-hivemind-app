@@ -218,8 +218,8 @@ function RunRow({ run, name }: { run: AutomationRun; name?: string }) {
 }
 
 /** One automation: its schedule, an on/off switch, Run now, and its runs behind a disclosure. Custom ones also edit and remove. */
-function ScheduleRow({ a, runs, custom, onEdit, onRemove }: {
-  a: AutomationView; runs: AutomationRun[]; custom?: boolean; onEdit?: () => void; onRemove?: () => void;
+function ScheduleRow({ a, runs, onEdit, onRemove }: {
+  a: AutomationView; runs: AutomationRun[]; onEdit?: () => void; onRemove?: () => void;
 }) {
   const client = useQueryClient();
   const [busy, setBusy] = useState(false);
@@ -236,7 +236,7 @@ function ScheduleRow({ a, runs, custom, onEdit, onRemove }: {
   }, fail);
   const mine = runs.filter((r) => r.automation === a.id);
   return (
-    <div className="schedule-row">
+    <div className="schedule-row" id={`automation-${a.id}`}>
       <label className="check" title={ACTION_HELP[a.action.kind]}>
         <input type="checkbox" checked={a.enabled} disabled={busy} onChange={(e) => toggle(e.target.checked)} />
         <span><strong>{a.name}</strong>{about ? ` · ${about}` : ""}{a.repo ? ` · ${repoName(a.repo)}` : ""}<br />
@@ -244,8 +244,8 @@ function ScheduleRow({ a, runs, custom, onEdit, onRemove }: {
       </label>
       <div className="work-actions">
         <button type="button" onClick={runNow}>Run now</button>
-        {custom && onEdit && <button type="button" onClick={onEdit}>Edit</button>}
-        {custom && onRemove && <button type="button" className="ghost" onClick={onRemove}>Remove</button>}
+        {onEdit && <button type="button" onClick={onEdit}>Edit</button>}
+        {onRemove && <button type="button" className="ghost" onClick={onRemove}>Remove</button>}
       </div>
       {!!mine.length && (
         <details>
@@ -283,6 +283,8 @@ export function SchedulesSection() {
   const current = useApp((s) => (typeof s.project === "string" ? s.project : null));
   const projects = useQuery({ ...projectsQuery(), enabled: useProjectsEnabled() }).data?.projects.filter((p) => p.status !== "archived" && p.repos.length) ?? [];
   const custom = useShowCustom();
+  // A link to one automation (a session's Automation chip, Home's activity) shows it even while custom ones are hidden.
+  const linked = useApp((s) => s.settings?.automation);
   const [editing, setEditing] = useState<Automation | null>(null);
   const [asking, setAsking] = useState<Automation | null>(null);
   const list = data.data?.automations ?? [];
@@ -314,7 +316,9 @@ export function SchedulesSection() {
       )}
       {data.isSuccess && (
         <>
-          {built.map((a) => <ScheduleRow key={a.id} a={a} runs={runs} />)}
+          {built.map((a) => editing?.id === a.id
+            ? <AutomationForm key={a.id} initial={editing} onDone={() => setEditing(null)} />
+            : <ScheduleRow key={a.id} a={a} runs={runs} onEdit={() => setEditing(a)} onRemove={() => setAsking(a)} />)}
           {claude && !built.some((a) => a.action.kind === "executive_briefing") && (
             <AddRow title="Morning briefing" hint="A priorities briefing about all active projects every day at 08:00, kept on Home. Counts against the learning budget." make={() => morningBriefing(null, true)} />
           )}
@@ -323,11 +327,14 @@ export function SchedulesSection() {
           )}
           {!built.some((a) => a.action.kind === "wiki_rebuild") && <p className="muted small">A weekly wiki rebuild is turned on per project with Rebuild weekly in Notes, Wiki.</p>}
           <label className="check"><input type="checkbox" checked={custom} onChange={(e) => showCustom(e.target.checked)} /> Show custom automations{others.length ? ` (${others.length})` : ""}</label>
+          {!custom && others.filter((a) => a.id === linked).map((a) => editing?.id === a.id
+            ? <AutomationForm key={a.id} initial={editing} onDone={() => setEditing(null)} />
+            : <ScheduleRow key={a.id} a={a} runs={runs} onEdit={() => setEditing(a)} onRemove={() => setAsking(a)} />)}
           {custom && (
             <div className="schedule-custom">
               {others.map((a) => editing?.id === a.id
                 ? <AutomationForm key={a.id} initial={editing} onDone={() => setEditing(null)} />
-                : <ScheduleRow key={a.id} a={a} runs={runs} custom onEdit={() => setEditing(a)} onRemove={() => setAsking(a)} />)}
+                : <ScheduleRow key={a.id} a={a} runs={runs} onEdit={() => setEditing(a)} onRemove={() => setAsking(a)} />)}
               {editing && !editing.id
                 ? <AutomationForm key={editing.name || "new"} initial={editing} onDone={() => setEditing(null)} />
                 : (

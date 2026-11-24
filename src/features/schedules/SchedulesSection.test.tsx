@@ -30,6 +30,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
 const { SchedulesSection } = await import("./SchedulesSection");
 const { useCustomShown } = await import("./schedules");
+const { useApp } = await import("../../store");
 
 let root: Root | null = null;
 async function mount() {
@@ -47,6 +48,7 @@ beforeEach(() => {
   saved = [];
   invoke.mockClear();
   useCustomShown.setState({ shown: false });
+  useApp.setState({ settings: null });
 });
 afterEach(async () => {
   await act(async () => root?.unmount());
@@ -81,5 +83,24 @@ describe("Settings > Schedules", () => {
     const options = [...el.querySelectorAll("select[aria-label='Add a built-in automation'] option")].map((o) => o.textContent);
     expect(options.some((o) => o?.startsWith("Weekly skill upkeep"))).toBe(true);
     expect(options.some((o) => o?.startsWith("Nightly memory maintenance"))).toBe(false);
+  });
+
+  // Codex review of 99ceaea, U1: a built-in schedule can still be edited and removed, as on the old Automations tab.
+  it("offers Edit and Remove on a built-in schedule", async () => {
+    saved = [auto("w1", "Weekly wiki rebuild", { kind: "wiki_rebuild", domain: "demo" }, { project: "core" })];
+    const el = await mount();
+    const row = el.querySelector("#automation-w1")!;
+    expect([...row.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Run now", "Edit", "Remove"]);
+  });
+
+  // U2: a session's Automation chip opens Schedules at its automation, shown even while custom ones are hidden.
+  it("shows the linked custom automation while custom automations are hidden", async () => {
+    saved = [auto("c1", "Weekly code review", { kind: "role", role: "reviewer", engine: "claude", prompt: "p" }),
+      auto("c2", "Drift check", { kind: "architecture_check", system: "pay" })];
+    useApp.setState({ settings: { section: "schedules", automation: "c1" } });
+    const el = await mount();
+    expect(names(el)).toContain("Weekly code review");
+    expect(names(el)).not.toContain("Drift check");
+    expect(useCustomShown.getState().shown).toBe(false);
   });
 });

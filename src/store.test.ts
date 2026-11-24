@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { wikiRoute } from "./features/wiki/wiki";
-import { migrateNav, openInbox, openProject, openSession, openSystem, setLeaveGuard, startSession, useApp } from "./store";
+import { migrateNav, openInbox, openProject, openSession, openSettings, openSystem, setLeaveGuard, startSession, useApp } from "./store";
 
 const app = () => useApp.getState();
 
@@ -121,6 +121,21 @@ describe("navigation", () => {
     later!();
     expect(app().project).toBe("core");
     clear();
+  });
+});
+
+// Codex review of 857ec37, S2: a link inside Settings (a session, a note, the Inbox) closes Settings so its target shows.
+describe("Settings", () => {
+  beforeEach(() => useApp.setState({ route: { page: "home" }, back: [], settings: null }));
+  it("opens at a section and closes when a link goes anywhere, the current page included", () => {
+    openSettings("schedules");
+    expect(useApp.getState().settings).toEqual({ section: "schedules" });
+    openSession("s1");
+    expect(useApp.getState()).toMatchObject({ settings: null, route: { page: "agents", session: "s1" } });
+    openSettings();
+    expect(useApp.getState().settings).toEqual({});
+    useApp.getState().go({ page: "agents", session: "s1" });
+    expect(useApp.getState().settings).toBeNull();
   });
 });
 

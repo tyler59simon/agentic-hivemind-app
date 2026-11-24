@@ -24,6 +24,20 @@ describe("cancelling a wiki build", () => {
     wikiAgentCancel.mockClear();
   });
 
+  // W3: a cancel that did not reach Rust leaves Cancel usable.
+  it("a cancel request that fails can be made again", async () => {
+    let finishBuild: (v: unknown) => void = () => undefined;
+    wikiAgentBuild.mockImplementation(() => new Promise((r) => { finishBuild = r; }));
+    const started = startWikiBuild(client, "demo", "", false);
+    await vi.waitFor(() => expect(wikiAgentBuild).toHaveBeenCalled());
+    wikiAgentCancel.mockImplementationOnce(() => Promise.reject(new Error("no build")));
+    cancelWikiBuild();
+    await vi.waitFor(() => expect(useWikiBuild.getState().cancelling).toBe(false));
+    finishBuild({ ok: true, written: [], failed: [], pending: [], stopped: null, cost_usd: 0 });
+    await started;
+    expect(useToasts.getState().items.map((t) => t.text)).toEqual(["no build", "Wiki build finished: 0 pages written for $0.00."]);
+  });
+
   it("a Cancel before the build reaches Rust ends it without ever starting it", async () => {
     const started = startWikiBuild(client, "demo", "", false); // running is set at once; the listeners are still being set up
     expect(useWikiBuild.getState().running).toEqual({ domain: "demo", project: "" });
@@ -90,10 +104,12 @@ describe("a scheduled rebuild", () => {
     expect(useWikiBuild.getState().running).toEqual({ domain: "demo", project: "", scheduled: true });
   });
 
-  it("Cancel cancels the running rebuild's automation run, and its end toasts as cancelled", async () => {
+  it("Cancel cancels the rebuild run of the shown domain and project, and its end toasts as cancelled", async () => {
+    // W1: another project's rebuild run is never the one cancelled.
     automationList.mockResolvedValue({
-      automations: [{ id: "a1", action: { kind: "wiki_rebuild", domain: "demo" } }, { id: "a2", action: { kind: "skill_upkeep" } }],
-      runs: [{ id: "r2", automation: "a2", state: "running" }, { id: "r1", automation: "a1", state: "running" }], templates: [],
+      automations: [{ id: "a0", project: "other", action: { kind: "wiki_rebuild", domain: "demo" } }, { id: "a1", project: "core", action: { kind: "wiki_rebuild", domain: "demo" } },
+        { id: "a2", project: "core", action: { kind: "skill_upkeep" } }],
+      runs: [{ id: "r0", automation: "a0", state: "running" }, { id: "r2", automation: "a2", state: "running" }, { id: "r1", automation: "a1", state: "running" }], templates: [],
     });
     progress({ event: "start", calls: 2 });
     cancelWikiBuild();
@@ -103,11 +119,29 @@ describe("a scheduled rebuild", () => {
     expect(useToasts.getState().items.map((t) => t.text)).toEqual(["Wiki build cancelled. The pages already written are kept."]);
   });
 
-  it("Cancel stops the build directly when no rebuild run is running any more", async () => {
+  // W1, W3: with no rebuild run left nothing is stopped (a build started since is not this one), and Cancel works again.
+  it("Cancel stops nothing when the rebuild run has ended, and can be pressed again", async () => {
     automationList.mockResolvedValue({ automations: [], runs: [], templates: [] });
     progress({ event: "start", calls: 2 });
     cancelWikiBuild();
-    await vi.waitFor(() => expect(wikiAgentCancel).toHaveBeenCalled());
+    await vi.waitFor(() => expect(useToasts.getState().items.map((t) => t.text)).toEqual(["The scheduled rebuild has already ended."]));
+    expect(wikiAgentCancel).not.toHaveBeenCalled();
     expect(automationAct).not.toHaveBeenCalled();
+    expect(useWikiBuild.getState().cancelling).toBe(false);
+  });
+
+  // W2: a lost done event does not leave the strip up once the rebuild's automation run is over.
+  it("ends when its automation run is no longer running, and not while it is", async () => {
+    automationList.mockResolvedValue({ automations: [{ id: "a1", project: "core", action: { kind: "wiki_rebuild", domain: "demo" } }],
+      runs: [{ id: "r1", automation: "a1", state: "running" }], templates: [] });
+    progress({ event: "start", calls: 2 });
+    handlers.get("automations-changed")!({ payload: null });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(useWikiBuild.getState().running).not.toBeNull();
+    automationList.mockResolvedValue({ automations: [{ id: "a1", project: "core", action: { kind: "wiki_rebuild", domain: "demo" } }],
+      runs: [{ id: "r1", automation: "a1", state: "succeeded" }], templates: [] });
+    handlers.get("automations-changed")!({ payload: null });
+    await vi.waitFor(() => expect(useWikiBuild.getState().running).toBeNull());
+    expect(useToasts.getState().items).toEqual([]);
   });
 });

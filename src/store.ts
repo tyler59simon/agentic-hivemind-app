@@ -40,7 +40,8 @@ interface AppState {
   /** Earlier routes, oldest first, for Back. */
   back: Route[];
   /** Settings while it is open, at a section when a link asked for one; null when closed. Not kept over a restart. */
-  settings: { section?: SettingsSection } | null;
+  /** Settings while it is open: the section a link opened it at, and with `automation` the automation to show in Schedules. */
+  settings: { section?: SettingsSection; automation?: string } | null;
   setProject: (project: string | null) => void;
   setDomain: (domain: string) => void;
   setPalette: (palette: AppState["palette"]) => void;
@@ -118,7 +119,8 @@ export const useApp = create<AppState>()(persist((set) => ({
   setPalette: (palette) => set({ palette }),
   go: (route, opts = {}) => {
     if (!opts.force && stopped(() => useApp.getState().go(route, { ...opts, force: true }))) return;
-    set((s) => (same(s.route, route) ? s : { route, back: opts.replace ? s.back : [...s.back, s.route].slice(-BACK_LIMIT) }));
+    // Settings covers the shell, so going anywhere closes it: a link in Settings shows where it leads (Codex review of 857ec37, S2).
+    set((s) => (same(s.route, route) ? (s.settings ? { settings: null } : s) : { route, back: opts.replace ? s.back : [...s.back, s.route].slice(-BACK_LIMIT), settings: null }));
   },
   goBack: (force) => {
     if (!useApp.getState().back.length) return;
@@ -144,5 +146,7 @@ export const openInbox = (session?: string, file?: string, kind?: InboxKind) => 
 export const openSkills = (skill?: string) => app().go({ page: "notes", view: "skills", ...(skill ? { skill } : {}) });
 /** Open Settings, at a section when one is given (Schedules, Spend, Maintenance, Learning). */
 export const openSettings = (section?: SettingsSection) => useApp.setState({ settings: section ? { section } : {} });
+/** Open Settings > Schedules at one automation, shown even when it is a custom one and those are hidden. */
+export const openAutomation = (automation: string) => useApp.setState({ settings: { section: "schedules", automation } });
 export const closeSettings = () => useApp.setState({ settings: null });
 export const startSession = () => app().go({ page: "agents", view: "new" });

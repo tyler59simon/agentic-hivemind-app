@@ -622,7 +622,12 @@ impl automations::Doer for AppDoer {
                 if cost > 0.0 {
                     automations::Doer::charge(self, cost);
                 }
-                let outcome = outcome?;
+                // A build that failed or was cancelled part way keeps what it spent on its run (Codex review of 99ceaea, B2).
+                let outcome = match outcome {
+                    Ok(outcome) => outcome,
+                    Err(e) if cost > 0.0 => return Ok(Started::Failed { detail: e, cost: Some(cost) }),
+                    Err(e) => return Err(e),
+                };
                 let (detail, _) = wiki_build::summary(&outcome);
                 // Pages that failed or were left fail the run, so a failure notification fires; it keeps its cost (WIKI-R2).
                 if wiki_build::incomplete(&outcome) {
@@ -743,8 +748,16 @@ impl automations::Doer for AppDoer {
 
 /// An automation run's budget: its own when it has a valid one, never above the settings' cap per agent run
 /// (agent::start_task caps a session the same way). The fit check and a wiki rebuild's --budget both use it (WIKI-R3).
+/// Sessions whose events never fire event automations: an automation's own, and the task sessions of deleted workflows.
+fn fires_no_events(origin: &str) -> bool {
+    origin.starts_with("automation:") || origin.starts_with("workflow:")
+}
+
 fn run_budget(own: Option<f64>, agent_cap: f64) -> f64 {
-    own.filter(|b| b.is_finite() && *b > 0.0).map_or(agent_cap, |b| b.min(agent_cap))
+    let budget = own.filter(|b| b.is_finite() && *b > 0.0).map_or(agent_cap, |b| b.min(agent_cap));
+    // Whole cents, rounded down: `--budget` is written with two decimals, and rounding up there would pass more than was
+    // admitted or than the cap allows (Codex review of 99ceaea, B1). The epsilon keeps 0.29 from becoming 0.28.
+    ((budget * 100.0 + 1e-9).floor() / 100.0).max(0.0)
 }
 
 /// Automations finish on session reports; failed and approved sessions the user started fire event automations. Work that starts sessions runs on its own thread so the conductor never waits on a worktree.
@@ -768,8 +781,10 @@ fn orchestration_reports(app: AppHandle) -> conductor::Handler {
                 let detail = info.summary.clone().or(info.error.clone()).map(|t| agent::events::clip(&t, 300)).unwrap_or_else(|| "Session finished".into());
                 state.automations.finished(Some(&info.id), ok, detail, info.cost_usd, &doer);
             }
-            // Work an automation started never fires event automations (no loops).
-            if origin.starts_with("automation:") {
+            // Work an automation started never fires event automations (no loops). A task session of a deleted Workflows run
+            // (`workflow:<run>:<task>`, CON-20) cannot be traced to whoever started the run any more, so it fires none either
+            // (Codex review of 99ceaea, C2).
+            if fires_no_events(&origin) {
                 return;
             }
             let (project, repo) = match &info.task {
@@ -1930,9 +1945,14 @@ mod tests {
     use super::*;
     use term::launch::{Cli, NO_CODEX};
 
-    /// Codex review of dd4c1b0, R3-D8: a store written in another letter case or with another separator gets the name
-    /// the filesystem gives it, without the `\\?\` prefix; a root that does not exist keeps its text.
-    #[cfg(windows)]
+    #[test]
+    fn sessions_of_automations_and_of_deleted_workflows_fire_no_event_automations() {   // Codex review of 99ceaea, C2
+        assert!(fires_no_events("automation:a1"));
+        assert!(fires_no_events("workflow:r1:t1"));
+        assert!(!fires_no_events(""));
+        assert!(!fires_no_events("review:s1"));
+    }
+
     #[test]
     fn a_run_budget_is_its_own_but_never_above_the_cap_per_agent_run() {   // WIKI-R3
         assert_eq!(run_budget(Some(2.0), 1.0), 1.0);
@@ -1941,8 +1961,15 @@ mod tests {
         assert_eq!(run_budget(None, 5.0), 5.0);
         assert_eq!(run_budget(Some(0.0), 5.0), 5.0);
         assert_eq!(run_budget(Some(f64::NAN), 5.0), 5.0);
+        // Whole cents, rounded down, so the two-decimal --budget never exceeds what was admitted (Codex review, B1).
+        assert_eq!(run_budget(Some(1.006), 5.0), 1.0);
+        assert_eq!(run_budget(Some(3.0), 1.009), 1.0);
+        assert_eq!(run_budget(Some(0.29), 5.0), 0.29);
     }
 
+    /// Codex review of dd4c1b0, R3-D8: a store written in another letter case or with another separator gets the name
+    /// the filesystem gives it, without the `\\?\` prefix; a root that does not exist keeps its text.
+    #[cfg(windows)]
     #[test]
     fn a_store_root_is_named_as_the_filesystem_names_it() {
         let dir = std::env::temp_dir().join(format!("HM-Store-{}", uuid::Uuid::new_v4().simple()));

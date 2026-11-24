@@ -41,7 +41,8 @@ function finish(client: QueryClient, done: Pick<WikiBuildDone, "ok" | "result" |
 }
 
 let listening: Promise<unknown> | null = null;
-/** Listen for the build's events (once). The wiki view calls this when it opens, so a build it did not start still refreshes it. */
+/** Listen for the build's events (once). The app calls this at start, so a scheduled rebuild shows in the quit summary before the
+ *  wiki was ever opened (Codex review of 99ceaea, W2); the wiki view calls it too. */
 export const listenOnce = (client: QueryClient) => (listening ??= Promise.all([
   listen<WikiBuildEvent>("wiki-build-progress", (e) => useWikiBuild.setState((s) => {
     if (s.running) return { progress: applyProgress(s.progress, e.payload) };
@@ -51,7 +52,27 @@ export const listenOnce = (client: QueryClient) => (listening ??= Promise.all([
     return { running: { domain: e.payload.domain, project, scheduled: true }, progress: applyProgress(null, e.payload), cancelling: false };
   })),
   listen<WikiBuildDone>("wiki-build-done", (e) => finish(client, e.payload, true)),
+  // A scheduled rebuild has no command result to fall back on: when its automation run is over and the done event was lost,
+  // the build ends here instead of showing forever (W2).
+  listen("automations-changed", () => { void settleScheduled(client); }),
 ]));
+
+/** The running automation run of the scheduled rebuild shown here, if any. */
+async function scheduledRun(running: { domain: string; project: string }) {
+  const list = await automationList();
+  const mine = new Set(list.automations
+    .filter((a) => a.action.kind === "wiki_rebuild" && a.action.domain === running.domain && (a.project ?? "") === running.project)
+    .map((a) => a.id));
+  return list.runs.find((r) => r.state === "running" && mine.has(r.automation));
+}
+
+async function settleScheduled(client: QueryClient) {
+  const { running } = useWikiBuild.getState();
+  if (!running?.scheduled) return;
+  const run = await scheduledRun(running).catch(() => "unknown" as const);
+  if (run || useWikiBuild.getState().running !== running) return;
+  finish(client, { ok: false, error: CANCELLED }, true);
+}
 
 /** Build or refresh the agent-written wiki; resolves when it is over (the toast and refetch have happened by then). */
 export async function startWikiBuild(client: QueryClient, domain: string, project: string, restructure: boolean) {
@@ -72,20 +93,20 @@ export function cancelWikiBuild() {
   const { running } = useWikiBuild.getState();
   if (!running) return;
   useWikiBuild.setState({ cancelling: true });
-  if (running.scheduled) { void cancelScheduled(); return; }
-  wikiAgentCancel().catch((e) => toast(classify(e).message, "error"));
+  // A cancel that did not reach the build leaves Cancel usable, and the end then reads as it is (Codex review of 99ceaea, W3).
+  const failed = (e: unknown) => {
+    if (useWikiBuild.getState().running === running) useWikiBuild.setState({ cancelling: false });
+    toast(classify(e).message, "error");
+  };
+  if (running.scheduled) { void cancelScheduled(running).catch(failed); return; }
+  wikiAgentCancel().catch(failed);
 }
 
-/** Cancel a scheduled rebuild through its automation run, so the run reads as cancelled rather than failed. Without a running
- *  rebuild run (it ended meanwhile) the build is stopped directly. */
-async function cancelScheduled() {
-  try {
-    const list = await automationList();
-    const rebuilds = new Set(list.automations.filter((a) => a.action.kind === "wiki_rebuild").map((a) => a.id));
-    const run = list.runs.find((r) => r.state === "running" && rebuilds.has(r.automation));
-    if (run) await automationAct("cancel", run.id);
-    else await wikiAgentCancel();
-  } catch (e) {
-    toast(classify(e).message, "error");
-  }
+/** Cancel a scheduled rebuild through its own automation run (the one rebuilding this domain and project), so the run reads as
+ *  cancelled rather than failed. With no such run left the rebuild has ended, and nothing is stopped: a build started since is
+ *  someone else's (Codex review of 99ceaea, W1). */
+async function cancelScheduled(running: { domain: string; project: string }) {
+  const run = await scheduledRun(running);
+  if (!run) throw new Error("The scheduled rebuild has already ended.");
+  await automationAct("cancel", run.id);
 }

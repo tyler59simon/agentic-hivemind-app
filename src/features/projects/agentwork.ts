@@ -47,7 +47,7 @@ export function agentNeeds(i: NeedsInput): Need[] {
   return out;
 }
 
-export type ActivityTarget = { session: string } | { automations: true } | { skill: string };
+export type ActivityTarget = { session: string } | { automation: string } | { skill: string };
 export interface Activity { key: string; at: number; text: string; target: ActivityTarget }
 
 /** What agents, automations and the skills library did, newest first. */
@@ -60,7 +60,7 @@ export function agentActivity(i: { sessions: SessionInfo[]; runs: AutomationRun[
   }
   for (const r of i.runs) {
     const how = r.state === "waiting" ? "is waiting" : r.state === "running" ? "is running" : r.state === "succeeded" ? "ran" : r.state === "failed" ? "failed" : "was cancelled";
-    out.push({ key: `a-${r.id}`, at: r.at, text: `${i.automationName(r.automation)} ${how}${r.detail && r.state !== "running" ? `: ${r.detail.split("\n")[0]}` : ""}`, target: { automations: true } });
+    out.push({ key: `a-${r.id}`, at: r.at, text: `${i.automationName(r.automation)} ${how}${r.detail && r.state !== "running" ? `: ${r.detail.split("\n")[0]}` : ""}`, target: { automation: r.automation } });
   }
   for (const e of i.ledger) {
     out.push({ key: `k-${e.at}-${e.name}-${e.action}`, at: e.at, text: `Skill ${e.name}: ${e.action}${e.version ? ` (version ${e.version})` : ""}`, target: { skill: e.name } });

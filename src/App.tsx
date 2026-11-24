@@ -17,7 +17,7 @@ import { appQuit, notifyTray, quitAck, termList } from "./lib/term";
 import { useAttentionEvents } from "./features/terminal/attention";
 import { QuitDialog } from "./features/terminal/QuitDialog";
 import { runningSummary } from "./features/terminal/running";
-import { useWikiBuild } from "./features/wiki/build";
+import { listenOnce, useWikiBuild } from "./features/wiki/build";
 import { invalidateWiki } from "./features/wiki/useWiki";
 import { needsLmUpdate, useConnection } from "./lib/connection";
 import { refreshStore } from "./lib/refresh";
@@ -159,6 +159,9 @@ function useLiveRefresh(enabled: boolean) {
   const client = useQueryClient();
   useEffect(() => {
     if (!enabled) return;
+    // The wiki build's listeners stay for the app's life: a scheduled rebuild then shows in the quit summary even when the wiki
+    // was never opened (Codex review of 99ceaea, W2).
+    listenOnce(client).catch(() => undefined);
     const stops = [
       listen("notes-changed", () => refreshStore(client)),
       listen("store-changed", () => {
@@ -180,7 +183,10 @@ function useLiveRefresh(enabled: boolean) {
       }),
       listen("architecture-drift", () => client.invalidateQueries({ queryKey: ["architecture", "drift"] })),
       listen("automations-changed", () => client.invalidateQueries({ queryKey: ["automations"] })),
-      listen<string>("executive-changed", (e) => client.invalidateQueries({ queryKey: ["executive", e.payload] })),
+      listen<string>("executive-changed", (e) => {
+        client.invalidateQueries({ queryKey: ["executive", e.payload] });
+        client.invalidateQueries({ queryKey: ["learning"] }); // a briefing spends the learning budget (Codex review of 99ceaea, B3)
+      }),
       listen<{ ref: string }>("open-note", (e) => useWorkspace.getState().openNote(e.payload.ref)),
       listen<{ notebook: string; path: string }>("page-appended", (e) => onPageAppended(client, e.payload)),
       listen<FilesChanged>("files-changed", (e) => onFilesChanged(client, e.payload)),
@@ -199,8 +205,8 @@ export default function App() {
   // A link that opened Settings at a section scrolls there once the section has drawn.
   useEffect(() => {
     if (!settings?.section) return;
-    const id = `settings-${settings.section}`;
-    const frame = requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ block: "start" }));
+    const ids = [...(settings.automation ? [`automation-${settings.automation}`] : []), `settings-${settings.section}`];
+    const frame = requestAnimationFrame(() => ids.map((id) => document.getElementById(id)).find(Boolean)?.scrollIntoView({ block: "start" }));
     return () => cancelAnimationFrame(frame);
   }, [settings]);
   const link = useQuery({ queryKey: ["connect"], queryFn: connect, retry: false, staleTime: Infinity });
@@ -251,6 +257,8 @@ export default function App() {
             {link.isSuccess && !outdated && <button className="link" onClick={() => setSettings(false)}>Back</button>}
           </div>
         </main>
+        {/* Schedules and Maintenance report through toasts (Codex review of 857ec37, S1). */}
+        <Toasts />
         {dialogs}
       </>
     );

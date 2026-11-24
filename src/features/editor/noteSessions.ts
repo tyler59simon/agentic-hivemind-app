@@ -7,6 +7,7 @@ import { bridgeGeneration, type Note } from "../../lib/lm";
 import { deleteDraft, getDraft, putDraft, type NoteDraft } from "../../lib/drafts";
 import { connectedStore, storeId } from "../../documents/store";
 import type { Problem } from "../../lib/errors";
+import { useWorkspace } from "../../workspace/store";
 import { fieldsOf, isDirty, type Fields } from "./save";
 
 export interface EditState { base: Fields; rev: string; mine: Fields; version: number }
@@ -169,7 +170,16 @@ export function savedNote(store: string, ref: string, sent: EditState, fresh: No
   const s = getSession(key);
   if (!s?.st) {
     const dk = noteDraftKey(store, ref);
-    getDraft(dk).then((d) => { if (d && !isDirty(sent.mine, d.mine)) return deleteDraft(dk); }).catch(() => {});
+    getDraft(dk).then((d) => {
+      if (d && isDirty(sent.mine, d.mine)) return; // newer edits are kept as a draft, and their tabs keep the dot
+      // No editor is left to tell the tabs, so they lose the dot here, unless an editor opened on the note meanwhile
+      // (Codex review of 9dfa56d, C3).
+      if (!getSession(key)) {
+        const ws = useWorkspace.getState();
+        for (const pane of ws.panes) for (const tab of pane.tabs) if (tab.kind === "note" && tab.ref === ref && ws.dirty[tab.id]) ws.setDirty(tab.id, false);
+      }
+      if (d) return deleteDraft(dk);
+    }).catch(() => {});
     return;
   }
   const f = fieldsOf(fresh);

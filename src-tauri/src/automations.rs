@@ -336,6 +336,9 @@ pub struct Automations {
     pending: Mutex<Pending>,
     /// Automations the scheduler is firing on another thread.
     busy: Mutex<BTreeSet<String>>,
+    /// Why `automations.json` must not be written: it could not be read, or entries were dropped from it and no copy of the
+    /// original could be kept. Every save is then refused, so the original survives (Codex review of 99ceaea, C1).
+    blocked: Option<String>,
     /// The cancel switch of each run whose action is under way, by run id.
     cancels: Mutex<HashMap<String, Arc<Cancel>>>,
 }
@@ -392,8 +395,13 @@ fn unaffordable(a: &Automation, doer: &dyn Doer) -> Option<String> {
 /// The saved automations, read entry by entry. An entry that no longer reads (a Workflows task-graph automation, whose
 /// action was deleted in CON-20, or one a newer build wrote) is dropped, and the file as it was is first copied to
 /// `automations.json.bak-<ms>`, so the next save cannot lose it. A file that is not a list at all is copied aside the same way.
-fn load(path: &std::path::Path) -> Vec<Automation> {
-    let Ok(text) = std::fs::read_to_string(path) else { return vec![] };
+/// The second value says why the file must not be written: it exists but could not be read, or the copy failed.
+fn load(path: &std::path::Path) -> (Vec<Automation>, Option<String>) {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (vec![], None),
+        Err(e) => return (vec![], Some(format!("Hivemind could not read {}: {e}. Automations are not saved until it can.", path.display()))),
+    };
     let (list, dropped) = match serde_json::from_str::<Vec<serde_json::Value>>(&text) {
         Ok(raw) => {
             let total = raw.len();
@@ -406,19 +414,21 @@ fn load(path: &std::path::Path) -> Vec<Automation> {
     if dropped > 0 {
         let aside = path.with_file_name(format!("automations.json.bak-{}", now_ms()));
         if let Err(e) = std::fs::copy(path, &aside) {
-            eprintln!("Hivemind could not keep a copy of {} before dropping {dropped} unreadable automation(s): {e}", path.display());
+            let why = format!("Hivemind could not keep a copy of {} before dropping {dropped} unreadable automation(s): {e}. Automations are not saved until it can.", path.display());
+            eprintln!("{why}");
+            return (list, Some(why));
         }
     }
-    list
+    (list, None)
 }
 
 impl Automations {
     pub fn new(app_data: PathBuf) -> Automations {
         let path = app_data.join("automations.json");
-        let list = load(&path);
+        let (list, blocked) = load(&path);
         let autos = Automations {
             path, runs_dir: app_data.join("automation-runs"), state: Mutex::new(list), wake: Condvar::new(), dirty: AtomicBool::new(false),
-            admit: Mutex::new(()), pending: Mutex::default(), busy: Mutex::new(BTreeSet::new()), cancels: Mutex::new(HashMap::new()),
+            admit: Mutex::new(()), pending: Mutex::default(), busy: Mutex::new(BTreeSet::new()), cancels: Mutex::new(HashMap::new()), blocked,
         };
         autos.recover();
         autos
@@ -442,6 +452,9 @@ impl Automations {
     }
 
     fn save(&self, list: &[Automation]) -> Result<(), String> {
+        if let Some(why) = &self.blocked {
+            return Err(why.clone());
+        }
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -772,6 +785,15 @@ impl Automations {
         self.cancels.lock().unwrap().remove(&row.id);
         if let Some(cancelled) = self.find_run(&row.id).filter(|r| r.state == RunState::Cancelled) {
             let Some(child) = child else {
+                // What the action spent before it stopped stays on the cancelled run (Codex review of 99ceaea, B2).
+                let cancelled = match row.cost_usd {
+                    Some(cost) if cancelled.cost_usd.is_none() => {
+                        let kept = RunRow { cost_usd: Some(cost), ..cancelled };
+                        self.keep_run(&kept, doer);
+                        kept
+                    }
+                    _ => cancelled,
+                };
                 if starts {
                     self.start_done(&a.id);
                 }
@@ -1169,6 +1191,9 @@ mod tests {
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 self.saw_cancel.store(cancel.is_set(), Ordering::Relaxed);
+                if self.part_failed {   // a wiki rebuild stopped part way: it spent something
+                    return Ok(Started::Failed { detail: "Build cancelled.".into(), cost: Some(0.4) });
+                }
                 return Err("Cancelled".into());
             }
             if self.commits {
@@ -1548,6 +1573,29 @@ mod tests {
     }
 
     #[test]
+    fn a_cancelled_run_keeps_what_its_action_spent() {   // Codex review of 99ceaea, B2
+        let (dir, autos) = store();
+        let a = autos.put(Automation { id: String::new(), ..daily("Wiki") }, now_ms()).unwrap();
+        let doer = Fake { slow: true, part_failed: true, ..Default::default() };
+        let row = std::thread::scope(|s| {
+            let fired = s.spawn(|| autos.fire(&a.id, "manual", None, &doer));
+            let start = std::time::Instant::now();
+            let running = loop {
+                if let Some(r) = autos.runs(&a.id).into_iter().find(|r| r.state == RunState::Running) {
+                    break r;
+                }
+                assert!(start.elapsed() < Duration::from_secs(10), "the run never started");
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            autos.cancel(&running.id).unwrap();
+            fired.join().unwrap().unwrap()
+        });
+        assert_eq!((row.state, row.cost_usd), (RunState::Cancelled, Some(0.4)));
+        assert_eq!(autos.runs(&a.id)[0].cost_usd, Some(0.4));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_waiting_event_run_is_cancelled_when_its_automation_moves_to_another_project() {
         let (dir, autos) = store();
         let def = Automation { id: String::new(), enabled: true, ask_first: true, project: Some("p".into()), repo: Some("r".into()),
@@ -1616,6 +1664,24 @@ mod tests {
         assert_eq!(std::fs::read_dir(&clean).unwrap().count(), 1);
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&clean);
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_is_never_written() {   // Codex review of 99ceaea, C1
+        // A folder in the file's place reads as an error other than "not found": nothing is saved over it.
+        let dir = std::env::temp_dir().join(format!("hivemind-automations-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("automations.json")).unwrap();
+        let autos = Automations::new(dir.clone());
+        assert!(autos.list().is_empty());
+        let refused = autos.put(Automation { id: String::new(), ..daily("A") }, 1).unwrap_err();
+        assert!(refused.contains("not saved"), "{refused}");
+        assert!(dir.join("automations.json").is_dir());
+        // A missing file is an empty list that saves as usual.
+        let fresh = std::env::temp_dir().join(format!("hivemind-automations-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&fresh).unwrap();
+        assert!(Automations::new(fresh.clone()).put(Automation { id: String::new(), ..daily("A") }, 1).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&fresh);
     }
 
     #[test]

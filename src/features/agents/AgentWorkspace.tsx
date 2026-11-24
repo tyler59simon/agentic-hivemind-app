@@ -10,7 +10,7 @@ import { lastRun, runText } from "../skills/skills";
 import { useProjectsEnabled, useSystemsEnabled } from "../../lib/connection";
 import { sessionCapture } from "../../lib/executive";
 import { connect } from "../../lib/lm";
-import { openInbox, openProject, openSession, openSettings, openSystem, startSession, useApp } from "../../store";
+import { openAutomation, openInbox, openProject, openSession, openSystem, startSession, useApp } from "../../store";
 import { Markdown } from "../../ui/Markdown";
 import { Menu } from "../../ui/Menu";
 import { Confirm } from "../../ui/Modal";
@@ -367,7 +367,7 @@ function Session({ id }: { id: string }) {
           {info.role && <span className="status-chip cap">{info.role}</span>}
           {info.verdict && <span className={`status-chip ${info.verdict === "pass" ? "active" : "waiting"}`}>{VERDICT_LABELS[info.verdict]}</span>}
           {usage && <span className="muted small" title="The agent program and every process it started">{usageText(usage)}</span>}
-          {info.origin?.startsWith("automation:") && <button className="linked-chip" title="Open Settings, Schedules" onClick={() => openSettings("schedules")}>Automation</button>}
+          {info.origin?.startsWith("automation:") && <button className="linked-chip" title="Open Settings, Schedules" onClick={() => openAutomation(info.origin!.slice("automation:".length))}>Automation</button>}
           {info.task.kind === "executive" && isEnded(live) && (
             <button className="linked-chip" disabled={capturing || info.turns === 0} onClick={captureChat} title="Pull decisions, commitments and risks out of this conversation for review">
               {capturing ? <LoaderCircle className="spin" size="1.1em" aria-hidden /> : <Inbox size="1.1em" aria-hidden />}Capture from this chat

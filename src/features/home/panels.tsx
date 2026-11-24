@@ -12,7 +12,7 @@ import type { Project } from "../../lib/lm";
 import { skillHistory } from "../../lib/skills";
 import { automationsQuery } from "../../lib/automations";
 import { ago } from "../../lib/text";
-import { openInbox, openSession, openSettings, openSkills, openSystem, useApp } from "../../store";
+import { openAutomation, openInbox, openSession, openSettings, openSkills, openSystem, useApp } from "../../store";
 import { ArrowLink, Row, Section } from "../../ui/Page";
 import { agentActivity, agentNeeds, type Need } from "../projects/agentwork";
 import { useInboxItems } from "../review/useInboxItems";
@@ -154,7 +154,7 @@ export function AgentActivity({ project }: { project?: Project }) {
       {items.map((a) => (
         <Row key={a.key} meta={ago(new Date(a.at).toISOString())}
           onClick={() => ("session" in a.target ? openSession(a.target.session)
-            : "skill" in a.target ? openSkills(a.target.skill) : openSettings("schedules"))}>{a.text}</Row>
+            : "skill" in a.target ? openSkills(a.target.skill) : openAutomation(a.target.automation))}>{a.text}</Row>
       ))}
     </Section>
   );
