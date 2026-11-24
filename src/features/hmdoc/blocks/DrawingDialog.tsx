@@ -167,7 +167,7 @@ function Overlay({ children, onCancel, onDone, saving }: { children: React.React
   // drawing nor reaches a dialog under it. Cancel and Done close it.
   useLayer(true, onCancel, true, true);
   return (
-    <div className="hm-drawing" data-own-zoom role="dialog" aria-label="Drawing">
+    <div className="hm-drawing" data-own-zoom data-own-zoom-keys role="dialog" aria-label="Drawing">
       <header className="hm-drawing-head">
         <strong>Drawing</strong>
         <span className="fill" />

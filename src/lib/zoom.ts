@@ -31,6 +31,8 @@ export function stepZoom(zoom: number, action: ZoomAction): number {
 export const zoomPercent = (zoom: number): string => `${Math.round(zoom * 100)}%`;
 
 let current = 1;
+// The level the last request asked for, until the window reports it: quick steps build on it, not on `current`.
+let wanted: number | null = null;
 const listeners = new Set<(zoom: number) => void>();
 const changed = (zoom: number) => { current = zoom; listeners.forEach((l) => l(zoom)); };
 
@@ -47,15 +49,22 @@ export function onZoomChange(listener: (zoom: number) => void): () => void {
 /** Zoom every window to `zoom` and keep it. Resolves to the zoom kept. */
 export async function setZoom(zoom: number): Promise<number> {
   if (!inTauri()) { changed(zoom); return zoom; }
-  const kept = await invoke<number>("ui_zoom_set", { zoom });
-  changed(kept);
-  return kept;
+  wanted = zoom;
+  try {
+    const kept = await invoke<number>("ui_zoom_set", { zoom });
+    changed(kept);
+    return kept;
+  } finally {
+    if (wanted === zoom) wanted = null;
+  }
 }
 
-export const zoomBy = (action: ZoomAction): Promise<number> => setZoom(stepZoom(current, action));
+/** One step in or out, or back to 100 percent, from the level last asked for (two quick presses go two steps). */
+export const zoomBy = (action: ZoomAction): Promise<number> => setZoom(stepZoom(wanted ?? current, action));
 
-/** Views that zoom themselves (boards, the architecture canvas, drawings) keep Ctrl+wheel and the zoom keys. */
-const ownsZoom = (target: EventTarget | null) => target instanceof Element && target.closest("[data-own-zoom]") !== null;
+/** Views that zoom themselves (boards, the architecture canvas, drawings) keep Ctrl+wheel. Only a view with its own zoom
+ *  keys (the drawing editor, marked data-own-zoom-keys) keeps Ctrl+=, Ctrl+- and Ctrl+0 as well. */
+const owns = (target: EventTarget | null, marker: string) => target instanceof Element && target.closest(marker) !== null;
 
 /** Wheel notches add up before a step, so a touchpad pinch moves one level at a time, not one per event. */
 export function wheelSteps(): (deltaY: number) => ZoomAction | null {
@@ -74,14 +83,14 @@ export function wheelSteps(): (deltaY: number) => ZoomAction | null {
 export function initZoom(target: Window = window): () => void {
   const onKey = (e: KeyboardEvent) => {
     const action = zoomKey(e);
-    if (!action || ownsZoom(e.target)) return;
+    if (!action || owns(e.target, "[data-own-zoom-keys]")) return;
     e.preventDefault();
     e.stopPropagation();
     void zoomBy(action);
   };
   const step = wheelSteps();
   const onWheel = (e: WheelEvent) => {
-    if (!(e.ctrlKey || e.metaKey) || ownsZoom(e.target)) return;
+    if (!(e.ctrlKey || e.metaKey) || owns(e.target, "[data-own-zoom]")) return;
     e.preventDefault();
     const action = step(e.deltaY);
     if (action) void zoomBy(action);

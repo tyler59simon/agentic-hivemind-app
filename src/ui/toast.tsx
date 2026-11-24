@@ -53,8 +53,11 @@ export function Toasts() {
   const { items, dismiss } = useToasts();
   const [hover, setHover] = useState(false);
   const [focus, setFocus] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  // Removing the focused toast (its Undo or its own click) fires no blur, so look again whenever the list changes.
+  useEffect(() => { if (focus && !box.current?.contains(document.activeElement)) setFocus(false); }, [items, focus]);
   return (
-    <div className="toasts" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+    <div className="toasts" ref={box} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
       onFocus={() => setFocus(true)} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocus(false); }}>
       {items.map((t) => <ToastItem key={t.id} t={t} paused={hover || focus} dismiss={dismiss} />)}
     </div>

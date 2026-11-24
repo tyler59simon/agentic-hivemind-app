@@ -1887,7 +1887,8 @@ button.icon { border: none; padding: .25rem; }
   .sidebar { padding: 1rem .45rem .9rem; }
   .brand-block { justify-content: center; padding: 0 0 1rem; }
   .brand-block img { width: 2.4rem; height: 2.4rem; }
-  .brand-block span, .sidebar .grow { position: absolute !important; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  /* Only the labels on the sidebar itself: a menu opened from it keeps its item names. */
+  .brand-block span, .sidebar .grow:not(.menu-list .grow) { position: absolute !important; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .sidebar .menu-button > svg:last-child:not(:first-child) { display: none; }
   .project-switcher .menu-button, .project-switcher.static, .user-menu .menu-button, .nav-item { justify-content: center; padding: 0; gap: 0; position: relative; }
   .nav-item .nav-count { position: absolute; top: .1rem; right: .1rem; min-width: 1.15rem; height: 1.15rem; padding: 0 .25rem; font-size: .75rem; }

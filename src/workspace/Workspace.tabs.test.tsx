@@ -52,5 +52,28 @@ describe("the tab strip from the keyboard", () => {
     expect(useWorkspace.getState().panes[0].active).toBe("c");
     await press("Delete");
     expect(useWorkspace.getState().panes[0].tabs.map((t) => t.id)).toEqual(["a", "b"]);
+    // The focus goes to the tab now at the end, so the arrows keep working (Codex review, DESK-R6).
+    await act(async () => { await new Promise((r) => requestAnimationFrame(() => r(null))); });
+    expect(document.activeElement).toBe(tabs()[1]);
+    await press("ArrowLeft");
+    expect(document.activeElement).toBe(tabs()[0]);
+  });
+
+  it("makes the pane the keyboard enters the current one, without opening another tab (Codex review, DESK-R7)", async () => {
+    useWorkspace.setState({
+      panes: [{ id: "p0", tabs: [page("a", "A.md")], active: "a" }, { id: "p1", tabs: [page("b", "B.md"), page("c", "C.md")], active: "b" }],
+      focused: "p0", dirty: {}, reveal: null,
+    });
+    const el = document.createElement("div");
+    document.body.append(el);
+    root = createRoot(el);
+    await act(async () => root!.render(<QueryClientProvider client={new QueryClient()}><Workspace /></QueryClientProvider>));
+    const second = tabs().find((t) => t.textContent?.includes("B"))!;
+    await act(async () => second.focus());
+    expect(useWorkspace.getState().focused).toBe("p1");
+    await press("ArrowRight");
+    expect(useWorkspace.getState().panes[1].active).toBe("b");
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "w", ctrlKey: true, cancelable: true })); });
+    expect(useWorkspace.getState().panes.map((p) => p.tabs.map((t) => t.id))).toEqual([["a"], ["c"]]);
   });
 });

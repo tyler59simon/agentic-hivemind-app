@@ -102,6 +102,16 @@ describe("Modal", () => {
     expect([inner.mock.calls.length, outer.mock.calls.length]).toEqual([1, 0]);
   });
 
+  it("brings Tab back into the dialog when the focus fell to the page body (a button disabled during a write)", async () => {
+    await mount(<><button id="behind">Behind</button><Modal title="Archive" onClose={() => {}} locked><button>Archive</button></Modal></>);
+    (document.activeElement as HTMLElement).blur();
+    expect(document.activeElement).toBe(document.body);
+    const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    await act(async () => { document.body.dispatchEvent(tab); });
+    expect(tab.defaultPrevented).toBe(true);
+    expect(dialog().contains(document.activeElement)).toBe(true);
+  });
+
   it("gives the focus back to the button that opened it", async () => {
     function Host() {
       const [open, setOpen] = useState(false);

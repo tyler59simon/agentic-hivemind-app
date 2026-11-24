@@ -79,6 +79,18 @@ describe("the notebook tree from the keyboard", () => {
     await act(async () => { ([...document.querySelectorAll<HTMLElement>("[role=menuitem]")].find((i) => i.textContent === "Move to…"))!.click(); });
     const dialog = document.querySelector('[role="dialog"]')!;
     expect(dialog.getAttribute("aria-label")).toBe("Move Inbox");
-    expect([...dialog.querySelectorAll("option")].map((o) => o.textContent)).toEqual(["Projects"]);
+    expect([...dialog.querySelectorAll("option")].map((o) => o.textContent)).toEqual(["Projects", "Projects/Plan (as a subpage)"]);
+  });
+
+  it("leaves the focus where the user moved it when a rename ends on blur (Codex review, DESK-R8)", async () => {
+    await mount();
+    rowOf("Inbox.md")!.focus();
+    await press("F2");
+    const elsewhere = document.createElement("button");
+    document.body.append(elsewhere);
+    await act(async () => elsewhere.focus());
+    await act(async () => { await frame(); });
+    expect(document.querySelector("input.tree-rename, [role=treeitem] input")).toBeNull();
+    expect(document.activeElement).toBe(elsewhere);
   });
 });

@@ -69,6 +69,19 @@ export function tabKey(e: React.KeyboardEvent<HTMLElement>, act: { open: () => v
     : e.key === "Home" ? 0 : e.key === "End" ? tabs.length - 1 : -1;
   if (to >= 0 && tabs[to]) { e.preventDefault(); tabs[to].focus(); tabs[to].scrollIntoView({ block: "nearest", inline: "nearest" }); return; }
   if (e.key === "Enter" || e.key === " ") { e.preventDefault(); act.open(); return; }
-  if (e.key === "Delete" && act.close) { e.preventDefault(); act.close(); return; }
+  if (e.key === "Delete" && act.close) {
+    e.preventDefault();
+    const self = e.currentTarget, list = self.closest("[role=tablist]"), strip = list?.parentElement;
+    act.close();
+    // The tab is gone and took the focus with it: give it to the tab now in its place, or the strip's next control. Not
+    // when the close asked first (a dialog has the focus) or the tab is still there.
+    requestAnimationFrame(() => {
+      const now = document.activeElement;
+      if (self.isConnected || (now && now !== document.body)) return;
+      const left = [...(list?.querySelectorAll<HTMLElement>("[role=tab]") ?? [])];
+      (left[Math.min(at, left.length - 1)] ?? strip?.querySelector<HTMLElement>("button:not([disabled])"))?.focus();
+    });
+    return;
+  }
   if (contextMenuKey(e) && act.menu) { e.preventDefault(); act.menu(menuPointFor(e.currentTarget)); }
 }

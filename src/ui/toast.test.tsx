@@ -59,4 +59,18 @@ describe("toasts", () => {
     await wait(200);
     expect(shown()).toEqual([]);
   });
+
+  it("start counting again when the focused toast goes away without a blur (Codex review, DESK-R5)", async () => {
+    await act(async () => toast("Archived", "info", { label: "Undo", run() {} }));
+    await act(async () => toast("Saved"));
+    const undo = document.querySelector<HTMLButtonElement>(".toast button")!;
+    await act(async () => undo.focus());
+    // jsdom, like Chromium, sends no blur when the focused element is removed.
+    const blur = vi.spyOn(HTMLElement.prototype, "blur");
+    await act(async () => undo.click());
+    expect(blur).not.toHaveBeenCalled();
+    expect(shown()).toEqual(["Saved"]);
+    await wait(5100);
+    expect(shown()).toEqual([]);
+  });
 });

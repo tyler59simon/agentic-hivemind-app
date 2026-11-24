@@ -17,8 +17,13 @@ export function Modal({ title, children, onClose, wide, locked }: {
   useLayoutEffect(() => {
     const el = box.current;
     if (el && !el.contains(document.activeElement)) el.focus({ preventScroll: true });
+    // On the window, not the dialog: when the focused button is disabled during a write, the focus drops to the page body,
+    // and the next Tab must still come back into the dialog instead of reaching what is behind it.
+    const onTab = (e: KeyboardEvent) => { if (isTopLayer(layer.current) && box.current) trapTab(e, box.current); };
+    window.addEventListener("keydown", onTab);
     const from = opener.current;
     return () => {
+      window.removeEventListener("keydown", onTab);
       // Only when the focus was lost with the dialog: an action that focused something else (an editor) keeps it.
       queueMicrotask(() => {
         const now = document.activeElement;
@@ -29,8 +34,7 @@ export function Modal({ title, children, onClose, wide, locked }: {
   return createPortal(
     <div className="overlay center-overlay" onMouseDown={() => !locked && onClose()}>
       <div className={`modal ${wide ? "wide" : ""}`} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={box}
-        onMouseDown={(e) => e.stopPropagation()}
-        onKeyDown={(e) => { if (isTopLayer(layer.current) && box.current) trapTab(e.nativeEvent, box.current); }}>
+        onMouseDown={(e) => e.stopPropagation()}>
         <header className="modal-head"><h2>{title}</h2><button className="ghost" onClick={onClose} disabled={locked} aria-label="Close">×</button></header>
         <div className="modal-body">{children}</div>
       </div>

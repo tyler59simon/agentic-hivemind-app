@@ -44,14 +44,17 @@ describe("wheelSteps", () => {
 });
 
 describe("initZoom", () => {
-  it("zooms on the keys before an editor or terminal sees them, but not inside a view that zooms itself", async () => {
+  it("zooms on the keys before an editor or terminal sees them, and leaves the wheel to a view that zooms itself", async () => {
     undo = initZoom(window);
     const field = document.createElement("textarea");
     const board = document.createElement("div");
     board.setAttribute("data-own-zoom", "");
     const inner = document.createElement("span");
     board.append(inner);
-    document.body.append(field, board);
+    const drawing = document.createElement("div");
+    drawing.setAttribute("data-own-zoom", "");
+    drawing.setAttribute("data-own-zoom-keys", "");
+    document.body.append(field, board, drawing);
     let reached = false;
     field.addEventListener("keydown", () => { reached = true; });
 
@@ -64,8 +67,17 @@ describe("initZoom", () => {
     await Promise.resolve();
     expect(currentZoom()).toBe(1.1);
     expect(reached).toBe(false);
-    expect(press(inner, "=")).toBe(false);
-    expect(currentZoom()).toBe(1.1);
+    // A board zooms itself with the wheel but has no zoom keys: the keys still zoom the window (Codex review, DESK-R4).
+    expect(press(inner, "-")).toBe(true);
+    await Promise.resolve();
+    expect(currentZoom()).toBe(1);
+    expect(press(drawing, "=")).toBe(false);
+    expect(currentZoom()).toBe(1);
+    const boardWheel = new WheelEvent("wheel", { deltaY: -120, ctrlKey: true, bubbles: true, cancelable: true });
+    inner.dispatchEvent(boardWheel);
+    expect(boardWheel.defaultPrevented).toBe(false);
+    press(field, "=");
+    await Promise.resolve();
 
     const wheel = new WheelEvent("wheel", { deltaY: 120, ctrlKey: true, bubbles: true, cancelable: true });
     field.dispatchEvent(wheel);

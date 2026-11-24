@@ -169,10 +169,11 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
     const folder = folderFor(node);
     newCanvas(client, notebook.id, folder).then(() => { if (node) toggle(node.path, true); }, fail);
   };
-  const commitRename = () => {
+  /** Keep the new name. After Enter the focus goes back to the row; after a blur it stays where the user moved it. */
+  const commitRename = (refocus = false) => {
     const r = renaming;
     setRenaming(null);
-    if (r) focusRow(r.path);
+    if (r && refocus) focusRow(r.path);
     if (!r || !r.value.trim() || r.value.trim() === label(byPath.get(low(r.path))!)) return;
     movePath(client, notebook.id, r.path, renamed(r.path, r.value, byPath.get(low(r.path))?.kind === "dir")).catch(fail);
   };
@@ -196,9 +197,9 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
     if ("focus" in move) focusRow(rows[move.focus].node.path);
     else toggle("expand" in move ? move.expand : move.collapse, "expand" in move);
   };
-  /** Move a page or section without dragging (WCAG 2.5.7): pick the section it goes into. */
+  /** Move a page or section without dragging (WCAG 2.5.7): pick the section or page it goes under. */
   const moveTo = (node: Node) => setDialog(
-    <MoveDialog node={node} sections={[...byPath.values()].filter((n) => n.kind === "dir")} onClose={() => setDialog(null)}
+    <MoveDialog node={node} targets={[...byPath.values()]} onClose={() => setDialog(null)}
       onMove={(target) => { setDialog(null); drop(node.path, target); }} />,
   );
   const remove = (node: Node) => setDialog(
@@ -275,8 +276,8 @@ export function NotebookTree({ notebook, onSettings, lm, onProposals, edits, onE
                   <Icon size="1.05em" aria-hidden className="tree-icon" />
                   {renaming?.path === node.path
                     ? <input className="tree-input" autoFocus value={renaming.value} aria-label="New name" onClick={(e) => e.stopPropagation()}
-                      onChange={(e) => setRenaming({ ...renaming, value: e.target.value })} onBlur={commitRename}
-                      onKeyDown={(e) => { if (e.key === "Enter") commitRename(); else if (e.key === "Escape") { e.preventDefault(); setRenaming(null); focusRow(node.path); } }} />
+                      onChange={(e) => setRenaming({ ...renaming, value: e.target.value })} onBlur={() => commitRename()}
+                      onKeyDown={(e) => { if (e.key === "Enter") commitRename(true); else if (e.key === "Escape") { e.preventDefault(); setRenaming(null); focusRow(node.path); } }} />
                     : <span className="tree-label" title={node.path}>{label(node)}</span>}
                 </div>
                 {naming && naming.folder === node.path && (
