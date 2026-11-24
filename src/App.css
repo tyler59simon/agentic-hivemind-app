@@ -1285,7 +1285,16 @@ span.chip { display: inline-block; border: 1px solid var(--border-strong); }
 .resume-row { display: flex; gap: 1rem; width: 100%; text-align: left; align-items: baseline; }
 
 /* Wiki: a domain read as projects, sections and articles. */
-.page.wiki-page { max-width: 96rem; padding: 0; }
+.page.wiki-page { max-width: 96rem; padding: 0; container: wiki / inline-size; }
+/* The wiki's note rows (NoteRows in features/wiki/parts.tsx); these rules went with the Memory library in CON-11. */
+.lib-list { list-style: none; margin: 0; padding: 0; }
+.lib-row { display: flex; align-items: flex-start; justify-content: flex-start; gap: 1.1rem; width: 100%; text-align: left; border: none; border-left: .22rem solid transparent; border-bottom: 1px solid var(--border); border-radius: 0; padding: 1rem 1rem 1rem 1.1rem; }
+.lib-row > svg { flex: none; margin-top: .25rem; }
+.lib-row-main { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+.lib-row-title { font-size: 1.2rem; font-weight: 700; }
+.lib-row-meta { display: flex; flex-wrap: wrap; align-items: center; gap: .7rem; color: var(--fg-meta); }
+.lib-row-meta > * + *::before { content: "•"; margin-right: .7rem; font-size: .7em; vertical-align: middle; }
+.lib-row-text { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .wiki-bar { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem 1rem; }
 .wiki-scope { font-size: 1.25rem; }
 .wiki-bar select { height: 2.4rem; padding: 0 .8rem; }
@@ -1402,6 +1411,19 @@ sup.wiki-cite .removed { color: var(--muted); text-decoration: line-through; }
 @media (max-width: 760px) {
   .wiki-pager { grid-template-columns: 1fr; }
   .wiki-pager .next { grid-column: 1; }
+}
+/* In Notes the wiki shares the width with the Notes rail, so it follows its own width, not the window's (CON-14): the infobox
+   column goes under the article first, then the page tree folds behind the Contents button. */
+@container wiki (max-width: 75rem) {
+  .wiki-content .split { grid-template-columns: minmax(0, 1fr); }
+  .wiki-content .split-rail { border-left: none; padding-left: 0; border-top: 1px solid var(--border-strong); padding-top: 1.3rem; margin-top: 1.3rem; }
+}
+@container wiki (max-width: 44rem) {
+  .wiki-layout { grid-template-columns: minmax(0, 1fr); }
+  .wiki-side { position: static; max-height: none; }
+  .wiki-nav-toggle { display: inline-flex; }
+  .wiki-tree-box { display: none; max-height: 22rem; border: 1px solid var(--border); border-radius: .6rem; padding: .4rem; }
+  .wiki-tree-box.open { display: block; }
 }
 
 /* ---- Workflows ---- */
