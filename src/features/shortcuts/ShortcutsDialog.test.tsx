@@ -8,8 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 let hotkey: string | null = "CommandOrControl+Alt+M";
+let hotkeyError: string | null = null;
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(async (cmd: string) => (cmd === "capture_status" ? { shortcut: hotkey, error: null, close_to_tray: true } : null)),
+  invoke: vi.fn(async (cmd: string) => (cmd === "capture_status" ? { shortcut: hotkey, error: hotkeyError, close_to_tray: true } : null)),
 }));
 
 const { ShortcutsDialog, useShortcutsDialog, matchesFilter } = await import("./ShortcutsDialog");
@@ -30,6 +31,7 @@ const type = async (text: string) => {
 
 beforeEach(async () => {
   hotkey = "CommandOrControl+Alt+M";
+  hotkeyError = null;
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
@@ -99,6 +101,13 @@ describe("the sheet", () => {
     await act(async () => useShortcutsDialog.getState().show());
     await settle();
     expect(rows()).toContain("Quick capture window from anywhere = Off");
+  });
+
+  it("says Not registered when the system refused the Quick capture hotkey", async () => {
+    hotkeyError = "Could not register CommandOrControl+Alt+M";
+    await act(async () => useShortcutsDialog.getState().show());
+    await settle();
+    expect(rows()).toContain("Quick capture window from anywhere = Not registered");
   });
 
   it("Escape and the button close it, and the Settings button opens Settings at the section", async () => {

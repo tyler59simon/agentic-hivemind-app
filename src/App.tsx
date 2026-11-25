@@ -15,7 +15,7 @@ import { ShortcutsSection } from "./features/shortcuts/ShortcutsSection";
 import { agentSessions } from "./lib/agent";
 import { captureStatus, connect, domains, setBridgeGeneration } from "./lib/lm";
 import { editableTarget, isMac } from "./lib/platform";
-import { matches } from "./lib/shortcuts";
+import { combo, defaultCombo, matches, normalize } from "./lib/shortcuts";
 import { prefs } from "./lib/prefs";
 import { appQuit, notifyTray, quitAck, termList } from "./lib/term";
 import { useAttentionEvents } from "./features/terminal/attention";
@@ -43,6 +43,11 @@ import { newPageHere } from "./features/notes/actions";
 import type { FilesChanged } from "./lib/notebooks";
 import { modalOpen } from "./ui/layers";
 
+/** Whether the key goes to an editor that uses it: the sheet key is the editor's comment toggle only while it still is that
+ *  key. A terminal never needs this: it stops every key at its own element, so the app's handlers do not see it. */
+const editorKeepsKey = (target: EventTarget | null): boolean =>
+  normalize(combo("shortcuts.show")) === normalize(defaultCombo("editor.comment")) && !!(target as Element | null)?.closest?.(".cm-editor");
+
 /** Shortcuts that work on every page, by the keys the registry has (src/lib/shortcuts.ts). Ctrl+K and Ctrl+Shift+F belong to
  *  the top bar's search; tab ones to the open notes. */
 export function useShortcuts() {
@@ -55,8 +60,8 @@ export function useShortcuts() {
       if (matches(e, "nav.back") && !(isMac && editableTarget(e.target))) { e.preventDefault(); goBack(); return; }
       if (matches(e, "palette.commands")) { e.preventDefault(); setPalette("commands"); }
       else if (matches(e, "palette.notes")) { e.preventDefault(); setPalette("notes"); }
-      // An editor or a terminal keeps the key: Ctrl+/ is the editor's comment toggle, and the terminal sends it to the shell.
-      else if (matches(e, "shortcuts.show") && !(e.target as Element | null)?.closest?.(".cm-editor, .xterm")) { e.preventDefault(); useShortcutsDialog.getState().show(); }
+      // Ctrl+/ is the editor's comment toggle: an editor keeps it. A remapped sheet key works there.
+      else if (matches(e, "shortcuts.show") && !editorKeepsKey(e.target)) { e.preventDefault(); useShortcutsDialog.getState().show(); }
       else if (matches(e, "note.new")) {
         e.preventDefault();
         if (useApp.getState().route.page === "notes") void newPageHere(client);

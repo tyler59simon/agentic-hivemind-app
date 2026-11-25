@@ -11,7 +11,8 @@ describe("zoomKey", () => {
   it("reads Ctrl with = + - _ 0, and never AltGr or a bare key", () => {
     expect(zoomKey(key("=", { ctrlKey: true }))).toBe("in");
     expect(zoomKey(key("+", { ctrlKey: true, shiftKey: true }))).toBe("in");
-    expect(zoomKey(key("-", { metaKey: true }))).toBe("out");
+    expect(zoomKey(key("-", { ctrlKey: true }))).toBe("out");
+    expect(zoomKey(key("-", { metaKey: true }))).toBeNull(); // the Windows key is not Ctrl
     expect(zoomKey(key("_", { ctrlKey: true, shiftKey: true }))).toBe("out");
     expect(zoomKey(key("0", { ctrlKey: true }))).toBe("reset");
     expect(zoomKey(key("=", { ctrlKey: true, altKey: true }))).toBeNull();

@@ -37,11 +37,24 @@ fn key_name(key: &str) -> Option<String> {
     }
 }
 
+/// A key that is not a letter or a named key (punctuation and digits). What Shift does to it depends on the layout, so Shift
+/// does not count for it, and it is folded to its unshifted name: `Plus` is `=` and `_` is `-` (the same rule as
+/// src/lib/shortcuts.ts, `isLoose` and `canonKey`).
+fn is_loose(key: &str) -> bool {
+    let mut chars = key.chars();
+    matches!((chars.next(), chars.next()), (Some(c), None) if c.to_uppercase().eq(c.to_lowercase()))
+}
+
 /// The combo in its one spelling (modifiers in the order Mod, Ctrl, Alt, Shift), or None when it is not a combo this app can
 /// bind: an unknown part, a repeated modifier, or no modifier other than Shift on a key that is not a function key.
 pub fn normalize(combo: &str) -> Option<String> {
     let mut parts: Vec<&str> = combo.split('+').collect();
     let key = key_name(parts.pop()?)?;
+    let key = match key.as_str() {
+        "Plus" => "=".to_string(),
+        "_" => "-".to_string(),
+        _ => key,
+    };
     let mut flags = [false; 4];
     for part in parts {
         let at = MODIFIERS.iter().position(|m| *m == part)?;
@@ -52,9 +65,21 @@ pub fn normalize(combo: &str) -> Option<String> {
     if !(flags[0] || flags[1] || flags[2] || is_function_key(&key)) {
         return None;
     }
+    if is_loose(&key) {
+        flags[3] = false;
+    }
     let mut out: Vec<&str> = MODIFIERS.iter().zip(flags).filter(|(_, on)| *on).map(|(m, _)| *m).collect();
     out.push(&key);
     Some(out.join("+"))
+}
+
+/// A combo as compared between two overrides: off macOS there is no separate Cmd, so Ctrl and Mod are the same key.
+fn same_key(combo: &str) -> String {
+    if cfg!(target_os = "macos") {
+        combo.to_string()
+    } else {
+        combo.split('+').map(|part| if part == "Ctrl" { "Mod" } else { part }).collect::<Vec<_>>().join("+")
+    }
 }
 
 /// The overrides in `saved` that are well formed: an entry with an id or combo this module would refuse reads as unset.
@@ -69,7 +94,8 @@ pub fn get(saved: &Settings) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Keep `combo` for `id`, or with None go back to the default.
+/// Keep `combo` for `id`, or with None go back to the default. A combo another stored override already uses is refused with
+/// `taken:<id>`, naming the shortcut that holds it. Only the windows know the defaults, so they check those.
 pub fn change(saved: &mut Settings, id: &str, combo: Option<&str>) -> Result<(), String> {
     if !valid_id(id) {
         return Err("Unknown shortcut.".into());
@@ -78,6 +104,9 @@ pub fn change(saved: &mut Settings, id: &str, combo: Option<&str>) -> Result<(),
     match combo {
         Some(text) => {
             let combo = normalize(text).ok_or("That is not a key combination Hivemind can use.")?;
+            if let Some((holder, _)) = all.iter().find(|(other, held)| other.as_str() != id && same_key(held) == same_key(&combo)) {
+                return Err(format!("taken:{holder}"));
+            }
             if !all.contains_key(id) && all.len() >= MAX_OVERRIDES {
                 return Err("Too many changed shortcuts.".into());
             }
@@ -118,7 +147,8 @@ mod tests {
     #[test]
     fn combos_are_checked_and_put_in_one_spelling() {   // DESK-KEYS
         for (given, kept) in [
-            ("Mod+P", "Mod+P"), ("Shift+Mod+f", "Mod+Shift+F"), ("Alt+Mod+Shift+ArrowLeft", "Mod+Alt+Shift+ArrowLeft"), ("Mod+=", "Mod+="), ("Mod+Plus", "Mod+Plus"),
+            ("Mod+P", "Mod+P"), ("Shift+Mod+f", "Mod+Shift+F"), ("Alt+Mod+Shift+ArrowLeft", "Mod+Alt+Shift+ArrowLeft"), ("Mod+=", "Mod+="), ("Mod+Plus", "Mod+="),
+            ("Mod+Shift+Plus", "Mod+="), ("Mod+Shift+_", "Mod+-"), ("Mod+Shift+/", "Mod+/"), ("Mod+Alt+Shift+1", "Mod+Alt+1"), ("Mod+Shift+Enter", "Mod+Shift+Enter"),
             ("Mod+/", "Mod+/"), ("F5", "F5"), ("Shift+F12", "Shift+F12"), ("Ctrl+Tab", "Ctrl+Tab"), ("Alt+Space", "Alt+Space"),
         ] {
             assert_eq!(normalize(given).as_deref(), Some(kept), "{given}");
@@ -146,7 +176,7 @@ mod tests {
         change(&mut saved, "zoom.in", Some("Shift+Mod+Plus")).unwrap();
         assert_eq!(
             get(&saved),
-            BTreeMap::from([("palette.commands".to_string(), "Mod+Shift+P".to_string()), ("zoom.in".to_string(), "Mod+Shift+Plus".to_string())])
+            BTreeMap::from([("palette.commands".to_string(), "Mod+Shift+P".to_string()), ("zoom.in".to_string(), "Mod+=".to_string())])
         );
         let before = saved.clone();
         assert!(change(&mut saved, "palette.commands", Some("P")).is_err());
@@ -166,9 +196,9 @@ mod tests {
 
     #[test]
     fn bad_entries_in_the_file_read_as_unset() {   // DESK-KEYS
-        // One entry of the wrong type makes the whole map read as unset; the rest of the file still loads.
-        let typed: Settings = serde_json::from_str(r#"{"python": "py", "shortcuts": {"note.new": "Mod+J", "a": 3}}"#).unwrap();
-        assert_eq!((typed.python.as_deref(), get(&typed).len()), (Some("py"), 0));
+        // An entry of the wrong type is dropped on its own; the good ones and the rest of the file still load.
+        let typed: Settings = serde_json::from_str(r#"{"python": "py", "shortcuts": {"note.new": "Mod+J", "a": 3, "b": null, "c": ["Mod+K"]}}"#).unwrap();
+        assert_eq!((typed.python.as_deref(), get(&typed)), (Some("py"), BTreeMap::from([("note.new".to_string(), "Mod+J".to_string())])));
         let file: Settings = serde_json::from_str(r#"{"shortcuts": {"note.new": "Mod+J", "zoom.in": "J", "Bad": "Mod+K", "tab.close": "mod+w"}}"#).unwrap();
         assert_eq!(get(&file), BTreeMap::from([("note.new".to_string(), "Mod+J".to_string())]));
         let wrong: Settings = serde_json::from_str(r#"{"python": "py", "shortcuts": ["Mod+J"]}"#).unwrap();
@@ -176,13 +206,30 @@ mod tests {
     }
 
     #[test]
+    fn a_combo_another_override_holds_is_refused_naming_it() {   // DESK-KEYS O2
+        let mut saved = Settings::default();
+        change(&mut saved, "note.new", Some("Mod+J")).unwrap();
+        // The same key by another spelling is the same combo.
+        assert_eq!(change(&mut saved, "graph.open", Some("Mod+J")), Err("taken:note.new".to_string()));
+        assert_eq!(change(&mut saved, "zoom.in", Some("Shift+Mod+Plus")), Ok(()));
+        assert_eq!(change(&mut saved, "zoom.out", Some("Mod+Shift+Plus")), Err("taken:zoom.in".to_string()));
+        assert_eq!(get(&saved).len(), 2);
+        // Its own combo again is not a clash.
+        change(&mut saved, "note.new", Some("Mod+J")).unwrap();
+        // A freed combo can be taken.
+        change(&mut saved, "note.new", None).unwrap();
+        change(&mut saved, "graph.open", Some("Mod+J")).unwrap();
+    }
+
+    #[test]
     fn no_more_than_the_limit_is_kept() {   // DESK-KEYS
         let mut saved = Settings::default();
+        let combo = |n: usize| format!("{}+{}", ["Mod", "Mod+Alt", "Mod+Shift", "Mod+Alt+Shift"][n / 26], (b'A' + (n % 26) as u8) as char);
         for n in 0..MAX_OVERRIDES {
-            change(&mut saved, &format!("a{n}"), Some("Mod+J")).unwrap();
+            change(&mut saved, &format!("a{n}"), Some(&combo(n))).unwrap();
         }
-        assert!(change(&mut saved, "extra", Some("Mod+J")).is_err());
-        change(&mut saved, "a0", Some("Mod+K")).unwrap();
+        assert!(change(&mut saved, "extra", Some("Mod+Alt+Shift+Z")).is_err());
+        change(&mut saved, "a0", Some("Mod+Alt+Shift+Z")).unwrap();
         assert_eq!(get(&saved).len(), MAX_OVERRIDES);
     }
 }

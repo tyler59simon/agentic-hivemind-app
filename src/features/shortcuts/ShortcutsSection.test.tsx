@@ -9,6 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 let stored: Record<string, string> = {};
 let refuse: string | null = null;
+let refuseReset: string | null = null;
+let capture: { shortcut: string | null; error: string | null } = { shortcut: null, error: null };
 const calls: { cmd: string; args?: unknown }[] = [];
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string, args?: { id: string; combo: string | null }) => {
@@ -19,7 +21,8 @@ vi.mock("@tauri-apps/api/core", () => ({
       if (args!.combo) stored[args!.id] = args!.combo; else delete stored[args!.id];
       return stored;
     }
-    if (cmd === "shortcuts_reset") { stored = {}; return stored; }
+    if (cmd === "shortcuts_reset") { if (refuseReset) throw refuseReset; stored = {}; return stored; }
+    if (cmd === "capture_status") return { ...capture, close_to_tray: true };
     return null;
   }),
 }));
@@ -28,7 +31,9 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) })
 const { ShortcutsSection } = await import("./ShortcutsSection");
 const { useShortcutsDialog } = await import("./ShortcutsDialog");
 const { Announcer } = await import("../../ui/announce");
-const { setOverrides, format } = await import("../../lib/shortcuts");
+const { setOverrides, format, refreshCapture } = await import("../../lib/shortcuts");
+const { ShortcutsDialog } = await import("./ShortcutsDialog");
+const { useApp } = await import("../../store");
 
 let root: Root | null = null;
 const key = (label: string) => document.querySelector<HTMLButtonElement>(`button.shortcut-key[aria-label^="${label}:"]`)!;
@@ -49,17 +54,22 @@ beforeEach(async () => {
   (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
   stored = {};
   refuse = null;
+  refuseReset = null;
+  capture = { shortcut: null, error: null };
   calls.length = 0;
   setOverrides({});
+  await refreshCapture();
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
-  await act(async () => root!.render(<><ShortcutsSection /><Announcer /></>));
+  await act(async () => root!.render(<><button id="other">Other</button><ShortcutsSection /><ShortcutsDialog /><Announcer /></>));
 });
 afterEach(async () => {
   await act(async () => root?.unmount());
   root = null;
   setOverrides({});
+  useShortcutsDialog.getState().hide();
+  useApp.setState({ settings: null });
   delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   document.body.innerHTML = "";
 });
@@ -140,7 +150,7 @@ describe("the Settings section", () => {
     await start("New note");
     await press("New note", "b", { ctrlKey: true });
     expect(sets()).toEqual([{ id: "note.new", combo: "Mod+B" }]);
-    expect(text()).toContain('Ctrl+B also does "Bold" in the editor, and the key will do both there.');
+    expect(text()).toContain('Ctrl+B also does "Bold" in the editor, and both run there.');
     expect(said()).toContain("New note is now Ctrl+B.");
   });
 
@@ -181,11 +191,127 @@ describe("the Settings section", () => {
   });
 
   it("follows a change from another window", async () => {
-    await act(async () => setOverrides({ "zoom.in": "Mod+Shift+Plus" }));
-    expect(shownKeys("Zoom in")).toBe("Ctrl+Shift++");
+    await act(async () => setOverrides({ "zoom.in": "Mod+Alt+Z" }));
+    expect(shownKeys("Zoom in")).toBe("Ctrl+Alt+Z");
     expect(reset("Zoom in").disabled).toBe(false);
     await act(async () => setOverrides({}));
     expect(shownKeys("Zoom in")).toBe("Ctrl+=");
+  });
+
+  it("says who wins when an editor, a terminal or the zoom keys also use the key", async () => {
+    await start("Switch between Reading and editing");
+    await press("Switch between Reading and editing", "b", { ctrlKey: true });
+    expect(text()).toContain('Ctrl+B also does "Bold" in the editor, and there the editor wins.');
+    await start("Zoom in");
+    await press("Zoom in", "i", { ctrlKey: true });
+    expect(text()).toContain('also does "Italic" in the editor, but the app takes the key first, so it only zooms.');
+    await start("New note");
+    await press("New note", "K", { ctrlKey: true, shiftKey: true });
+    expect(text()).toContain('Ctrl+Shift+K also does "Move the focus out of the terminal" in a terminal, and there the terminal wins and this action does not run.');
+  });
+
+  it("sees Ctrl+Shift++ as the zoom key it is, and refuses Ctrl+Enter (Quick capture submits with it)", async () => {
+    await start("New note");
+    await press("New note", "+", { ctrlKey: true, shiftKey: true });
+    expect(text()).toContain('Ctrl+= is already used for "Zoom in".');
+    await press("New note", "Enter", { ctrlKey: true });
+    expect(text()).toContain("Ctrl+Enter is reserved for the system and cannot be used.");
+    expect(sets()).toEqual([]);
+  });
+
+  it("refuses the Quick capture hotkey while it is registered", async () => {
+    capture = { shortcut: "CommandOrControl+Alt+M", error: null };
+    await refreshCapture();
+    await start("New note");
+    await press("New note", "m", { ctrlKey: true, altKey: true });
+    expect(text()).toContain("Ctrl+Alt+M is the Quick capture hotkey.");
+    expect(sets()).toEqual([]);
+    capture = { shortcut: "CommandOrControl+Alt+M", error: "Could not register" };
+    await refreshCapture();
+    await press("New note", "m", { ctrlKey: true, altKey: true });
+    expect(sets()).toEqual([{ id: "note.new", combo: "Mod+Alt+M" }]);
+  });
+
+  it("names the shortcut that Rust says holds the combo", async () => {
+    refuse = "taken:graph.open";
+    await start("New note");
+    await press("New note", "j", { ctrlKey: true });
+    expect(text()).toContain('Ctrl+J is already used for "Open the graph".');
+  });
+
+  it("does not reset a row whose default another shortcut has taken", async () => {
+    // The file holds a clash that the recorder would have refused: Open the graph sits on Ctrl+N.
+    await act(async () => setOverrides({ "note.new": "Mod+J", "graph.open": "Mod+N" }));
+    expect(reset("New note").disabled).toBe(false);
+    await act(async () => reset("New note").click());
+    expect(sets()).toEqual([]);
+    expect(text()).toContain('Not reset. Ctrl+N is already used for "Open the graph".');
+    expect(saidNow()).toContain("Not reset.");
+    expect(shownKeys("New note")).toBe("Ctrl+J");
+    // Resetting the one that took it frees it.
+    await act(async () => reset("Open the graph").click());
+    await act(async () => reset("New note").click());
+    expect(shownKeys("New note")).toBe("Ctrl+N");
+  });
+
+  it("swallows the recorded key until it is let go, so holding it does not run the new shortcut", async () => {
+    await start("New note");
+    await press("New note", "j", { ctrlKey: true, code: "KeyJ" });
+    const again = await press("New note", "j", { ctrlKey: true, code: "KeyJ", repeat: true });
+    expect(again.defaultPrevented).toBe(true);
+    await act(async () => { key("New note").dispatchEvent(new KeyboardEvent("keyup", { key: "j", code: "KeyJ", bubbles: true })); });
+    const later = await press("New note", "j", { ctrlKey: true, code: "KeyJ" });
+    expect(later.defaultPrevented).toBe(false);
+  });
+
+  it("puts the focus on the recorder when recording starts, even when it had not moved there", async () => {
+    const other = document.getElementById("other") as HTMLButtonElement;
+    other.focus();
+    expect(document.activeElement).toBe(other);
+    await start("New note");
+    expect(document.activeElement).toBe(key("New note"));
+  });
+
+  it("Reset all is for an effective override only, moves the focus to the heading and says when it fails", async () => {
+    const all = () => [...document.querySelectorAll("button")].find((b) => b.textContent === "Reset all")!;
+    // Not remappable, not usable and equal to the default: none of these is an override that does anything.
+    await act(async () => setOverrides({ "file.save": "Mod+Shift+S", nonsense: "Mod+Q", "graph.open": "Mod+G", "note.new": "N" }));
+    expect(all().disabled).toBe(true);
+    await act(async () => setOverrides({ "note.new": "Mod+J" }));
+    expect(all().disabled).toBe(false);
+    refuseReset = "settings file is read-only";
+    (document.getElementById("other") as HTMLButtonElement).focus();
+    await act(async () => all().click());
+    expect(text()).toContain("settings file is read-only");
+    expect(saidNow()).toBe("settings file is read-only");
+    expect(shownKeys("New note")).toBe("Ctrl+J");
+    refuseReset = null;
+    await act(async () => all().click());
+    expect(document.activeElement).toBe(document.getElementById("shortcuts-title"));
+    expect(shownKeys("New note")).toBe("Ctrl+N");
+  });
+
+  it("the sheet's Settings button focuses the section heading, not the control that opened the sheet", async () => {
+    const other = document.getElementById("other") as HTMLButtonElement;
+    other.focus();
+    await act(async () => useShortcutsDialog.getState().show());
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    const change = [...document.querySelectorAll("button")].find((b) => b.textContent === "Change shortcuts in Settings")!;
+    await act(async () => change.click());
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(useApp.getState().settings).toEqual({ section: "shortcuts" });
+    expect(document.activeElement).toBe(document.getElementById("shortcuts-title"));
+  });
+
+  it("closing the sheet gives the focus back to the control that opened it", async () => {
+    const other = document.getElementById("other") as HTMLButtonElement;
+    other.focus();
+    await act(async () => useShortcutsDialog.getState().show());
+    expect(document.activeElement).not.toBe(other);
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(document.activeElement).toBe(other);
   });
 
   it("lets the zoom keys through to the recorder, and has the sheet button", async () => {

@@ -21,6 +21,11 @@ const { useWorkspace } = await import("./workspace/store");
 const { setOverrides } = await import("./lib/shortcuts");
 const { pushLayer } = await import("./ui/layers");
 const { setMacForTests } = await import("./lib/platform");
+const { CodeEditor } = await import("./features/editor/CodeEditor");
+
+// jsdom has no layout, which CodeMirror reads when it scrolls a selection into view.
+Range.prototype.getClientRects = function () { return [] as unknown as DOMRectList; };
+Range.prototype.getBoundingClientRect = function () { return new DOMRect(); };
 
 function Host() {
   useShortcuts();
@@ -119,6 +124,42 @@ describe("Ctrl+/", () => {
     const e = press("/", { ctrlKey: true }, document.getElementById("in-editor")!);
     expect(e.defaultPrevented).toBe(false);
     expect(useShortcutsDialog.getState().open).toBe(false);
+  });
+});
+
+describe("Ctrl+/ in a real editor (CodeMirror)", () => {
+  let holder: HTMLElement;
+  let editorRoot: Root;
+  const content = () => holder.querySelector<HTMLElement>(".cm-content")!;
+  const typed = () => content().textContent;
+  const send = async (k: string, mods: Partial<KeyboardEventInit> = {}) => {
+    const e = new KeyboardEvent("keydown", { key: k, cancelable: true, bubbles: true, ...mods });
+    await act(async () => { content().dispatchEvent(e); });
+    return e;
+  };
+  beforeEach(async () => {
+    holder = document.createElement("div");
+    document.body.append(holder);
+    editorRoot = createRoot(holder);
+    await act(async () => editorRoot.render(<CodeEditor doc="hello" docVersion={0} language="markdown" live={false} readOnly={false} lineNumbers
+      onChange={() => {}} onSave={() => {}} titles={() => []} onOpenLink={() => {}} />));
+    content().focus();
+  });
+  afterEach(async () => { await act(async () => editorRoot.unmount()); holder.remove(); });
+
+  it("the editor toggles its comment and the sheet stays closed", async () => {
+    const e = await send("/", { ctrlKey: true });
+    expect(typed()).toContain("<!--");
+    expect(e.defaultPrevented).toBe(true);
+    expect(useShortcutsDialog.getState().open).toBe(false);
+  });
+
+  it("a sheet key that is no longer the editor's comment key opens the sheet inside the editor", async () => {
+    setOverrides({ "shortcuts.show": "Mod+Alt+K" });
+    await send("/", { ctrlKey: true });
+    expect(useShortcutsDialog.getState().open).toBe(false); // the editor toggled its comment
+    await send("k", { ctrlKey: true, altKey: true });
+    expect(useShortcutsDialog.getState().open).toBe(true);
   });
 });
 

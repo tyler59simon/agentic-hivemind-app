@@ -94,7 +94,7 @@ pub struct Settings {
     pub density: Option<String>,
     /// Keyboard shortcuts the user changed, by shortcut id (DESK-KEYS). Changed only by `shortcuts_set`; read through
     /// `shortcuts::get`, which drops entries that are not well formed.
-    #[serde(default, deserialize_with = "lenient")]
+    #[serde(default, deserialize_with = "lenient_strings")]
     pub shortcuts: Option<BTreeMap<String, String>>,
 }
 
@@ -102,6 +102,13 @@ pub struct Settings {
 fn lenient<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned>(deserializer: D) -> Result<Option<T>, D::Error> {
     let value = serde_json::Value::deserialize(deserializer)?;
     Ok(serde_json::from_value::<Option<T>>(value).unwrap_or(None))
+}
+
+/// A map of text values read entry by entry: an entry whose value is not text is dropped and the others are kept; anything
+/// that is not a map reads as unset.
+fn lenient_strings<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<BTreeMap<String, String>>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value.as_object().map(|map| map.iter().filter_map(|(k, v)| v.as_str().map(|text| (k.clone(), text.to_string()))).collect()))
 }
 
 /// On macOS Cmd+Option+M minimizes every window of the front app, so Shift is added there (MACOS-1D). Keep in step with

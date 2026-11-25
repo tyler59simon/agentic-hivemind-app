@@ -5,7 +5,7 @@ import { useLayer } from "../../ui/layers";
 import { zoomBy } from "../../lib/zoom";
 import { format, useShortcutVersion } from "../../lib/shortcuts";
 import { useShortcutsDialog } from "../shortcuts/ShortcutsDialog";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMaintenanceEnabled, useProjectsEnabled, useSystemsEnabled, useWikiEnabled } from "../../lib/connection";
 import { copyDiagnostics, openLogsFolder } from "../../lib/diagnostics";
 import { domains, list } from "../../lib/lm";
@@ -65,6 +65,9 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
   const addNotebook = useAddNotebook();
   const keys = useShortcutVersion(); // the entries show the keys as they are now
   useEffect(() => { setQuery(""); setIndex(0); }, [app.palette]);
+  // What had the focus before the palette opened, for the sheet it may open: the palette's own controls are gone by then.
+  const before = useRef<Element | null>(null);
+  useEffect(() => useApp.subscribe((s, prev) => { if (s.palette && !prev.palette) before.current = document.activeElement; }), []);
   /** Run `act` for the notebook of the focused page, else the first notebook; says so when there is none. */
   const onNotebook = async (act: (notebook: string, folder: string) => unknown) => {
     const { notebook, folder } = currentNotebook(await firstNotebook(client));
@@ -161,7 +164,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "refresh", label: "Refresh", run: () => { refreshStore(client); close(); } },
       { key: "reconnect", label: "Reconnect to Living Memory", run: () => { onReconnect(); close(); } },
       { key: "settings", label: "Settings", run: () => { onSettings(); close(); } },
-      { key: "shortcuts", label: "Keyboard shortcuts", detail: format("shortcuts.show"), run: () => { close(); useShortcutsDialog.getState().show(); } },
+      { key: "shortcuts", label: "Keyboard shortcuts", detail: format("shortcuts.show"), run: () => { close(); useShortcutsDialog.getState().show(before.current); } },
       { key: "schedules", label: "Schedules", detail: "Settings: briefings, maintenance, rebuilds and automations", run: () => { close(); openSettings("schedules"); } },
       { key: "spend", label: "Spend", detail: "Settings: budgets and today's spending", run: () => { close(); openSettings("spend"); } },
       { key: "copy-diagnostics", label: "Copy diagnostics", detail: "version, settings summary and the end of the log; no note text", run: () => { close(); void copyDiagnostics(); } },

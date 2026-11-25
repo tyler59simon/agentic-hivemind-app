@@ -73,8 +73,11 @@ export const SHORTCUTS: readonly Shortcut[] = [
 const BY_ID = new Map(SHORTCUTS.map((s) => [s.id, s]));
 export const shortcut = (id: string): Shortcut | undefined => BY_ID.get(id);
 
-/** Combos the app never gives away: the platform's text and reload keys. */
-const RESERVED = ["Mod+C", "Mod+V", "Mod+X", "Mod+Z", "Mod+Shift+Z", "Mod+Y", "Mod+A", "Mod+F", "Mod+R", "Mod+Shift+R", "Tab", "Shift+Tab", "Escape"];
+/** Combos the app never gives away: the platform's text and reload keys, and Quick capture's submit chord (Mod+Enter). */
+const RESERVED = ["Mod+C", "Mod+V", "Mod+X", "Mod+Z", "Mod+Shift+Z", "Mod+Y", "Mod+A", "Mod+F", "Mod+R", "Mod+Shift+R", "Mod+Enter", "Tab", "Shift+Tab", "Escape"];
+
+/** The shortcuts that repeat while the key is held; every other one runs once per press. */
+const REPEATS = new Set(["zoom.in", "zoom.out", "tab.next", "tab.prev"]);
 
 // Parsing ------------------------------------------------------------------------------------------------------------
 
@@ -92,12 +95,20 @@ function keyName(key: string): string | null {
   return NAMED.includes(key) || FUNCTION_KEY.test(key) ? key : null;
 }
 
-/** Read a combo; null when it is not one this app can use. */
+/** One key equivalence for matching, recording and conflicts. A letter or a named key (Arrow, F1, Enter, Tab...) keeps its
+ *  name and Shift counts. Any other key (punctuation and digits) is "loose": Shift does not count, because what Shift does
+ *  to it depends on the layout (+ is Shift+= on a US layout, 1 needs Shift on a French one), and the key is folded to the
+ *  name its unshifted character has: `Plus` and `+` are `=`, `_` is `-`. So Mod+Shift+Plus is Mod+=. */
+const isLoose = (key: string): boolean => key.length === 1 && key.toUpperCase() === key.toLowerCase();
+const canonKey = (key: string): string => (key === "Plus" ? "=" : key === "_" ? "-" : key);
+
+/** Read a combo; null when it is not one this app can use. The result is in the one spelling (see `isLoose`). */
 export function parse(combo: string): Parsed | null {
   const parts = combo.split("+");
-  const key = parts.pop() ?? "";
+  const token = parts.pop() ?? "";
   // A key is spelled as keyName gives it: `Plus` for +, capitals for letters.
-  if (key.length === 0 || keyName(key) !== key) return null;
+  if (token.length === 0 || keyName(token) !== token) return null;
+  const key = canonKey(token);
   const parsed: Parsed = { mod: false, ctrl: false, alt: false, shift: false, key };
   const seen = new Set<string>();
   for (const part of parts) {
@@ -109,6 +120,7 @@ export function parse(combo: string): Parsed | null {
     else if (part === "Shift") parsed.shift = true;
     else return null;
   }
+  if (isLoose(key)) parsed.shift = false;
   return parsed;
 }
 
@@ -130,24 +142,35 @@ export function usable(combo: string): boolean {
 
 // Matching -----------------------------------------------------------------------------------------------------------
 
-export interface ComboEvent { key: string; code?: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }
+export interface ComboEvent {
+  key: string; code?: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean;
+  isComposing?: boolean; repeat?: boolean; getModifierState?: (key: string) => boolean;
+}
 
-/** The key of an event as combos spell it. With Option or Alt held a letter or digit is read from the physical key, since
- *  macOS turns Option+M into another character. */
+/** An event that is not a key press shortcuts can read: input method composition, a dead key waiting for its letter, and
+ *  AltGr (Windows reports it as Ctrl+Alt, which would otherwise look like Ctrl+Alt+key). */
+export const unreadable = (e: ComboEvent): boolean =>
+  !!e.isComposing || e.key === "Dead" || e.key === "Process" || !!e.getModifierState?.("AltGraph");
+
+/** The key of an event as combos spell it (see `isLoose`), or null for an event shortcuts cannot read. Only on macOS with
+ *  Option held is a letter or digit read from the physical key, since Option+M types another character there; everywhere
+ *  else it is `e.key`. */
 export function eventKey(e: ComboEvent): string | null {
+  if (unreadable(e)) return null;
   const code = e.code ?? "";
-  if (e.altKey && /^Key[A-Z]$/.test(code)) return code.slice(3);
-  if (e.altKey && /^Digit[0-9]$/.test(code)) return code.slice(5);
-  return keyName(e.key);
+  if (isMac && e.altKey && /^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (isMac && e.altKey && /^Digit[0-9]$/.test(code)) return code.slice(5);
+  const name = keyName(e.key);
+  return name && canonKey(name);
 }
 
 function matchesParsed(e: ComboEvent, p: Parsed): boolean {
   if (e.altKey !== p.alt) return false;
+  // Off macOS Mod is Ctrl alone: the Windows key never counts. On macOS Mod is Cmd and Ctrl is its own key.
   if (isMac) { if (e.metaKey !== p.mod || e.ctrlKey !== p.ctrl) return false; }
-  else if ((e.ctrlKey || e.metaKey) !== (p.mod || p.ctrl)) return false;
-  // Shift decides the character of = and -: + is Shift+= on most layouts, and _ is Shift+-.
-  if (p.key === "=" || p.key === "-") return (e.key === p.key || e.key === (p.key === "=" ? "+" : "_")) && (!p.shift || e.shiftKey);
-  return e.shiftKey === p.shift && eventKey(e) === p.key;
+  else if (e.metaKey || e.ctrlKey !== (p.mod || p.ctrl)) return false;
+  const key = eventKey(e);
+  return key === p.key && (isLoose(p.key) || e.shiftKey === p.shift);
 }
 
 // What each id is bound to now -----------------------------------------------------------------------------------------
@@ -168,6 +191,7 @@ export function combo(id: string): string {
 
 /** Whether the key event is the shortcut `id`. The callers keep their own guards (an open dialog, a field that takes text). */
 export function matches(e: ComboEvent, id: string): boolean {
+  if (e.repeat && !REPEATS.has(id)) return false;
   const p = parse(combo(id));
   return !!p && matchesParsed(e, p);
 }
@@ -175,7 +199,7 @@ export function matches(e: ComboEvent, id: string): boolean {
 /** The first of `ids` the event matches. */
 export const firstMatch = <T extends string>(e: ComboEvent, ids: readonly T[]): T | undefined => ids.find((id) => matches(e, id));
 
-const KEY_LABELS: Record<string, string> = { ArrowLeft: "Left", ArrowRight: "Right", ArrowUp: "Up", ArrowDown: "Down", Escape: "Esc", Plus: "+", PageUp: "Page Up", PageDown: "Page Down" };
+const KEY_LABELS: Record<string, string> = { ArrowLeft: "Left", ArrowRight: "Right", ArrowUp: "Up", ArrowDown: "Down", Escape: "Esc", PageUp: "Page Up", PageDown: "Page Down" };
 
 /** A combo as the user reads it: `Ctrl+Shift+F`, or `Cmd+Shift+F` and `Option` on macOS. Text that is not a combo comes back as is. */
 export function formatCombo(text: string): string {
@@ -191,8 +215,10 @@ export const format = (id: string): string => formatCombo(combo(id));
 export function comboOf(e: ComboEvent): string | null {
   const key = eventKey(e);
   if (!key || ["Control", "Shift", "Alt", "Meta", "AltGraph", "OS"].includes(e.key)) return null;
-  const mod = isMac ? e.metaKey : e.ctrlKey || e.metaKey;
-  return [mod && "Mod", isMac && e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", key].filter(Boolean).join("+");
+  // Off macOS the Windows key is not Ctrl: a combo with it is not recorded.
+  if (!isMac && e.metaKey) return null;
+  const mod = isMac ? e.metaKey : e.ctrlKey;
+  return [mod && "Mod", isMac && e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && !isLoose(key) && "Shift", key].filter(Boolean).join("+");
 }
 
 /** Tauri's accelerator text (`CommandOrControl+Alt+M`) as a combo, for the quick-capture hotkey; the text itself when unknown. */
@@ -206,8 +232,8 @@ export function fromAccelerator(accelerator: string): string {
 // Conflicts ----------------------------------------------------------------------------------------------------------
 
 export interface Conflict {
-  /** `reserved` and `app` refuse the combo; `editor` and `terminal` only warn. */
-  kind: "reserved" | "app" | "editor" | "terminal";
+  /** `reserved`, `app` and `global` (the Quick capture hotkey, when it is registered) refuse the combo; `editor` and `terminal` only warn. */
+  kind: "reserved" | "app" | "global" | "editor" | "terminal";
   /** What already uses it: a label, or the combo for a reserved one. */
   with: string;
   refuse: boolean;
@@ -221,16 +247,21 @@ export function conflicts(candidate: string, id: string): Conflict[] {
   const found: Conflict[] = [];
   const reserved = RESERVED.find((r) => normalize(r) === want);
   if (reserved || parse(candidate)?.key === "F5") found.push({ kind: "reserved", with: formatCombo(reserved ?? want), refuse: true });
+  const hotkey = captureCombo();
+  if (hotkey && normalize(hotkey) === want) found.push({ kind: "global", with: "Quick capture hotkey", refuse: true });
   for (const s of SHORTCUTS) {
     if (s.id === id || s.scope === "global") continue;
     const theirs = normalize(s.scope === "app" ? combo(s.id) : defaultCombo(s.id));
     if (theirs !== want) continue;
-    found.push({ kind: s.scope === "app" ? "app" : s.scope, with: s.label, refuse: s.scope === "app" });
+    found.push({ kind: s.scope, with: s.label, refuse: s.scope === "app" });
   }
   return found;
 }
 
 // Following the settings file ---------------------------------------------------------------------------------------
+
+/** Counts the `shortcuts` events this window heard. An answer to a request applies only when none arrived since it was sent. */
+let events = 0;
 
 const changed = () => { version++; listeners.forEach((l) => l()); };
 
@@ -241,7 +272,24 @@ export function setOverrides(next: Record<string, string>): void {
 }
 
 export const currentOverrides = (): Record<string, string> => overrides;
-export const overrideCount = (): number => Object.keys(overrides).length;
+/** How many remappable shortcuts are bound to something other than their default now. */
+export const overrideCount = (): number => SHORTCUTS.filter((s) => s.remappable && normalize(combo(s.id)) !== normalize(defaultCombo(s.id))).length;
+
+/** The Quick capture hotkey as the app reports it (`capture_status`): the accelerator, and why it is not registered. */
+export interface CaptureHotkey { shortcut: string | null; error: string | null }
+let captureHotkey: CaptureHotkey | null = null;
+export const captureStatusNow = (): CaptureHotkey | null => captureHotkey;
+/** The hotkey as a combo when it is registered, else null (off, not read yet, or registration failed). */
+export const captureCombo = (): string | null => (captureHotkey?.shortcut && !captureHotkey.error ? fromAccelerator(captureHotkey.shortcut) : null);
+
+/** Read the Quick capture hotkey, for the conflict check and the sheet. Outside the app there is none. */
+export async function refreshCapture(): Promise<void> {
+  try {
+    const status = await invoke<CaptureHotkey | null>("capture_status");
+    captureHotkey = status ? { shortcut: status.shortcut ?? null, error: status.error ?? null } : null;
+    changed();
+  } catch { /* no status: the sheet shows the default and nothing conflicts */ }
+}
 
 const subscribe = (l: () => void) => { listeners.add(l); return () => { listeners.delete(l); }; };
 /** Re-draw when any shortcut changes, for a view that shows several. */
@@ -253,9 +301,13 @@ export const useFormat = (id: string): string => useSyncExternalStore(subscribe,
 export function initShortcuts(): () => void {
   if (!inTauri()) return () => {};
   let stopped = false;
-  const unlisten = listen<Record<string, string>>("shortcuts", (e) => { if (!stopped) setOverrides(e.payload); });
-  // The read waits for the subscription, so a change between the two is heard, not missed.
-  const read = () => invoke<Record<string, string>>("shortcuts_get").then((all) => { if (!stopped) setOverrides(all); }, () => undefined);
+  const unlisten = listen<Record<string, string>>("shortcuts", (e) => { if (!stopped) { events++; setOverrides(e.payload); } });
+  // The read waits for the subscription, so a change between the two is heard, not missed. As in appearance.ts the events
+  // are the truth: a read that answers after an event arrived is older than it and is dropped.
+  const read = () => {
+    const sent = events;
+    return invoke<Record<string, string>>("shortcuts_get").then((all) => { if (!stopped && events === sent) setOverrides(all); }, () => undefined);
+  };
   void unlisten.then(read, read);
   return () => { stopped = true; void unlisten.then((u) => u(), () => undefined); };
 }
@@ -263,11 +315,15 @@ export function initShortcuts(): () => void {
 /** Keep `value` for `id` (null goes back to the default). Rust checks it and tells every window; rejects with its reason. */
 export async function saveShortcut(id: string, value: string | null): Promise<void> {
   if (!inTauri()) { const next = { ...overrides }; if (value) next[id] = value; else delete next[id]; setOverrides(next); return; }
-  setOverrides(await invoke<Record<string, string>>("shortcuts_set", { id, combo: value }));
+  const sent = events;
+  const now = await invoke<Record<string, string>>("shortcuts_set", { id, combo: value });
+  if (events === sent) setOverrides(now);
 }
 
 /** Go back to every default. */
 export async function resetShortcuts(): Promise<void> {
   if (!inTauri()) { setOverrides({}); return; }
-  setOverrides(await invoke<Record<string, string>>("shortcuts_reset"));
+  const sent = events;
+  const now = await invoke<Record<string, string>>("shortcuts_reset");
+  if (events === sent) setOverrides(now);
 }
