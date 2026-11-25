@@ -1,5 +1,6 @@
 // Lazy-loaded Draw.io (.drawio / .dio) visual board editor mirroring CanvasEditor's session & undo architecture.
 import { useEffect, useMemo, useRef, useState } from "react";
+import { joinsRun, type Run } from "../../lib/nudge";
 import { DrawioBoard } from "./DrawioBoard";
 import type { DrawioDoc } from "./model";
 import { parseDrawio, writeDrawio, type ParsedDrawio } from "./xml";
@@ -21,6 +22,8 @@ export default function DrawioEditor(props: DrawioEditorProps) {
   const known = useRef(props.text);
   const past = useRef<string[]>([]);
   const future = useRef<string[]>([]);
+  /** The last commit when it was a keyboard move or resize (see `joinsRun`). */
+  const run = useRef<Run>(null);
   const [, bump] = useState(0);
 
   useEffect(() => {
@@ -32,6 +35,7 @@ export default function DrawioEditor(props: DrawioEditorProps) {
     known.current = props.text;
     past.current = [];
     future.current = [];
+    run.current = null;
     bump((n) => n + 1);
   }, [props.text]);
 
@@ -43,17 +47,20 @@ export default function DrawioEditor(props: DrawioEditorProps) {
     bump((n) => n + 1);
   };
 
-  const commit = (next: DrawioDoc) => {
+  const commit = (next: DrawioDoc, group?: string) => {
     const before = latest.current.text;
     const text = writeDrawio(next);
     if (text === before) return;
-    past.current.push(before);
-    if (past.current.length > DEPTH) past.current.shift();
+    if (!(joinsRun(run, group) && past.current.length > 0)) {
+      past.current.push(before);
+      if (past.current.length > DEPTH) past.current.shift();
+    }
     future.current = [];
     give(text);
   };
 
   const undo = () => {
+    run.current = null;
     const back = past.current.pop();
     if (back === undefined) return;
     future.current.push(latest.current.text);
@@ -61,6 +68,7 @@ export default function DrawioEditor(props: DrawioEditorProps) {
   };
 
   const redo = () => {
+    run.current = null;
     const again = future.current.pop();
     if (again === undefined) return;
     past.current.push(latest.current.text);

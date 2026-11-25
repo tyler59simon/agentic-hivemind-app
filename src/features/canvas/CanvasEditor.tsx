@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RichContext } from "../editor/rich/context";
 import type { Pictures } from "../notes/PageView";
+import { joinsRun, type Run } from "../../lib/nudge";
 import { CanvasBoard } from "./CanvasBoard";
 import { parseCanvas, reuse, writeCanvas, type Canvas, type Parsed } from "./model";
 
@@ -23,8 +24,6 @@ export interface CanvasEditorProps {
 
 /** How many steps of undo a board keeps. */
 const DEPTH = 200;
-/** How soon after the last press the next press of a keyboard move or resize still joins its undo step. */
-const MERGE_MS = 1000;
 
 export default function CanvasEditor(props: CanvasEditorProps) {
   // The cards the new text has in common with the last are kept as the same objects, so a change draws only what it changed.
@@ -42,9 +41,8 @@ export default function CanvasEditor(props: CanvasEditorProps) {
   const known = useRef(props.text);
   const past = useRef<string[]>([]);
   const future = useRef<string[]>([]);
-  /** The kind of the last commit when it was a keyboard move or resize, and when: the next press of the same kind within
-   *  MERGE_MS joins its step, so holding an arrow key is one undo, not one per repeat. */
-  const run = useRef<{ group: string; at: number } | null>(null);
+  /** The last commit when it was a keyboard move or resize (see `joinsRun`). */
+  const run = useRef<Run>(null);
   const [, bump] = useState(0);
 
   useEffect(() => {
@@ -62,9 +60,7 @@ export default function CanvasEditor(props: CanvasEditorProps) {
   const commit = (next: Canvas, group?: string) => {
     const before = latest.current.text, text = writeCanvas(next);
     if (text === before) return;
-    const now = Date.now();
-    const joined = !!group && run.current?.group === group && now - run.current.at < MERGE_MS && past.current.length > 0;
-    run.current = group ? { group, at: now } : null;
+    const joined = joinsRun(run, group) && past.current.length > 0;
     if (!joined) {
       past.current.push(before);
       if (past.current.length > DEPTH) past.current.shift();

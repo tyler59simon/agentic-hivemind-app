@@ -1286,7 +1286,10 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .canvas { display: flex; flex-direction: column; height: clamp(20rem, 52vh, 38rem); border: 1px solid var(--canvas-border); border-radius: .6rem; background-color: var(--canvas-bg); background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1px); background-size: 22px 22px; overflow: hidden; }
 .canvas.full { position: fixed; inset: 0; z-index: 35; height: auto; border-radius: 0; }
 .canvas-top, .canvas-bottom { display: flex; align-items: center; gap: var(--sp-16); padding: var(--sp-12) var(--sp-18); flex: none; }
-.canvas-view { flex: 1; min-height: 0; position: relative; overflow: hidden; touch-action: none; cursor: grab; }
+.canvas-body { flex: 1; min-height: 0; display: flex; }
+.canvas-relations { flex: none; width: min(22rem, 40%); overflow: auto; padding: var(--sp-8) var(--sp-16); border-left: 1px solid var(--canvas-border); background: var(--bg-alt); font-size: .9rem; }
+.canvas-relations ul { margin: 0; padding-left: var(--sp-16); display: flex; flex-direction: column; gap: var(--sp-6); }
+.canvas-view { flex: 1; min-width: 0; min-height: 0; position: relative; overflow: hidden; touch-action: none; cursor: grab; }
 .canvas-view:active { cursor: grabbing; }
 .canvas-svg { display: block; width: 100%; height: 100%; user-select: none; }
 .canvas-boundary { fill: var(--canvas-boundary); stroke: var(--node-border); stroke-width: 1.5; stroke-dasharray: 7 6; }
@@ -1990,6 +1993,7 @@ button.owner-chip { cursor: pointer; }
 .drawio-inspector { top: 3.1rem; }
 .drawio-node { position: absolute; box-sizing: border-box; cursor: move; }
 .drawio-node.on { outline: 2px solid var(--selected); }
+.drawio-node:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
 .drawio-shape-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
 .drawio-icon-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
 .drawio-image-fallback { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; border: 1px dashed var(--border-strong); color: var(--muted); font-size: .8rem; }

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useLayer } from "../../ui/layers";
 import { Bell, Box, Database, Maximize, Minimize, Minus, Plus, User } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { systemDiagramSource, type ArchModel } from "../../lib/architecture";
 import { changeCount, type ModelDiff } from "./compare";
 import { canvasGraph, fitScale, layoutGraph, type CanvasNode, type Level } from "./canvas";
@@ -60,6 +60,23 @@ function Source({ slug, entry, version }: { slug: string; entry: DiagramEntry; v
   return <pre className="canvas-source">{text.data}</pre>;
 }
 
+/** Whether focus got to an element by the keyboard, as opposed to a click (which must not pan the drawing under the pointer). */
+const keyboardFocus = (el: Element) => { try { return el.matches(":focus-visible"); } catch { return true; } };
+
+/** The arrows of the level as text: "Source to Target: the whole label". The drawing cuts a long label short and a screen reader
+ *  skips its arrows, so this list is how both are read. */
+function Relations({ id, laid }: { id: string; laid: { nodes: CanvasNode[]; edges: { id: string; from: string; to: string; label: string }[] } }) {
+  const names = new Map(laid.nodes.map((n) => [n.id, n.name]));
+  // Focusable so a keyboard can scroll a long list.
+  return (
+    <section id={id} className="canvas-relations" aria-label="Relations" tabIndex={0}>
+      {laid.edges.length
+        ? <ul>{laid.edges.map((e) => <li key={e.id}>{names.get(e.from)} to {names.get(e.to)}{e.label ? `: ${e.label}` : ""}</li>)}</ul>
+        : <p className="muted small">This level has no relations.</p>}
+    </section>
+  );
+}
+
 const MAX_NAMES = 6;
 
 /** What a comparison found. Removed boxes and arrows are not drawn, so they are named here. */
@@ -98,6 +115,8 @@ export function ArchitectureCanvas({ slug, model, diagrams, version, caption, se
   const [level, setLevel] = useState<Shown>("containers");
   const [source, setSource] = useState(false);
   const [full, setFull] = useState(false);
+  const [relations, setRelations] = useState(false);
+  const relationsId = useId();
   const [view, setView] = useState({ scale: 1, x: 0, y: 0 });
   const host = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x: number; y: number; moved: boolean } | null>(null);
@@ -128,6 +147,24 @@ export function ArchitectureCanvas({ slug, model, diagrams, version, caption, se
     return { scale, x: p.x - (p.x - v.x) * k, y: p.y - (p.y - v.y) * k };
   });
 
+  /** Pan just far enough to bring a box the keyboard reached into the view. The browser's own scrolling of the view is undone: the
+   *  drawing moves by its transform. */
+  const reveal = (n: { x: number; y: number; width: number; height: number }) => {
+    const el = host.current;
+    if (!el) return;
+    el.scrollLeft = 0;
+    el.scrollTop = 0;
+    setView((v) => {
+      const m = 12, l = n.x * v.scale + v.x, t = n.y * v.scale + v.y, r = l + n.width * v.scale, b = t + n.height * v.scale;
+      let { x, y } = v;
+      if (r > el.clientWidth - m) x -= r - (el.clientWidth - m);
+      if (l + (x - v.x) < m) x += m - (l + (x - v.x));
+      if (b > el.clientHeight - m) y -= b - (el.clientHeight - m);
+      if (t + (y - v.y) < m) y += m - (t + (y - v.y));
+      return x === v.x && y === v.y ? v : { ...v, x, y };
+    });
+  };
+
   return (
     <div className={`canvas ${full ? "full" : ""}`}>
       <div className="canvas-top">
@@ -141,6 +178,7 @@ export function ArchitectureCanvas({ slug, model, diagrams, version, caption, se
         )}
       </div>
       {diff && !notice && <Legend result={diff.result} label={diff.label} />}
+      <div className="canvas-body">
       <div className="canvas-view" data-own-zoom ref={host}
         onWheel={(e) => { if (!laid || source) return; const r = e.currentTarget.getBoundingClientRect(); zoom(e.deltaY < 0 ? ZOOM.step : 1 / ZOOM.step, { x: e.clientX - r.left, y: e.clientY - r.top }); }}
         onPointerDown={(e) => { if (!laid || source || e.button !== 0) return; drag.current = { x: e.clientX, y: e.clientY, moved: false }; e.currentTarget.setPointerCapture(e.pointerId); }}
@@ -174,7 +212,7 @@ export function ArchitectureCanvas({ slug, model, diagrams, version, caption, se
                 {laid.edges.map((e) => {
                   const mid = e.points[Math.floor(e.points.length / 2)];
                   return (
-                    <g key={e.id} className={`canvas-edge ${selected && (e.from === selected || e.to === selected) ? "on" : ""} ${tint(diff, e.id, "Edges")}`}>
+                    <g key={e.id} aria-hidden="true" className={`canvas-edge ${selected && (e.from === selected || e.to === selected) ? "on" : ""} ${tint(diff, e.id, "Edges")}`}>
                       <path d={path(e.points)} markerEnd="url(#canvas-arrow)" />
                       {e.label && <text x={mid.x} y={mid.y - 7} textAnchor="middle">{e.label.length > 16 ? `${e.label.slice(0, 15)}…` : e.label}</text>}
                     </g>
@@ -183,7 +221,7 @@ export function ArchitectureCanvas({ slug, model, diagrams, version, caption, se
                 {laid.nodes.map((n) => (
                   <foreignObject key={n.id} x={n.x} y={n.y} width={n.width} height={n.height}>
                     <button className={`canvas-node ${n.id === selected ? "on" : ""} ${n.external || n.kind === "person" ? "outside" : ""} ${tint(diff, n.id, "")}`} aria-pressed={n.id === selected}
-                      title={n.description || n.name} onPointerDown={(e) => e.stopPropagation()} onClick={() => onSelect(n.id === selected ? null : n)}>
+                      title={n.description || n.name} onPointerDown={(e) => e.stopPropagation()} onFocus={(e) => { if (keyboardFocus(e.currentTarget)) reveal(n); }} onClick={() => onSelect(n.id === selected ? null : n)}>
                       {icon(n)}<strong>{n.name}</strong><span>{n.technology || KIND[n.kind]}</span>
                     </button>
                   </foreignObject>
@@ -192,6 +230,8 @@ export function ArchitectureCanvas({ slug, model, diagrams, version, caption, se
             </svg>
           )}
       </div>
+      {relations && laid && !source && <Relations id={relationsId} laid={laid} />}
+      </div>
       <div className="canvas-bottom">
         <div className="segmented compact" role="tablist" aria-label="Diagram level">
           {LEVELS.filter((l) => l.id !== "deployment" || deployment).map((l) => (
@@ -199,6 +239,9 @@ export function ArchitectureCanvas({ slug, model, diagrams, version, caption, se
           ))}
         </div>
         <span className="fill" />
+        {laid && !source && (
+          <button type="button" aria-expanded={relations} aria-controls={relationsId} onClick={() => setRelations((v) => !v)}>Relations</button>
+        )}
         {laid && !source && (
           <div className="canvas-zoom">
             <button className="icon-button" aria-label="Zoom out" onClick={() => zoom(1 / ZOOM.step)}><Minus size={16} aria-hidden /></button>

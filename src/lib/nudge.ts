@@ -17,3 +17,17 @@ export function nudgeOf(e: NudgeKey): { kind: "move" | "resize"; dx: number; dy:
   if (!d || e.altKey || !(e.ctrlKey || e.metaKey)) return null;
   return { kind: e.shiftKey ? "resize" : "move", dx: d[0] * KEY_STEP, dy: d[1] * KEY_STEP };
 }
+
+/** How soon after the last press the next press of a keyboard move or resize still joins its undo step. */
+export const MERGE_MS = 1000;
+
+/** The kind and time of the last commit of an editor, when it was a keyboard move or resize. */
+export type Run = { group: string; at: number } | null;
+
+/** Whether a commit of kind `group` (the same kind of keyboard move or resize as the last, within MERGE_MS) joins the history step
+ *  of the last one, so holding an arrow key is one undo and not one per repeat. Records this commit as the last. */
+export function joinsRun(run: { current: Run }, group: string | undefined, now = Date.now()): boolean {
+  const joined = !!group && run.current?.group === group && now - run.current.at < MERGE_MS;
+  run.current = group ? { group, at: now } : null;
+  return joined;
+}

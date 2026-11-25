@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { KEY_STEP, nudgeOf } from "./nudge";
+import { joinsRun, KEY_STEP, MERGE_MS, nudgeOf, type Run } from "./nudge";
 
 const press = (key: string, mods: Partial<Parameters<typeof nudgeOf>[0]> = {}) => nudgeOf({ key, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...mods });
 
@@ -18,5 +18,18 @@ describe("nudgeOf", () => {
     expect(press("ArrowLeft", { altKey: true })).toBeNull();
     expect(press("ArrowLeft", { ctrlKey: true, altKey: true })).toBeNull();
     expect(press("a", { ctrlKey: true })).toBeNull();
+  });
+});
+
+describe("joinsRun", () => {
+  it("joins a press of the same kind within a second, and starts a new step for another kind, a pause or a plain commit", () => {
+    const run: { current: Run } = { current: null };
+    expect(joinsRun(run, "key-move", 0)).toBe(false);
+    expect(joinsRun(run, "key-move", 400)).toBe(true);
+    expect(joinsRun(run, "key-resize", 500)).toBe(false);
+    expect(joinsRun(run, "key-resize", 500 + MERGE_MS)).toBe(false);
+    expect(joinsRun(run, "key-resize", 600 + MERGE_MS)).toBe(true);
+    expect(joinsRun(run, undefined, 700 + MERGE_MS)).toBe(false);
+    expect(joinsRun(run, "key-resize", 800 + MERGE_MS)).toBe(false);
   });
 });

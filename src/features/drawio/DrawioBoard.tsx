@@ -1,8 +1,9 @@
 // Native offline Draw.io interactive canvas board (zero iframes).
 // Renders nested containers, shapes, embedded data:image SVG/PNG icons, arrows, waypoints, and multi-page tabs.
 import { ArrowDownToLine, ArrowUpToLine, Download, Maximize2, Minus, Plus, Redo2, Trash2, Undo2 } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { classify } from "../../lib/errors";
+import { nudgeOf } from "../../lib/nudge";
 import { toast } from "../../ui/toast";
 import { saveCopy } from "../notes/actions";
 import { labelToPlainText, sanitizeDrawioLabel } from "./label";
@@ -17,7 +18,9 @@ export interface DrawioBoardProps {
   doc: DrawioDoc;
   readOnly: boolean;
   fileName: string;
-  onCommit(next: DrawioDoc): void;
+  /** The document after one gesture or edit. `group` names a run of the same keyboard move or resize, which the history folds into
+   *  one step when the presses come close together. */
+  onCommit(next: DrawioDoc, group?: string): void;
   onUndo(): void;
   onRedo(): void;
   canUndo: boolean;
@@ -33,6 +36,11 @@ type Gesture =
 const SWATCHES = ["#edf6ff", "#eaf6ec", "#fff3e6", "#f3e8ff", "#fef2f2", "#f8f9fa", "#ffffff"];
 const STROKES = ["#438dd5", "#2e7d32", "#e65100", "#7c3aed", "#dc2626", "#5f6368", "#1f2937"];
 const STEP = 1.25;
+/** The first line of a cell's label as plain text, for its accessible name and the cells list. */
+const cellName = (cell: DrawioCell) => {
+  const line = labelToPlainText(cell.value, parseStyle(cell.style).html).split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? "";
+  return line.length > 80 ? `${line.slice(0, 80)}...` : line || "no label";
+};
 const clampK = (k: number) => Math.min(8, Math.max(0.1, k));
 
 /** Draw the SVG shape body of a vertex cell inside its local `(0..w, 0..h)` box. */
@@ -170,9 +178,54 @@ function exportPageSvg(cells: DrawioCell[], rects: Map<string, DrawioRect>): str
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><rect width="100%" height="100%" fill="#ffffff" />${parts.join("")}</svg>`;
 }
 
+/** Every shape of the page with the arrows that join it ("A to B: label"), and a form that joins two shapes: the way to read, pick
+ *  and make connections without the drawing and without dragging from a handle to another shape (WCAG 2.5.7). */
+function CellsPanel({ cells, readOnly, onPick, onConnect }: { cells: DrawioCell[]; readOnly: boolean; onPick(id: string): void; onConnect(from: string, to: string): void }) {
+  const shapes = cells.filter((c) => c.vertex);
+  const names = new Map(shapes.map((c) => [c.id, cellName(c)]));
+  const arrows = cells.filter((c) => c.edge && c.source && c.target && names.has(c.source) && names.has(c.target));
+  const sentence = (e: DrawioCell) => `${names.get(e.source!)} to ${names.get(e.target!)}${e.value ? `: ${labelToPlainText(e.value, parseStyle(e.style).html).trim()}` : ""}`;
+  const [from, setFrom] = useState(""), [to, setTo] = useState("");
+  const pick = (value: string, set: (v: string) => void, label: string) => (
+    <label>{label}
+      <select value={value} onChange={(e) => set(e.target.value)}>
+        <option value="">Choose a shape</option>
+        {shapes.map((c) => <option key={c.id} value={c.id}>{names.get(c.id)}</option>)}
+      </select>
+    </label>
+  );
+  return (
+    <div className="canvas-panel" role="group" aria-label="Cells">
+      {shapes.length
+        ? (
+          <ul>
+            {shapes.map((c) => {
+              const mine = arrows.filter((e) => e.source === c.id || e.target === c.id);
+              return (
+                <li key={c.id}>
+                  <button type="button" className="link-row" onClick={() => onPick(c.id)}>{names.get(c.id)}</button>
+                  {mine.length > 0 && <ul aria-label={`Connections of ${names.get(c.id)}`}>{mine.map((e) => <li key={e.id}><button type="button" className="link-row" onClick={() => onPick(e.id)}>{sentence(e)}</button></li>)}</ul>}
+                </li>
+              );
+            })}
+          </ul>
+        )
+        : <p className="muted small">No shapes on this page.</p>}
+      {!readOnly && shapes.length > 1 && (
+        <form className="canvas-connect" onSubmit={(e) => { e.preventDefault(); if (from && to && from !== to) onConnect(from, to); }}>
+          {pick(from, setFrom, "From")}
+          {pick(to, setTo, "To")}
+          <button type="submit" disabled={!from || !to || from === to}>Connect</button>
+        </form>
+      )}
+    </div>
+  );
+}
+
 export function DrawioBoard(props: DrawioBoardProps) {
   const { doc, readOnly } = props;
   const root = useRef<HTMLDivElement>(null);
+  const shellRef = useRef<HTMLDivElement>(null);
   const [pageIndex, setPageIndex] = useState(0);
   const safeIndex = Math.min(pageIndex, Math.max(0, doc.pages.length - 1));
   const [view, setView] = useState<DrawioView>({ x: 0, y: 0, k: 1 });
@@ -183,6 +236,14 @@ export function DrawioBoard(props: DrawioBoardProps) {
   const [renamingPage, setRenamingPage] = useState<number | null>(null);
   const [pageDraft, setPageDraft] = useState("");
   const [joining, setJoining] = useState<{ from: DrawioPoint; to: DrawioPoint } | null>(null);
+  const [panel, setPanel] = useState(false);
+  // The cell the Tab key stops on (a roving tabindex: the arrow keys move between cells), where focus goes once an edit or a
+  // delete has finished and its element is gone, and whether a pointer press is under way (focus it gives a cell must not change
+  // the selection the press makes itself).
+  const [stop, setStop] = useState<string | null>(null);
+  const focusAfter = useRef<string | null>(null);
+  const pressing = useRef(false);
+  const panelId = useId(), hintId = useId();
   const gesture = useRef<Gesture | null>(null);
 
   const shown = preview ?? doc;
@@ -191,8 +252,14 @@ export function DrawioBoard(props: DrawioBoardProps) {
   const selectedSet = useMemo(() => new Set(selected.filter((id) => page.cells.some((c) => c.id === id))), [selected, page.cells]);
   const singleCell = selectedSet.size === 1 ? page.cells.find((c) => selectedSet.has(c.id)) ?? null : null;
 
-  const latest = useRef({ view, doc, pageIndex: safeIndex, selectedSet, readOnly, props, rects, page });
-  latest.current = { view, doc, pageIndex: safeIndex, selectedSet, readOnly, props, rects, page };
+  // The keyboard walks the shapes in reading order: top to bottom, then left to right.
+  const order = useMemo(() => page.cells
+    .filter((c) => c.vertex && rects.has(c.id))
+    .sort((a, b) => rects.get(a.id)!.y - rects.get(b.id)!.y || rects.get(a.id)!.x - rects.get(b.id)!.x || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)), [page.cells, rects]);
+  const tabStop = singleCell?.vertex ? singleCell.id : stop && order.some((c) => c.id === stop) ? stop : order[0]?.id ?? null;
+
+  const latest = useRef({ view, doc, pageIndex: safeIndex, selectedSet, readOnly, props, rects, page, order, stop });
+  latest.current = { view, doc, pageIndex: safeIndex, selectedSet, readOnly, props, rects, page, order, stop };
 
   useLayoutEffect(() => {
     const box = root.current?.getBoundingClientRect();
@@ -236,6 +303,7 @@ export function DrawioBoard(props: DrawioBoardProps) {
     const el = root.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
+      if ((e.target as HTMLElement).closest?.(".canvas-panel-host")) return;
       e.preventDefault();
       if (e.ctrlKey || e.metaKey) zoomAt(Math.exp(-e.deltaY * 0.002), e.clientX, e.clientY);
       else setView((v) => ({ ...v, x: v.x - e.deltaX, y: v.y - e.deltaY }));
@@ -269,6 +337,7 @@ export function DrawioBoard(props: DrawioBoardProps) {
       }
     };
     const onUp = (e: PointerEvent) => {
+      pressing.current = false;
       const g = gesture.current;
       if (!g) return;
       gesture.current = null;
@@ -297,7 +366,41 @@ export function DrawioBoard(props: DrawioBoardProps) {
     };
   }, []);
 
-  const commit = (next: DrawioDoc) => { if (!readOnly) props.onCommit(next); };
+  const commit = (next: DrawioDoc, group?: string) => { if (!readOnly) props.onCommit(next, group); };
+
+  /** Pan just far enough to bring a shape the keyboard reached into the pane. */
+  const reveal = (r: DrawioRect) => {
+    const pane = root.current?.getBoundingClientRect();
+    if (!pane?.width) return;
+    setView((v) => {
+      const m = 48, l = r.x * v.k + v.x, t = r.y * v.k + v.y, right = l + r.width * v.k, bottom = t + r.height * v.k;
+      let { x, y } = v;
+      if (right > pane.width - m) x -= right - (pane.width - m);
+      if (l + (x - v.x) < m) x += m - (l + (x - v.x));
+      if (bottom > pane.height - m) y -= bottom - (pane.height - m);
+      if (t + (y - v.y) < m) y += m - (t + (y - v.y));
+      return x === v.x && y === v.y ? v : { ...v, x, y };
+    });
+  };
+  /** Focus a shape (or the shell) without the browser scrolling the pane; the view is moved by `reveal` instead. */
+  const focusOn = (id: string) => {
+    const shell = shellRef.current;
+    // An arrow (picked from the cells list) has no element of its own to focus, so the shell takes it.
+    const el = [...(shell?.querySelectorAll<HTMLElement>("[data-drawio-cell]") ?? [])].find((n) => n.dataset.drawioCell === id) ?? shell;
+    el?.focus({ preventScroll: true });
+    const r = latest.current.rects.get(id);
+    if (r) reveal(r);
+  };
+  /** Select one shape and put the keyboard on it. */
+  const goTo = (id: string) => { setSelected([id]); setStop(id); focusOn(id); };
+
+  // Focus that waits for what ended an edit or removed a shape: the textarea or the shape is gone once the board has drawn again.
+  useLayoutEffect(() => {
+    const id = focusAfter.current;
+    if (!id || editing) return;
+    focusAfter.current = null;
+    focusOn(id);
+  }); // eslint-disable-line react-hooks/exhaustive-deps
 
   const startEdit = (cell: DrawioCell) => {
     if (readOnly) return;
@@ -306,8 +409,9 @@ export function DrawioBoard(props: DrawioBoardProps) {
     setEditText(labelToPlainText(cell.value, st.html));
   };
 
-  const finishEdit = (save: boolean) => {
+  const finishEdit = (save: boolean, byKey = false) => {
     const id = editing;
+    if (byKey && id) focusAfter.current = id;
     setEditing(null);
     if (!save || !id) return;
     const cell = page.cells.find((c) => c.id === id);
@@ -324,9 +428,59 @@ export function DrawioBoard(props: DrawioBoardProps) {
     setSelected([made.id]);
   };
 
+  /** A keyboard move or resize (Ctrl+Arrow, Ctrl+Shift+Arrow): the same model change as a drag, as one commit. */
+  const nudge = (ids: string[], by: NonNullable<ReturnType<typeof nudgeOf>>) => {
+    const L = latest.current;
+    if (L.readOnly) return;
+    const cells = ids.map((id) => L.page.cells.find((c) => c.id === id)).filter((c): c is DrawioCell => !!c?.vertex);
+    if (!cells.length) return;
+    if (by.kind === "move") {
+      commit(moveCells(L.doc, L.pageIndex, new Set(cells.map((c) => c.id)), by.dx, by.dy), "key-move");
+      const r = L.rects.get(cells[0].id);
+      if (r) reveal({ ...r, x: r.x + by.dx, y: r.y + by.dy });
+    } else if (cells.length === 1) {
+      commit(resizeCell(L.doc, L.pageIndex, cells[0].id, "se", by.dx, by.dy), "key-resize");
+      const r = L.rects.get(cells[0].id);
+      if (r) reveal({ ...r, width: r.width + by.dx, height: r.height + by.dy });
+    }
+  };
+
+  /** A shape has the keyboard focus, however it got it (Tab, an arrow key, a click): it is the Tab stop, it is selected, and it is
+   *  brought into view. The browser's own scrolling of the pane is undone: the board moves by its transform. */
+  const gotFocus = (e: React.FocusEvent) => {
+    const el = e.target as HTMLElement;
+    const id = el.getAttribute("data-drawio-cell");
+    if (!id) return;
+    if (root.current) { root.current.scrollLeft = 0; root.current.scrollTop = 0; }
+    setStop(id);
+    if (pressing.current) return;
+    if (!selectedSet.has(id)) setSelected([id]);
+    const r = rects.get(id);
+    if (r) reveal(r);
+  };
+
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if ((e.target as HTMLElement)?.closest?.("input, textarea")) return;
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+    const t = e.target as HTMLElement;
+    if (t?.closest?.("input, textarea, select, .canvas-panel-host")) return;
+    // What acts on a shape is for the shape or the shell having focus, not for a toolbar button.
+    const focused = t.hasAttribute?.("data-drawio-cell") ? t.dataset.drawioCell : undefined;
+    const direct = t === e.currentTarget || !!focused;
+    const nudged = direct ? nudgeOf(e) : null;
+    const walk: Record<string, number> = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 };
+    if (nudged) {
+      e.preventDefault();
+      nudge(selectedSet.size ? [...selectedSet] : focused ? [focused] : [], nudged);
+    } else if (direct && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && (e.key in walk || e.key === "Home" || e.key === "End")) {
+      // Arrow keys move between shapes in reading order (down and right go on, up and left go back); Home and End go to the ends.
+      e.preventDefault();
+      if (!order.length) return;
+      const here = order.findIndex((c) => c.id === (focused ?? (singleCell?.vertex ? singleCell.id : stop)));
+      const to = e.key === "Home" ? 0 : e.key === "End" ? order.length - 1 : Math.min(order.length - 1, Math.max(0, here < 0 ? 0 : here + walk[e.key]));
+      goTo(order[to].id);
+    } else if (direct && (e.key === "Enter" || e.key === "F2") && !readOnly) {
+      const cell = page.cells.find((c) => c.id === (focused ?? (selectedSet.size === 1 ? [...selectedSet][0] : undefined)));
+      if (cell) { e.preventDefault(); startEdit(cell); }
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
       e.preventDefault();
       if (e.shiftKey) props.onRedo();
       else props.onUndo();
@@ -335,8 +489,7 @@ export function DrawioBoard(props: DrawioBoardProps) {
       props.onRedo();
     } else if ((e.key === "Delete" || e.key === "Backspace") && selectedSet.size && !readOnly) {
       e.preventDefault();
-      commit(deleteCells(doc, safeIndex, selectedSet));
-      setSelected([]);
+      removeSelected();
     } else if (e.key === "Escape") {
       // Used here, so not for focus mode too. A gesture under way is cancelled (its preview goes and a release commits nothing);
       // with none, Escape clears the selection, and with neither it is left to the shell.
@@ -345,23 +498,45 @@ export function DrawioBoard(props: DrawioBoardProps) {
     }
   };
 
+  /** Delete the selection, and keep the keyboard where it was: on the shape after the first one removed in reading order, else the
+   *  one before, else the shell. */
+  function removeSelected() {
+    const first = order.findIndex((c) => selectedSet.has(c.id));
+    const rest = order.filter((c) => !selectedSet.has(c.id));
+    const next = first < 0 ? undefined : rest.find((c) => order.indexOf(c) > first) ?? rest[rest.length - 1];
+    focusAfter.current = next?.id ?? "shell";
+    commit(deleteCells(doc, safeIndex, selectedSet));
+    setSelected([]);
+  }
+
   const vertices = page.cells.filter((c) => c.vertex && rects.has(c.id));
   const edges = page.cells.filter((c) => c.edge);
   const singleStyle = singleCell ? parseStyle(singleCell.style) : null;
 
   return (
-    <div className="drawio-shell" onKeyDown={onKeyDown} tabIndex={0}>
+    <div ref={shellRef} className="drawio-shell" onKeyDown={onKeyDown} onFocus={gotFocus} tabIndex={tabStop ? -1 : 0}>
+      {/* An application, not a plain group: the board takes the arrow keys itself (they walk the shapes, with Ctrl they move and
+          resize one), which a screen reader must pass through instead of using for its own reading. */}
       <div
         ref={root}
         className="canvas-board drawio-board"
+        role="application"
+        aria-label={`Diagram board, page ${page.name}`}
+        aria-describedby={hintId}
         style={{ "--k": view.k } as CSSProperties}
         onPointerDown={(e) => {
           if (e.button !== 0) return;
-          if ((e.target as HTMLElement).closest(".canvas-tools, .drawio-node, .drawio-edge-hit, .drawio-edge-label")) return;
+          if ((e.target as HTMLElement).closest(".canvas-tools, .canvas-panel-host, .drawio-node, .drawio-edge-hit, .drawio-edge-label")) return;
+          pressing.current = true;
+          shellRef.current?.focus({ preventScroll: true });
           setSelected([]);
           gesture.current = { kind: "pan", sx: e.clientX, sy: e.clientY, from: view };
         }}
       >
+        <p id={hintId} className="visually-hidden">
+          Arrow keys move between shapes in reading order. Enter or F2 edits the label. Ctrl or Cmd with an arrow key moves the shape,
+          and with Shift as well resizes it. Delete removes it.
+        </p>
         <div className="canvas-tools" role="toolbar" aria-label="Draw.io toolbar">
           {!readOnly && (
             <>
@@ -382,6 +557,9 @@ export function DrawioBoard(props: DrawioBoardProps) {
           <span className="canvas-zoom">{Math.round(view.k * 100)}%</span>
           <button type="button" title="Zoom in" aria-label="Zoom in" onClick={() => zoomAt(STEP)}><Plus size="1em" aria-hidden /></button>
           <button type="button" title="Fit to view" aria-label="Fit to view" onClick={doFit}><Maximize2 size="1em" aria-hidden /></button>
+          {/* The arrows are drawn in an SVG a screen reader skips and a keyboard cannot select. This is the list of every shape
+              with its connections, and the way to join two shapes without dragging from a handle. */}
+          <button type="button" aria-expanded={panel} aria-controls={panelId} onClick={() => setPanel((v) => !v)}>Cells</button>
           <span className="canvas-sep" aria-hidden />
           <button
             type="button"
@@ -418,9 +596,16 @@ export function DrawioBoard(props: DrawioBoardProps) {
             )}
             <button type="button" title="Bring to front" aria-label="Bring to front" onClick={() => commit(reorderCells(doc, safeIndex, selectedSet, "front"))}><ArrowUpToLine size="1em" aria-hidden /></button>
             <button type="button" title="Send to back" aria-label="Send to back" onClick={() => commit(reorderCells(doc, safeIndex, selectedSet, "back"))}><ArrowDownToLine size="1em" aria-hidden /></button>
-            <button type="button" className="danger-text" title="Delete selected" aria-label="Delete selected" onClick={() => { commit(deleteCells(doc, safeIndex, selectedSet)); setSelected([]); }}>
+            <button type="button" className="danger-text" title="Delete selected" aria-label="Delete selected" onClick={removeSelected}>
               <Trash2 size="1em" aria-hidden />
             </button>
+          </div>
+        )}
+
+        {panel && (
+          <div id={panelId} className="canvas-panel-host">
+            <CellsPanel cells={page.cells} readOnly={readOnly} onPick={goTo}
+              onConnect={(from, to) => { const added = addEdge(doc, safeIndex, from, to); commit(added.doc); setSelected([added.id]); }} />
           </div>
         )}
 
@@ -437,11 +622,15 @@ export function DrawioBoard(props: DrawioBoardProps) {
               <div
                 key={cell.id}
                 data-drawio-cell={cell.id}
+                role="group"
+                aria-label={`${st.shape === "text" ? "Text" : "Shape"}: ${cellName(cell)}`}
+                tabIndex={tabStop === cell.id ? 0 : -1}
                 className={`drawio-node${isSel ? " on" : ""}${st.shape === "text" ? " drawio-text-node" : ""}`}
                 style={{ left: r.x, top: r.y, width: r.width, height: r.height, opacity: st.opacity }}
                 onPointerDown={(e) => {
                   if (e.button !== 0 || isEdit) return;
                   if ((e.target as HTMLElement).closest(".canvas-corner, .canvas-handle")) return;
+                  pressing.current = true;
                   e.stopPropagation();
                   const nextSel = e.shiftKey
                     ? (isSel ? selected.filter((id) => id !== cell.id) : [...selected, cell.id])
@@ -460,13 +649,14 @@ export function DrawioBoard(props: DrawioBoardProps) {
                 {isEdit ? (
                   <textarea
                     className="drawio-label-input"
+                    aria-label="Shape label"
                     autoFocus
                     value={editText}
                     onChange={(e) => setEditText(e.target.value)}
                     onBlur={() => finishEdit(true)}
                     onKeyDown={(e) => {
-                      if (e.key === "Escape") { e.preventDefault(); finishEdit(false); }
-                      else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); finishEdit(true); }
+                      if (e.key === "Escape") { e.preventDefault(); finishEdit(false, true); }
+                      else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); finishEdit(true, true); }
                     }}
                   />
                 ) : safeHtml ? (
@@ -516,7 +706,7 @@ export function DrawioBoard(props: DrawioBoardProps) {
             );
           })}
 
-          <svg className="canvas-edges drawio-edges" width="1" height="1" overflow="visible">
+          <svg className="canvas-edges drawio-edges" width="1" height="1" overflow="visible" aria-hidden="true">
             {edges.map((edge) => {
               const pts = edgePoints(edge, rects);
               if (pts.length < 2) return null;
@@ -566,12 +756,13 @@ export function DrawioBoard(props: DrawioBoardProps) {
                 {isEdit ? (
                   <input
                     autoFocus
+                    aria-label="Arrow label"
                     value={editText}
                     onChange={(e) => setEditText(e.target.value)}
                     onBlur={() => finishEdit(true)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter") finishEdit(true);
-                      else if (e.key === "Escape") { e.preventDefault(); finishEdit(false); }
+                      if (e.key === "Enter") finishEdit(true, true);
+                      else if (e.key === "Escape") { e.preventDefault(); finishEdit(false, true); }
                     }}
                   />
                 ) : (
@@ -583,13 +774,16 @@ export function DrawioBoard(props: DrawioBoardProps) {
         </div>
       </div>
 
-      <div className="drawio-pages" role="tablist" aria-label="Diagram pages">
+      {/* Not a tab list: the tabs sit beside a rename field and a delete button, which a tab list may not hold, and there is no
+          panel per page. A button for each page that says which one is shown. */}
+      <div className="drawio-pages" role="group" aria-label="Diagram pages">
         {doc.pages.map((p, i) => (
           <div key={p.id} className={`drawio-page-tab${i === safeIndex ? " on" : ""}`}>
             {renamingPage === i ? (
               <input
                 autoFocus
                 className="drawio-page-rename"
+                aria-label="Page name"
                 value={pageDraft}
                 onChange={(e) => setPageDraft(e.target.value)}
                 onBlur={() => { setRenamingPage(null); commit(renamePage(doc, i, pageDraft)); }}
@@ -601,10 +795,11 @@ export function DrawioBoard(props: DrawioBoardProps) {
             ) : (
               <button
                 type="button"
-                role="tab"
-                aria-selected={i === safeIndex}
+                aria-pressed={i === safeIndex}
+                title={readOnly ? undefined : "Double-click or press F2 to rename"}
                 onClick={() => { setPageIndex(i); setSelected([]); }}
                 onDoubleClick={() => { if (!readOnly) { setRenamingPage(i); setPageDraft(p.name); } }}
+                onKeyDown={(e) => { if (e.key === "F2" && !readOnly) { e.preventDefault(); setRenamingPage(i); setPageDraft(p.name); } }}
               >
                 {p.name}
               </button>
