@@ -2,8 +2,8 @@
 // order, a file the board cannot hold is refused with a reason, edges are checked, and colours map to the palette.
 import { describe, expect, it } from "vitest";
 import {
-  addEdge, addNode, canvasProblem, colourOf, connectProblem, dangling, emptyCanvas, fitView, inside, moveNodes, NEW_CANVAS_TEXT, parseCanvas, removeItems, resizedBox,
-  setNode, writeCanvas, zoomAt, type Canvas,
+  addEdge, addNode, canvasProblem, colourOf, connectProblem, dangling, emptyCanvas, fitView, inside, moveNodes, NEW_CANVAS_TEXT, parseCanvas, readingOrder, removeItems, resizedBox,
+  setNode, withInside, writeCanvas, zoomAt, type Canvas,
 } from "./model";
 
 /** What Obsidian writes: tabs, one card per line, and fields this code does not know. */
@@ -221,5 +221,24 @@ describe("changes", () => {
     expect(fit.k).toBeGreaterThan(1);
     expect(fit.x + 200 * fit.k).toBeCloseTo(400);
     expect(fitView([], 800, 600)).toEqual({ x: 0, y: 0, k: 1 });
+  });
+});
+
+describe("keyboard order and moves", () => {
+  const box = { width: 100, height: 50 };
+  const c: Canvas = {
+    nodes: [
+      { id: "d", type: "text", x: 200, y: 100, ...box }, { id: "b", type: "text", x: 200, y: 0, ...box },
+      { id: "a2", type: "text", x: 0, y: 0, ...box }, { id: "a1", type: "text", x: 0, y: 0, ...box },
+      { id: "g", type: "group", x: 0, y: 300, width: 400, height: 300 }, { id: "in", type: "text", x: 10, y: 310, ...box },
+    ],
+    edges: [], extra: [],
+  };
+  it("lists the cards top to bottom, then left to right, ties by id", () => {
+    expect(readingOrder(c.nodes).map((n) => n.id)).toEqual(["a1", "a2", "b", "d", "g", "in"]);
+  });
+  it("adds the cards inside each group to the ids a move takes", () => {
+    expect([...withInside(c, ["g"])].sort()).toEqual(["g", "in"]);
+    expect([...withInside(c, ["b"])]).toEqual(["b"]);
   });
 });

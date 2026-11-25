@@ -23,7 +23,7 @@ const EdgePath = memo(function EdgePath({ edge, from, to, selected }: { edge: Ca
   );
 });
 
-export interface EdgeLabelProps { edge: CanvasEdge; from: CanvasNode; to: CanvasNode; selected: boolean; editing: boolean; onDone: (id: string, label: string | null) => void }
+export interface EdgeLabelProps { edge: CanvasEdge; from: CanvasNode; to: CanvasNode; selected: boolean; editing: boolean; onDone: (id: string, label: string | null, byKey?: boolean) => void }
 
 const EdgeLabel = memo(function EdgeLabel({ edge, from, to, selected, editing, onDone }: EdgeLabelProps) {
   const { mid } = shapeOf(edge, from, to);
@@ -36,8 +36,8 @@ const EdgeLabel = memo(function EdgeLabel({ edge, from, to, selected, editing, o
           onBlur={(e) => onDone(edge.id, e.currentTarget.value)}
           onKeyDown={(e) => {
             e.stopPropagation();
-            if (e.key === "Enter") { e.preventDefault(); onDone(edge.id, e.currentTarget.value); }
-            else if (e.key === "Escape") { e.preventDefault(); onDone(edge.id, null); }
+            if (e.key === "Enter") { e.preventDefault(); onDone(edge.id, e.currentTarget.value, true); }
+            else if (e.key === "Escape") { e.preventDefault(); onDone(edge.id, null, true); }
           }} />
         : edge.label}
     </div>
@@ -46,7 +46,7 @@ const EdgeLabel = memo(function EdgeLabel({ edge, from, to, selected, editing, o
 
 /** Every edge whose two cards are on the board. An edge that names a missing card is kept in the file and not drawn. */
 export const EdgesLayer = memo(function EdgesLayer({ nodes, edges, selected, editing, onLabel }: {
-  nodes: CanvasNode[]; edges: CanvasEdge[]; selected: string | null; editing: string | null; onLabel: (id: string, label: string | null) => void;
+  nodes: CanvasNode[]; edges: CanvasEdge[]; selected: string | null; editing: string | null; onLabel: (id: string, label: string | null, byKey?: boolean) => void;
 }) {
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
   const drawn = edges.flatMap((edge) => {

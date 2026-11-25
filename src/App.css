@@ -1953,6 +1953,10 @@ button.owner-chip { cursor: pointer; }
 .canvas-sep { width: 1px; align-self: stretch; background: var(--border); }
 .canvas-zoom { min-width: 3rem; text-align: center; font-size: .82rem; }
 .canvas-tools .canvas-swatch { width: 1.2rem; height: 1.2rem; padding: 0; border-radius: 50%; background: var(--canvas-c); border: 1px solid var(--border-strong); }
+.canvas-panel-host { position: absolute; right: .6rem; top: .6rem; z-index: 5; width: min(22rem, calc(100% - 1.2rem)); max-height: calc(100% - 1.2rem); overflow: auto; background: var(--bg-alt); border: 1px solid var(--border-strong); border-radius: .5rem; padding: var(--sp-8); cursor: default; user-select: text; }
+.canvas-panel ul { list-style: none; margin: 0 0 var(--sp-8); padding: 0; }
+.canvas-connect { display: flex; flex-direction: column; gap: var(--sp-6); }
+.canvas-connect label { display: flex; flex-direction: column; font-size: .82rem; }
 .canvas-note { position: absolute; left: .6rem; bottom: .6rem; z-index: 5; background: var(--bg-alt); border: 1px solid var(--border); border-radius: .4rem; padding: var(--sp-5) var(--sp-10); }
 
 /* Pan/zoom viewport & split diagram editors (.svg, .mmd). */
@@ -2143,6 +2147,7 @@ button.owner-chip { cursor: pointer; }
 .tree-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .tab-main:focus { outline: none; }
 .note-tab-pill:has(> .tab-main:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+.canvas-node:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
 /* A card's handles show while the card has the keyboard focus, not only under the mouse. */
 .canvas-node:focus-within .canvas-handle { opacity: 1; }
 

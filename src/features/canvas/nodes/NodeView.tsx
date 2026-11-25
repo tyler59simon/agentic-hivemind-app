@@ -11,8 +11,9 @@ import { colourOf, type CanvasNode } from "../model";
 
 /** What a card asks of its board. */
 export interface NodeApi {
-  /** End an edit: `patch` is what the card now holds, or null to give the edit up. */
-  finish(id: string, patch: Partial<CanvasNode> | null): void;
+  /** End an edit: `patch` is what the card now holds, or null to give the edit up. `byKey` says a key ended it (Enter, Ctrl+Enter or
+   *  Escape), so focus goes back to the card; an edit that ended because focus left must not take it back. */
+  finish(id: string, patch: Partial<CanvasNode> | null, byKey?: boolean): void;
   follow(target: string, split: boolean): void;
   openFile(path: string): void;
   openUrl(url: string): void;
@@ -49,15 +50,15 @@ export function colourStyle(color: unknown): { className: string; style?: CSSPro
 }
 
 /** An input that ends its edit on Enter or when it loses focus, and gives it up on Escape. */
-function EditLine({ value, label, onDone, className }: { value: string; label: string; onDone: (value: string | null) => void; className?: string }) {
+function EditLine({ value, label, onDone, className }: { value: string; label: string; onDone: (value: string | null, byKey?: boolean) => void; className?: string }) {
   return (
     <input className={className ?? "canvas-edit-line"} autoFocus defaultValue={value} aria-label={label}
       onFocus={(e) => e.currentTarget.select()}
       onBlur={(e) => onDone(e.currentTarget.value)}
       onKeyDown={(e) => {
         e.stopPropagation();
-        if (e.key === "Enter") { e.preventDefault(); onDone(e.currentTarget.value); }
-        else if (e.key === "Escape") { e.preventDefault(); onDone(null); }
+        if (e.key === "Enter") { e.preventDefault(); onDone(e.currentTarget.value, true); }
+        else if (e.key === "Escape") { e.preventDefault(); onDone(null, true); }
       }} />
   );
 }
@@ -69,8 +70,8 @@ function TextBody({ node, editing }: { node: CanvasNode; editing: boolean }) {
     // Ctrl+Enter or leaving the card ends the edit; Escape gives it up. Keys typed here are the card's, not the board's.
     const keys = (e: KeyboardEvent<HTMLTextAreaElement>) => {
       e.stopPropagation();
-      if (e.key === "Escape") { e.preventDefault(); env.api.finish(node.id, null); }
-      else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); env.api.finish(node.id, { text: e.currentTarget.value }); }
+      if (e.key === "Escape") { e.preventDefault(); env.api.finish(node.id, null, true); }
+      else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); env.api.finish(node.id, { text: e.currentTarget.value }, true); }
     };
     return <textarea className="canvas-edit" autoFocus defaultValue={text} aria-label="Card text" onBlur={(e) => env.api.finish(node.id, { text: e.currentTarget.value })} onKeyDown={keys} />;
   }
@@ -81,7 +82,7 @@ function GroupBody({ node, editing }: { node: CanvasNode; editing: boolean }) {
   const env = useEnv();
   return (
     <div className="canvas-group-label">
-      {editing ? <EditLine value={node.label ?? ""} label="Group label" onDone={(v) => env.api.finish(node.id, v === null ? null : { label: v || undefined })} />
+      {editing ? <EditLine value={node.label ?? ""} label="Group label" onDone={(v, key) => env.api.finish(node.id, v === null ? null : { label: v || undefined }, key)} />
         : <span>{node.label || (env.readOnly ? "" : "Group")}</span>}
     </div>
   );
@@ -117,7 +118,7 @@ function hostOf(url: string): string {
 function LinkBody({ node, editing }: { node: CanvasNode; editing: boolean }) {
   const env = useEnv();
   const url = node.url ?? "";
-  if (editing) return <div className="canvas-link"><EditLine value={url} label="Link address" onDone={(v) => env.api.finish(node.id, v === null ? null : { url: v.trim() })} /></div>;
+  if (editing) return <div className="canvas-link"><EditLine value={url} label="Link address" onDone={(v, key) => env.api.finish(node.id, v === null ? null : { url: v.trim() }, key)} /></div>;
   return (
     <div className="canvas-link">
       <strong className="canvas-title">{hostOf(url) || "Link"}</strong>
@@ -157,9 +158,29 @@ const UnknownBody = ({ node }: { node: CanvasNode }) => <div className="canvas-f
 const CORNERS = ["nw", "ne", "sw", "se"] as const;
 const SIDE_HANDLES = ["top", "right", "bottom", "left"] as const;
 
-export interface NodeViewProps { node: CanvasNode; selected: boolean; editing: boolean; handles: boolean }
+/** What a card is and what it holds, for its accessible name and the board's list of connections: "Text card" and its first line,
+ *  "File" and the file's name, "Link" and its address, "Memory note" and its reference, "Group" and its label. */
+export function nodeName(node: CanvasNode): { kind: string; name: string } {
+  switch (node.type) {
+    case "text": {
+      const line = (node.text ?? "").split(/\r?\n/).map((l) => l.replace(/^\s*(?:#{1,6}|[-*+>])\s+/, "").trim()).find(Boolean) ?? "";
+      return { kind: "Text card", name: line.length > 80 ? `${line.slice(0, 80)}...` : line || "empty" };
+    }
+    case "file": return { kind: "File", name: `${baseName((node.file ?? "").replace(/\\/g, "/")) || "no file"}${node.subpath ? ` ${node.subpath}` : ""}` };
+    case "link": {
+      const mem = memoryRef(node.url);
+      return mem ? { kind: "Memory note", name: mem } : { kind: "Link", name: node.url?.trim() || "no address" };
+    }
+    case "group": return { kind: "Group", name: node.label?.trim() || "no label" };
+    default: return { kind: "Card", name: node.type };
+  }
+}
 
-export const NodeView = memo(function NodeView({ node, selected, editing, handles }: NodeViewProps) {
+export interface NodeViewProps { node: CanvasNode; selected: boolean; editing: boolean; handles: boolean;
+  /** Whether the card is the board's one stop in the Tab order (a roving tabindex: the other cards are reached by the arrow keys). */
+  tabStop: boolean }
+
+export const NodeView = memo(function NodeView({ node, selected, editing, handles, tabStop }: NodeViewProps) {
   const env = useEnv();
   const { className, style } = colourStyle(node.color);
   let body: ReactNode;
@@ -171,8 +192,12 @@ export const NodeView = memo(function NodeView({ node, selected, editing, handle
     case "group": body = <GroupBody node={node} editing={editing} />; break;
     default: body = <UnknownBody node={node} />;
   }
+  const { kind, name } = nodeName(node);
+  // A group, not a button: a card holds buttons and links of its own. Its name is the kind and the start of what it holds; the
+  // card's content stays readable inside it.
   return (
     <div className={`canvas-node canvas-${node.type} ${className} ${selected ? "on" : ""}`} data-node-id={node.id}
+      role="group" aria-label={`${kind}: ${name}`} tabIndex={tabStop ? 0 : -1}
       style={{ ...style, left: node.x, top: node.y, width: node.width, height: node.height }}>
       {body}
       {!env.readOnly && SIDE_HANDLES.map((s) => <span key={s} className={`canvas-handle canvas-handle-${s}`} data-handle={s} title="Drag to another card to join them" />)}

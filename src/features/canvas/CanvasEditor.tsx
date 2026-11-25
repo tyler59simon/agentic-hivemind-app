@@ -23,6 +23,8 @@ export interface CanvasEditorProps {
 
 /** How many steps of undo a board keeps. */
 const DEPTH = 200;
+/** How soon after the last press the next press of a keyboard move or resize still joins its undo step. */
+const MERGE_MS = 1000;
 
 export default function CanvasEditor(props: CanvasEditorProps) {
   // The cards the new text has in common with the last are kept as the same objects, so a change draws only what it changed.
@@ -40,6 +42,9 @@ export default function CanvasEditor(props: CanvasEditorProps) {
   const known = useRef(props.text);
   const past = useRef<string[]>([]);
   const future = useRef<string[]>([]);
+  /** The kind of the last commit when it was a keyboard move or resize, and when: the next press of the same kind within
+   *  MERGE_MS joins its step, so holding an arrow key is one undo, not one per repeat. */
+  const run = useRef<{ group: string; at: number } | null>(null);
   const [, bump] = useState(0);
 
   useEffect(() => {
@@ -47,27 +52,35 @@ export default function CanvasEditor(props: CanvasEditorProps) {
     known.current = props.text;
     past.current = [];
     future.current = [];
+    run.current = null;
     bump((n) => n + 1);
   }, [props.text]);
 
   if (!parsed.ok) return <div className="center muted">{parsed.reason}</div>;
 
   const give = (text: string) => { known.current = text; latest.current.onChange(text); bump((n) => n + 1); };
-  const commit = (next: Canvas) => {
+  const commit = (next: Canvas, group?: string) => {
     const before = latest.current.text, text = writeCanvas(next);
     if (text === before) return;
-    past.current.push(before);
-    if (past.current.length > DEPTH) past.current.shift();
+    const now = Date.now();
+    const joined = !!group && run.current?.group === group && now - run.current.at < MERGE_MS && past.current.length > 0;
+    run.current = group ? { group, at: now } : null;
+    if (!joined) {
+      past.current.push(before);
+      if (past.current.length > DEPTH) past.current.shift();
+    }
     future.current = [];
     give(text);
   };
   const undo = () => {
+    run.current = null;
     const back = past.current.pop();
     if (back === undefined) return;
     future.current.push(latest.current.text);
     give(back);
   };
   const redo = () => {
+    run.current = null;
     const again = future.current.pop();
     if (again === undefined) return;
     past.current.push(latest.current.text);

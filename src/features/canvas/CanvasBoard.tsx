@@ -3,19 +3,20 @@
 // changes get new objects. A gesture (a drag, a resize, a join) shows a preview while it runs and hands the board to
 // `onCommit` once, when it ends, so it is one step of the document's history.
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { RichContext } from "../editor/rich/context";
 import { isPicture } from "../editor/rich/parse";
 import { NoteCardDialog } from "../hmdoc/blocks/EmbedDialogs";
 import type { Pictures } from "../notes/PageView";
+import { nudgeOf } from "../../lib/nudge";
 import { useWorkspace } from "../../workspace/store";
 import { EdgesLayer } from "./Edges";
 import { FilePicker } from "./FilePicker";
 import {
-  addEdge, addNode, anchor, connectProblem, dangling, fitView, inside, moveNodes, nearestSide, PRESETS, removeItems, resizedBox, resizeNode, setEdge, setNode,
-  SIZES, zoomAt, type Canvas, type CanvasNode, type NewNode, type Point, type Side, type View,
+  addEdge, addNode, anchor, connectProblem, dangling, facing, fitView, moveNodes, nearestSide, PRESETS, readingOrder, removeItems, resizedBox, resizeNode, setEdge, setNode,
+  SIZES, withInside, zoomAt, type Box, type Canvas, type CanvasEdge, type CanvasNode, type NewNode, type Point, type Side, type View,
 } from "./model";
-import { EnvContext, isWebUrl, MEM_PREFIX, NodeView, type BoardEnv, type NodeApi } from "./nodes/NodeView";
+import { EnvContext, isWebUrl, MEM_PREFIX, NodeView, nodeName, type BoardEnv, type NodeApi } from "./nodes/NodeView";
 import { registerBoard, type TreeFile } from "./treeDrop";
 
 export interface CanvasBoardProps {
@@ -26,8 +27,9 @@ export interface CanvasBoardProps {
   pictures: Pictures;
   /** The id of the board's notebook: only its own pages can be dropped on the board. */
   notebook: string;
-  /** The board after one gesture or edit: one step of the history. */
-  onCommit(next: Canvas): void;
+  /** The board after one gesture or edit: one step of the history. `group` names a run of the same keyboard move or resize, which
+   *  the history folds into one step when the presses come close together. */
+  onCommit(next: Canvas, group?: string): void;
   onUndo(): void;
   onRedo(): void;
   canUndo: boolean;
@@ -48,10 +50,46 @@ type Gesture =
   | { kind: "resize"; sx: number; sy: number; id: string; corner: string; base: Canvas; last: Canvas | null }
   | { kind: "link"; from: string; side: Side };
 
-const NodesLayer = memo(function NodesLayer({ nodes, selected, editing }: { nodes: CanvasNode[]; selected: ReadonlySet<string>; editing: string | null }) {
+const NodesLayer = memo(function NodesLayer({ nodes, selected, editing, tabStop }: { nodes: CanvasNode[]; selected: ReadonlySet<string>; editing: string | null; tabStop: string | null }) {
   const single = selected.size === 1;
-  return <>{nodes.map((n) => <NodeView key={n.id} node={n} selected={selected.has(n.id)} editing={editing === n.id} handles={single && selected.has(n.id)} />)}</>;
+  return <>{nodes.map((n) => <NodeView key={n.id} node={n} selected={selected.has(n.id)} editing={editing === n.id} handles={single && selected.has(n.id)} tabStop={tabStop === n.id} />)}</>;
 });
+
+/** The edges as a list, and a form that joins two cards: the way to read, pick and make connections without the drawing and
+ *  without dragging from a card's handle to another card (WCAG 2.5.7). */
+function ConnectionsPanel({ nodes, edges, readOnly, onPick, onConnect }: {
+  nodes: CanvasNode[]; edges: CanvasEdge[]; readOnly: boolean; onPick(edgeId: string): void; onConnect(from: string, to: string): void;
+}) {
+  const names = new Map(nodes.map((n) => [n.id, nodeName(n).name]));
+  const rows = edges.filter((e) => names.has(e.fromNode) && names.has(e.toNode));
+  const [from, setFrom] = useState(""), [to, setTo] = useState("");
+  const options = (value: string, set: (v: string) => void, label: string) => (
+    <label>{label}
+      <select value={value} onChange={(e) => set(e.target.value)}>
+        <option value="">Choose a card</option>
+        {nodes.map((n) => <option key={n.id} value={n.id}>{nodeName(n).kind}: {names.get(n.id)}</option>)}
+      </select>
+    </label>
+  );
+  return (
+    <div className="canvas-panel" data-canvas-ui role="group" aria-label="Connections">
+      {rows.length
+        ? <ul>{rows.map((e) => (
+          <li key={e.id}>
+            <button type="button" className="link-row" onClick={() => onPick(e.id)}>{names.get(e.fromNode)} to {names.get(e.toNode)}{e.label ? `: ${e.label}` : ""}</button>
+          </li>
+        ))}</ul>
+        : <p className="muted small">No connections.</p>}
+      {!readOnly && nodes.length > 1 && (
+        <form className="canvas-connect" onSubmit={(e) => { e.preventDefault(); if (from && to) onConnect(from, to); }}>
+          {options(from, setFrom, "From")}
+          {options(to, setTo, "To")}
+          <button type="submit" disabled={!from || !to}>Connect</button>
+        </form>
+      )}
+    </div>
+  );
+}
 
 const inField = (el: EventTarget | null) => !!(el as HTMLElement | null)?.closest?.("textarea, input");
 
@@ -65,6 +103,14 @@ export function CanvasBoard(props: CanvasBoardProps) {
   const [editingEdge, setEditingEdge] = useState<string | null>(null);
   const [joining, setJoining] = useState<{ from: Point; to: Point } | null>(null);
   const [dialog, setDialog] = useState<"file" | "note" | null>(null);
+  const [panel, setPanel] = useState(false);
+  // The card the Tab key stops on (a roving tabindex: the arrow keys move between cards), and where focus goes once an edit or
+  // a delete has finished and its element is gone: a card's id, or "board".
+  const [stop, setStop] = useState<string | null>(null);
+  const focusAfter = useRef<string | null>(null);
+  // A pointer press is under way: focus it gives a card must not change the selection the press makes itself (Shift+click).
+  const pressing = useRef(false);
+  const panelId = useId(), hintId = useId();
   const gesture = useRef<Gesture | null>(null);
   // Which edit is open, read synchronously: an edit that has ended ignores the blur its own removal can cause.
   const editingNow = useRef<{ node: string | null; edge: string | null }>({ node: null, edge: null });
@@ -72,6 +118,9 @@ export function CanvasBoard(props: CanvasBoardProps) {
   const nodeIds = useMemo(() => new Set(shown.nodes.map((n) => n.id)), [shown.nodes]);
   const selected = useMemo(() => new Set(sel.nodes.filter((id) => nodeIds.has(id))), [sel.nodes, nodeIds]);
   const edgeSelected = sel.edge && shown.edges.some((e) => e.id === sel.edge) ? sel.edge : null;
+  // The keyboard walks the cards in reading order: top to bottom, then left to right.
+  const order = useMemo(() => readingOrder(canvas.nodes), [canvas.nodes]);
+  const tabStop = selected.size === 1 ? [...selected][0] : stop && nodeIds.has(stop) ? stop : order[0]?.id ?? null;
 
   const latest = useRef({ view, canvas, sel: selected, edge: edgeSelected, readOnly, props, shown });
   latest.current = { view, canvas, sel: selected, edge: edgeSelected, readOnly, props, shown };
@@ -99,7 +148,39 @@ export function CanvasBoard(props: CanvasBoardProps) {
     return { x: (clientX - (box?.left ?? 0) - v.x) / v.k, y: (clientY - (box?.top ?? 0) - v.y) / v.k };
   };
 
-  const commit = (next: Canvas) => { if (!latest.current.readOnly) latest.current.props.onCommit(next); };
+  const commit = (next: Canvas, group?: string) => { if (!latest.current.readOnly) latest.current.props.onCommit(next, group); };
+
+  /** Pan the view just far enough to bring `b` (a card's box) into the pane, for a card the keyboard has reached. */
+  const reveal = (b: Box) => {
+    const pane = root.current?.getBoundingClientRect();
+    if (!pane?.width) return;
+    setView((v) => {
+      const m = 48, l = b.x * v.k + v.x, t = b.y * v.k + v.y, r = l + b.width * v.k, bottom = t + b.height * v.k;
+      let { x, y } = v;
+      if (r > pane.width - m) x -= r - (pane.width - m);
+      if (l + (x - v.x) < m) x += m - (l + (x - v.x));
+      if (bottom > pane.height - m) y -= bottom - (pane.height - m);
+      if (t + (y - v.y) < m) y += m - (t + (y - v.y));
+      return x === v.x && y === v.y ? v : { ...v, x, y };
+    });
+  };
+  /** Focus a card (or the board) without the browser scrolling the pane; the view is moved by `reveal` instead. */
+  const focusOn = (id: string) => {
+    const el = id === "board" ? root.current : [...(root.current?.querySelectorAll<HTMLElement>("[data-node-id]") ?? [])].find((n) => n.dataset.nodeId === id);
+    el?.focus({ preventScroll: true });
+    const node = latest.current.canvas.nodes.find((n) => n.id === id);
+    if (node) reveal(node);
+  };
+  /** Select one card and put the keyboard on it. */
+  const goTo = (id: string) => { setSel({ nodes: [id], edge: null }); setStop(id); focusOn(id); };
+
+  // Focus that waits for what ended an edit or removed a card: the textarea or the card is gone once the board has drawn again.
+  useLayoutEffect(() => {
+    const id = focusAfter.current;
+    if (!id || editing || editingEdge) return;
+    focusAfter.current = null;
+    focusOn(id);
+  }); // eslint-disable-line react-hooks/exhaustive-deps
   const startEdit = (id: string) => { editingNow.current = { node: id, edge: null }; setEditingEdge(null); setEditing(id); };
   const startEdgeEdit = (id: string) => { editingNow.current = { node: null, edge: id }; setEditing(null); setEditingEdge(id); };
 
@@ -115,17 +196,19 @@ export function CanvasBoard(props: CanvasBoardProps) {
   };
   const addFile = (path: string, at?: Point) => add({ type: "file", file: path }, isPicture(path) ? "picture" : "file", at);
 
-  const finish = (id: string, patch: Partial<CanvasNode> | null) => {
+  const finish = (id: string, patch: Partial<CanvasNode> | null, byKey?: boolean) => {
     if (editingNow.current.node !== id) return;
     editingNow.current = { node: null, edge: null };
+    if (byKey) focusAfter.current = id;
     setEditing(null);
     const node = latest.current.canvas.nodes.find((n) => n.id === id);
     if (!patch || !node) return;
     if (Object.keys(patch).some((k) => patch[k] !== node[k])) commit(setNode(latest.current.canvas, id, patch));
   };
-  const finishEdge = (id: string, label: string | null) => {
+  const finishEdge = (id: string, label: string | null, byKey?: boolean) => {
     if (editingNow.current.edge !== id) return;
     editingNow.current = { node: null, edge: null };
+    if (byKey) focusAfter.current = "board";
     setEditingEdge(null);
     const edge = latest.current.canvas.edges.find((e) => e.id === id);
     if (label === null || !edge) return;
@@ -133,7 +216,7 @@ export function CanvasBoard(props: CanvasBoardProps) {
   };
 
   const api = useMemo<NodeApi>(() => ({
-    finish: (id, patch) => finish(id, patch),
+    finish: (id, patch, byKey) => finish(id, patch, byKey),
     follow: (target, split) => latest.current.props.ctx.openPage(target, split),
     openFile: (path) => latest.current.props.onOpenFile(path),
     openUrl: (url) => { if (isWebUrl(url)) openUrl(url).catch(() => undefined); },
@@ -226,8 +309,8 @@ export function CanvasBoard(props: CanvasBoardProps) {
         if (made) { commit(made.canvas); setSel({ nodes: [], edge: made.id }); }
       }
     };
-    const up = (e: PointerEvent) => end(e, false);
-    const cancel = (e: PointerEvent) => end(e, true);
+    const up = (e: PointerEvent) => { pressing.current = false; end(e, false); };
+    const cancel = (e: PointerEvent) => { pressing.current = false; end(e, true); };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", cancel);
@@ -243,8 +326,9 @@ export function CanvasBoard(props: CanvasBoardProps) {
     const t = e.target as HTMLElement;
     if (t.closest("[data-canvas-ui]") || inField(t)) return;
     const L = latest.current;
-    root.current?.focus({ preventScroll: true });
     const nodeEl = t.closest<HTMLElement>("[data-node-id]");
+    pressing.current = true;
+    (nodeEl ?? root.current)?.focus({ preventScroll: true });
     const edgeEl = t.closest<HTMLElement>("[data-edge-id]");
     const handle = t.closest<HTMLElement>("[data-handle]")?.dataset.handle as Side | undefined;
     const corner = t.closest<HTMLElement>("[data-resize]")?.dataset.resize;
@@ -281,9 +365,16 @@ export function CanvasBoard(props: CanvasBoardProps) {
     }
     if (L.readOnly) return;
     // A group takes the cards inside it along.
-    const ids = new Set(nodes);
-    for (const n of nodes) for (const inner of inside(L.canvas, n)) ids.add(inner);
+    const ids = withInside(L.canvas, nodes);
     gesture.current = { kind: "move", ...at, ids, base: L.canvas, moved: false, narrow: was && !e.shiftKey && nodes.length > 1 ? node.id : null, last: null };
+  };
+
+  /** What a double-click on a card does, and Enter or F2 on one: open a file or a Memory note, or edit what the card says. */
+  const activate = (node: CanvasNode) => {
+    const L = latest.current;
+    if (node.type === "file" && node.file) L.props.onOpenFile(node.file.replace(/\\/g, "/"));
+    else if (node.type === "link" && node.url?.startsWith(MEM_PREFIX)) useWorkspace.getState().openNote(node.url.slice(MEM_PREFIX.length), {});
+    else if (!L.readOnly && (node.type === "text" || node.type === "link" || node.type === "group")) startEdit(node.id);
   };
 
   const doubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -294,9 +385,7 @@ export function CanvasBoard(props: CanvasBoardProps) {
     const node = id ? L.canvas.nodes.find((n) => n.id === id) : undefined;
     const edgeId = t.closest<HTMLElement>("[data-edge-id]")?.dataset.edgeId;
     if (node) {
-      if (node.type === "file" && node.file) L.props.onOpenFile(node.file.replace(/\\/g, "/"));
-      else if (node.type === "link" && node.url?.startsWith(MEM_PREFIX)) useWorkspace.getState().openNote(node.url.slice(MEM_PREFIX.length), {});
-      else if (!L.readOnly && (node.type === "text" || node.type === "link" || node.type === "group")) startEdit(node.id);
+      activate(node);
     } else if (edgeId) {
       if (!L.readOnly) startEdgeEdit(edgeId);
     } else if (!L.readOnly) add({ type: "text", text: "" }, "text", toCanvas(e.clientX, e.clientY));
@@ -305,29 +394,84 @@ export function CanvasBoard(props: CanvasBoardProps) {
   const removeSelected = () => {
     const L = latest.current;
     if (L.readOnly || (!L.sel.size && !L.edge)) return;
+    // Keep the keyboard where it was: on the card after the first one removed in reading order, else the one before, else the board.
+    const rest = order.filter((n) => !L.sel.has(n.id));
+    const first = order.findIndex((n) => L.sel.has(n.id));
+    const next = rest.find((n) => order.indexOf(n) > first) ?? rest[rest.length - 1];
+    focusAfter.current = next && L.sel.size ? next.id : "board";
     commit(removeItems(L.canvas, L.sel, new Set(L.edge ? [L.edge] : [])));
     setSel(NONE);
   };
 
+  /** A keyboard move or resize (Ctrl+Arrow, Ctrl+Shift+Arrow) of the cards `ids`: the same model change as a drag, as one commit,
+   *  and a run of presses of one kind is one step of the history. */
+  const nudge = (ids: string[], by: NonNullable<ReturnType<typeof nudgeOf>>) => {
+    const L = latest.current;
+    if (L.readOnly || !ids.length) return;
+    if (by.kind === "move") {
+      commit(moveNodes(L.canvas, withInside(L.canvas, ids), by.dx, by.dy), "key-move");
+      const n = L.canvas.nodes.find((x) => x.id === ids[0]);
+      if (n) reveal({ ...n, x: n.x + by.dx, y: n.y + by.dy });
+    } else if (ids.length === 1) {
+      const n = L.canvas.nodes.find((x) => x.id === ids[0]);
+      if (!n) return;
+      const box = resizedBox(n, "se", by.dx, by.dy);
+      commit(resizeNode(L.canvas, n.id, box), "key-resize");
+      reveal(box);
+    }
+  };
+
   const keys = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (inField(e.target) || (e.target as HTMLElement).closest("[data-canvas-ui]")) return;
+    const t = e.target as HTMLElement;
+    if (inField(t) || t.closest("[data-canvas-ui]")) return;
     const L = latest.current;
     const mod = e.ctrlKey || e.metaKey, key = e.key.toLowerCase();
+    // What acts on a card is for the card or the board having focus, not for a button or link inside a card (Enter on "Open in
+    // browser" opens the address and does not also edit the card).
+    const focused = t.hasAttribute("data-node-id") ? t.dataset.nodeId : undefined;
+    const direct = t === root.current || !!focused;
+    const nudged = direct ? nudgeOf(e) : null;
+    const walk: Record<string, number> = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 };
     if (mod && key === "z") { e.preventDefault(); if (e.shiftKey) L.props.onRedo(); else L.props.onUndo(); }
     else if (mod && key === "y") { e.preventDefault(); L.props.onRedo(); }
     else if (mod && key === "a") { e.preventDefault(); setSel({ nodes: L.canvas.nodes.map((n) => n.id), edge: null }); }
-    else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); removeSelected(); }
+    else if (nudged) { e.preventDefault(); nudge(L.sel.size ? [...L.sel] : focused ? [focused] : [], nudged); }
+    // Arrow keys move between cards in reading order (down and right go on, up and left go back); Home and End go to the ends.
+    else if (direct && !mod && !e.altKey && !e.shiftKey && (e.key in walk || e.key === "Home" || e.key === "End")) {
+      e.preventDefault();
+      if (!order.length) return;
+      const here = order.findIndex((n) => n.id === (focused ?? (L.sel.size === 1 ? [...L.sel][0] : stop)));
+      const to = e.key === "Home" ? 0 : e.key === "End" ? order.length - 1 : Math.min(order.length - 1, Math.max(0, here < 0 ? 0 : here + walk[e.key]));
+      goTo(order[to].id);
+    }
+    else if (direct && (e.key === "Delete" || e.key === "Backspace")) { e.preventDefault(); removeSelected(); }
     else if (e.key === "Escape") {
       // Escape used here (a gesture, a selection) is not for focus mode too.
       if (gesture.current || preview || joining || L.sel.size || L.edge) e.preventDefault();
       gesture.current = null; setPreview(null); setJoining(null); setSel(NONE);
     }
-    else if ((e.key === "Enter" || e.key === "F2") && !L.readOnly) {
+    else if (direct && (e.key === "Enter" || e.key === "F2")) {
       const [only] = [...L.sel];
-      const node = L.sel.size === 1 ? L.canvas.nodes.find((n) => n.id === only) : undefined;
-      if (node && (node.type === "text" || node.type === "link" || node.type === "group")) { e.preventDefault(); startEdit(node.id); }
-      else if (!L.sel.size && L.edge) { e.preventDefault(); startEdgeEdit(L.edge); }
+      const node = L.canvas.nodes.find((n) => n.id === (focused ?? (L.sel.size === 1 ? only : undefined)));
+      if (node) { e.preventDefault(); activate(node); }
+      else if (!L.sel.size && L.edge && !L.readOnly) { e.preventDefault(); startEdgeEdit(L.edge); }
     }
+  };
+
+  /** A card has the keyboard focus, however it got it (Tab, an arrow key, a click): it is the Tab stop, it is selected, and it is
+   *  brought into view. The browser's own scrolling of the pane is undone: the board moves by its transform. */
+  const gotFocus = (e: React.FocusEvent<HTMLDivElement>) => {
+    const el = e.target as HTMLElement;
+    const id = el.getAttribute("data-node-id");
+    if (!id || el.closest("[data-canvas-ui]")) return;
+    if (root.current) { root.current.scrollLeft = 0; root.current.scrollTop = 0; }
+    setStop(id);
+    if (pressing.current) return;
+    const L = latest.current;
+    const node = L.canvas.nodes.find((n) => n.id === id);
+    if (!node) return;
+    if (!L.sel.has(id)) setSel({ nodes: [id], edge: null });
+    reveal(node);
   };
 
   const zoomBy = (factor: number) => {
@@ -353,11 +497,16 @@ export function CanvasBoard(props: CanvasBoardProps) {
   const world: CSSProperties = { transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})`, ["--k" as string]: view.k };
   const percent = `${Math.round(view.k * 100)}%`;
   return (
-    <div ref={root} className="canvas-board" data-own-zoom tabIndex={0} role="application" aria-label="Canvas board" onPointerDown={down} onDoubleClick={doubleClick} onKeyDown={keys}>
+    <div ref={root} className="canvas-board" data-own-zoom tabIndex={tabStop ? -1 : 0} role="application" aria-label="Canvas board" aria-describedby={hintId}
+      onPointerDown={down} onDoubleClick={doubleClick} onKeyDown={keys} onFocus={gotFocus}>
+      <p id={hintId} className="visually-hidden">
+        Arrow keys move between cards in reading order. Enter or F2 opens or edits the card. Ctrl or Cmd with an arrow key moves it,
+        and with Shift as well resizes it. Delete removes it.
+      </p>
       <EnvContext.Provider value={env}>
         <div className="canvas-world" style={world}>
           <EdgesLayer nodes={shown.nodes} edges={shown.edges} selected={edgeSelected} editing={editingEdge} onLabel={finishEdge} />
-          <NodesLayer nodes={shown.nodes} selected={selected} editing={editing} />
+          <NodesLayer nodes={shown.nodes} selected={selected} editing={editing} tabStop={tabStop} />
           {joining && <svg className="canvas-edges" width="1" height="1" aria-hidden><path className="canvas-joining" d={`M${joining.from.x} ${joining.from.y}L${joining.to.x} ${joining.to.y}`} /></svg>}
         </div>
       </EnvContext.Provider>
@@ -379,6 +528,9 @@ export function CanvasBoard(props: CanvasBoardProps) {
         <span className="canvas-zoom" role="status" aria-label="Zoom level">{percent}</span>
         <button type="button" onClick={() => zoomBy(STEP)} title="Zoom in" aria-label="Zoom in">+</button>
         <button type="button" onClick={fit} title="Fit every card in the pane">Fit</button>
+        {/* The edges are drawn in an SVG a screen reader skips and a keyboard cannot select. This is their list, and the way to join
+            two cards without dragging from one card's handle to the other. */}
+        <button type="button" aria-expanded={panel} aria-controls={panelId} onClick={() => setPanel((v) => !v)}>Connections</button>
         {!readOnly && hasSelection && (
           <>
             <span className="canvas-sep" />
@@ -388,6 +540,22 @@ export function CanvasBoard(props: CanvasBoardProps) {
           </>
         )}
       </div>
+      {panel && (
+        <div id={panelId} className="canvas-panel-host" data-canvas-ui>
+          <ConnectionsPanel nodes={canvas.nodes} edges={canvas.edges} readOnly={readOnly}
+            onPick={(id) => { setSel({ nodes: [], edge: id }); root.current?.focus({ preventScroll: true }); }}
+            onConnect={(from, to) => {
+              const L = latest.current;
+              const a = L.canvas.nodes.find((n) => n.id === from), b = L.canvas.nodes.find((n) => n.id === to);
+              if (!a || !b) return;
+              const [fromSide, toSide] = facing(a, b);
+              const problem = connectProblem(L.canvas, from, to, fromSide, toSide);
+              if (problem) { L.props.ctx.fail(problem); return; }
+              const made = addEdge(L.canvas, from, to, fromSide, toSide);
+              if (made) { commit(made.canvas); setSel({ nodes: [], edge: made.id }); }
+            }} />
+        </div>
+      )}
       {missing > 0 && <div className="canvas-note muted small" data-canvas-ui>{missing} {missing === 1 ? "edge joins" : "edges join"} a card that is not on the board. {missing === 1 ? "It is" : "They are"} kept in the file and not drawn.</div>}
       {dialog === "file" && <FilePicker files={ctx.notebook?.files ?? []} onClose={() => setDialog(null)} onPick={(path) => { setDialog(null); addFile(path); }} />}
       {dialog === "note" && (

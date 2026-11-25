@@ -319,6 +319,18 @@ export function resizeNode(c: Canvas, id: string, box: Box): Canvas {
   return setNode(c, id, { x: round(box.x), y: round(box.y), width: Math.max(MIN_W, round(box.width)), height: Math.max(MIN_H, round(box.height)) });
 }
 
+/** Cards from top to bottom, then left to right: the order the keyboard walks them in. */
+export function readingOrder(nodes: readonly CanvasNode[]): CanvasNode[] {
+  return [...nodes].sort((a, b) => a.y - b.y || a.x - b.x || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/** `ids` and, for each group among them, the cards inside it: what a move takes along. */
+export function withInside(c: Canvas, ids: Iterable<string>): Set<string> {
+  const all = new Set(ids);
+  for (const id of [...all]) for (const inner of inside(c, id)) all.add(inner);
+  return all;
+}
+
 /** The ids of the cards that lie wholly inside a group, so moving the group takes them along. */
 export function inside(c: Canvas, groupId: string): string[] {
   const g = c.nodes.find((n) => n.id === groupId);
