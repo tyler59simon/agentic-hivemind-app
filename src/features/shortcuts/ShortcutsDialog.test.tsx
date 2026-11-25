@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // The shortcut reference sheet (DESK-KEYS): groups, a filter, the keys as remapped, and the quick-capture hotkey as the app
 // registered it.
-import { act } from "react";
+import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -121,6 +121,26 @@ describe("the sheet", () => {
     expect(useShortcutsDialog.getState().open).toBe(false);
     expect(useApp.getState().settings).toEqual({ section: "shortcuts" });
     useApp.setState({ settings: null });
+  });
+});
+
+describe("under React Strict Mode", () => {
+  it("keeps the focus in the filter box while open and gives it back to the opener only on close", async () => {
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+    const el = document.createElement("div");
+    document.body.append(el);
+    root = createRoot(el);
+    await act(async () => root!.render(<StrictMode><button id="opener">Opener</button><ShortcutsDialog /></StrictMode>));
+    const opener = document.getElementById("opener") as HTMLButtonElement;
+    opener.focus();
+    await act(async () => useShortcutsDialog.getState().show());
+    await settle();
+    expect(document.activeElement).toBe(document.querySelector('input[aria-label="Filter shortcuts"]'));
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+    await settle();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(opener);
   });
 });
 

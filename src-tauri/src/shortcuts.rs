@@ -73,25 +73,30 @@ pub fn normalize(combo: &str) -> Option<String> {
     Some(out.join("+"))
 }
 
-/// A combo as compared between two overrides: off macOS there is no separate Cmd, so Ctrl and Mod are the same key.
+/// A combo as compared between two overrides: off macOS there is no separate Cmd, so Ctrl and Mod are one flag (`Mod+Ctrl+J`
+/// and `Mod+J` are the same key), as in src/lib/shortcuts.ts.
 fn same_key(combo: &str) -> String {
     if cfg!(target_os = "macos") {
-        combo.to_string()
-    } else {
-        combo.split('+').map(|part| if part == "Ctrl" { "Mod" } else { part }).collect::<Vec<_>>().join("+")
+        return combo.to_string();
     }
+    let mut parts: Vec<&str> = combo.split('+').map(|part| if part == "Ctrl" { "Mod" } else { part }).collect();
+    parts.dedup();
+    parts.join("+")
 }
 
-/// The overrides in `saved` that are well formed: an entry with an id or combo this module would refuse reads as unset.
+/// The overrides in `saved` that are well formed, each in its normalized spelling, so one saved under an older rule (such as
+/// `Mod+Shift+1`, now `Mod+1`) is read and kept, not dropped. An entry with an id or combo this module would refuse reads as
+/// unset. When two entries are the same key, the first by id order is kept.
 pub fn get(saved: &Settings) -> BTreeMap<String, String> {
-    saved
-        .shortcuts
-        .iter()
-        .flatten()
-        .filter(|(id, combo)| valid_id(id) && normalize(combo).as_deref() == Some(combo.as_str()))
-        .map(|(id, combo)| (id.clone(), combo.clone()))
-        .take(MAX_OVERRIDES)
-        .collect()
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = BTreeMap::new();
+    for (id, combo) in saved.shortcuts.iter().flatten() {
+        let Some(combo) = normalize(combo).filter(|_| valid_id(id)) else { continue };
+        if out.len() < MAX_OVERRIDES && seen.insert(same_key(&combo)) {
+            out.insert(id.clone(), combo);
+        }
+    }
+    out
 }
 
 /// Keep `combo` for `id`, or with None go back to the default. A combo another stored override already uses is refused with
@@ -201,6 +206,38 @@ mod tests {
         assert_eq!((typed.python.as_deref(), get(&typed)), (Some("py"), BTreeMap::from([("note.new".to_string(), "Mod+J".to_string())])));
         let file: Settings = serde_json::from_str(r#"{"shortcuts": {"note.new": "Mod+J", "zoom.in": "J", "Bad": "Mod+K", "tab.close": "mod+w"}}"#).unwrap();
         assert_eq!(get(&file), BTreeMap::from([("note.new".to_string(), "Mod+J".to_string())]));
+    }
+
+    #[test]
+    fn an_entry_saved_under_an_older_spelling_is_read_as_its_normalized_form() {   // DESK-KEYS F1
+        let file: Settings = serde_json::from_str(r#"{"shortcuts": {"graph.open": "Mod+Shift+1", "zoom.in": "Shift+Mod+Plus", "note.new": "Mod+J"}}"#).unwrap();
+        let expected = BTreeMap::from([("graph.open".to_string(), "Mod+1".to_string()), ("zoom.in".to_string(), "Mod+=".to_string()), ("note.new".to_string(), "Mod+J".to_string())]);
+        assert_eq!(get(&file), expected);
+        // A later edit of another shortcut writes them back normalized and keeps them.
+        let mut saved = file.clone();
+        change(&mut saved, "tab.close", Some("Mod+K")).unwrap();
+        assert_eq!(get(&saved).len(), 4);
+        assert_eq!(get(&saved)["graph.open"], "Mod+1");
+        assert_eq!(saved.shortcuts.as_ref().unwrap()["graph.open"], "Mod+1");
+    }
+
+    #[test]
+    fn two_entries_that_are_one_key_keep_the_first_by_id() {   // DESK-KEYS F1
+        let file: Settings = serde_json::from_str(r#"{"shortcuts": {"b.id": "Mod+Shift+1", "a.id": "Mod+1", "c.id": "Mod+J"}}"#).unwrap();
+        assert_eq!(get(&file), BTreeMap::from([("a.id".to_string(), "Mod+1".to_string()), ("c.id".to_string(), "Mod+J".to_string())]));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn off_macos_ctrl_and_mod_are_one_flag_when_combos_are_compared() {   // DESK-KEYS F3
+        assert_eq!(same_key("Mod+Ctrl+J"), same_key("Mod+J"));
+        assert_eq!(same_key("Ctrl+J"), same_key("Mod+J"));
+        assert_ne!(same_key("Ctrl+Alt+J"), same_key("Mod+J"));
+        let mut saved = Settings::default();
+        change(&mut saved, "note.new", Some("Mod+J")).unwrap();
+        assert_eq!(change(&mut saved, "graph.open", Some("Mod+Ctrl+J")), Err("taken:note.new".to_string()));
+        let file: Settings = serde_json::from_str(r#"{"shortcuts": {"a.id": "Mod+Ctrl+J", "b.id": "Ctrl+J"}}"#).unwrap();
+        assert_eq!(get(&file).len(), 1);
         let wrong: Settings = serde_json::from_str(r#"{"python": "py", "shortcuts": ["Mod+J"]}"#).unwrap();
         assert_eq!((wrong.python.as_deref(), get(&wrong).len()), (Some("py"), 0));
     }

@@ -23,10 +23,11 @@ export const useShortcutsDialog = create<DialogState>((set) => ({
   hide: (restore = true) => set({ open: false, restore }),
 }));
 
-/** Put the focus back where the sheet was asked for, or on the main region when that control is gone. */
+/** Put the focus back where the sheet was asked for, or on the main region when that control is gone. Only when the sheet has
+ *  been closed: React Strict Mode runs an effect's cleanup once while the sheet is still open. */
 function giveFocusBack(): void {
-  const { returnTo, restore } = useShortcutsDialog.getState();
-  if (!restore) return;
+  const { returnTo, restore, open } = useShortcutsDialog.getState();
+  if (open || !restore) return;
   const target = returnTo?.isConnected && returnTo !== document.body ? returnTo : document.querySelector<HTMLElement>("main");
   if (!target) return;
   if (!target.matches("a[href], button, input, select, textarea, [tabindex]")) target.setAttribute("tabindex", "-1");

@@ -221,13 +221,43 @@ export function comboOf(e: ComboEvent): string | null {
   return [mod && "Mod", isMac && e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && !isLoose(key) && "Shift", key].filter(Boolean).join("+");
 }
 
-/** Tauri's accelerator text (`CommandOrControl+Alt+M`) as a combo, for the quick-capture hotkey; the text itself when unknown. */
-export function fromAccelerator(accelerator: string): string {
-  const names: Record<string, string> = { commandorcontrol: "Mod", cmdorctrl: "Mod", command: "Mod", cmd: "Mod", super: "Mod", control: "Ctrl", ctrl: "Ctrl", alt: "Alt", option: "Alt", shift: "Shift" };
-  const parts = accelerator.split("+").map((p) => names[p.toLowerCase()] ?? p);
-  const text = parts.join("+");
-  return parse(text) ? text : accelerator;
+/** The Quick capture hotkey is registered from text the user typed, read the way the global-hotkey crate reads it (case does
+ *  not matter): `Control`/`Ctrl`; `CommandOrControl`/`CmdOrCtrl`/`CmdOrControl`/`CommandOrCtrl` (Cmd on macOS, Ctrl elsewhere);
+ *  `Command`/`Cmd`/`Super`/`Meta` (Cmd on macOS, the Windows key elsewhere); `Alt`/`Option`; `Shift`. */
+const ACCELERATOR_MODS: Record<string, "Mod" | "Ctrl" | "Super" | "Alt" | "Shift"> = {
+  commandorcontrol: "Mod", commandorctrl: "Mod", cmdorcontrol: "Mod", cmdorctrl: "Mod", control: "Ctrl", ctrl: "Ctrl",
+  command: "Super", cmd: "Super", super: "Super", meta: "Super", alt: "Alt", option: "Alt", shift: "Shift",
+};
+
+/** A key of an accelerator as combos spell it: `KeyN` and `n` are N, `Digit5` and `5` are 5, `F1` to `F12`, a named key in any
+ *  case, or one punctuation character. Null for a key combos cannot name. */
+function acceleratorKey(text: string): string | null {
+  const key = /^(?:key|digit)(.)$/i.exec(text)?.[1] ?? text;
+  if (/^f\d+$/i.test(key)) return FUNCTION_KEY.test(key.toUpperCase()) ? key.toUpperCase() : null;
+  const aliases: Record<string, string> = { esc: "Escape", return: "Enter", left: "ArrowLeft", right: "ArrowRight", up: "ArrowUp", down: "ArrowDown" };
+  const named = aliases[key.toLowerCase()] ?? NAMED.find((n) => n.toLowerCase() === key.toLowerCase());
+  if (named) return named;
+  return key.length === 1 ? keyName(key) : null;
 }
+
+/** The accelerator as an app combo, to compare with the app's own shortcuts; null when it cannot clash with one: an unknown
+ *  part, or the Windows key (Super, Meta, Cmd off macOS), which no app combo uses. */
+export function acceleratorCombo(accelerator: string): string | null {
+  const parts = accelerator.split("+");
+  const key = acceleratorKey(parts.pop() ?? "");
+  if (!key) return null;
+  const mods = new Set<string>();
+  for (const part of parts) {
+    const mod = ACCELERATOR_MODS[part.trim().toLowerCase()];
+    if (!mod) return null;
+    if (mod === "Super") { if (!isMac) return null; mods.add("Mod"); } else mods.add(mod);
+  }
+  const text = [...["Mod", "Ctrl", "Alt", "Shift"].filter((m) => mods.has(m)), key].join("+");
+  return usable(text) ? normalize(text) : null;
+}
+
+/** The accelerator as a combo to show, or its own text when it is not one (the Windows key, or an unknown spelling). */
+export const fromAccelerator = (accelerator: string): string => acceleratorCombo(accelerator) ?? accelerator;
 
 // Conflicts ----------------------------------------------------------------------------------------------------------
 
@@ -280,7 +310,7 @@ export interface CaptureHotkey { shortcut: string | null; error: string | null }
 let captureHotkey: CaptureHotkey | null = null;
 export const captureStatusNow = (): CaptureHotkey | null => captureHotkey;
 /** The hotkey as a combo when it is registered, else null (off, not read yet, or registration failed). */
-export const captureCombo = (): string | null => (captureHotkey?.shortcut && !captureHotkey.error ? fromAccelerator(captureHotkey.shortcut) : null);
+export const captureCombo = (): string | null => (captureHotkey?.shortcut && !captureHotkey.error ? acceleratorCombo(captureHotkey.shortcut) : null);
 
 /** Read the Quick capture hotkey, for the conflict check and the sheet. Outside the app there is none. */
 export async function refreshCapture(): Promise<void> {

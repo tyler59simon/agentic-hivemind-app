@@ -192,8 +192,45 @@ describe("format", () => {
 
   it("reads Tauri's accelerator text as a combo", () => {
     expect(S.formatCombo(S.fromAccelerator("CommandOrControl+Alt+M"))).toBe("Ctrl+Alt+M");
-    expect(S.fromAccelerator("Ctrl+Shift+Q")).toBe("Ctrl+Shift+Q");
+    expect(S.formatCombo(S.fromAccelerator("Ctrl+Shift+Q"))).toBe("Ctrl+Shift+Q");
     expect(S.fromAccelerator("Ctrl+Nonsense")).toBe("Ctrl+Nonsense");
+  });
+});
+
+describe("the Quick capture accelerator as a combo", () => {
+  it("reads the spellings the global-hotkey crate takes, in any case", () => {
+    for (const [accelerator, combo] of [
+      ["CommandOrControl+Alt+M", "Mod+Alt+M"], ["cmdorctrl+alt+m", "Mod+Alt+M"], ["CmdOrControl+Shift+KeyN", "Mod+Shift+N"], ["CommandOrCtrl+Digit5", "Mod+5"],
+      ["Control+KeyN", "Mod+N"], ["Ctrl+Alt+F9", "Mod+Alt+F9"], ["Option+Shift+j", "Alt+Shift+J"], ["Ctrl+Space", "Mod+Space"], ["Ctrl+Left", "Mod+ArrowLeft"],
+      ["Ctrl+Esc", "Mod+Escape"], ["Ctrl+/", "Mod+/"],
+    ]) expect(S.acceleratorCombo(accelerator), accelerator).toBe(combo);
+    for (const unknown of ["", "M", "Ctrl+Hyper+M", "Ctrl+F99", "Ctrl+Nonsense", "Ctrl+"]) expect(S.acceleratorCombo(unknown), unknown).toBeNull();
+  });
+
+  it("conflicts when the spelling differs but the key is the same", async () => {
+    capture = { shortcut: "Control+KeyN", error: null };
+    await S.refreshCapture();
+    expect(S.conflicts("Mod+N", "graph.open")).toEqual([{ kind: "global", with: "Quick capture hotkey", refuse: true }, { kind: "app", with: "New note", refuse: true }]);
+  });
+
+  it("treats Super, Cmd, Command and Meta as the Windows key off macOS: no app combo clashes with it", async () => {
+    for (const spelling of ["Super+Alt+J", "Meta+Alt+J", "Command+Alt+J", "Cmd+Alt+J"]) {
+      capture = { shortcut: spelling, error: null };
+      await S.refreshCapture();
+      expect(S.captureCombo(), spelling).toBeNull();
+      expect(S.conflicts("Mod+Alt+J", "note.new"), spelling).toEqual([]);
+      expect(S.conflicts("Alt+J", "note.new"), spelling).toEqual([]);
+    }
+  });
+
+  it("treats Super as Cmd on macOS, so Super+Alt+J is Mod+Alt+J", async () => {
+    setMacForTests(true);
+    capture = { shortcut: "Super+Alt+J", error: null };
+    await S.refreshCapture();
+    expect(S.captureCombo()).toBe("Mod+Alt+J");
+    expect(S.conflicts("Mod+Alt+J", "note.new")).toEqual([{ kind: "global", with: "Quick capture hotkey", refuse: true }]);
+    // Ctrl is its own key there.
+    expect(S.conflicts("Ctrl+Alt+J", "note.new")).toEqual([]);
   });
 });
 
