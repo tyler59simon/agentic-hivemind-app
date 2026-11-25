@@ -146,7 +146,7 @@ export function NoteView({ refId, tabId }: { refId: string; tabId: string }) {
   if (note.error) return <p className="error pad">{classify(note.error).message}</p>;
   if (!n) return null;
   return (
-    <article className="note">
+    <article className="note doc-column">
       <div className="markdown">
         <Markdown remarkPlugins={[remarkGfm, remarkWikilinks]} components={components}
           urlTransform={(url) => (url.startsWith(WIKI_PREFIX) ? url : defaultUrlTransform(url))}>

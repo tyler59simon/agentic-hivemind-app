@@ -172,7 +172,7 @@ export function NoteEditor({ tab, live, head }: { tab: Tab; live: boolean; head:
   if (note.isLoading || !st) return <p className="muted pad">Loading…</p>;
   const n = note.data;
   return (
-    <article className="note editing file-editor">
+    <article className="note editing file-editor doc-column">
       {createPortal(
         <div className="note-head">
           <input className="title-input" value={st.mine.title} aria-label="Title" onChange={(e) => edit({ title: e.target.value })}

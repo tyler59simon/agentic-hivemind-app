@@ -535,7 +535,7 @@ function TextFileTab({ tab }: { tab: Tab }) {
         ? <PageView text={doc.text} tabId={tab.id} onLink={follow}
           pictures={{ base: pictures.data, folder: loose ? "" : folderOf(ref.path), files }} embed={loose ? undefined : rich.readEmbed} />
         : (
-          <div className="note file-editor">
+          <div className={`note file-editor${markdown ? " doc-column" : ""}`}>
             <CodeEditor key={key} doc={doc.text} docVersion={doc.version} follow language={markdown ? "markdown" : "text"} live={mode === "live"}
               readOnly={doc.status === "readOnly" || arriving} lineNumbers={!markdown} onChange={(text) => edit(key, text)} onSave={doSave}
               titles={titles} onOpenLink={follow} reveal={reveal} placeholder={markdown ? "Start writing…" : undefined}

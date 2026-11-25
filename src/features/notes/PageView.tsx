@@ -136,7 +136,7 @@ export function PageView({ text, tabId, onLink, pictures, embed, nested }: {
     : nested ? null : <p className="muted">This page is empty. Press <kbd>Ctrl</kbd>+<kbd>E</kbd> to write.</p>;
   if (nested) return <div className="markdown">{body}</div>;
   return (
-    <article className="note page-view">
+    <article className="note page-view doc-column">
       <div className="markdown">{body}</div>
     </article>
   );

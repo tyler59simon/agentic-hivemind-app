@@ -80,11 +80,10 @@ onThemeChange(() => {
   const theme = xtermTheme(read);
   lives.forEach((live) => { live.term.options.theme = theme; });
 });
-// A new code font (Settings) changes every open terminal's font and refits the ones on screen.
-onTypeChange(() => {
-  const fontFamily = read("--font-mono");
-  lives.forEach((live, id) => { if (live.term.options.fontFamily !== fontFamily) { live.term.options.fontFamily = fontFamily; refit(id); } });
-});
+// A new code font (Settings) reaches every open terminal through `refit`, which sets the font only where the cell can be
+// measured: a terminal that is detached or hidden keeps its old font until it is shown again (`mount` and the host's
+// resize call `refit`), because xterm measures zero there and would keep the old cell size.
+onTypeChange(() => { lives.forEach((_live, id) => refit(id)); });
 const rootPx = () => parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
 const openLink = (_e: MouseEvent, uri: string) => { if (/^https?:/i.test(uri)) openUrl(uri).catch(() => undefined); };
 
@@ -360,10 +359,13 @@ export function openFind(id: string): void {
   notify();
 }
 
-/** Refit after the host changed size; skipped while the host is hidden. */
+/** Refit after the host changed size; skipped while the host is hidden. Also puts the code font in effect (Settings) before
+ *  it fits, so the grid and the PTY are sized for the font the terminal draws with. */
 export function refit(id: string): void {
   const live = lives.get(id);
   if (!live || live.box.offsetParent === null || !live.term.element) return;
+  const family = read("--font-mono");
+  if (family && live.term.options.fontFamily !== family) live.term.options.fontFamily = family;
   const px = fontPx(rootPx());
   if (live.term.options.fontSize !== px) live.term.options.fontSize = px;
   try { live.fit.fit(); } catch { /* the host has no size yet */ }

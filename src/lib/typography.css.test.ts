@@ -18,7 +18,9 @@ describe("the typography tokens (DESK-TYPE)", () => {
   });
 
   it("reads them in notes and editors", () => {
-    expect(rule(".note")).toContain("max-width: var(--doc-width);");
+    // Only the Markdown reading and editing columns follow the width; Hmdoc, Canvas, Draw.io and the others keep 54rem (review C2).
+    expect(rule(".note")).toContain("max-width: 54rem;");
+    expect(rule(".note.doc-column")).toContain("max-width: var(--doc-width);");
     for (const selector of [".markdown", ".md-editor"]) expect(rule(selector), selector).toContain("font-family: var(--font-doc);");
     expect(rule(".markdown")).toContain("line-height: var(--doc-line-height);");
   });
@@ -43,11 +45,19 @@ describe("the typography tokens (DESK-TYPE)", () => {
     const defined = new Set([...root.matchAll(/^\s*--(sp-\d+):/gm)].map((m) => m[1]));
     expect([...used].filter((u) => !defined.has(u))).toEqual([]);
     expect(used.size).toBeGreaterThan(10);
-    for (const selector of [".markdown", ".md-editor"]) {
+    for (const selector of [".markdown", ".md-editor", ".canvas-text"]) {
       const own = css.split("\n").filter((l) => l.startsWith(`${selector} `) || l.startsWith(`${selector},`));
       expect(own.length, selector).toBeGreaterThan(0);
       expect(own.filter((l) => l.includes("var(--sp-")), selector).toEqual([]);
     }
+  });
+
+  it("starts the narrow rail under the tab strip in either density (review R1)", () => {
+    const rail = css.split("\n").find((l) => l.startsWith(".notes-area.narrow .note-rail {"))!;
+    // Comfortable: 2.1rem tab + 2 x .5rem padding + .05rem + 1px = the old 3.15rem + 1px.
+    expect(rail).toContain("top: calc(var(--row-h) + 2 * var(--sp-10) + .05rem + 1px);");
+    expect(rule(".note-tabs")).toContain("padding: var(--sp-10) var(--sp-16);");
+    expect(rule(".note-tab-pill")).toContain("height: var(--row-h);");
   });
 
   it("has no use of the old --font-sans token", () => {

@@ -149,7 +149,7 @@ export function NewNote({ tab }: { tab: Tab }) {
   );
 
   return (
-    <article className="note editing">
+    <article className="note editing doc-column">
       <div className="note-head">
         <input className="title-input" autoFocus value={f.title} placeholder="Title" aria-label="Title" onChange={(e) => setF({ ...f, title: e.target.value })} />
         <button className="primary" disabled={saving} onClick={() => save()} title="Save (Ctrl+S)">{saving ? "Saving…" : "Save"}</button>
