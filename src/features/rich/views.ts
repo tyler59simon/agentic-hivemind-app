@@ -8,6 +8,7 @@ import type { AnyExtension, Editor, NodeViewRendererProps } from "@tiptap/core";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { NodeSelection } from "@tiptap/pm/state";
 import { documentIsDark, onDocumentLook } from "../../lib/paper";
+import { webImageNote } from "../../lib/webImage";
 import { renderMath } from "../../ui/Math";
 import { diagramClick, drawMermaid, skipReason } from "../../ui/Mermaid";
 import type { RichContext } from "../editor/rich/context";
@@ -68,7 +69,8 @@ export function atomView(draw: (box: HTMLElement, node: PMNode, env: ViewEnv, pr
 
 function picture(box: HTMLElement, src: string, alt: string, wiki: boolean, width: number | undefined, env: ViewEnv) {
   const url = env.ctx().pictureUrl(src, wiki);
-  if (!url) { box.append(el("span", "rich-missing", `Picture: ${alt || src}`)); return; }
+  const note = webImageNote(src);
+  if (!url) { box.append(el("span", "rich-missing", note ? `Picture: ${alt ? `${alt}. ` : ""}${note}` : `Picture: ${alt || src}`)); return; }
   const img = el("img");
   img.src = url;
   img.alt = alt;

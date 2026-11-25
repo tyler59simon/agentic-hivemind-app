@@ -87,7 +87,7 @@ function build(view: EditorView): DecorationSet {
             if (!ctx || touches(node.from, node.to) || !oneLine(node.from, node.to)) return false;
             const embed = parseEmbed(state.sliceDoc(node.from, node.to));
             if (embed?.kind === "picture") {
-              out.push(Decoration.replace({ widget: new PictureWidget(state.sliceDoc(node.from, node.to), ctx.pictureUrl(embed.src, embed.wiki), embed.alt, embed.width, false) }).range(node.from, node.to));
+              out.push(Decoration.replace({ widget: new PictureWidget(state.sliceDoc(node.from, node.to), ctx.pictureUrl(embed.src, embed.wiki), embed.alt, embed.width, false, embed.src) }).range(node.from, node.to));
             }
             return false;
           }
@@ -116,7 +116,7 @@ function build(view: EditorView): DecorationSet {
         const a = from + m.index!, b = a + m[0].length;
         const embed = parseEmbed(m[0]);
         if (embed?.kind !== "picture" || !isPicture(embed.src) || inCode(a) || replaced(a, b) || touches(a, b)) continue;
-        out.push(Decoration.replace({ widget: new PictureWidget(m[0], ctx.pictureUrl(embed.src, embed.wiki), embed.alt, embed.width, false) }).range(a, b));
+        out.push(Decoration.replace({ widget: new PictureWidget(m[0], ctx.pictureUrl(embed.src, embed.wiki), embed.alt, embed.width, false, embed.src) }).range(a, b));
       }
     }
     if (text.includes("[^")) {

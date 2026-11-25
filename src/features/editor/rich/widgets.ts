@@ -3,6 +3,7 @@
 // again at the time of the edit (`sourceAt`), so a widget kept across edits above it never writes at an old position.
 import { StateEffect } from "@codemirror/state";
 import { EditorView, WidgetType } from "@codemirror/view";
+import { webImageNote } from "../../../lib/webImage";
 import { renderMath } from "../../../ui/Math";
 import { diagramClick, drawMermaid, skipReason } from "../../../ui/Mermaid";
 import type { RichContext } from "./context";
@@ -31,12 +32,14 @@ const MIN_PICTURE = 32, MAX_PICTURE = 2000, PICTURE_STEP = 16;
 
 /** A picture: its source replaced by the picture, with a handle that writes the width (`|300`) back. */
 export class PictureWidget extends WidgetType {
-  constructor(readonly source: string, readonly url: string | null, readonly alt: string, readonly width: number | undefined, readonly block: boolean) { super(); }
+  /** `src` is the picture's own address, for the note that says a web picture is not shown (REG-30). */
+  constructor(readonly source: string, readonly url: string | null, readonly alt: string, readonly width: number | undefined, readonly block: boolean, readonly src = "") { super(); }
   eq(o: PictureWidget) { return o.source === this.source && o.url === this.url && o.block === this.block; }
   get estimatedHeight() { return this.block ? 200 : -1; }
   toDOM(view: EditorView) {
     const box = el(this.block ? "div" : "span", this.block ? "cm-rich-picture cm-rich-block" : "cm-rich-picture");
-    const missing = () => { box.replaceChildren(el("span", "cm-rich-missing", `[${this.alt || "picture"}]`)); box.title = this.source; };
+    const note = webImageNote(this.src);
+    const missing = () => { box.replaceChildren(el("span", "cm-rich-missing", `[${this.alt || "picture"}]${note ? ` ${note}` : ""}`)); box.title = this.source; };
     if (!this.url) { missing(); return box; }
     const img = el("img");
     img.src = this.url;

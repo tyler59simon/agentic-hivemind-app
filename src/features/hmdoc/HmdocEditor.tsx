@@ -7,6 +7,7 @@ import type { Node as PMNode } from "@tiptap/pm/model";
 import { EditorState as PMState, Plugin, Selection, TextSelection } from "@tiptap/pm/state";
 import { TableMap } from "@tiptap/pm/tables";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { webImageNote } from "../../lib/webImage";
 import { pastedPictures } from "../editor/rich/attach";
 import type { RichContext } from "../editor/rich/context";
 import { isPicture } from "../editor/rich/parse";
@@ -449,7 +450,7 @@ function Cover({ meta, ctx, editable, onCover, onSettings }: {
   const url = meta.cover ? ctx.pictureUrl(meta.cover, true) : null;
   return (
     <div className={`hmdoc-cover${meta.cover ? " has-cover" : ""}`} ref={strip} tabIndex={editable ? 0 : undefined} onPaste={paste}>
-      {meta.cover && (url ? <img src={url} alt="" /> : <span className="rich-missing">Cover not found: {meta.cover}</span>)}
+      {meta.cover && (url ? <img src={url} alt="" /> : <span className="rich-missing">{webImageNote(meta.cover) ?? `Cover not found: ${meta.cover}`}</span>)}
       {editable && <button type="button" className="hmdoc-cover-button" onClick={onSettings}>{meta.cover ? "Change cover" : "Add a cover image"}</button>}
     </div>
   );

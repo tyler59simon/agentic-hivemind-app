@@ -13,6 +13,7 @@ import { findFile, pictureUrl } from "./pictures";
 import { QueryBlock } from "./QueryView";
 import { folderOf } from "../../lib/notebooks";
 import { scrollBehavior } from "../../lib/motion";
+import { webImageNote } from "../../lib/webImage";
 
 const PLUGINS = [remarkGfm, remarkEmbeds, remarkWikilinks, remarkHighlights, remarkCallouts];
 const keepUrl = (url: string) => (url.startsWith(WIKI_PREFIX) || url.startsWith(WIKI_PICTURE) ? url : defaultUrlTransform(url));
@@ -100,7 +101,7 @@ export function PageView({ text, tabId, onLink, pictures, embed, nested }: {
         } else url = pictureUrl(raw, pictures?.base, pictures?.folder ?? "");
         return url
           ? <img src={url} alt={label} loading="lazy" width={width} height={height} />
-          : <span className="muted" title={raw}>[{label || "image"}]</span>;
+          : <span className="muted" title={raw}>[{label || "image"}]{webImageNote(raw) ? ` ${webImageNote(raw)}` : ""}</span>;
       },
       code: ({ node: _node, className, children, ...rest }) => {
         const source = String(children ?? "");

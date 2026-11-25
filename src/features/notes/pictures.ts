@@ -1,12 +1,11 @@
 // Where a picture in a page loads from (NS-1B, phase doc section 5). A relative path is resolved against the page's
-// folder and served by `hmfile` under the page's grant; web pictures load as they are; anything else (a `file:` URL, a
-// Windows path, a path that climbs out of the grant's folder) does not load, and the alt text shows instead.
+// folder and served by `hmfile` under the page's grant. Anything else does not load and the alt text shows instead: a web
+// picture (REG-30, `src/lib/webImage.ts`), a `file:` URL, a Windows path, or a path that climbs out of the grant's folder.
 
 /** The URL to load `src` from, or null when it must not load. `base` is the grant's URL prefix (ending in `/`), and
  *  `folder` the page's folder relative to the grant's root ("" for its top level). */
 export function pictureUrl(src: string | undefined, base: string | undefined, folder: string): string | null {
   if (!src) return null;
-  if (/^https?:\/\//i.test(src)) return src;
   if (!base) return null;
   const path = relativeTarget(src, folder);
   return path === null ? null : base + path.split("/").map(encodeURIComponent).join("/");

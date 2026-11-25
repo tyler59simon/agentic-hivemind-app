@@ -140,7 +140,7 @@ function draw(d: Draw, node: SyntaxNode, { from, to }: Block, out: Range<Decorat
       const embed = parseEmbed(source);
       if (!embed) return;
       out.push(replaceBlock(embed.kind === "picture"
-        ? new PictureWidget(source, ctx.pictureUrl(embed.src, embed.wiki), embed.alt, embed.width, true)
+        ? new PictureWidget(source, ctx.pictureUrl(embed.src, embed.wiki), embed.alt, embed.width, true, embed.src)
         : new EmbedWidget(embed.target, embed.heading, ctx, d.stamp)).range(from, to));
     }
   }

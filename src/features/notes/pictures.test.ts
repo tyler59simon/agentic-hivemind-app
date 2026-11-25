@@ -11,9 +11,8 @@ describe("pictureUrl", () => {
     expect(pictureUrl("100%.png", base, "")).toBeNull();
   });
 
-  it("loads web pictures as they are and nothing outside the grant", () => {
-    expect(pictureUrl("https://example.com/a.png", base, "")).toBe("https://example.com/a.png");
-    for (const bad of ["../a.png", "../../etc/x.png", "file:///C:/x.png", "C:\\x.png", "/abs.png", "\\\\server\\x.png", "data:image/png;base64,AA", ""]) {
+  it("loads no web picture (REG-30) and nothing outside the grant", () => {
+    for (const bad of ["https://example.com/a.png", "http://example.com/a.png", "//example.com/a.png", "HTTPS://EXAMPLE.COM/A.PNG", "../a.png", "../../etc/x.png", "file:///C:/x.png", "C:\\x.png", "/abs.png", "\\\\server\\x.png", "data:image/png;base64,AA", ""]) {
       expect(pictureUrl(bad, base, "")).toBeNull();
     }
     expect(pictureUrl("a.png", undefined, "")).toBeNull();
