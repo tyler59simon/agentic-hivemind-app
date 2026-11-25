@@ -38,7 +38,8 @@ export function Splitter({ label, value, min, max, step, bigStep, pxPerUnit, rev
   const set = (v: number) => { const next = round(clamp(v, min, max)); if (next !== round(value)) onChange(next); };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (onMenu && contextMenuKey(e)) { e.preventDefault(); onMenu(menuPointFor(e.currentTarget), e.currentTarget); return; }
+    // The divider owns this chord while it has the focus: no saved shortcut also runs (`matches` skips it for a divider with a menu).
+    if (onMenu && contextMenuKey(e)) { e.preventDefault(); e.stopPropagation(); onMenu(menuPointFor(e.currentTarget), e.currentTarget); return; }
     if (e.altKey || e.ctrlKey || e.metaKey) return;
     const by = e.shiftKey ? bigStep : step;
     const sign = reverse ? -1 : 1;
@@ -77,7 +78,7 @@ export function Splitter({ label, value, min, max, step, bigStep, pxPerUnit, rev
 
   return (
     <div role="separator" aria-orientation="vertical" aria-label={label} aria-valuenow={round(value)} aria-valuemin={round(min)} aria-valuemax={round(max)}
-      aria-valuetext={text} aria-controls={controls} tabIndex={0} className={`splitter ${className}`.trim()}
+      aria-valuetext={text} aria-controls={controls} data-menu-splitter={onMenu ? "" : undefined} tabIndex={0} className={`splitter ${className}`.trim()}
       onKeyDown={onKeyDown} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerEnd} onPointerCancel={onPointerEnd}
       onLostPointerCapture={onLostCapture} onContextMenu={onContextMenu} onDoubleClick={onReset} />
   );

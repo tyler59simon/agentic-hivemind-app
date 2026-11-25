@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({}) }));
 
-const { RailSplitter, SidebarSplitter, TreeSplitter } = await import("./RegionSplitters");
+const { RailFocusGuard, RailSplitter, SidebarSplitter, TreeSplitter } = await import("./RegionSplitters");
 const { useLayout } = await import("./layout");
 const { useApp } = await import("../store");
 const { useWorkspace } = await import("../workspace/store");
@@ -99,5 +99,49 @@ describe("what the dividers report", () => {
     expect(useLayout.getState().treeWidth).toBe(16);
     act(() => { sep("Context rail width").dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); });
     expect(useLayout.getState().railWidth).toBeNull();
+  });
+});
+
+// F2: the rail goes (the window crosses 1100 px, the zoom changes, the user hides it) while the focus is in it.
+describe("the focus when the rail goes", () => {
+  function Host({ rail }: { rail: boolean }) {
+    return (
+      <div className="notes-area">
+        <button aria-label="Context rail" id="rail-button" />
+        <main className="page-host" tabIndex={-1} />
+        {rail && <><RailFocusGuard /><RailSplitter /><aside className="note-rail"><button id="in-rail">Rail</button></aside></>}
+      </div>
+    );
+  }
+  const show = (rail: boolean) => act(async () => root!.render(<Host rail={rail} />));
+
+  it("moves from a control in the rail to the rail button, before the rail leaves the page", async () => {
+    await show(true);
+    document.querySelector<HTMLElement>("#in-rail")!.focus();
+    await show(false);
+    expect(document.activeElement).toBe(document.querySelector("#rail-button"));
+  });
+
+  it("moves from the rail divider too", async () => {
+    await show(true);
+    sep("Context rail width").focus();
+    await show(false);
+    expect(document.activeElement).toBe(document.querySelector("#rail-button"));
+  });
+
+  it("goes to the page when the button is not there", async () => {
+    await show(true);
+    document.querySelector("#rail-button")!.remove();
+    document.querySelector<HTMLElement>("#in-rail")!.focus();
+    await show(false);
+    expect(document.activeElement).toBe(document.querySelector("main.page-host"));
+  });
+
+  it("leaves the focus alone when it was somewhere else", async () => {
+    await show(true);
+    const page = document.querySelector<HTMLElement>("main.page-host")!;
+    page.focus();
+    await show(false);
+    expect(document.activeElement).toBe(page);
   });
 });

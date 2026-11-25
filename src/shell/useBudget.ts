@@ -10,8 +10,14 @@ const subscribe = (listener: () => void) => { window.addEventListener("resize", 
 /** The window width and the rem in one string, so the snapshot is stable between changes. */
 const snapshot = () => `${window.innerWidth}:${remPx()}`;
 
-export function useBudget(): Budget {
+/** The window width in CSS px and the size of 1 rem in CSS px, kept current. */
+export function useViewport(): [number, number] {
   const [viewport, rootPx] = useSyncExternalStore(subscribe, snapshot).split(":").map(Number);
+  return [viewport, rootPx];
+}
+
+export function useBudget(): Budget {
+  const [viewport, rootPx] = useViewport();
   const layout = useLayout();
   const notes = useApp((s) => s.route.page === "notes");
   const lists = useApp((s) => s.route.page === "notes" && !!s.route.view);

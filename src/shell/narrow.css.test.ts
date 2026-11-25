@@ -79,4 +79,12 @@ describe("the splitter", () => {
     // The page takes the focus when a region goes, and shows it.
     expect(rule(".page-host:focus-visible").body).toContain("outline: 2px solid var(--accent)");
   });
+
+  // F9: at the narrowest sidebar (12 rem) the name gives way and the collapse button stays inside the sidebar.
+  it("lets the brand name shrink and truncate, and keeps the logo and the button their size", () => {
+    expect(rule(".brand-block span").body).toBe("min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;");
+    expect(rule(".brand-block img").body).toContain("flex: none");
+    expect(rule(".icon-button").body).toContain("flex: none");
+    expect(rule(".sidebar-toggle").body).toBe("margin-left: auto;");
+  });
 });

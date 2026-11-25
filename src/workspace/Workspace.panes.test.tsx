@@ -16,7 +16,7 @@ vi.mock("../features/notes/NewFileTab", () => ({ NewFileTab: () => null }));
 Element.prototype.scrollIntoView = () => {};
 
 const { Workspace } = await import("./Workspace");
-const { PANE_MIN_REM } = await import("../shell/budget");
+const { PANE_MIN_REM, paneShares } = await import("../shell/budget");
 const { paneSize, useWorkspace } = await import("./store");
 
 let root: Root | null = null;
@@ -178,14 +178,50 @@ describe("the splitter between panes", () => {
     expect(sizes()[1] / 2).toBeCloseTo(PANE_MIN_REM / 60, 2);
   });
 
-  it("makes the two panes equal on a double click, and leaves the third pane alone", async () => {
+  /** The widths drawn now, in rem, in a row of `rem`. */
+  const drawn = (rem = 60) => paneShares(sizes(), rem, PANE_MIN_REM).map((s) => Math.round(s * rem * 100) / 100);
+
+  it("makes the two panes equal on a double click, and keeps the width the third pane is drawn at (F1)", async () => {
     panes([1.6, 0.4, 1]);
     await mount();
+    const [, , third] = drawn(); // the middle pane is held to its minimum, so this is not 1/3 of 60
     act(() => { seps()[0].dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); });
-    expect(sizes()).toEqual([1, 1, 1]);
-    panes([0.5, 1.9, 0.6]);
+    const now = drawn();
+    expect(now[0]).toBeCloseTo(now[1], 2);
+    expect(now[2]).toBeCloseTo(third, 2);
+    expect(now.reduce((a, b) => a + b, 0)).toBeCloseTo(60, 1);
+    act(() => { panes([0.5, 1.9, 0.6]); }); // drawn [14, 32, 14]
+    expect(drawn()).toEqual([14, 32, 14]);
     act(() => { seps()[1].dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); });
-    expect(sizes().map((n) => Math.round(n * 100) / 100)).toEqual([0.5, 1.25, 1.25]);
+    expect(drawn()).toEqual([14, 23, 23]);
+  });
+
+  // F1: the divider moves the drawn widths of its two panes and no other. Saved [0.2, 1, 1] draws [14, 23, 23] in 60 rem; one
+  // step right on the first divider asks for [15, 22, 23], not a share of the saved weights (which gave [14, 19.15, 26.85]).
+  it("moves the drawn widths of its two panes by the step, and the third pane stays as drawn", async () => {
+    panes([0.2, 1, 1]);
+    await mount();
+    expect(drawn()).toEqual([14, 23, 23]);
+    key(seps()[0], "ArrowRight");
+    expect(drawn()).toEqual([15, 22, 23]);
+    key(seps()[1], "ArrowLeft", { shiftKey: true }); // the second divider, 4 rem to the left
+    expect(drawn()).toEqual([15, 18, 27]);
+    key(seps()[0], "ArrowLeft"); // back to the minimum: 14, and the middle gets the rem
+    expect(drawn()).toEqual([14, 19, 27]);
+  });
+
+  it("does the same from the menu and a drag", async () => {
+    panes([0.2, 1, 1]);
+    await mount();
+    act(() => { seps()[0].dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 })); });
+    act(() => [...document.querySelectorAll<HTMLElement>("[role='menuitem']")][0].click()); // left wider by 4 rem
+    expect(drawn()).toEqual([18, 19, 23]);
+    const sep = seps()[1];
+    const at = (type: string, x: number) => act(() => { sep.dispatchEvent(Object.assign(new MouseEvent(type, { clientX: x, button: 0, bubbles: true, cancelable: true }), { pointerId: 1 })); });
+    at("pointerdown", 100);
+    at("pointermove", 116); // 16 px is 1 rem
+    expect(drawn()).toEqual([18, 20, 22]);
+    at("pointerup", 116);
   });
 });
 
@@ -237,5 +273,63 @@ describe("the menu on the divider (a way to size the panes without dragging)", (
     open();
     act(() => items()[0].click());
     expect(sizes()[1] / 2).toBeGreaterThanOrEqual(PANE_MIN_REM / 29 - 0.001);
+  });
+
+  // F3: the menu is drawn in the body, above the rail that lies over the note; Escape gives the focus back to the divider.
+  it("is drawn in the body, outside the pane row and its stacking context, and Escape returns the focus to the divider", async () => {
+    panes([1, 1]);
+    await mount();
+    seps()[0].focus();
+    open();
+    const menu = document.querySelector<HTMLElement>("[role='menu']")!;
+    expect(menu.parentElement).toBe(document.body);
+    expect(menu.closest(".workspace")).toBeNull();
+    key(menu, "Escape");
+    expect(document.activeElement).toBe(seps()[0]);
+  });
+
+  // F5: three panes in a row too narrow for their minimums draw equal, so no direction can move; a command must not rewrite the sizes.
+  it("turns off a direction that cannot move, and writes nothing for it", async () => {
+    rowPx = 480; // 30 rem for three panes of 14 rem minimum: equal
+    panes([1.5, 0.5, 1]);
+    await mount();
+    expect(grows()).toEqual([1, 1, 1]);
+    open();
+    expect(items().map((i) => (i as HTMLButtonElement).disabled)).toEqual([true, true, false]);
+    act(() => items()[0].click());
+    expect(sizes()).toEqual([1.5, 0.5, 1]);
+    key(seps()[0], "ArrowRight");
+    key(seps()[0], "End");
+    expect(sizes()).toEqual([1.5, 0.5, 1]);
+    // Equal widths is a reset: it is written.
+    act(() => items()[2].click());
+    expect(sizes()).toEqual([1, 1, 1].map((n) => expect.closeTo(n, 5)));
+  });
+
+  it("turns off only the direction that is at its end", async () => {
+    panes([1, 1]);
+    await mount();
+    key(seps()[0], "Home");
+    open();
+    expect(items().map((i) => (i as HTMLButtonElement).disabled)).toEqual([false, true, false]);
+  });
+
+  // F4: while a divider with a menu has the focus, Shift+F10 is its own, whatever it is saved for, and reaches nothing else.
+  it("keeps Shift+F10 for itself: it does not reach the window, and no saved shortcut matches it there", async () => {
+    panes([1, 1]);
+    await mount();
+    const heard: KeyboardEvent[] = [];
+    const listen = (e: KeyboardEvent) => heard.push(e);
+    window.addEventListener("keydown", listen);
+    const e = new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true });
+    act(() => { seps()[0].dispatchEvent(e); });
+    window.removeEventListener("keydown", listen);
+    expect(heard).toEqual([]);
+    expect(document.querySelector("[role='menu']")).not.toBeNull();
+    const { setOverrides, matches } = await import("../lib/shortcuts");
+    setOverrides({ "palette.commands": "Shift+F10" });
+    expect(matches(Object.assign(new KeyboardEvent("keydown", { key: "F10", shiftKey: true }), {}), "palette.commands")).toBe(true); // elsewhere it works
+    expect(matches(Object.assign({ key: "F10", shiftKey: true, ctrlKey: false, metaKey: false, altKey: false }, { target: seps()[0] }), "palette.commands")).toBe(false);
+    setOverrides({});
   });
 });

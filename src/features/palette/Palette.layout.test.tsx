@@ -35,7 +35,9 @@ const settle = async () => { for (let i = 0; i < 3; i++) await act(async () => {
 const wide = (px: number) => act(() => { Object.defineProperty(window, "innerWidth", { value: px, configurable: true }); window.dispatchEvent(new Event("resize")); });
 const reset = () => {
   useLayout.setState({ sidebarCollapsed: false, focusMode: false });
-  useWorkspace.setState({ rail: true, railSplit: false, railNarrow: false });
+  // The Notes page with a note open: the only place the rail draws.
+  useApp.setState({ route: { page: "notes" } });
+  useWorkspace.setState({ panes: [{ id: "p0", tabs: [{ id: "t", kind: "note", ref: "d:1" }], active: "t" }], rail: true, railSplit: false, railNarrow: false });
 };
 
 beforeEach(async () => {
@@ -112,6 +114,27 @@ describe("the layout commands", () => {
     await act(async () => row("Show the note's context rail")!.click());
     expect(useLayout.getState().focusMode).toBe(false);
     expect(useWorkspace.getState().rail).toBe(true);
+  });
+
+  // F8: the rail draws only beside an open note on the Notes page; elsewhere there is nothing to show.
+  it("offers the rail command only on the Notes page with a document open", async () => {
+    const offered = async () => {
+      await act(async () => useApp.getState().setPalette("commands"));
+      await settle();
+      const found = !!(row("Hide the note's context rail") ?? row("Show the note's context rail"));
+      await act(async () => useApp.getState().setPalette(null));
+      return found;
+    };
+    await wide(1500);
+    useWorkspace.setState({ panes: [{ id: "p0", tabs: [{ id: "t", kind: "note", ref: "d:1" }], active: "t" }] });
+    useApp.setState({ route: { page: "agents" } });
+    expect(await offered()).toBe(false);
+    useApp.setState({ route: { page: "notes", view: "tasks" } });
+    expect(await offered()).toBe(false);
+    useApp.setState({ route: { page: "notes" } });
+    expect(await offered()).toBe(true);
+    useWorkspace.setState({ panes: [{ id: "p0", tabs: [], active: null }] });
+    expect(await offered()).toBe(false);
   });
 
   it("the rail command says Show in focus mode even when the rail is on, and hides it outside focus mode", async () => {

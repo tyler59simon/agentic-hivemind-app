@@ -338,8 +338,10 @@ export function DrawioBoard(props: DrawioBoardProps) {
       commit(deleteCells(doc, safeIndex, selectedSet));
       setSelected([]);
     } else if (e.key === "Escape") {
-      if (selected.length || gesture.current) e.preventDefault(); // used here, so not for focus mode too
-      setSelected([]);
+      // Used here, so not for focus mode too. A gesture under way is cancelled (its preview goes and a release commits nothing);
+      // with none, Escape clears the selection, and with neither it is left to the shell.
+      if (gesture.current) { e.preventDefault(); gesture.current = null; setPreview(null); setJoining(null); }
+      else if (selected.length) { e.preventDefault(); setSelected([]); }
     }
   };
 

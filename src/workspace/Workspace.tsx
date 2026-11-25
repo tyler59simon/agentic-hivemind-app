@@ -1,5 +1,6 @@
 import { Columns2, LayoutPanelTop, PanelRight, Plus, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
+import { createPortal } from "react-dom";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { NewNote } from "../features/editor/NewNote";
 import { NoteTab } from "../features/editor/NoteTab";
@@ -153,25 +154,26 @@ function PaneView({ pane, grow, focused, last, onClose }: {
 /** The divider between two neighbouring panes: it moves width from one to the other, and a double click makes them equal. `share`
  *  is the left pane's part of the two as they are drawn now, in percent, and `pairRem` the width the two have together (0 until
  *  it is measured). The menu (right-click, Shift+F10) does the same without dragging. */
-function PaneSplitter({ left, right, share, pairRem, label }: { left: Pane; right: Pane; share: number; pairRem: number; label: string }) {
-  const resize = useWorkspace((s) => s.resizePanes);
+function PaneSplitter({ left, share, pairRem, label, onShare }: { left: Pane; share: number; pairRem: number; label: string; onShare: (percent: number, force?: boolean) => void }) {
   const [menu, setMenu] = useState<{ x: number; y: number; from: HTMLElement } | null>(null);
   const unit = pairRem > 0 ? 100 / pairRem : 1; // one rem in percent of the two
   const min = pairRem > 0 ? Math.min(PANE_MIN_REM * unit, 50) : 0;
   const pct = Math.round(share);
-  const set = (v: number) => resize(left.id, right.id, Math.min(100 - min, Math.max(min, v)) / 100);
+  const set = (v: number) => onShare(Math.min(100 - min, Math.max(min, v)));
+  // A direction that cannot move is off, so a command never does nothing (and never rewrites the saved sizes for it).
+  const room = 1e-6;
   return (
     <div className="pane-gap">
       <Splitter label={label} controls={`pane-${left.id}`} value={share} min={min} max={100 - min} step={unit} bigStep={4 * unit} pxPerUnit={(pairRem * remPx()) / 100}
-        text={`${pct}% and ${100 - pct}%`} onChange={(v) => resize(left.id, right.id, v / 100)} onReset={() => resize(left.id, right.id, 0.5)}
+        text={`${pct}% and ${100 - pct}%`} onChange={(v) => onShare(v)} onReset={() => onShare(50, true)}
         onMenu={(at, from) => setMenu({ ...at, from })} />
-      {menu && (
+      {/* In the body, above the rail that lies over the note in a narrow window; focus goes back to the divider. */}
+      {menu && createPortal(
         <ContextMenu at={menu} from={menu.from} label="Pane widths" onClose={() => setMenu(null)}>
-          <li role="none"><button role="menuitem" onClick={() => { setMenu(null); set(share + 4 * unit); }}><span className="grow">Make left pane wider</span></button></li>
-          <li role="none"><button role="menuitem" onClick={() => { setMenu(null); set(share - 4 * unit); }}><span className="grow">Make right pane wider</span></button></li>
-          <li role="none"><button role="menuitem" onClick={() => { setMenu(null); resize(left.id, right.id, 0.5); }}><span className="grow">Equal widths</span></button></li>
-        </ContextMenu>
-      )}
+          <li role="none"><button role="menuitem" disabled={share >= 100 - min - room} onClick={() => { setMenu(null); set(share + 4 * unit); }}><span className="grow">Make left pane wider</span></button></li>
+          <li role="none"><button role="menuitem" disabled={share <= min + room} onClick={() => { setMenu(null); set(share - 4 * unit); }}><span className="grow">Make right pane wider</span></button></li>
+          <li role="none"><button role="menuitem" onClick={() => { setMenu(null); onShare(50, true); }}><span className="grow">Equal widths</span></button></li>
+        </ContextMenu>, document.body)}
     </div>
   );
 }
@@ -206,6 +208,17 @@ export function Workspace() {
   const row = useRef<HTMLDivElement>(null);
   const rowRem = useRowRem(row);
   const shares = paneShares(panes.map(paneSize), rowRem, PANE_MIN_REM);
+  const setSizes = useWorkspace((s) => s.setPaneSizes);
+  // Move the divider before pane `i`: the two panes next to it share their drawn width as asked, every other pane keeps the
+  // width it is drawn at, and the sizes saved are the ones that draw exactly that. A move that changes nothing writes nothing,
+  // unless it is a reset (`force`).
+  const setPair = (i: number, percent: number, force = false) => {
+    const pair = shares[i - 1] + shares[i];
+    const left = (pair * percent) / 100;
+    if (!force && Math.abs(left - shares[i - 1]) < 1e-6) return;
+    const next = shares.map((n, j) => (j === i - 1 ? left : j === i ? pair - left : n));
+    setSizes(Object.fromEntries(panes.map((p, j) => [p.id, next[j] * panes.length])));
+  };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (modalOpen()) return;
@@ -241,7 +254,7 @@ export function Workspace() {
       {panes.map((p, i) => (
         <Fragment key={p.id}>
           {i > 0 && (
-            <PaneSplitter left={panes[i - 1]} right={p} share={(100 * shares[i - 1]) / (shares[i - 1] + shares[i])} pairRem={(shares[i - 1] + shares[i]) * rowRem}
+            <PaneSplitter left={panes[i - 1]} onShare={(percent, force) => setPair(i, percent, force)} share={(100 * shares[i - 1]) / (shares[i - 1] + shares[i])} pairRem={(shares[i - 1] + shares[i]) * rowRem}
               label={panes.length === 2 ? "Width of the left pane" : `Width of pane ${i}`} />
           )}
           <PaneView pane={p} grow={shares[i] * panes.length} focused={p.id === focused || panes.length === 1} last={i === panes.length - 1} onClose={close.request} />

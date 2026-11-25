@@ -53,4 +53,28 @@ describe("DrawioEditor component", () => {
     expect(onInvalid).toHaveBeenCalledTimes(1);
     expect(document.querySelector("iframe")).toBeNull();
   });
+
+  // F7: Escape in the middle of a move cancels it: the preview goes and the release commits nothing. With no gesture and no
+  // selection the key is not used here, so a shell above can have it.
+  it("Escape cancels a gesture under way, then clears the selection, then is left alone", async () => {
+    const onChange = vi.fn();
+    const el = document.createElement("div");
+    document.body.append(el);
+    root = createRoot(el);
+    await act(async () => { root!.render(<DrawioEditor text={SAMPLE} readOnly={false} fileName="a.drawio" onChange={onChange} />); });
+    const shell = el.querySelector(".drawio-shell")!;
+    const pointer = (target: EventTarget, type: string, x: number) => act(async () => {
+      target.dispatchEvent(Object.assign(new MouseEvent(type, { clientX: x, clientY: x, button: 0, bubbles: true, cancelable: true }), { pointerId: 1 }));
+    });
+    const escape = () => { const e = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }); act(() => { shell.dispatchEvent(e); }); return e; };
+    await pointer(el.querySelector("[data-drawio-cell='a']")!, "pointerdown", 10);
+    await pointer(window, "pointermove", 80);
+    expect(escape().defaultPrevented).toBe(true); // the gesture
+    await pointer(window, "pointerup", 80);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(el.querySelector(".drawio-node.on")).not.toBeNull(); // the selection is still there
+    expect(escape().defaultPrevented).toBe(true); // the selection
+    expect(el.querySelector(".drawio-node.on")).toBeNull();
+    expect(escape().defaultPrevented).toBe(false); // nothing left: for the shell
+  });
 });

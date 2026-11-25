@@ -336,4 +336,12 @@ describe("the Settings section", () => {
     expect(document.body.textContent).toContain("Not set, taken by Command palette");
     useShortcutsDialog.getState().hide();
   });
+
+  // F4: Shift+F10 is the key of the width menu on a divider between panes, while the divider has the focus.
+  it("warns that Shift+F10 also opens the pane width menu, and does not refuse it", async () => {
+    await start("Command palette");
+    await press("Command palette", "F10", { shiftKey: true });
+    expect(sets()).toEqual([{ id: "palette.commands", combo: "Shift+F10" }]);
+    expect(text()).toContain("Shift+F10 also opens the width menu on a divider between panes, and there the divider wins.");
+  });
 });

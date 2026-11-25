@@ -33,12 +33,16 @@ afterEach(async () => {
 });
 
 describe("the Layout settings", () => {
-  it("has a labelled range for each width, in rem, with its limits, 1 rem steps and the value shown", () => {
-    for (const [label, min, max] of [["Sidebar width", 12, 24], ["Notes list width", 12, 28], ["Context rail width", 15, 32]] as const) {
+  it("has a labelled range for each width, in rem, with its limits, 0.1 rem steps and the value shown", () => {
+    for (const [label, min, max] of [["Sidebar width", 12, 24], ["Notes list width", 12, 28], ["Rail width when docked", 15, 32]] as const) {
       const input = range(label);
       expect(input, label).toBeDefined();
-      expect([input.min, input.max, input.step], label).toEqual([String(min), String(max), "1"]);
+      expect([input.min, input.max, input.step], label).toEqual([String(min), String(max), "0.1"]);
     }
+    // F6: the slider, the readout and the spoken text are one number (the default sidebar is 15.4 rem, not a slider that says 15).
+    const sidebar = range("Sidebar width");
+    expect(sidebar.value).toBe("15.4");
+    expect(sidebar.getAttribute("aria-valuetext")).toBe("15.4 rem");
     expect(document.querySelector(`output[for='${range("Sidebar width").id}']`)?.textContent).toBe("15.4 rem");
     expect(range("Sidebar width").getAttribute("aria-valuetext")).toBe("15.4 rem");
   });
@@ -49,13 +53,13 @@ describe("the Layout settings", () => {
     expect(document.querySelector(`output[for='${range("Sidebar width").id}']`)?.textContent).toBe("20 rem");
     change(range("Notes list width"), "13");
     expect(useLayout.getState().treeWidth).toBe(13);
-    change(range("Context rail width"), "30");
+    change(range("Rail width when docked"), "30");
     expect(useLayout.getState().railWidth).toBe(30);
   });
 
   it("shows the rail as following the window until it is set", () => {
     expect(document.querySelector(".layout")!.textContent).toContain("Follows the window until you set it.");
-    change(range("Context rail width"), "20");
+    change(range("Rail width when docked"), "20");
     expect(document.querySelector(".layout")!.textContent).not.toContain("Follows the window");
   });
 
@@ -74,5 +78,17 @@ describe("the Layout settings", () => {
     act(() => reset.click());
     expect(useLayout.getState()).toMatchObject({ sidebarWidth: 15.4, treeWidth: 16, railWidth: null, sidebarCollapsed: false });
     expect(useWorkspace.getState().panes.map((p) => p.size)).toEqual([1, 1]);
+  });
+
+  // F6: until it is set the rail follows the window, and so does what the setting shows.
+  it("shows the automatic rail width as the window changes", () => {
+    const at = (px: number) => act(() => { Object.defineProperty(window, "innerWidth", { value: px, configurable: true }); window.dispatchEvent(new Event("resize")); });
+    const shown = () => document.querySelector(`output[for='${range("Rail width when docked").id}']`)!.textContent;
+    at(1500);
+    expect(shown()).toBe("22.5 rem");
+    expect(range("Rail width when docked").value).toBe("22.5");
+    at(1200);
+    expect(shown()).toBe("18 rem");
+    at(1024);
   });
 });

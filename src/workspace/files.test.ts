@@ -110,21 +110,16 @@ describe("workspace with notebook pages", () => {
     expect(paneSize({ id: "x", tabs: [], active: null, size: 0.4 })).toBe(0.4);
   });
 
-  it("moves width between two panes without changing what they have together, and keeps both open", () => {
+  it("sets the sizes of the panes it is given, and leaves the rest alone", () => {
     ws().openTab({ kind: "new-note" });
     ws().split();
     const [a, b] = ws().panes.map((p) => p.id);
-    expect(ws().panes.map(paneSize)).toEqual([1, 1]);
-    ws().resizePanes(a, b, 0.7);
-    expect(ws().panes.map(paneSize)).toEqual([1.4, 0.6].map((n) => expect.closeTo(n, 5)));
-    ws().resizePanes(a, b, 0); // never to nothing
-    expect(paneSize(ws().panes[0])).toBeCloseTo(0.1, 5);
-    ws().resizePanes(a, b, Number.NaN); // ignored
-    expect(paneSize(ws().panes[0])).toBeCloseTo(0.1, 5);
-    ws().resizePanes(a, b, 0.5);
-    expect(ws().panes.map(paneSize)).toEqual([1, 1].map((n) => expect.closeTo(n, 5)));
-    ws().resizePanes(a, "gone", 0.9); // an unknown pane changes nothing
-    expect(ws().panes.map(paneSize)).toEqual([1, 1].map((n) => expect.closeTo(n, 5)));
+    ws().setPaneSizes({ [a]: 1.4, [b]: 0.6 });
+    expect(ws().panes.map(paneSize)).toEqual([1.4, 0.6]);
+    ws().setPaneSizes({ [a]: 0.5 });
+    expect(ws().panes.map(paneSize)).toEqual([0.5, 0.6]);
+    ws().setPaneSizes({ [a]: Number.NaN, [b]: -1, gone: 3 }); // not sizes: ignored
+    expect(ws().panes.map(paneSize)).toEqual([0.5, 0.6]);
   });
 
   it("drops tabs of unknown kinds and file tabs without a file", () => {

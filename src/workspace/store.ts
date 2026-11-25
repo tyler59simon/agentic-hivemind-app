@@ -46,8 +46,9 @@ interface WorkspaceState {
   updateTab: (tabId: string, patch: Partial<Tab>) => void;
   setDirty: (tabId: string, dirty: boolean) => void;
   setRail: (rail: boolean, narrow?: boolean) => void;
-  /** Move width between two neighbouring panes: `left` gets `share` (0 to 1) of what the two have together. */
-  resizePanes: (left: string, right: string, share: number) => void;
+  /** Set the sizes of the panes named (pane id to size). The caller works out what is drawn and sends sizes that reproduce it
+   *  (src/shell/budget.ts, `paneShares`); a pane not named, an unknown id or a size that is not a positive number is left as it is. */
+  setPaneSizes: (sizes: Record<string, number>) => void;
   revealLine: (tabId: string, line: number, col?: number) => void;
   replaceRef: (from: string, to: string) => void;
   /** A page or folder of a notebook was renamed or moved: its tabs follow. */
@@ -178,12 +179,9 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
       set((s) => ({ panes: s.panes.map((p) => ({ ...p, tabs: p.tabs.map((t) => (t.id === tabId ? { ...t, ...patch } : t)) })) })),
     setDirty: (tabId, dirty) => set((s) => (Boolean(s.dirty[tabId]) === dirty ? s : { dirty: { ...s.dirty, [tabId]: dirty } })),
     setRail: (shown, narrow = false) => set((s) => (narrow ? { railNarrow: shown } : s.panes.length > 1 ? { railSplit: shown } : { rail: shown })),
-    resizePanes: (left, right, share) => set((s) => {
-      const a = s.panes.find((p) => p.id === left), b = s.panes.find((p) => p.id === right);
-      if (!a || !b || !Number.isFinite(share)) return s;
-      const total = paneSize(a) + paneSize(b), size = total * Math.min(0.95, Math.max(0.05, share));
-      return { panes: s.panes.map((p) => (p === a ? { ...p, size } : p === b ? { ...p, size: total - size } : p)) };
-    }),
+    setPaneSizes: (sizes) => set((s) => ({
+      panes: s.panes.map((p) => (typeof sizes[p.id] === "number" && Number.isFinite(sizes[p.id]) && sizes[p.id] > 0 ? { ...p, size: sizes[p.id] } : p)),
+    })),
     revealLine: (tabId, line, col) => set({ reveal: { tabId, line, ...(col ? { col } : {}), at: Date.now() } }),
     // After a new note is captured, its tab becomes a note tab.
     replaceRef: (from, to) =>

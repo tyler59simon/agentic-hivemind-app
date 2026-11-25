@@ -32,7 +32,9 @@ function describe(candidate: string, id: string): Note | null {
   if (refused?.kind === "reserved") return { kind: "error", text: `${keys} is reserved for the system and cannot be used.` };
   if (refused?.kind === "global") return { kind: "error", text: `${keys} is the Quick capture hotkey.` };
   if (refused) return { kind: "error", text: `${keys} is already used for "${refused.with}".` };
-  return found[0] ? { kind: "warn", text: warning(keys, found[0], id) } : null;
+  if (found[0]) return { kind: "warn", text: warning(keys, found[0], id) };
+  // A divider between split panes opens its width menu on this key while it has the focus.
+  return normalize(candidate) === "Shift+F10" ? { kind: "warn", text: `${keys} also opens the width menu on a divider between panes, and there the divider wins.` } : null;
 }
 
 /** Rust refuses a combo another saved shortcut holds with `taken:<id>`; say it as a conflict. */

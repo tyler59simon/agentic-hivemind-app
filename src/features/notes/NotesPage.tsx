@@ -8,7 +8,7 @@ import { addNotebook, notebooksQuery, type Notebook } from "../../lib/notebooks"
 import { openInbox, useApp } from "../../store";
 import { toast } from "../../ui/toast";
 import { ContextRail } from "../../workspace/RightSidebar";
-import { RailSplitter, TreeSplitter } from "../../shell/RegionSplitters";
+import { RailFocusGuard, RailSplitter, TreeSplitter } from "../../shell/RegionSplitters";
 import { useBudget } from "../../shell/useBudget";
 import { hasTabs, railShown, useWorkspace } from "../../workspace/store";
 import { statusQuery } from "../../lib/noteindex";
@@ -139,7 +139,7 @@ export function NotesPage() {
         )
         : open
         ? <div className={`notes-area${narrow ? " narrow" : ""}`} style={{ "--rail-w": `${budget.rail}rem` } as CSSProperties}>
-          <Workspace />{rail && <><RailSplitter /><ContextRail /></>}
+          <Workspace />{rail && <><RailFocusGuard /><RailSplitter /><ContextRail /></>}
         </div>
         : empty ? <Empty onAdd={add} />
         : (

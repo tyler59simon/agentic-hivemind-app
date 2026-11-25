@@ -148,6 +148,7 @@ export function usable(combo: string): boolean {
 export interface ComboEvent {
   key: string; code?: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean;
   isComposing?: boolean; repeat?: boolean; getModifierState?: (key: string) => boolean;
+  target?: EventTarget | null;
 }
 
 /** An event that is not a key press shortcuts can read: input method composition, a dead key waiting for its letter, and
@@ -228,6 +229,8 @@ function resolve(): void {
 /** Whether the key event is the shortcut `id`. The callers keep their own guards (an open dialog, a field that takes text). */
 export function matches(e: ComboEvent, id: string): boolean {
   if (e.repeat && !REPEATS.has(id)) return false;
+  // A divider with a menu has Shift+F10 and the Menu key while it has the focus, whatever they are saved for.
+  if ((e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) && (e.target as Element | null)?.closest?.("[data-menu-splitter]")) return false;
   const p = parse(combo(id));
   return !!p && matchesParsed(e, p);
 }
