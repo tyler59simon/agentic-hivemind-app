@@ -4,7 +4,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { movedPath, sameDoc, type FileRef } from "../documents/keys";
 import { isCanvas, isDocx, isDrawio, isMarkdown, isMermaid, isPdf, isSvg, pageTitle } from "../lib/notebooks";
 import type { NoteType } from "../lib/lm";
-import { prefs } from "../lib/prefs";
+import { defaultMode } from "../lib/appearance";
 import { safeStorage, useApp } from "../store";
 
 export type Mode = "reading" | "live" | "source" | "history" | "bigfile" | "hex" | "board" | "preview" | "split" | "edit";
@@ -129,7 +129,7 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
     },
 
     openNote: (ref, opts = {}) =>
-      get().openTab({ kind: "note", ref, mode: opts.mode ?? prefs.defaultMode(), title: opts.title }, { split: opts.split }),
+      get().openTab({ kind: "note", ref, mode: opts.mode ?? defaultMode(), title: opts.title }, { split: opts.split }),
 
     activate: (paneId, tabId) => { set({ focused: paneId }); withPane(paneId, (p) => ({ ...p, active: tabId })); },
 

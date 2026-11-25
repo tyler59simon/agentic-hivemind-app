@@ -65,17 +65,23 @@ pub struct Settings {
     #[serde(default)]
     pub ui_zoom: Option<f64>,
     /// Colour theme, one of `THEMES` (DESK-11). Changed only by `appearance_set`; an unknown value is ignored.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub theme: Option<String>,
     /// Default document background, one of `PAPERS`. Changed only by `appearance_set`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub document_background: Option<String>,
     /// Document text size multiple, one of `DOC_SIZES`. Changed only by `appearance_set`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub document_size: Option<f64>,
     /// How a note opens, one of `DEFAULT_MODES`. Changed only by `appearance_set`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub default_mode: Option<String>,
+}
+
+/// A value of the wrong type reads as unset, so one bad appearance field never fails the whole settings file.
+fn lenient<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned>(deserializer: D) -> Result<Option<T>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value::<Option<T>>(value).unwrap_or(None))
 }
 
 /// On macOS Cmd+Option+M minimizes every window of the front app, so Shift is added there (MACOS-1D). Keep in step with
@@ -319,6 +325,20 @@ mod tests {
         assert_eq!((bad.theme(), bad.document_background(), bad.document_size(), bad.default_mode()), (None, None, None, None));
         let good: Settings = serde_json::from_str(r#"{"theme": "emerald", "document_background": "white", "document_size": 1.25, "default_mode": "source"}"#).unwrap();
         assert_eq!((good.theme(), good.document_background(), good.document_size(), good.default_mode()), (Some("emerald"), Some("white"), Some(1.25), Some("source")));
+    }
+
+    #[test]
+    fn an_appearance_field_of_the_wrong_type_does_not_fail_the_file() {   // DESK-11, C6
+        let text = r#"{"python": "py", "ui_zoom": 1.5, "theme": 3, "document_background": ["white"], "document_size": "1.1", "default_mode": {"a": 1}}"#;
+        let loaded: Settings = serde_json::from_str(text).unwrap();
+        assert_eq!((loaded.python.as_deref(), loaded.ui_zoom), (Some("py"), Some(1.5)));
+        assert_eq!((loaded.theme, loaded.document_background, loaded.document_size, loaded.default_mode), (None, None, None, None));
+        let dir = std::env::temp_dir().join(format!("hivemind-settings-lenient-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, text).unwrap();
+        assert_eq!(load(&path).python.as_deref(), Some("py"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

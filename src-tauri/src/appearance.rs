@@ -58,14 +58,36 @@ pub fn change(saved: &mut settings::Settings, key: &str, value: &serde_json::Val
     Ok(())
 }
 
-/// Check and keep one value, then tell every window with `appearance` (the new values of all of them).
-pub fn set_value<R: Runtime>(app: &AppHandle<R>, settings_path: &Path, key: &str, value: &serde_json::Value) -> Result<(), String> {
-    let now = settings::update(settings_path, |saved| {
-        change(saved, key, value)?;
-        Ok(get(saved))
-    })?;
-    let _ = app.emit("appearance", now);
-    Ok(())
+/// Whether `key` has a usable value in `saved`; a key that is not an appearance setting is an error.
+fn is_set(saved: &settings::Settings, key: &str) -> Result<bool, String> {
+    let now = get(saved);
+    match key {
+        "theme" => Ok(now.theme.is_some()),
+        "document_background" => Ok(now.document_background.is_some()),
+        "document_size" => Ok(now.document_size.is_some()),
+        "default_mode" => Ok(now.default_mode.is_some()),
+        _ => Err(format!("Unknown appearance setting: {key}")),
+    }
+}
+
+/// Check and keep one value; with `only_if_unset`, only when the key has none yet (a window moving its old localStorage copy
+/// over must not undo a choice made since). Returns whether the file was changed.
+fn write(saved: &mut settings::Settings, key: &str, value: &serde_json::Value, only_if_unset: bool) -> Result<Option<Appearance>, String> {
+    if only_if_unset && is_set(saved, key)? {
+        return Ok(None);
+    }
+    change(saved, key, value)?;
+    Ok(Some(get(saved)))
+}
+
+/// Check and keep one value, then tell every window with `appearance` (the new values of all of them). With `only_if_unset`
+/// nothing is written or sent when the key already has a value. Returns whether it wrote.
+pub fn set_value<R: Runtime>(app: &AppHandle<R>, settings_path: &Path, key: &str, value: &serde_json::Value, only_if_unset: bool) -> Result<bool, String> {
+    let now = settings::update(settings_path, |saved| write(saved, key, value, only_if_unset))?;
+    if let Some(now) = &now {
+        let _ = app.emit("appearance", now);
+    }
+    Ok(now.is_some())
 }
 
 #[cfg(test)]
@@ -89,6 +111,23 @@ mod tests {
             assert!(change(&mut saved, key, &value).is_err(), "{key} {value}");
         }
         assert_eq!(saved, before);
+    }
+
+    #[test]
+    fn only_if_unset_writes_a_missing_value_and_never_replaces_one() {   // DESK-11, C3
+        let mut saved = settings::Settings::default();
+        assert!(write(&mut saved, "theme", &json!("emerald"), true).unwrap().is_some());
+        assert_eq!(saved.theme(), Some("emerald"));
+        assert!(write(&mut saved, "theme", &json!("purple"), true).unwrap().is_none());
+        assert_eq!(saved.theme(), Some("emerald"));
+        // A saved value that is not a known one counts as unset.
+        saved.document_size = Some(3.0);
+        assert!(write(&mut saved, "document_size", &json!(1.25), true).unwrap().is_some());
+        assert_eq!(saved.document_size(), Some(1.25));
+        // Bad values and unknown keys are still refused, set or not.
+        assert!(write(&mut saved, "default_mode", &json!("history"), true).is_err());
+        assert!(write(&mut saved, "ui_zoom", &json!(1.5), true).is_err());
+        assert!(write(&mut saved, "theme", &json!("purple"), false).unwrap().is_some());
     }
 
     #[test]

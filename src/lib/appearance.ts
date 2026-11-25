@@ -5,6 +5,7 @@
 // `appearance::change` and a validator in settings.rs, then `followAppearance` in the module that shows it.
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { toast } from "../ui/toast";
 import type { Mode } from "../workspace/store";
 import { inTauri } from "./native";
 import type { PaperDefault } from "./paper";
@@ -21,11 +22,22 @@ export type AppearanceKey = keyof Appearance;
 
 // Counts saves of each key from this window, so a start-up read that answers after a save does not undo it.
 const saves: Partial<Record<AppearanceKey, number>> = {};
+// What shows each key in this window, so a refused save can put back what the file holds.
+const applies = new Map<AppearanceKey, (value: never) => void>();
+const NAMES: Record<AppearanceKey, string> = {
+  theme: "theme", document_background: "document background", document_size: "document text size", default_mode: "default note mode",
+};
 
 /** Keep `value` in the settings file; Rust checks it and tells every window. Outside the app there is no file. */
 export function saveAppearance<K extends AppearanceKey>(key: K, value: NonNullable<Appearance[K]>): void {
   saves[key] = (saves[key] ?? 0) + 1;
-  if (inTauri()) invoke("appearance_set", { key, value }).catch(() => undefined);
+  if (inTauri()) invoke("appearance_set", { key, value }).catch(() => refused(key));
+}
+
+/** The file did not take a change: say so, and show what it holds, so the screen and the copy match it. */
+function refused(key: AppearanceKey): void {
+  toast(`Could not save the ${NAMES[key]} setting.`, "error");
+  invoke<Appearance>("appearance_get").then((all) => { if (all[key] != null) applies.get(key)?.(all[key] as never); }, () => undefined);
 }
 
 /** Call `apply` with the setting's value from the settings file at start and whenever any window changes it. `stored` reads
@@ -37,28 +49,44 @@ export function followAppearance<K extends AppearanceKey>(
   let stopped = false;
   let heard = false;
   const savesAtStart = saves[key];
-  invoke<Appearance>("appearance_get").then((all) => {
+  applies.set(key, apply as (value: never) => void);
+  const read = () => invoke<Appearance>("appearance_get").then((all) => {
     // A change made or heard while the read was on its way is newer than what it read.
     if (stopped || heard || saves[key] !== savesAtStart) return;
     const value = all[key];
     if (value != null) apply(value as NonNullable<Appearance[K]>);
-    else { const copy = stored(); if (copy != null) saveAppearance(key, copy as NonNullable<Appearance[K]>); }
+    else {
+      // Only a value the file still lacks: another window or an explicit choice may have set it since.
+      const copy = stored();
+      if (copy != null) invoke("appearance_init", { key, value: copy }).catch(() => undefined);
+    }
   }, () => undefined);
   const unlisten = listen<Appearance>("appearance", (e) => {
-    heard = true;
     const value = e.payload[key];
-    if (value != null) apply(value as NonNullable<Appearance[K]>);
+    if (value == null) return;
+    heard = true;
+    apply(value as NonNullable<Appearance[K]>);
   });
-  return () => { stopped = true; void unlisten.then((u) => u()); };
+  // The read waits for the subscription, so a change between the two is heard, not missed.
+  void unlisten.then(read, read);
+  return () => { stopped = true; if (applies.get(key) === apply) applies.delete(key); void unlisten.then((u) => u(), () => undefined); };
 }
 
-/** Open notes in `mode` from now on: kept in the settings file, and in this window's copy for `prefs.defaultMode()`. */
-export function setDefaultMode(mode: Mode): void {
-  prefs.setDefaultMode(mode);
-  saveAppearance("default_mode", mode);
+// The mode in effect, kept here too so it holds when localStorage cannot be used.
+let mode: Mode | null = null;
+
+/** How a note opens by default. */
+export const defaultMode = (): Mode => mode ?? prefs.defaultMode();
+
+/** Open notes in `next` from now on: kept in the settings file, and in this window's copy. */
+export function setDefaultMode(next: Mode): void {
+  mode = next;
+  prefs.setDefaultMode(next);
+  saveAppearance("default_mode", next);
 }
 
 /** Follow the settings file for the default note mode. Called once, before the first render. */
 export function initDefaultMode(): () => void {
-  return followAppearance("default_mode", () => prefs.stored(prefs.defaultModeKey) as Mode | null, (mode) => prefs.setDefaultMode(mode));
+  mode = prefs.defaultMode();
+  return followAppearance("default_mode", () => prefs.stored(prefs.defaultModeKey) as Mode | null, (next) => { mode = next; prefs.setDefaultMode(next); });
 }

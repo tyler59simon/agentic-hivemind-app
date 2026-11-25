@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { setDefaultMode } from "../../lib/appearance";
+import { defaultMode, setDefaultMode } from "../../lib/appearance";
 import { applyDocSize, DOC_SIZES, useDocSize } from "../../lib/docSize";
 import { isMac } from "../../lib/platform";
 import { setZoom, useZoom, ZOOM_STEPS, zoomPercent } from "../../lib/zoom";
@@ -9,7 +9,6 @@ import { pauseLmStore } from "../../documents/store";
 import { useProjectsEnabled } from "../../lib/connection";
 import { captureStatus, getSettings, saveSettings, type CaptureStatus, type Settings } from "../../lib/lm";
 import { applyPaperDefault, PAPER_DEFAULTS, usePaperDefault, type PaperDefault } from "../../lib/paper";
-import { prefs } from "../../lib/prefs";
 import { applyTheme, THEME_CHOICES, useThemeChoice, type ThemeChoice } from "../../lib/theme";
 import { useHidden } from "../../shell/hidden";
 import { useAvailableSections } from "../../shell/Sidebar";
@@ -27,7 +26,9 @@ type PathKey = "python" | "script" | "root" | "claude_path" | "codex_path" | "ar
 export function SettingsForm({ onSaved }: { onSaved: () => void }) {
   const [value, setValue] = useState<Settings>({ python: null, script: null, root: null });
   const [status, setStatus] = useState<CaptureStatus | null>(null);
-  const [mode, setMode] = useState<Mode>(prefs.defaultMode());
+  const [mode, setMode] = useState<Mode>(defaultMode());
+  // Only a mode picked in this form is saved, so a form opened before the file's value arrived never replaces it.
+  const [modeEdited, setModeEdited] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const theme = useThemeChoice();
   const zoom = useZoom();
@@ -68,12 +69,11 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
   return (
     <form className="settings" onSubmit={(e) => {
       e.preventDefault();
-      setDefaultMode(mode);
       // Notes wait while the store may change, so none saves into the store being switched to; connecting again names
       // the store. Settings that were not saved change nothing.
       const resume = pauseLmStore();
       let saved = false;
-      saveSettings(value).then(() => { saved = true; return captureStatus().then(setStatus); }).then(onSaved)
+      saveSettings(value).then(() => { saved = true; if (modeEdited) setDefaultMode(mode); return captureStatus().then(setStatus); }).then(onSaved)
         .catch((err) => { if (!saved) resume(); setError(String(err)); });
     }}>
       <h3>Living Memory</h3>
@@ -161,7 +161,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
       <h3>Editor</h3>
       <label className="field">
         <span>Open notes in</span>
-        <select value={mode} onChange={(e) => setMode(e.target.value as Mode)}>
+        <select value={mode} onChange={(e) => { setMode(e.target.value as Mode); setModeEdited(true); }}>
           <option value="reading">Reading view</option>
           <option value="live">Live preview editor</option>
           <option value="source">Source (plain Markdown)</option>

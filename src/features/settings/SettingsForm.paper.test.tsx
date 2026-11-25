@@ -52,7 +52,7 @@ describe("the Document background setting", () => {
     expect(select().value).toBe("white");
   });
 
-  it("shows a change that came from the other window", async () => {
+  it("shows a value applied from outside the form (the settings file or the other window)", async () => {
     await act(async () => applyPaperDefault("white", false));
     expect(select().value).toBe("white");
   });
