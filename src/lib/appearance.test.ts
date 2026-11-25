@@ -258,6 +258,23 @@ describe("a change the file refuses (C5)", () => {
     expect(fake.file.theme).toBeUndefined();
   });
 
+  it("shows the default, not the refused value, when the file holds nothing (Codex review of 9f7b80c, C1)", async () => {
+    const w = await openWindow();
+    await startAndWait(w);
+    fake.failSets = true;
+    w.spell.setSpellcheck(false);
+    w.theme.applyTheme("emerald");
+    w.docSize.applyDocSize(1.5);
+    w.appearance.setDefaultMode("source");
+    await flush();
+    expect(w.spell.spellcheck()).toBe(true);
+    expect(w.theme.currentThemeChoice()).toBe("purple");
+    expect(docSizeVar()).toBe("1");
+    expect(w.appearance.defaultMode()).toBe("reading");
+    expect(["hivemind.spellcheck", "hivemind.theme", "hivemind.documentSize", "hivemind.defaultMode"].map((k) => localStorage.getItem(k))).toEqual([null, null, null, null]);
+    expect(w.toasts()).toHaveLength(4);
+  });
+
   it("lets a newer change win over the read that follows a refused save", async () => {   // Codex re-review of 2e736f0
     fake.file = { theme: "emerald-light" };
     const w = await openWindow();

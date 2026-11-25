@@ -36,6 +36,11 @@ const COPIES: Record<AppearanceKey, string> = {
   theme: prefs.themeKey, document_background: prefs.paperKey, document_size: prefs.docSizeKey, default_mode: prefs.defaultModeKey, spellcheck: prefs.spellcheckKey,
 };
 
+// What each key shows while the file holds nothing for it. Keep in step with the getters in prefs.ts.
+const DEFAULTS: { [K in AppearanceKey]: NonNullable<Appearance[K]> } = {
+  theme: "purple", document_background: "theme", document_size: 1, default_mode: "reading", spellcheck: true,
+};
+
 /** Keep `value` in the settings file; Rust checks it and tells every window. Outside the app there is no file. */
 export function saveAppearance<K extends AppearanceKey>(key: K, value: NonNullable<Appearance[K]>): void {
   changed(key);
@@ -43,14 +48,18 @@ export function saveAppearance<K extends AppearanceKey>(key: K, value: NonNullab
 }
 
 /** The file did not take a change: say so, and show what it holds, so the screen and the copy match it. When the file holds
- *  nothing for the key, the refused value is dropped from the copy, so the next start does not move it into the file. */
+ *  nothing for the key, the screen shows the default and the refused value is dropped from the copy, so the next start does
+ *  not move it into the file. */
 function refused(key: AppearanceKey): void {
   toast(`Could not save the ${NAMES[key]} setting.`, "error");
   const at = changes[key];
   invoke<Appearance>("appearance_get").then((all) => {
     if (changes[key] !== at) return;
     if (all[key] != null) applies.get(key)?.(all[key] as never);
-    else try { localStorage.removeItem(COPIES[key]); } catch { /* no copy kept */ }
+    else {
+      applies.get(key)?.(DEFAULTS[key] as never);   // writes the copy too, so the copy goes after it
+      try { localStorage.removeItem(COPIES[key]); } catch { /* no copy kept */ }
+    }
   }, () => undefined);
 }
 
