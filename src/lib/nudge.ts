@@ -31,3 +31,11 @@ export function joinsRun(run: { current: Run }, group: string | undefined, now =
   run.current = group ? { group, at: now } : null;
   return joined;
 }
+
+/** The share of the width (0.2 to 0.8) a source and preview divider gives the source after a key: the arrow keys move it 5 points,
+ *  Home and End go to the limits. Null for any other key. The dividers of the Mermaid and SVG editors use it, so they move
+ *  without a drag too. */
+export function splitKeyShare(key: string, share: number): number | null {
+  const next = key === "ArrowLeft" ? share - 0.05 : key === "ArrowRight" ? share + 0.05 : key === "Home" ? 0.2 : key === "End" ? 0.8 : null;
+  return next === null ? null : Math.round(Math.min(0.8, Math.max(0.2, next)) * 100) / 100;
+}

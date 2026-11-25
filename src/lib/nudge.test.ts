@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { joinsRun, KEY_STEP, MERGE_MS, nudgeOf, type Run } from "./nudge";
+import { joinsRun, KEY_STEP, MERGE_MS, nudgeOf, splitKeyShare, type Run } from "./nudge";
 
 const press = (key: string, mods: Partial<Parameters<typeof nudgeOf>[0]> = {}) => nudgeOf({ key, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...mods });
 
@@ -31,5 +31,17 @@ describe("joinsRun", () => {
     expect(joinsRun(run, "key-resize", 600 + MERGE_MS)).toBe(true);
     expect(joinsRun(run, undefined, 700 + MERGE_MS)).toBe(false);
     expect(joinsRun(run, "key-resize", 800 + MERGE_MS)).toBe(false);
+  });
+});
+
+describe("splitKeyShare", () => {
+  it("moves the divider 5 points with the arrows, to the limits with Home and End, and stays inside them", () => {
+    expect(splitKeyShare("ArrowRight", 0.45)).toBe(0.5);
+    expect(splitKeyShare("ArrowLeft", 0.45)).toBe(0.4);
+    expect(splitKeyShare("ArrowLeft", 0.2)).toBe(0.2);
+    expect(splitKeyShare("ArrowRight", 0.8)).toBe(0.8);
+    expect(splitKeyShare("Home", 0.5)).toBe(0.2);
+    expect(splitKeyShare("End", 0.5)).toBe(0.8);
+    expect(splitKeyShare("a", 0.5)).toBeNull();
   });
 });

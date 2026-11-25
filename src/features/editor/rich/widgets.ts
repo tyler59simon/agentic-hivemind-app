@@ -26,6 +26,9 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
   return node;
 };
 
+/** The narrowest and widest a picture may be made, and what one arrow key press changes the width by, in pixels. */
+const MIN_PICTURE = 32, MAX_PICTURE = 2000, PICTURE_STEP = 16;
+
 /** A picture: its source replaced by the picture, with a handle that writes the width (`|300`) back. */
 export class PictureWidget extends WidgetType {
   constructor(readonly source: string, readonly url: string | null, readonly alt: string, readonly width: number | undefined, readonly block: boolean) { super(); }
@@ -43,13 +46,35 @@ export class PictureWidget extends WidgetType {
     if (this.width) img.style.width = `${this.width}px`;
     img.addEventListener("error", missing);
     const handle = el("span", "cm-rich-resize");
-    // The keyboard way (WCAG 2.5.7) is the width in the source: ![alt|300](picture.png).
-    handle.title = "Drag to resize, or type the width in the source: ![alt|300](picture.png)";
+    // Without a drag (WCAG 2.5.7): the handle takes focus, and the arrow keys change the width by 16 (as a slider does). The width
+    // can also be typed in the source: ![alt|300](picture.png).
+    handle.title = "Drag to resize, use the arrow keys when it has focus, or type the width in the source: ![alt|300](picture.png)";
+    handle.tabIndex = 0;
+    handle.setAttribute("role", "slider");
+    handle.setAttribute("aria-label", "Picture width");
+    handle.setAttribute("aria-valuemin", String(MIN_PICTURE));
+    handle.setAttribute("aria-valuemax", String(MAX_PICTURE));
+    handle.dataset.source = this.source;
+    const shownWidth = () => Math.round(img.getBoundingClientRect().width || this.width || 0);
+    handle.setAttribute("aria-valuenow", String(shownWidth()));
+    img.addEventListener("load", () => handle.setAttribute("aria-valuenow", String(shownWidth())));
+    handle.addEventListener("keydown", (e) => {
+      const by = ({ ArrowRight: PICTURE_STEP, ArrowUp: PICTURE_STEP, ArrowLeft: -PICTURE_STEP, ArrowDown: -PICTURE_STEP } as Record<string, number>)[e.key];
+      if (by === undefined || e.ctrlKey || e.metaKey || e.altKey || view.state.readOnly) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const from = sourceAt(view, box, this.source);
+      if (from === null) return;
+      const next = withWidth(this.source, Math.min(MAX_PICTURE, Math.max(MIN_PICTURE, shownWidth() + by)));
+      view.dispatch({ changes: { from, to: from + this.source.length, insert: next }, userEvent: "input.resize" });
+      // The new source draws a new widget; the keyboard goes on to its handle.
+      [...view.dom.querySelectorAll<HTMLElement>(".cm-rich-resize")].find((h) => h.dataset.source === next)?.focus({ preventScroll: true });
+    });
     handle.addEventListener("pointerdown", (e) => {
       if (view.state.readOnly) return;
       e.preventDefault();
       const startX = e.clientX, startWidth = img.getBoundingClientRect().width;
-      const widthAt = (x: number) => Math.max(32, Math.round(startWidth + x - startX));
+      const widthAt = (x: number) => Math.max(MIN_PICTURE, Math.round(startWidth + x - startX));
       handle.setPointerCapture?.(e.pointerId);
       const move = (ev: PointerEvent) => { img.style.width = `${widthAt(ev.clientX)}px`; };
       const up = (ev: PointerEvent) => {

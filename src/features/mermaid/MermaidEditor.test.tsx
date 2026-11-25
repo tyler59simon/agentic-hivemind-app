@@ -79,4 +79,25 @@ describe("MermaidEditor", () => {
     await until(() => el.textContent?.includes("Parse error on line 2"));
     expect(el.querySelector(".mermaid-diagram.stale-preview svg")).not.toBeNull();
   });
+
+  it("moves the divider between source and preview with the arrow keys (WCAG 2.5.7)", async () => {
+    const el = document.createElement("div");
+    document.body.append(el);
+    root = createRoot(el);
+    await act(async () => {
+      root!.render(
+        <MermaidEditor doc={NEW_MERMAID_TEXT} docVersion={1} mode="split" readOnly={false} fileName="flow.mmd" tabId="t1"
+          onChange={() => {}} onSave={() => {}} titles={() => []} onOpenLink={() => {}} />,
+      );
+    });
+    const divider = el.querySelector<HTMLElement>(".split-divider")!;
+    const share = () => el.querySelector<HTMLElement>(".diagram-source-pane")!.style.flexBasis;
+    expect(divider.tabIndex).toBe(0);
+    expect(divider.getAttribute("aria-valuenow")).toBe("45");
+    await act(async () => { divider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })); });
+    expect(share()).toBe("50%");
+    expect(divider.getAttribute("aria-valuenow")).toBe("50");
+    await act(async () => { divider.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true, cancelable: true })); });
+    expect(share()).toBe("20%");
+  });
 });

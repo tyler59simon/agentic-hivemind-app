@@ -164,6 +164,20 @@ describe("dragging a card on a board", () => {
     expect(cards("doing")).toContain("A");
   });
 
+  it("moves a card from the column list on the card, with no drag, by the same write", async () => {
+    await render(<QueryBlock source={BOARD} />);
+    const before = files.get("A.md")!;
+    const select = column("todo").querySelector<HTMLSelectElement>("select[aria-label='Column of A']")!;
+    expect([...select.options].map((o) => o.textContent)).toEqual(["todo", "doing", "No status"]);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(select, "doing");
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await settle();
+    expect(files.get("A.md")).toBe(before.replace("status: todo", "status: doing"));
+    expect(cards("doing")).toContain("A");
+  });
+
   it("takes the property away when a card is dropped in the column for no value", async () => {
     await render(<QueryBlock source={BOARD} />);
     await drag(column("doing").querySelector("[aria-label='Card B']")!, column("No status"));

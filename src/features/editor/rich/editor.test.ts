@@ -294,3 +294,34 @@ describe("Codex review of 398b956", () => {
     expect(view.dom.querySelector<HTMLElement>(".cm-footnote")?.title).toBe("real text");
   });
 });
+
+describe("the picture width handle without a drag (WCAG 2.5.7)", () => {
+  const pictures = ctx({ pictureUrl: () => "http://hmfile.localhost/g/pic.png" });
+  const press = (target: Element, key: string, extra: KeyboardEventInit = {}) =>
+    target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...extra }));
+
+  it("is a slider with a name, and the arrow keys write the width back to the source and keep the keyboard on the handle", () => {
+    const view = editor("Intro\n\n![alt|100](pic.png)\n\nEnd", pictures, 0);
+    const handle = view.dom.querySelector<HTMLElement>(".cm-rich-resize")!;
+    expect(handle.getAttribute("role")).toBe("slider");
+    expect(handle.getAttribute("aria-label")).toBe("Picture width");
+    expect(handle.getAttribute("aria-valuenow")).toBe("100");
+    expect(handle.tabIndex).toBe(0);
+    handle.focus();
+    expect(press(handle, "ArrowRight")).toBe(false);
+    expect(view.state.doc.toString()).toBe("Intro\n\n![alt|116](pic.png)\n\nEnd");
+    const again = view.dom.querySelector<HTMLElement>(".cm-rich-resize")!;
+    expect(document.activeElement).toBe(again);
+    press(again, "ArrowLeft");
+    press(document.activeElement!, "ArrowLeft");
+    expect(view.state.doc.toString()).toBe("Intro\n\n![alt|84](pic.png)\n\nEnd");
+  });
+
+  it("changes nothing for other keys or with Ctrl held", () => {
+    const view = editor("x\n\n![alt|100](pic.png)", pictures, 0);
+    const handle = view.dom.querySelector<HTMLElement>(".cm-rich-resize")!;
+    press(handle, "a");
+    press(handle, "ArrowRight", { ctrlKey: true });
+    expect(view.state.doc.toString()).toBe("x\n\n![alt|100](pic.png)");
+  });
+});

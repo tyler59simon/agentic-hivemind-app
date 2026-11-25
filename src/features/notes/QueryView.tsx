@@ -119,6 +119,10 @@ function Board({ spec, rows, write }: { spec: QuerySpec; rows: QueryRow[]; write
           {rows.filter((r) => columnOf(r) === column).map((r) => (
             <div key={keyOfRow(r)} className="board-card" draggable role="group" aria-label={`Card ${r.title || pageTitle(r.path)}`} onDragStart={(e) => { e.dataTransfer.setData("text/plain", keyOfRow(r)); e.dataTransfer.effectAllowed = "move"; }}>
               <button type="button" className="link" onClick={() => openPage({ notebook: r.notebook, path: r.path })}>{r.title || pageTitle(r.path)}</button>
+              {/* Moving a card to another column without dragging it (WCAG 2.5.7): the same write as a drop. */}
+              <select className="small" aria-label={`Column of ${r.title || pageTitle(r.path)}`} value={column} onChange={(e) => void drop(e.target.value, keyOfRow(r))}>
+                {names.map((c) => <option key={c || "none"} value={c}>{c || `No ${group}`}</option>)}
+              </select>
               {fields.map((f) => shown(r, f) && <div key={f} className="small"><span className="muted">{f}</span> {shown(r, f)}</div>)}
             </div>
           ))}

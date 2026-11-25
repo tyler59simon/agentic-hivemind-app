@@ -7,6 +7,7 @@ import { toast } from "../../ui/toast";
 import { CodeEditor } from "../editor/CodeEditor";
 import { copyLater } from "../../lib/platform";
 import { inspectSvg, rasterizeSvgToPng, svgToDataUrl, type SvgInfo } from "./svg";
+import { splitKeyShare } from "../../lib/nudge";
 
 export interface SvgEditorProps {
   doc: string;
@@ -142,6 +143,11 @@ export default function SvgEditor(props: SvgEditorProps) {
         role="separator"
         aria-orientation="vertical"
         aria-label="Resize source and preview"
+        aria-valuenow={Math.round(ratio * 100)}
+        aria-valuemin={20}
+        aria-valuemax={80}
+        tabIndex={0}
+        onKeyDown={(e) => { const next = splitKeyShare(e.key, ratio); if (next !== null) { e.preventDefault(); setRatio(next); } }}
         onPointerDown={(e) => { if (e.button === 0) dragging.current = true; }}
       />
       <div className="diagram-preview-wrap" style={{ flexBasis: `${(1 - ratio) * 100}%` }}>
