@@ -50,8 +50,9 @@ describe("the typography settings", () => {
     expect([...select("Code font").options].map((o) => o.value)).toEqual(["jetbrains", "cascadia", "consolas"]);
     expect([...select("Document line height").options].map((o) => o.value)).toEqual(["1.4", "1.6", "1.8"]);
     expect([...select("Document width").options].map((o) => o.value)).toEqual(["narrow", "normal", "wide", "full"]);
-    expect(["Interface font", "Document font", "Code font", "Document line height", "Document width"].map((l) => select(l).value))
-      .toEqual(["jakarta", "jakarta", "jetbrains", "1.6", "normal"]);
+    expect([...select("Density").options].map((o) => o.value)).toEqual(["comfortable", "compact"]);
+    expect(["Interface font", "Document font", "Code font", "Document line height", "Document width", "Density"].map((l) => select(l).value))
+      .toEqual(["jakarta", "jakarta", "jetbrains", "1.6", "normal", "comfortable"]);
   });
 
   it("apply at once and are kept without pressing Save", async () => {
@@ -60,12 +61,15 @@ describe("the typography settings", () => {
     await pick("Code font", "consolas");
     await pick("Document line height", "1.8");
     await pick("Document width", "full");
+    await pick("Density", "compact");
     expect(css("--font-ui")).toMatch(/^"Segoe UI"/);
     expect(css("--font-doc")).toMatch(/^Georgia/);
     expect(css("--font-mono")).toMatch(/^Consolas/);
     expect(css("--doc-line-height")).toBe("1.8");
     expect(css("--doc-width")).toBe("none");
-    expect(["ui_font", "doc_font", "mono_font", "doc_line_height", "doc_width"].map((k) => prefs.typeValue(k as "ui_font"))).toEqual(["segoe", "georgia", "consolas", 1.8, "full"]);
+    expect(document.documentElement.dataset.density).toBe("compact");
+    expect(["ui_font", "doc_font", "mono_font", "doc_line_height", "doc_width", "density"].map((k) => prefs.typeValue(k as "ui_font")))
+      .toEqual(["segoe", "georgia", "consolas", 1.8, "full", "compact"]);
     expect(select("Document line height").value).toBe("1.8");
     expect(save).not.toHaveBeenCalled();
   });

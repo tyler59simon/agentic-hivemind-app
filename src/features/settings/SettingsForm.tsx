@@ -204,6 +204,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
           {DOC_SIZES.map((s) => <option key={s.value} value={String(s.value)}>{s.label}</option>)}
         </select>
       </label>
+      <TypeField name="density" label="Density" />
       <TypeField name="ui_font" label="Interface font" />
       <TypeField name="doc_font" label="Document font" />
       <TypeField name="mono_font" label="Code font" />
@@ -221,7 +222,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
           {PAPER_DEFAULTS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
         </select>
       </label>
-      <p className="muted small">The zoom, the fonts, the document text size, line height and width, the theme and the document background change at once and are kept in the settings file; they do not need Save. White shows documents as dark text on white paper while the rest of Hivemind keeps its theme. A document's page menu can switch that one tab. The document width is the reading column of a note; a page document keeps its own width.</p>
+      <p className="muted small">The zoom, the density, the fonts, the document text size, line height and width, the theme and the document background change at once and are kept in the settings file; they do not need Save. White shows documents as dark text on white paper while the rest of Hivemind keeps its theme. A document's page menu can switch that one tab. The document width is the reading column of a note; a page document keeps its own width. Compact density tightens the spacing of the whole interface, not the text.</p>
 
       <h3>Sidebar</h3>
       {sections.map((s) => (

@@ -19,7 +19,7 @@ const block = (selector: string) => {
 const values = (selector: string) =>
   new Map([...block(selector).matchAll(/^\s*(--[a-z0-9-]+):\s*([^;]+);/gm)].map((m) => [m[1], m[2].trim()] as [string, string]));
 // Fonts, document layout and spacing are not colours (DESK-TYPE).
-const colours = (selector: string) => [...values(selector).keys()].filter((t) => !/^--(font|doc|sp)-|^--(row-h|control-h)$/.test(t));
+const colours = (selector: string) => [...values(selector).keys()].filter((t) => !/^--(font|doc|sp)-|^--(row-h|tree-row-h|control-h)$/.test(t));
 
 const purple = colours(":root");
 const emerald = values(':root[data-theme="emerald"]');
