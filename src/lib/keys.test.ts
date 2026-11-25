@@ -1,5 +1,6 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { guardReload, reloadKey } from "./keys";
+import { browserOnlyKey, guardBrowserKeys, guardReload, reloadKey } from "./keys";
 
 const key = (k: string, mods: Partial<KeyboardEventInit> = {}) => ({ key: k, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...mods });
 
@@ -10,6 +11,41 @@ describe("reloadKey", () => {
     expect(reloadKey(key("R", { ctrlKey: true, shiftKey: true }))).toBe(true);
     expect(reloadKey(key("r", { ctrlKey: true, altKey: true }))).toBe(false);
     expect(reloadKey(key("r"))).toBe(false);
+  });
+});
+
+describe("browserOnlyKey", () => {
+  it("is Ctrl or Meta with P and nothing else, so editor keys such as Ctrl+U and Ctrl+Shift+P pass", () => {
+    expect(browserOnlyKey(key("p", { ctrlKey: true }))).toBe(true);
+    expect(browserOnlyKey(key("P", { ctrlKey: true }))).toBe(true);
+    expect(browserOnlyKey(key("p", { metaKey: true }))).toBe(true);
+    expect(browserOnlyKey(key("u", { ctrlKey: true }))).toBe(false);
+    expect(browserOnlyKey(key("P", { ctrlKey: true, shiftKey: true }))).toBe(false);
+    expect(browserOnlyKey(key("p", { ctrlKey: true, altKey: true }))).toBe(false);
+    expect(browserOnlyKey(key("p"))).toBe(false);
+    expect(browserOnlyKey(key("f", { ctrlKey: true }))).toBe(false);
+  });
+});
+
+describe("guardBrowserKeys", () => {
+  it("prevents the webview's print after every other listener, and leaves the key to anyone who handled it first", () => {
+    const undo = guardBrowserKeys(window);
+    const earlier: boolean[] = [];
+    const host = document.createElement("div");
+    document.body.append(host);
+    host.addEventListener("keydown", (e) => earlier.push(e.defaultPrevented));
+    const print = new KeyboardEvent("keydown", { key: "p", ctrlKey: true, cancelable: true, bubbles: true });
+    host.dispatchEvent(print);
+    expect(earlier).toEqual([false]);
+    expect(print.defaultPrevented).toBe(true);
+    const save = new KeyboardEvent("keydown", { key: "s", ctrlKey: true, cancelable: true, bubbles: true });
+    host.dispatchEvent(save);
+    expect(save.defaultPrevented).toBe(false);
+    undo();
+    const again = new KeyboardEvent("keydown", { key: "p", ctrlKey: true, cancelable: true, bubbles: true });
+    host.dispatchEvent(again);
+    expect(again.defaultPrevented).toBe(false);
+    host.remove();
   });
 });
 

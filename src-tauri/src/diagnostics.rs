@@ -24,6 +24,9 @@ const LOG_MAX_BYTES: u128 = 1_000_000;
 const LOG_KEEP: usize = 5;
 /// Lines of the log that "Copy diagnostics" includes.
 const TAIL_LINES: usize = 300;
+/// At most this many characters of log, so the block (info, settings and log) still fits a GitHub issue body, which holds
+/// 65,536 characters with the issue template and the user's own text.
+const TAIL_CHARS: usize = 40_000;
 /// How much of the end of the log file is read to find those lines.
 const TAIL_READ: u64 = 256 * 1024;
 /// The mark above a tail that does not start at the top of the log.
@@ -318,8 +321,36 @@ fn tail_of_bytes(mut bytes: Vec<u8>, behind: bool, lines: usize) -> String {
         all.drain(..all.len() - lines);
         cut = true;
     }
+    cut |= fit_chars(&mut all, TAIL_CHARS - CUT_MARK.len() - 1);
     let body = all.join("\n");
     if cut && !body.is_empty() { format!("{CUT_MARK}\n{body}") } else { body }
+}
+
+/// Drop lines from the front until the newest ones, joined by newlines, are at most `budget` characters. A last line that
+/// is longer than that keeps its end, as a byte window does. Returns whether anything was dropped.
+fn fit_chars(lines: &mut Vec<&str>, budget: usize) -> bool {
+    let mut total = 0;
+    let mut keep = 0;
+    for line in lines.iter().rev() {
+        let size = line.chars().count() + usize::from(keep > 0);
+        if total + size > budget {
+            break;
+        }
+        total += size;
+        keep += 1;
+    }
+    if keep == lines.len() {
+        return false;
+    }
+    if keep == 0 {
+        let last = lines[lines.len() - 1];
+        let skip = last.chars().count() - budget;
+        let start = last.char_indices().nth(skip).map_or(last.len(), |(i, _)| i);
+        *lines = vec![&last[start..]];
+    } else {
+        lines.drain(..lines.len() - keep);
+    }
+    true
 }
 
 /// `tail_of` for the log file, with a fixed line when it cannot be read.
@@ -423,7 +454,7 @@ fn render(info: &AppInfo, settings: &str, log: &str, unavailable: Option<&str>) 
     let os = info.os_version.as_deref().map(|v| format!(", {v}")).unwrap_or_default();
     let log = match unavailable {
         Some(kind) => format!("Log file unavailable: {kind}"),
-        None => format!("Log (last {TAIL_LINES} lines)\n{log}"),
+        None => format!("Log (newest lines)\n{log}"),
     };
     format!(
         "Hivemind {}\nTauri {}\n{} {}\n{} {}{os}\nData folder: {}\nConfig folder: {}\nLog folder: {}\n\nSettings\n{settings}\n\n{log}\n",
@@ -855,6 +886,31 @@ mod tests {
     }
 
     #[test]
+    fn the_tail_keeps_the_newest_lines_that_fit_the_character_budget() {
+        // 300 lines of 330 characters would be about 99,000 characters: only the newest that fit are kept, and the cut says so.
+        let text: String = (1..=300).map(|n| format!("{n:04} {}\n", "x".repeat(325))).collect();
+        let tail = tail_of_bytes(text.into_bytes(), false, TAIL_LINES);
+        assert!(tail.chars().count() <= TAIL_CHARS, "{} characters", tail.chars().count());
+        assert!(tail.starts_with("[earlier lines cut]\n") && tail.ends_with(&format!("0300 {}", "x".repeat(325))));
+        assert!(tail.lines().nth(1).is_some_and(|l| l.len() == 330), "a kept line is whole");
+        // A short log is left as it is.
+        assert_eq!(tail_of_bytes(b"one\ntwo\n".to_vec(), false, TAIL_LINES), "one\ntwo");
+    }
+
+    #[test]
+    fn a_line_over_the_character_budget_keeps_its_end() {
+        let mut lines = vec!["older", "\u{20ac}abcdefgh"];
+        assert!(fit_chars(&mut lines, 4));
+        assert_eq!(lines, vec!["efgh"]);
+        let mut lines = vec!["ab", "cd", "ef"];
+        assert!(fit_chars(&mut lines, 5));
+        assert_eq!(lines, vec!["cd", "ef"]);
+        let mut lines = vec!["ab", "cd"];
+        assert!(!fit_chars(&mut lines, 5));
+        assert_eq!(lines, vec!["ab", "cd"]);
+    }
+
+    #[test]
     fn a_missing_log_is_a_fixed_line_not_an_empty_string() {
         let dir = scratch("missing");
         assert_eq!(tail_lines(&dir.join("missing.log"), 3), "Log not readable: NotFound");
@@ -949,10 +1005,10 @@ mod tests {
     #[test]
     fn the_report_has_the_info_the_settings_and_the_log_or_why_there_is_none() {
         let text = render(&info(), "theme: emerald", "[INFO] started", None);
-        for part in ["Hivemind 0.1.0", "WebView2 140.0", "windows x86_64, Windows 11 (build 26100)", "Log folder: L", "theme: emerald", "Log (last 300 lines)\n[INFO] started"] {
+        for part in ["Hivemind 0.1.0", "WebView2 140.0", "windows x86_64, Windows 11 (build 26100)", "Log folder: L", "theme: emerald", "Log (newest lines)\n[INFO] started"] {
             assert!(text.contains(part), "{part} is missing from:\n{text}");
         }
         let text = render(&info(), "theme: emerald", "", Some("PermissionDenied"));
-        assert!(text.contains("Log file unavailable: PermissionDenied") && !text.contains("Log (last"), "{text}");
+        assert!(text.contains("Log file unavailable: PermissionDenied") && !text.contains("Log (newest"), "{text}");
     }
 }
