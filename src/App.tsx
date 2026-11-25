@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Confirm } from "./ui/Modal";
+import { X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import "./App.css";
 import logo from "./assets/logo.png";
@@ -61,8 +62,10 @@ export function useShortcuts() {
     const onKey = (e: KeyboardEvent) => {
       const { setPalette, go, goBack } = useApp.getState();
       if (modalOpen()) return; // a dialog is open: nothing behind it changes (DESK-4)
-      // On macOS Option+Left moves a word left in text, so it goes back only outside text fields.
-      if (matches(e, "nav.back") && !(isMac && editableTarget(e.target))) { e.preventDefault(); goBack(); return; }
+      // Escape leaves Settings, except in a field (where it would drop typed edits) or when a control used the key.
+      if (e.key === "Escape" && useApp.getState().settings && !e.defaultPrevented && !editableTarget(e.target)) { e.preventDefault(); closeSettings(); return; }
+      // On macOS Option+Left moves a word left in text, so it goes back only outside text fields. In Settings it closes Settings.
+      if (matches(e, "nav.back") && !(isMac && editableTarget(e.target))) { e.preventDefault(); if (useApp.getState().settings) closeSettings(); else goBack(); return; }
       if (matches(e, "palette.commands")) { e.preventDefault(); setPalette("commands"); }
       else if (matches(e, "palette.notes")) { e.preventDefault(); setPalette("notes"); }
       // Ctrl+/ is the editor's comment toggle: an editor keeps it. A remapped sheet key works there.
@@ -311,12 +314,16 @@ export default function App() {
   if (link.isLoading) return <><main className="center muted">Connecting to Living Memory…</main>{dialogs}</>;
   const outdated = link.isSuccess && needsLmUpdate(link.data.version);
   if (link.error || outdated || settings) {
+    const closable = link.isSuccess && !outdated;
     return (
       <>
         <SettingsTitle />
         <main className="center">
           <div className="card">
-            <h1 className="brand"><img src={logo} alt="" />Hivemind</h1>
+            <div className="card-head">
+              <h1 className="brand"><img src={logo} alt="" />Hivemind</h1>
+              {closable && <button className="icon-button" aria-label="Close Settings" title="Close Settings (Esc)" onClick={() => setSettings(false)}><X size="1.2em" aria-hidden /></button>}
+            </div>
             {link.error && <p className="error">{String(link.error)}</p>}
             {outdated && <p className="error">This version of Living Memory is too old: Hivemind needs one with direct writes and unified proposals (<code>alm version</code> lists <code>direct_writes</code> and <code>proposals</code> under capabilities). Update Living Memory, then reconnect.</p>}
             <SettingsForm onSaved={reconnect} />
@@ -326,7 +333,7 @@ export default function App() {
             <BeforeUninstall
               onOpenReview={link.isSuccess && !outdated ? (id) => { setSettings(false); openInbox(id); } : undefined}
               onOpenSession={link.isSuccess && !outdated ? (id) => { setSettings(false); openSession(id); } : undefined} />
-            {link.isSuccess && !outdated && <button className="link" onClick={() => setSettings(false)}>Back</button>}
+            {closable && <button className="link" onClick={() => setSettings(false)}>Back</button>}
           </div>
         </main>
         {/* Schedules and Maintenance report through toasts (Codex review of 857ec37, S1). */}

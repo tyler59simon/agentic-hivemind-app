@@ -419,6 +419,7 @@ h1, h2, h3, h4 { line-height: 1.2; }
 .center { display: grid; place-items: center; min-height: 100%; height: 100vh; padding: var(--sp-20); }
 .pane-body .center { height: 100%; min-height: 0; }
 .card { width: min(36rem, 100%); border: 1px solid var(--border-strong); border-radius: .6rem; padding: var(--sp-26); background: var(--bg-alt); }
+.card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-14); }
 .brand { display: flex; align-items: center; gap: var(--sp-14); margin: 0 0 var(--sp-16); }
 .brand img { width: 2.6rem; height: 2.6rem; }
 .link { border: none; color: var(--accent); padding: 0; display: inline; }

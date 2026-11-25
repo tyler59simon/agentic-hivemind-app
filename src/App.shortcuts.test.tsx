@@ -176,3 +176,37 @@ describe("a remapped key", () => {
     expect(useShortcutsDialog.getState().open).toBe(true);
   });
 });
+
+describe("leaving Settings by keyboard", () => {
+  afterEach(() => useApp.setState({ settings: null }));
+
+  it("Escape and Alt+Left close Settings without moving the page behind it", () => {
+    useApp.setState({ route: { page: "notes" }, back: [{ page: "home" }], settings: {} });
+    press("Escape");
+    expect(useApp.getState().settings).toBeNull();
+    useApp.setState({ settings: {} });
+    press("ArrowLeft", { altKey: true });
+    expect(useApp.getState().settings).toBeNull();
+    expect(useApp.getState().route).toEqual({ page: "notes" });
+  });
+
+  it("Escape in a field, or one a control already used, leaves Settings open", () => {
+    useApp.setState({ settings: {} });
+    const field = document.createElement("input");
+    document.body.append(field);
+    press("Escape", {}, field);
+    expect(useApp.getState().settings).toEqual({});
+    const used = new KeyboardEvent("keydown", { key: "Escape", cancelable: true, bubbles: true });
+    used.preventDefault();
+    act(() => { window.dispatchEvent(used); });
+    expect(useApp.getState().settings).toEqual({});
+  });
+
+  it("a dialog in front keeps Escape for itself", () => {
+    useApp.setState({ settings: {} });
+    const layer = pushLayer(() => {}, undefined, true);
+    press("Escape");
+    expect(useApp.getState().settings).toEqual({});
+    layer.pop();
+  });
+});
