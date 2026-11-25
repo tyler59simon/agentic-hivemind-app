@@ -135,7 +135,7 @@ export function TaxonomyView() {
       {error && <p className="error">{error}</p>}
       {filteredUnknown.length > 0 && (
         <section className="facet warn-box">
-          <h3>In use but not registered</h3>
+          <h2>In use but not registered</h2>
           <p className="muted small">Memory notes with these tags cannot be saved until each tag is registered or renamed to a registered one.</p>
           <ul className="tag-list">{filteredUnknown.map((t) => row(t))}</ul>
         </section>
@@ -143,10 +143,10 @@ export function TaxonomyView() {
       {selected && (
         <section className="facet tag-results" aria-label={`Items tagged ${selected}`}>
           <div className="tag-results-head">
-            <h3>
+            <h2>
               Tagged <code>{selected}</code>{" "}
               <span className="muted small">{formatTagCounts({ count: taggedNotes.length, pageCount: taggedPages.length })}</span>
-            </h3>
+            </h2>
             <div className="row">
               <button type="button" className="ghost small" onClick={() => useNotesSearch.getState().byTag(selected)}>Open in search</button>
               <button type="button" className="ghost small" onClick={() => setSelected(null)}>Close</button>
@@ -154,7 +154,7 @@ export function TaxonomyView() {
           </div>
           {taggedNotes.length > 0 && (
             <div className="tag-result-group">
-              <h4>Memory notes <span className="muted small">{taggedNotes.length}</span></h4>
+              <h3>Memory notes <span className="muted small">{taggedNotes.length}</span></h3>
               {taggedNotes.map((n) => (
                 <button key={n.ref} type="button" className="link-row"
                   onClick={(e) => { useApp.getState().setDomain(n.domain); useWorkspace.getState().openNote(n.ref, { title: n.title, split: e.ctrlKey || e.metaKey }); }}>
@@ -167,7 +167,7 @@ export function TaxonomyView() {
           {selectedPages.isLoading && <p className="muted small">Loading pages…</p>}
           {taggedPages.length > 0 && (
             <div className="tag-result-group">
-              <h4>Pages <span className="muted small">{taggedPages.length}</span></h4>
+              <h3>Pages <span className="muted small">{taggedPages.length}</span></h3>
               {taggedPages.map((h) => {
                 const detail = [notebookNames.get(h.notebook), folderOf(h.path)].filter(Boolean).join(" · ");
                 return (
@@ -189,7 +189,7 @@ export function TaxonomyView() {
         {facetEntries.map(([facet, tags]) => (
           (!needle || tags.length > 0) && (
             <section key={facet} className="facet">
-              <h3>{facet} <span className="muted small">{tags.length}</span></h3>
+              <h2>{facet} <span className="muted small">{tags.length}</span></h2>
               {facet === "project" && <p className="muted small">Managed by projects.</p>}
               {facet === "system" && <p className="muted small">Managed by systems.</p>}
               {tags.length ? <ul className="tag-list">{tags.map((t) => row(t))}</ul> : <p className="muted small">No tags yet.</p>}
@@ -198,7 +198,7 @@ export function TaxonomyView() {
         ))}
         {(filteredPageOnly.length > 0 || (!needle && usage.pageOnly.length > 0)) && (
           <section className="facet">
-            <h3>Page tags <span className="muted small">{filteredPageOnly.length}</span></h3>
+            <h2>Page tags <span className="muted small">{filteredPageOnly.length}</span></h2>
             <p className="muted small">Free-form <code>#tags</code> used only on folder notebook pages.</p>
             <ul className="tag-list">{filteredPageOnly.map((t) => row(t, true))}</ul>
           </section>

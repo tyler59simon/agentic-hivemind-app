@@ -100,7 +100,7 @@ export function NoteTypesSection({ tags }: { tags: string[] }) {
 
   return (
     <section className="facet">
-      <h3 className="settings-h2">Note types <span className="muted small">{types.all.length}</span></h3>
+      <h2 className="settings-h2">Note types <span className="muted small">{types.all.length}</span></h2>
       <p className="muted small">Living Memory's own types cannot be changed. Retiring a custom type keeps its notes; new notes can no longer use it.</p>
       <ul className="tag-list">{builtin.map(row)}</ul>
       {custom.length ? <ul className="tag-list">{custom.map(row)}</ul> : <p className="muted small">No custom types yet.</p>}

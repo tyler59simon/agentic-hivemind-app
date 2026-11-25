@@ -114,4 +114,23 @@ describe("TaxonomyView (unified Tags view)", () => {
     expect(host!.textContent).toContain("#q4-plan");
     expect(host!.textContent).not.toContain("concern/bug");
   });
+
+  it("has the page title as h1, its sections as h2 and the results groups as h3, with no level skipped", async () => {
+    mount();
+    await flush();
+    await flush();
+    const rustBtn = [...host!.querySelectorAll("button")].find((b) => b.textContent?.includes("technology/rust"))!;
+    act(() => { rustBtn.click(); });
+    await flush();
+    await flush();
+    const headings = [...host!.querySelectorAll("h1, h2, h3, h4, h5, h6")].map((h) => [Number(h.tagName[1]), h.textContent!.replace(/\s+/g, " ").trim()] as const);
+    expect(headings[0]).toEqual([1, "Tags"]);
+    const levels = headings.map(([level]) => level);
+    levels.forEach((level, i) => { if (i) expect(level).toBeLessThanOrEqual(levels[i - 1] + 1); });
+    const titles = (level: number) => headings.filter(([l]) => l === level).map(([, t]) => t);
+    expect(titles(2)).toEqual(expect.arrayContaining(["concern 1", "technology 1", "Page tags 1"]));
+    expect(titles(2).some((t) => t.startsWith("Tagged technology/rust"))).toBe(true);
+    expect(titles(3)).toEqual(["Memory notes 1", "Pages 1"]);
+    expect(levels).not.toContain(4);
+  });
 });
