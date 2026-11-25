@@ -33,6 +33,7 @@ mod replace;
 mod resources;
 mod review;
 mod settings;
+mod shortcuts;
 mod shell_env;
 mod skills;
 mod skillsync;
@@ -1500,9 +1501,27 @@ fn appearance_init(app: AppHandle, state: State<'_, AppState>, key: String, valu
     appearance::set_value(&app, &state.settings_path, &key, &value, true)
 }
 
+/// The keyboard shortcuts the user changed (DESK-KEYS), by shortcut id.
+#[tauri::command]
+fn shortcuts_get(state: State<'_, AppState>) -> std::collections::BTreeMap<String, String> {
+    shortcuts::get(&settings::load(&state.settings_path))
+}
+
+/// Keep one changed shortcut (null goes back to the default) and tell every window with `shortcuts`. Returns all of them.
+#[tauri::command]
+fn shortcuts_set(app: AppHandle, state: State<'_, AppState>, id: String, combo: Option<String>) -> Result<std::collections::BTreeMap<String, String>, String> {
+    shortcuts::set(&app, &state.settings_path, &id, combo.as_deref())
+}
+
+/// Go back to every default shortcut and tell every window.
+#[tauri::command]
+fn shortcuts_reset(app: AppHandle, state: State<'_, AppState>) -> Result<std::collections::BTreeMap<String, String>, String> {
+    shortcuts::reset(&app, &state.settings_path)
+}
+
 /// What a Settings form save keeps: the folder list changes only through the native picker, the rules files only through
-/// architecture_rules_set, the zoom only through ui_zoom_set and the appearance only through appearance_set, so a form
-/// opened earlier never undoes them.
+/// architecture_rules_set, the zoom only through ui_zoom_set, the appearance only through appearance_set and the shortcuts
+/// only through shortcuts_set, so a form opened earlier never undoes them.
 fn settings_to_save(previous: &Settings, value: Settings) -> Result<Settings, String> {
     let mut value = folders::keep(previous, value);
     value.architecture_rules = previous.architecture_rules.clone();
@@ -1518,6 +1537,7 @@ fn settings_to_save(previous: &Settings, value: Settings) -> Result<Settings, St
     value.doc_line_height = previous.doc_line_height;
     value.doc_width = previous.doc_width.clone();
     value.density = previous.density.clone();
+    value.shortcuts = previous.shortcuts.clone();
     if !value.shows(agent::Engine::Claude) && !value.shows(agent::Engine::Codex) {
         return Err("Keep at least one engine shown.".into());
     }
@@ -2163,7 +2183,7 @@ pub fn run() {
             exec_session_capture,
             exec_export,
             diagnostics::app_info, diagnostics::diagnostics, diagnostics::open_logs_folder, diagnostics::log_client,
-            lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, ui_zoom, ui_zoom_set, appearance_get, appearance_set, appearance_init, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
+            lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, ui_zoom, ui_zoom_set, appearance_get, appearance_set, appearance_init, shortcuts_get, shortcuts_set, shortcuts_reset, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_roles, learning_status, learning_review, skills_list, skill_proposals, skill_decide, skill_action, skill_version, skill_history,
             skills_upkeep, skill_from_note, skills_sync, skill_link, skill_unlink, skill_resolve, uninstall_skills, uninstall_remove_skills,
             automation_list, automation_put, automation_delete, automation_spend, automation_act, architecture_drift, architecture_rules_set, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, uninstall_inventory, uninstall_remove_worktree, uninstall_delete_branch, repo_branches,
@@ -2251,6 +2271,16 @@ mod tests {
         assert_eq!(saved.python.as_deref(), Some("py"));
         assert_eq!((saved.ui_font, saved.doc_font, saved.mono_font, saved.doc_line_height, saved.doc_width, saved.density),
             (previous.ui_font, previous.doc_font, previous.mono_font, previous.doc_line_height, previous.doc_width, previous.density));
+    }
+
+    #[test]
+    fn a_settings_form_save_keeps_the_shortcuts_it_did_not_change() {   // DESK-KEYS
+        let previous = Settings { shortcuts: Some([("note.new".to_string(), "Mod+J".to_string())].into()), ..Default::default() };
+        let form = Settings { python: Some("py".into()), shortcuts: Some([("note.new".to_string(), "Mod+K".to_string())].into()), ..Default::default() };
+        let saved = settings_to_save(&previous, form).unwrap();
+        assert_eq!((saved.python.as_deref(), saved.shortcuts), (Some("py"), previous.shortcuts.clone()));
+        let none = settings_to_save(&previous, Settings { shortcuts: None, ..Default::default() }).unwrap();
+        assert_eq!(none.shortcuts, previous.shortcuts);
     }
 
     #[test]

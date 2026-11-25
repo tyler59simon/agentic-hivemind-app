@@ -20,6 +20,19 @@ describe("zoomKey", () => {
   });
 });
 
+describe("zoomKey with a remapped shortcut (DESK-KEYS)", () => {
+  it("follows the shortcut registry", async () => {
+    const { setOverrides } = await import("./shortcuts");
+    setOverrides({ "zoom.in": "Mod+Shift+J", "zoom.reset": "Alt+Z" });
+    expect(zoomKey(key("=", { ctrlKey: true }))).toBeNull();
+    expect(zoomKey(key("j", { ctrlKey: true, shiftKey: true }))).toBe("in");
+    expect(zoomKey(key("z", { altKey: true }))).toBe("reset");
+    expect(zoomKey(key("-", { ctrlKey: true }))).toBe("out");
+    setOverrides({});
+    expect(zoomKey(key("=", { ctrlKey: true }))).toBe("in");
+  });
+});
+
 describe("stepZoom", () => {
   it("steps through the browser levels and stops at the ends", () => {
     expect(stepZoom(1, "in")).toBe(1.1);

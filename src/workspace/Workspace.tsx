@@ -12,7 +12,7 @@ import { isUnsaved } from "../documents/session";
 import { newPageHere } from "../features/notes/actions";
 import { fileName, isMarkdown, isRichDoc } from "../lib/notebooks";
 import { announceDocumentLook, useWhitePaper } from "../lib/paper";
-import { commandKey } from "../lib/platform";
+import { firstMatch, useFormat } from "../lib/shortcuts";
 import { useApp } from "../store";
 import { ErrorBoundary } from "../ui/ErrorBoundary";
 import { tabKey } from "../ui/focus";
@@ -102,6 +102,7 @@ function PaneView({ pane, focused, last, onClose }: {
 }) {
   const { activate, focus, split, panes, setRail } = useWorkspace();
   const narrow = useNarrow();
+  const goTo = useFormat("palette.notes");
   const rail = useWorkspace((s) => railShown(s, narrow));
   const active = pane.tabs.find((t) => t.id === pane.active) ?? pane.tabs[0];
   const strip = useRef<HTMLDivElement>(null);
@@ -135,12 +136,15 @@ function PaneView({ pane, focused, last, onClose }: {
       </div>
       <div className="pane-body" data-paper={white ? "" : undefined} role="tabpanel" aria-label={active ? tabLabel(active) : "No tab open"}>
         {active ? <ErrorBoundary label="This tab" resetKey={active.id} onError={() => void flushAllDrafts()}>{TAB_VIEWS[active.kind](active)}</ErrorBoundary> : (
-          <div className="center muted"><p>Open a note or page here: Ctrl+click a link, or press <kbd>Ctrl</kbd>+<kbd>O</kbd>.</p></div>
+          <div className="center muted"><p>Open a note or page here: Ctrl+click a link, or press <kbd>{goTo}</kbd>.</p></div>
         )}
       </div>
     </section>
   );
 }
+
+/** The registry shortcuts this component handles. */
+const KEYS = ["tab.close", "file.save", "tab.next", "tab.prev", "view.split", "view.mode"] as const;
 
 /** The open notes: one pane, or up to three side by side, each with its own tabs. */
 export function Workspace() {
@@ -149,24 +153,25 @@ export function Workspace() {
   const close = useCloseTab();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || modalOpen()) return;
-      // Letters take the platform's command key (Ctrl+E and Ctrl+W edit text on macOS); Ctrl+Tab cycles tabs everywhere,
-      // since Cmd+Tab switches apps on macOS.
-      if (e.key !== "Tab" && !commandKey(e)) return;
+      if (modalOpen()) return;
+      // The keys are as the registry has them: letters take the platform's command key (Ctrl+E and Ctrl+W edit text on
+      // macOS); Ctrl+Tab cycles tabs everywhere, since Cmd+Tab switches apps on macOS.
+      const hit = firstMatch(e, KEYS);
+      if (!hit) return;
       const ws = useWorkspace.getState();
       const pane = ws.panes.find((p) => p.id === ws.focused) ?? ws.panes[0];
-      if (e.key.toLowerCase() === "w") { if (pane?.active) close.request(pane.id, pane.active); }
-      else if (e.key.toLowerCase() === "s" && !e.defaultPrevented) {
+      if (hit === "tab.close") { if (pane?.active) close.request(pane.id, pane.active); }
+      else if (hit === "file.save" && !e.defaultPrevented) {
         // The editor saves on its own; this covers a page in Reading mode, which has no editor (Codex review of 32fd236, U1).
         const tab = pane?.tabs.find((t) => t.id === pane.active);
         if (tab?.kind === "file" && tab.file) { e.preventDefault(); void saveFileTab(keyOf(tab.file)); }
         else if (tab?.kind === "compare" && tab.compare) { e.preventDefault(); void saveFileTab(keyOf(tab.compare.left)); void saveFileTab(keyOf(tab.compare.right)); }
       }
-      else if (e.key === "Tab") { e.preventDefault(); ws.cycle(e.shiftKey ? -1 : 1); }
-      else if (e.key === "\\") { e.preventDefault(); ws.split(); }
+      else if (hit === "tab.next" || hit === "tab.prev") { e.preventDefault(); ws.cycle(hit === "tab.prev" ? -1 : 1); }
+      else if (hit === "view.split") { e.preventDefault(); ws.split(); }
       // An editor that used the key has the last word (Codex review of 2392f6b, R1-9). An editing mode (Live or Source)
       // goes to Reading, anything else to Live, for notes and pages alike (CONR-16).
-      else if (e.key.toLowerCase() === "e" && !e.defaultPrevented) {
+      else if (hit === "view.mode" && !e.defaultPrevented) {
         e.preventDefault();
         const tab = pane?.tabs.find((t) => t.id === pane.active);
         if (tab?.kind === "note") ws.updateTab(tab.id, { mode: tab.mode === "live" || tab.mode === "source" ? "reading" : "live" });

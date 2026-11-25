@@ -11,7 +11,7 @@ import { OTHER_FOLDERS } from "../lib/folders";
 import { useApp } from "../store";
 import { fileName, pageTitle } from "../lib/notebooks";
 import { isLoose } from "../lib/opens";
-import { commandKey } from "../lib/platform";
+import { matches } from "../lib/shortcuts";
 import { useNotebookTitle } from "../features/notes/notebookTitle";
 import { activeTab, tabLabel, useWorkspace } from "../workspace/store";
 import { SECTIONS } from "./Sidebar";
@@ -54,7 +54,7 @@ function useCrumbs(): Crumb[] {
   return leaf ? [root, section, { label: leaf }] : [root, section];
 }
 
-/** Breadcrumb on the left; one unified search box on the right (Ctrl+K / Ctrl+Shift+F) on every page (CON-11). */
+/** Breadcrumb on the left; one unified search box on the right (Ctrl+K / Ctrl+Shift+F by default) on every page (CON-11). */
 export function Topbar() {
   const crumbs = useCrumbs();
   const unsaved = useWorkspace((s) => { const t = activeTab(s); return !!t && !!s.dirty[t.id]; });
@@ -63,9 +63,8 @@ export function Topbar() {
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!commandKey(e) || modalOpen()) return;
-      const key = e.key.toLowerCase();
-      if ((key === "k" && !e.shiftKey) || (key === "f" && e.shiftKey)) {
+      if (modalOpen()) return;
+      if (matches(e, "search.focus") || matches(e, "search.alt")) {
         e.preventDefault();
         useNotesSearch.getState().show();
         input.current?.focus();

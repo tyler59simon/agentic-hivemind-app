@@ -14,6 +14,7 @@ import { inTauri } from "./lib/native";
 import { initPaperDefault } from "./lib/paper";
 import { installGlobalLogging } from "./lib/log";
 import { isMac } from "./lib/platform";
+import { initShortcuts } from "./lib/shortcuts";
 import { initSpellcheck } from "./lib/spellcheck";
 import { initTheme } from "./lib/theme";
 import { initTypography } from "./lib/typography";
@@ -29,6 +30,7 @@ initDefaultMode();
 initSpellcheck();
 initTypography();
 guardReload();
+initShortcuts();
 initZoom();
 if (isMac) document.documentElement.classList.add("mac");
 

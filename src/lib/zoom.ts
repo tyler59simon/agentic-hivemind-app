@@ -1,23 +1,23 @@
-// Window zoom (DESK-ZOOM): Ctrl+= / Ctrl+- / Ctrl+0 and Ctrl+wheel zoom every window through WebView2's own zoom, so
+// Window zoom (DESK-ZOOM): Ctrl+= / Ctrl+- / Ctrl+0 (as remapped in Settings, DESK-KEYS) and Ctrl+wheel zoom every window through WebView2's own zoom, so
 // media queries, window-width checks and px sizes all follow. Rust keeps the zoom in the settings file and applies it
 // when a window is made; `ui-zoom` tells every window when it changes.
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSyncExternalStore } from "react";
 import { inTauri } from "./native";
-import type { KeyLike } from "./keys";
+import { matches, type ComboEvent } from "./shortcuts";
 
 /** The zoom levels Ctrl+= and Ctrl+- step through, as in a browser. */
 export const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2] as const;
 
 export type ZoomAction = "in" | "out" | "reset";
 
-/** Ctrl (or Cmd) with = or +, - or _, or 0, and no Alt (AltGr). Shift is allowed: + is Shift+= on most layouts. */
-export function zoomKey(e: KeyLike): ZoomAction | null {
-  if (!(e.ctrlKey || e.metaKey) || e.altKey) return null;
-  if (e.key === "=" || e.key === "+") return "in";
-  if (e.key === "-" || e.key === "_") return "out";
-  if (e.key === "0") return "reset";
+/** The zoom action a key is: by default Ctrl (or Cmd) with = or +, - or _, or 0, and no Alt (AltGr). Shift is allowed on
+ *  = and -: + is Shift+= on most layouts. */
+export function zoomKey(e: ComboEvent): ZoomAction | null {
+  if (matches(e, "zoom.in")) return "in";
+  if (matches(e, "zoom.out")) return "out";
+  if (matches(e, "zoom.reset")) return "reset";
   return null;
 }
 

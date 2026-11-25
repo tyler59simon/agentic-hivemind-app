@@ -92,6 +92,10 @@ pub struct Settings {
     pub doc_width: Option<String>,
     #[serde(default, deserialize_with = "lenient")]
     pub density: Option<String>,
+    /// Keyboard shortcuts the user changed, by shortcut id (DESK-KEYS). Changed only by `shortcuts_set`; read through
+    /// `shortcuts::get`, which drops entries that are not well formed.
+    #[serde(default, deserialize_with = "lenient")]
+    pub shortcuts: Option<BTreeMap<String, String>>,
 }
 
 /// A value of the wrong type reads as unset, so one bad appearance field never fails the whole settings file.

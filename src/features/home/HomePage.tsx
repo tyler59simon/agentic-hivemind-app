@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { sessionsQuery } from "../../lib/agent";
 import { useSystemsEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
-import { isMac, modKey } from "../../lib/platform";
+import { matches, useFormat } from "../../lib/shortcuts";
 import type { Milestone } from "../../lib/executive";
 import { writeProject, type NoteRow, type Project } from "../../lib/lm";
 import { sections } from "../../lib/note";
@@ -51,7 +51,7 @@ function useCapture(projects: Project[], project: Project | undefined): { start:
   const go = useApp((s) => s.go);
   const [capturing, setCapturing] = useState(false);
   useEffect(() => {
-    const key = (e: KeyboardEvent) => { if ((isMac ? e.metaKey : e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "c" && !modalOpen()) { e.preventDefault(); setCapturing(true); } };
+    const key = (e: KeyboardEvent) => { if (matches(e, "capture.open") && !modalOpen()) { e.preventDefault(); setCapturing(true); } };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, []);
@@ -80,9 +80,9 @@ function useHomeTabs(): { tab: HomeTab; tabs: ReactNode } {
   return { tab, tabs: <Tabs label="Home" value={tab} onChange={change} items={[{ id: "overview", label: "Overview" }, { id: "architecture", label: "Architecture" }]} /> };
 }
 
-const CaptureButton = ({ onClick }: { onClick: () => void }) => (
-  <button className="primary" onClick={onClick} title={`${modKey()}+Shift+C`}><Plus size="1em" aria-hidden /> Capture</button>
-);
+function CaptureButton({ onClick }: { onClick: () => void }) {
+  return <button className="primary" onClick={onClick} title={useFormat("capture.open")}><Plus size="1em" aria-hidden /> Capture</button>;
+}
 
 /** A slim line above the open list: the newest active plan note of the project, how far it is and the state of its session. */
 function Continue({ project, members }: { project: Project; members: NoteRow[] }) {

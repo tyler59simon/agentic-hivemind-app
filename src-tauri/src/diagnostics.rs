@@ -409,6 +409,7 @@ fn settings_summary(s: &Settings) -> String {
         ("claude_path_set", set(&s.claude_path)),
         ("codex_path_set", set(&s.codex_path)),
         ("capture_shortcut_custom", s.capture_shortcut.is_some().to_string()),
+        ("shortcut_overrides", crate::shortcuts::get(s).len().to_string()),
         ("hidden_engines", count(s.hidden_engines.as_ref().map(Vec::len))),
         ("other_folders", count(s.other_folders.as_ref().map(Vec::len))),
         ("allowed_commands", commands.to_string()),
@@ -797,13 +798,14 @@ mod tests {
             python: Some("C:\\Users\\someone\\python.exe".into()),
             capture_shortcut: Some("Ctrl+Shift+Q".into()),
             allowed_commands: Some(BTreeMap::from([("proj".to_string(), vec!["npm test".to_string(), "secret-command --token abc".to_string()])])),
+            shortcuts: Some(BTreeMap::from([("note.new".to_string(), "Mod+J".to_string()), ("tab.close".to_string(), "Mod+Shift+J".to_string())])),
             ..Settings::default()
         };
         let text = settings_summary(&s);
-        for key in ["theme: emerald", "density: compact", "document_background:", "ui_font:", "doc_width:", "default_mode:", "allowed_commands: 2", "python_set: true", "script_set: false"] {
+        for key in ["theme: emerald", "density: compact", "document_background:", "ui_font:", "doc_width:", "default_mode:", "allowed_commands: 2", "shortcut_overrides: 2", "python_set: true", "script_set: false"] {
             assert!(text.contains(key), "{key} is missing from:\n{text}");
         }
-        for leaked in ["npm test", "secret-command", "someone", "Ctrl+Shift+Q", "proj"] {
+        for leaked in ["npm test", "secret-command", "someone", "Ctrl+Shift+Q", "proj", "Mod+J", "note.new"] {
             assert!(!text.contains(leaked), "{leaked} leaked into:\n{text}");
         }
     }
