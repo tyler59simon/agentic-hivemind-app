@@ -9,6 +9,7 @@ import { useApp, type Page } from "../store";
 import { useLayout } from "./layout";
 import { SidebarSplitter } from "./RegionSplitters";
 import { Sidebar } from "./Sidebar";
+import { useBudget } from "./useBudget";
 import { Topbar } from "./Topbar";
 import { flushAllDrafts } from "../documents/store";
 import { ErrorBoundary } from "../ui/ErrorBoundary";
@@ -23,47 +24,63 @@ const PAGES: Record<Page, () => ReactNode> = {
   inbox: () => <InboxPage />,
 };
 
-/** The regions focus mode hides (App.css): focus that is inside one when it goes moves to the page. */
-const HIDDEN_IN_FOCUS = ".sidebar, .topbar, .notebooks, .note-rail";
+/** What a layout change hides, as a selector: the regions and the splitters (App.css). */
+function hiddenBy(focus: boolean, collapsed: boolean, folded: boolean, overlay: boolean): string {
+  if (focus) return ".sidebar, .topbar, .notebooks, .note-rail, .shell > .splitter, .notes-page > .splitter, .notes-area > .splitter";
+  const hidden: string[] = [];
+  if (collapsed || folded) hidden.push(".shell > .splitter");
+  if (folded) hidden.push(".notes-page > .splitter", ".sidebar-toggle");
+  if (overlay) hidden.push(".notes-area > .splitter");
+  return hidden.join(", ");
+}
 
-/** Focus mode: hides the sidebar, the top bar, the notes list and the rail, keeps the tab strip. Escape leaves it when
- *  nothing else wants the key (a dialog, a menu, the palette, a field or an editor that used it). Focus never stays inside a
- *  region that is hidden, nor falls to the page's top when the button that left the mode goes. */
-function useFocusMode(host: RefObject<HTMLElement | null>) {
-  const focusMode = useLayout((s) => s.focusMode);
-  const was = useRef(focusMode);
+/** Focus never stays on something the layout just hid, nor falls to the top of the page when the control that was used goes:
+ *  entering focus mode, collapsing the sidebar and a window width that folds regions move it to a control that is drawn, the
+ *  sidebar button or the page. The page takes the focus with a visible outline (App.css). */
+function useKeepFocus(host: RefObject<HTMLElement | null>, focus: boolean, collapsed: boolean, folded: boolean, overlay: boolean) {
+  const was = useRef(focus);
   useLayoutEffect(() => {
     const active = document.activeElement;
     const lost = !active || active === document.body;
-    if (focusMode && !was.current && (lost || !!active?.closest(HIDDEN_IN_FOCUS))) host.current?.focus();
-    else if (!focusMode && was.current && lost) host.current?.focus();
-    was.current = focusMode;
-  }, [focusMode, host]);
+    const hidden = hiddenBy(focus, collapsed, folded, overlay);
+    const inHidden = !!hidden && !!active?.closest(hidden);
+    const entered = focus && !was.current, left = !focus && was.current;
+    was.current = focus;
+    if (!(inHidden || ((entered || left) && lost))) return;
+    const toggle = !focus && !folded && active?.closest(".shell > .splitter") ? document.querySelector<HTMLElement>(".sidebar-toggle") : null;
+    (toggle ?? host.current)?.focus();
+  }, [focus, collapsed, folded, overlay, host]);
+}
+
+/** Escape leaves focus mode when nothing else wants the key: a dialog, a menu or the palette (layers), an editor or board that
+ *  used it (the event is `defaultPrevented`), or a text field, which gives up its edit on Escape (rename, filter). A field
+ *  that has no Escape action cannot be told from one that has, so every field keeps the key. */
+function useFocusEscape(focus: boolean) {
   useEffect(() => {
-    if (!focusMode) return;
+    if (!focus) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented || e.isComposing || anyLayer() || modalOpen()) return;
-      // A text field gives up its edit on Escape (rename, filter): that is its own.
       if ((e.target as Element | null)?.closest?.("input, textarea, select")) return;
       e.preventDefault();
       useLayout.getState().setFocusMode(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [focusMode]);
-  return focusMode;
+  }, [focus]);
 }
 
 /** The app frame: sidebar, top bar, and the page for the current route. */
 export function Shell({ info, onSettings, onReconnect }: { info: ConnectInfo; onSettings: () => void; onReconnect: () => void }) {
   const page = useApp((s) => s.route.page);
-  const sidebarWidth = useLayout((s) => s.sidebarWidth);
   const collapsed = useLayout((s) => s.sidebarCollapsed);
+  const focus = useLayout((s) => s.focusMode);
+  const budget = useBudget();
   const host = useRef<HTMLElement>(null);
-  const focus = useFocusMode(host);
+  useKeepFocus(host, focus, collapsed, budget.folded, budget.overlay);
+  useFocusEscape(focus);
   const exitKeys = useFormat("focus.toggle");
   return (
-    <div className={`shell${collapsed ? " collapsed" : ""}${focus ? " focus" : ""}`} style={{ "--sidebar-w": `${sidebarWidth}rem` } as CSSProperties}>
+    <div className={`shell${collapsed ? " collapsed" : ""}${focus ? " focus" : ""}`} style={{ "--sidebar-w": `${budget.sidebar}rem` } as CSSProperties}>
       <Sidebar info={info} onSettings={onSettings} onReconnect={onReconnect} />
       <SidebarSplitter />
       <div className="main">

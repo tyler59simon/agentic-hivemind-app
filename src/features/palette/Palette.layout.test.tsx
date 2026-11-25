@@ -24,12 +24,19 @@ const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query
 const { Palette } = await import("./Palette");
 const { useApp } = await import("../../store");
 const { useLayout } = await import("../../shell/layout");
+const { useWorkspace } = await import("../../workspace/store");
+const { useNotesSearch } = await import("../search/store");
 
 let root: Root | null = null;
 const row = (label: string) => [...document.querySelectorAll<HTMLButtonElement>(".palette li button")].find((b) => b.querySelector("span")!.textContent === label);
 const detail = (label: string) => row(label)?.querySelectorAll("span")[1]?.textContent;
 const settle = async () => { for (let i = 0; i < 3; i++) await act(async () => { await new Promise((r) => setTimeout(r, 20)); }); };
-const reset = () => useLayout.setState({ sidebarCollapsed: false, focusMode: false });
+/** A wide window, where the rail sits beside the note and its switch is `rail`; jsdom is 1024 px, where it lies over the note. */
+const wide = (px: number) => act(() => { Object.defineProperty(window, "innerWidth", { value: px, configurable: true }); window.dispatchEvent(new Event("resize")); });
+const reset = () => {
+  useLayout.setState({ sidebarCollapsed: false, focusMode: false });
+  useWorkspace.setState({ rail: true, railSplit: false, railNarrow: false });
+};
 
 beforeEach(async () => {
   reset();
@@ -42,6 +49,7 @@ beforeEach(async () => {
   await settle();
 });
 afterEach(async () => {
+  await wide(1024);
   await act(async () => root?.unmount());
   root = null;
   useApp.getState().setPalette(null);
@@ -78,5 +86,46 @@ describe("the layout commands", () => {
   it("turn full screen on", async () => {
     await act(async () => row("Full screen")!.click());
     expect(win.setFullscreen).toHaveBeenCalledWith(true);
+  });
+
+  // R1: the search box is hidden in focus mode, so every command that searches leaves it first.
+  it("search commands leave focus mode, then ask the box to focus", async () => {
+    for (const label of ["Search notes and pages", "Search active notes", "Search the archive"]) {
+      useLayout.setState({ focusMode: true });
+      const tick = useNotesSearch.getState().focusTick;
+      await act(async () => useApp.getState().setPalette("commands"));
+      await settle();
+      await act(async () => row(label)!.click());
+      expect(useLayout.getState().focusMode, label).toBe(false);
+      expect(useNotesSearch.getState().focusTick, label).toBeGreaterThan(tick);
+    }
+  });
+
+  // R4: the rail is hidden in focus mode, so its command shows it and leaves the mode.
+  it("the rail command leaves focus mode and shows the rail, instead of changing what is hidden", async () => {
+    await wide(1500);
+    useWorkspace.setState({ rail: false });
+    useLayout.setState({ focusMode: true });
+    await act(async () => useApp.getState().setPalette("commands"));
+    await settle();
+    expect(row("Show the note's context rail")).toBeDefined();
+    await act(async () => row("Show the note's context rail")!.click());
+    expect(useLayout.getState().focusMode).toBe(false);
+    expect(useWorkspace.getState().rail).toBe(true);
+  });
+
+  it("the rail command says Show in focus mode even when the rail is on, and hides it outside focus mode", async () => {
+    await wide(1500);
+    useWorkspace.setState({ rail: true });
+    await act(async () => useApp.getState().setPalette("commands"));
+    await settle();
+    expect(row("Hide the note's context rail")).toBeDefined();
+    await act(async () => row("Hide the note's context rail")!.click());
+    expect(useWorkspace.getState().rail).toBe(false);
+    useWorkspace.setState({ rail: true });
+    useLayout.setState({ focusMode: true });
+    await act(async () => useApp.getState().setPalette("commands"));
+    await settle();
+    expect(row("Show the note's context rail")).toBeDefined();
   });
 });

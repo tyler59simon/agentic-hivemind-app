@@ -63,8 +63,15 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
   const mark = (p: Page) => (p === "agents" && waiting ? "An agent session is waiting for you" : p === "agents" && attention === "done" ? "A terminal finished" : p === "agents" && running ? "An agent session is running" : p === "notes" && unsaved ? "A document has unsaved edits" : null);
 
   return (
-    <aside className="sidebar">
-      <div className="brand-block"><img src={logo} alt="" /><span>Hivemind</span></div>
+    <aside className="sidebar" id="app-sidebar">
+      <div className="brand-block">
+        <img src={logo} alt="" /><span>Hivemind</span>
+        {/* Under 960 px the sidebar is icons only whatever this says, so the button is hidden there (App.css). It sits in the brand row, so the navigation keeps its height. */}
+        <button type="button" className="icon-button sidebar-toggle" aria-label="Sidebar" aria-controls="app-sidebar" aria-expanded={!collapsed}
+          title={`${collapsed ? "Expand" : "Collapse"} the sidebar (${toggleKeys})`} onClick={() => setCollapsed(!collapsed)}>
+          {collapsed ? <PanelLeftOpen size="1.35em" aria-hidden /> : <PanelLeftClose size="1.35em" aria-hidden />}
+        </button>
+      </div>
       <ProjectSwitcher />
       <nav className="nav" aria-label="Sections" ref={nav}>
         {available.filter((s) => !hidden.includes(s.page)).map(({ page: p, label, icon: Icon }) => (
@@ -101,10 +108,6 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
           </>
         )}
       </Menu>
-      {/* Under 960 px the sidebar is icons only whatever this says, so the button is hidden there (App.css). */}
-      <button type="button" className="nav-item sidebar-toggle" aria-expanded={!collapsed} title={`${collapsed ? "Expand" : "Collapse"} the sidebar (${toggleKeys})`} onClick={() => setCollapsed(!collapsed)}>
-        {collapsed ? <PanelLeftOpen size="1.35em" aria-hidden /> : <PanelLeftClose size="1.35em" aria-hidden />}<span className="grow">Sidebar</span>
-      </button>
     </aside>
   );
 }

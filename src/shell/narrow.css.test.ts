@@ -21,8 +21,8 @@ const at = (needle: string) => css.indexOf(needle);
 
 describe("the widths the user sets (DESK-LAYOUT)", () => {
   it("reach the sidebar, the notes list and the rail through variables whose fallbacks are the old sizes", () => {
-    expect(rule(".shell").body).toContain("grid-template-columns: min(var(--sidebar-w, 15.4rem), 30vw) minmax(0, 1fr)");
-    expect(rule(".notes-page").body).toContain("grid-template-columns: min(var(--tree-w, 16rem), 40vw) minmax(0, 1fr)");
+    expect(rule(".shell").body).toContain("grid-template-columns: var(--sidebar-w, 15.4rem) minmax(0, 1fr)");
+    expect(rule(".notes-page").body).toContain("grid-template-columns: var(--tree-w, 16rem) minmax(0, 1fr)");
     expect(rule(".note-rail").body).toContain("width: var(--rail-w, clamp(15rem, 24vw, 25rem))");
   });
 
@@ -32,10 +32,12 @@ describe("the widths the user sets (DESK-LAYOUT)", () => {
     expect(narrowRules).not.toMatch(/--sidebar-w|--tree-w|--rail-w/);
     expect(at("@media (max-width: 960px)")).toBeGreaterThan(at(".shell { display: grid"));
     expect(at("@media (max-width: 960px)")).toBeGreaterThan(at(".notes-page { display: grid"));
-    // The rail over the note in a narrow window has its own width and is not capped by the one beside it.
+    // The rail over the note in a narrow window has its own width. No vw cap is left in the CSS: the budget (budget.ts) holds the widths.
     const overlay = rule(".notes-area.narrow .note-rail").body;
     expect(overlay).toContain("width: min(22rem, 85%)");
-    expect(overlay).toContain("max-width: none");
+    expect(rule(".note-rail").body).not.toContain("max-width");
+    expect(rule(".shell").body).not.toContain("min(");
+    expect(rule(".notes-page").body).not.toContain("min(");
     expect(at(".notes-area.narrow .note-rail {")).toBeGreaterThan(at(".note-rail { width: var(--rail-w"));
   });
 
@@ -44,7 +46,9 @@ describe("the widths the user sets (DESK-LAYOUT)", () => {
   });
 
   it("are hidden with the regions they size in focus mode, which wins over the narrow grid", () => {
-    expect(rule(".shell.focus > .sidebar, .shell.focus .topbar, .shell.focus .notebooks, .shell.focus .note-rail, .shell.focus .splitter").body).toBe("display: none;");
+    expect(rule(".shell.focus > .sidebar, .shell.focus .topbar, .shell.focus .notebooks, .shell.focus .note-rail, .shell.focus > .splitter, .shell.focus .notes-page > .splitter, .shell.focus .notes-area > .splitter").body).toBe("display: none;");
+    // The splitters between panes stay: they belong to the tab strip that focus mode keeps.
+    expect(css).not.toMatch(/\.shell\.focus \.splitter/);
     expect(rule(".shell.focus").body).toBe("grid-template-columns: minmax(0, 1fr);");
     expect(at(".shell.focus {")).toBeGreaterThan(at("@media (max-width: 960px)"));
   });
@@ -71,5 +75,8 @@ describe("the splitter", () => {
     expect(body).toContain("width: 24px");
     expect(rule(".splitter:focus-visible").body).toContain("outline: 2px solid var(--accent)");
     expect(rule(".pane-gap").body).toContain("width: 0");
+    expect(rule(".notes-area.narrow > .splitter").body).toBe("display: none;");
+    // The page takes the focus when a region goes, and shows it.
+    expect(rule(".page-host:focus-visible").body).toContain("outline: 2px solid var(--accent)");
   });
 });

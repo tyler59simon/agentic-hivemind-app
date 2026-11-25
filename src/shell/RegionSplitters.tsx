@@ -1,32 +1,37 @@
-// The splitters for the sidebar, the notes tree and the context rail (DESK-LAYOUT). Each sits on the edge of its region
-// (App.css puts it there) and keeps its width in the layout store. A narrow window folds these regions by its own rules, and
-// then the splitter is hidden.
+// The splitters for the sidebar, the notes list and the context rail (DESK-LAYOUT). Each sits on the edge of its region
+// (App.css puts it there) and keeps its width in the layout store. The value, the limits and the drag start are what is drawn
+// now (budget.ts), not what was saved: a width the window has no room for shows as the width it has, and the saved one comes
+// back when there is room. A narrow window folds these regions by its own rules, and then the splitter is hidden.
 import { Splitter } from "../ui/Splitter";
-import { autoRailWidth, DEFAULT_WIDTH, LIMITS, remPx, useLayout } from "./layout";
+import { DEFAULT_WIDTH, LIMITS } from "./budget";
+import { remPx, useLayout } from "./layout";
+import { useBudget } from "./useBudget";
 
 const STEP = 1;
 const BIG_STEP = 4;
 const text = (rem: number) => `${Math.round(rem * 10) / 10} rem`;
 
 export function SidebarSplitter() {
-  const width = useLayout((s) => s.sidebarWidth);
   const set = useLayout((s) => s.setSidebarWidth);
-  return <Splitter label="Sidebar width" value={width} min={LIMITS.sidebar.min} max={LIMITS.sidebar.max} step={STEP} bigStep={BIG_STEP} pxPerUnit={remPx()}
+  const b = useBudget();
+  const width = Math.max(b.sidebar, LIMITS.sidebar.min);
+  return <Splitter label="Sidebar width" controls="app-sidebar" value={width} min={LIMITS.sidebar.min} max={Math.max(b.max.sidebar, width)} step={STEP} bigStep={BIG_STEP} pxPerUnit={remPx()}
     text={text(width)} onChange={set} onReset={() => set(DEFAULT_WIDTH.sidebar)} />;
 }
 
 export function TreeSplitter() {
-  const width = useLayout((s) => s.treeWidth);
   const set = useLayout((s) => s.setTreeWidth);
-  return <Splitter label="Notes list width" value={width} min={LIMITS.tree.min} max={LIMITS.tree.max} step={STEP} bigStep={BIG_STEP} pxPerUnit={remPx()}
+  const b = useBudget();
+  const width = Math.max(b.tree, LIMITS.tree.min);
+  return <Splitter label="Notes list width" controls="notes-tree" value={width} min={LIMITS.tree.min} max={Math.max(b.max.tree, width)} step={STEP} bigStep={BIG_STEP} pxPerUnit={remPx()}
     text={text(width)} onChange={set} onReset={() => set(DEFAULT_WIDTH.tree)} />;
 }
 
-/** The rail is on the right, so it grows when its edge moves left. Until it is set, its width is the window's (`autoRailWidth`). */
+/** The rail is on the right, so it grows when its edge moves left. Until it is set, its width is the window's (`autoRail`). */
 export function RailSplitter() {
-  const stored = useLayout((s) => s.railWidth);
   const set = useLayout((s) => s.setRailWidth);
-  const width = stored ?? autoRailWidth();
-  return <Splitter label="Context rail width" reverse value={width} min={LIMITS.rail.min} max={LIMITS.rail.max} step={STEP} bigStep={BIG_STEP} pxPerUnit={remPx()}
+  const b = useBudget();
+  const width = Math.max(b.rail, LIMITS.rail.min);
+  return <Splitter label="Context rail width" controls="note-rail" reverse value={width} min={LIMITS.rail.min} max={Math.max(b.max.rail, width)} step={STEP} bigStep={BIG_STEP} pxPerUnit={remPx()}
     text={text(width)} onChange={set} onReset={() => set(null)} />;
 }

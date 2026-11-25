@@ -57,8 +57,8 @@ interface WorkspaceState {
 let counter = 0;
 const newId = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${(counter++).toString(36)}`;
 const firstPane = (): Pane => ({ id: newId("pane"), tabs: [], active: null, size: 1 });
-/** A pane's size, 1 when it has none or a bad one. */
-export const paneSize = (p: Pane): number => (typeof p.size === "number" && Number.isFinite(p.size) && p.size > 0 ? p.size : 1);
+/** A pane's size: 1 when it has none or a bad one, and held between 0.05 and 20 so no weight can swallow the others. */
+export const paneSize = (p: Pane): number => (typeof p.size === "number" && Number.isFinite(p.size) ? Math.min(20, Math.max(0.05, p.size)) : 1);
 export const MAX_PANES = 3;
 
 /** Whether a never-saved text file holds text. It has no draft, so closing the window or quitting loses it. */
@@ -216,7 +216,7 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
   migrate: (stored, version) =>
     withPaneSizes(withoutHostedTabs(version >= 2 ? (stored as WorkspaceState) : notesOnly(stored as { panes?: Pane[]; focused?: string; panel?: string | null }))),
   // Tabs of a kind this build does not know (written by a newer one) are dropped.
-  merge: (stored, current) => ({ ...current, ...knownKinds(stored as Partial<WorkspaceState>) }),
+  merge: (stored, current) => ({ ...current, ...normalizedSizes(knownKinds(stored as Partial<WorkspaceState>)) }),
   partialize: (s) => ({
     // New-note tabs hold unsaved text in drafts, not here, and a new text file has none; a comparison and a search are not reopened
     // (NS-6A, NS-6B). Keep only reopenable tabs.
@@ -252,6 +252,14 @@ export function withoutHostedTabs<T extends { panes?: Pane[] }>(stored: T): T {
 /** A stored layout whose panes all have a size of 1: before version 5 they shared the width equally. */
 export function withPaneSizes<T extends { panes?: Pane[] }>(stored: T): T {
   return stored?.panes ? { ...stored, panes: stored.panes.map((p) => ({ ...p, size: 1 })) } : stored;
+}
+
+/** A stored layout whose pane sizes are sane: each one finite and between 0.05 and 20, then scaled so they average 1 (the shares
+ *  stay the same). A file edited by hand or written by a bug cannot make a pane weigh nothing or everything. */
+export function normalizedSizes<T extends { panes?: Pane[] }>(stored: T): T {
+  if (!stored?.panes?.length) return stored;
+  const sum = stored.panes.reduce((n, p) => n + paneSize(p), 0);
+  return { ...stored, panes: stored.panes.map((p) => ({ ...p, size: (paneSize(p) * stored.panes!.length) / sum })) };
 }
 
 /** A stored layout without tabs of unknown kinds. A tab saved in Rich mode, which was deleted (CON-19), opens in Live. */

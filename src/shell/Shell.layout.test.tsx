@@ -61,7 +61,10 @@ describe("the sidebar width and collapse button", () => {
 
   it("collapses and expands the sidebar, and says which with aria-expanded", () => {
     const button = document.querySelector<HTMLButtonElement>(".sidebar-toggle")!;
-    expect(button.textContent).toBe("Sidebar");
+    expect(button.getAttribute("aria-label")).toBe("Sidebar");
+    expect(button.getAttribute("aria-controls")).toBe("app-sidebar");
+    expect(document.getElementById("app-sidebar")).not.toBeNull();
+    expect(button.closest(".brand-block")).not.toBeNull();
     expect(button.getAttribute("aria-expanded")).toBe("true");
     expect(button.title).toBe("Collapse the sidebar (Ctrl+Shift+B)");
     act(() => button.click());
@@ -71,6 +74,48 @@ describe("the sidebar width and collapse button", () => {
     expect(useLayout.getState().sidebarCollapsed).toBe(true);
     act(() => button.click());
     expect(shell().classList.contains("collapsed")).toBe(false);
+  });
+});
+
+/** The window is `px` wide for the layout (it follows the resize event). */
+const resizeTo = (px: number) => act(() => { Object.defineProperty(window, "innerWidth", { value: px, configurable: true }); window.dispatchEvent(new Event("resize")); });
+
+describe("focus when a layout change hides what had it (A3)", () => {
+  const splitter = () => document.querySelector<HTMLElement>(".shell > .splitter")!;
+
+  it("goes to the sidebar button when the sidebar collapses with its divider focused", () => {
+    splitter().focus();
+    expect(document.activeElement).toBe(splitter());
+    act(() => useLayout.getState().setSidebarCollapsed(true));
+    expect(document.activeElement).toBe(document.querySelector(".sidebar-toggle"));
+  });
+
+  it("goes to the page when focus mode hides the divider", () => {
+    splitter().focus();
+    act(() => useLayout.getState().setFocusMode(true));
+    expect(document.activeElement).toBe(document.querySelector("main.page-host"));
+  });
+
+  it("goes to the page when a narrow window folds the sidebar and its divider goes", () => {
+    splitter().focus();
+    resizeTo(900);
+    expect(document.activeElement).toBe(document.querySelector("main.page-host"));
+    resizeTo(1024);
+  });
+
+  it("leaves the focus alone when it is not in what went", () => {
+    const toggle = document.querySelector<HTMLElement>(".sidebar-toggle")!;
+    toggle.focus();
+    act(() => useLayout.getState().setSidebarCollapsed(true));
+    expect(document.activeElement).toBe(toggle);
+    const nav = document.querySelector<HTMLElement>(".nav-item")!;
+    nav.focus();
+    act(() => useLayout.getState().setSidebarCollapsed(false));
+    expect(document.activeElement).toBe(nav);
+  });
+
+  it("makes the page a visible focus target in CSS, and keeps the button name", () => {
+    expect(document.querySelector("main.page-host")!.getAttribute("tabindex")).toBe("-1");
   });
 });
 

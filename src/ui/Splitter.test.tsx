@@ -129,6 +129,59 @@ describe("the separator", () => {
     expect(now()).toBe(18);
   });
 
+  it("keeps the first pointer until it ends: a second touch does not take the drag over (C6)", async () => {
+    await mount();
+    pointer("pointerdown", 100, { pointerId: 1 });
+    pointer("pointerdown", 400, { pointerId: 2 }); // a second finger
+    pointer("pointermove", 500, { pointerId: 2 });
+    expect(now()).toBe(16);
+    pointer("pointermove", 120, { pointerId: 1 });
+    expect(now()).toBe(18); // from the first pointer's own start
+    pointer("pointerup", 120, { pointerId: 2 }); // the other one lifting does not end it
+    pointer("pointermove", 130, { pointerId: 1 });
+    expect(now()).toBe(19);
+    pointer("pointerup", 130, { pointerId: 1 });
+    pointer("pointerdown", 0, { pointerId: 2 }); // free again: another pointer can start
+    pointer("pointermove", 20, { pointerId: 2 });
+    expect(now()).toBe(21);
+  });
+
+  it("ends the drag when the capture is lost, so a later move with the same id does nothing (C6)", async () => {
+    await mount();
+    pointer("pointerdown", 100);
+    pointer("lostpointercapture", 100);
+    pointer("pointermove", 300);
+    expect(now()).toBe(16);
+    pointer("pointerdown", 100); // and a new drag can begin
+    pointer("pointermove", 110);
+    expect(now()).toBe(17);
+  });
+
+  it("releases the capture only when it holds it", async () => {
+    await mount();
+    const release = vi.fn();
+    const held = { value: true };
+    sep().setPointerCapture = vi.fn();
+    sep().hasPointerCapture = () => held.value;
+    sep().releasePointerCapture = release;
+    pointer("pointerdown", 0);
+    pointer("pointerup", 0);
+    expect(release).toHaveBeenCalledWith(1);
+    release.mockClear();
+    held.value = false;
+    pointer("pointerdown", 0);
+    pointer("pointerup", 0);
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it("names the region it controls", async () => {
+    const el = document.createElement("div");
+    document.body.append(el);
+    root = createRoot(el);
+    await act(async () => root!.render(<Splitter label="Notes list width" controls="notes-tree" value={16} min={12} max={28} step={1} bigStep={4} pxPerUnit={16} onChange={() => {}} onReset={() => {}} />));
+    expect(sep().getAttribute("aria-controls")).toBe("notes-tree");
+  });
+
   it("asks the caller to reset on a double click", async () => {
     await mount();
     act(() => { sep().dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); });

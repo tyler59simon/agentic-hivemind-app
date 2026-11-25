@@ -4,35 +4,19 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import { flushSync } from "react-dom";
 import { classify } from "../lib/errors";
 import { inTauri } from "../lib/native";
 import { safeStorage } from "../store";
 import { toast } from "../ui/toast";
+import { railShown, useWorkspace } from "../workspace/store";
+import { autoRail, clampWidth, DEFAULT_WIDTH, LIMITS } from "./budget";
 
-/** The width limits of each region in rem. */
-export const LIMITS = {
-  sidebar: { min: 12, max: 24 },
-  tree: { min: 12, max: 28 },
-  rail: { min: 15, max: 32 },
-} as const;
-
-/** The width a region has until the user drags it, in rem: what App.css had before. The rail has none: it follows the window,
- *  `clamp(15rem, 24vw, 25rem)` (see `autoRailWidth`). */
-export const DEFAULT_WIDTH = { sidebar: 15.4, tree: 16 } as const;
-
-type Region = keyof typeof LIMITS;
-
-/** `value` held between the limits of `region`; anything that is not a finite number gives `fallback`. */
-export function clampWidth(region: Region, value: unknown, fallback: number = LIMITS[region].min): number {
-  const { min, max } = LIMITS[region];
-  const n = typeof value === "number" && Number.isFinite(value) ? value : fallback;
-  return Math.min(max, Math.max(min, n));
-}
+export { clampWidth, DEFAULT_WIDTH, LIMITS };
 
 /** The rail's width in rem when the user has not set one: the CSS default at the current window width. */
 export function autoRailWidth(): number {
-  const vw = typeof window === "undefined" ? 0 : window.innerWidth;
-  return Math.min(25, Math.max(15, (0.24 * vw) / remPx()));
+  return autoRail(typeof window === "undefined" ? 0 : window.innerWidth, remPx());
 }
 
 /** The size of 1rem in CSS pixels. */
@@ -85,6 +69,24 @@ export const useLayout = create<LayoutState>()(persist((set) => ({
   partialize: (s) => ({ sidebarWidth: s.sidebarWidth, sidebarCollapsed: s.sidebarCollapsed, treeWidth: s.treeWidth, railWidth: s.railWidth }),
   merge: (stored, current) => ({ ...current, ...sanitize(stored) }),
 }));
+
+/** Leave focus mode now, so what the caller does next (focus the search box) finds the regions drawn. */
+export function leaveFocusMode(): void {
+  if (useLayout.getState().focusMode) flushSync(() => useLayout.getState().setFocusMode(false));
+}
+
+/** The rail's button and command. In focus mode the rail is hidden, so asking for it leaves the mode and shows it. */
+export function toggleRail(overlay: boolean): void {
+  const ws = useWorkspace.getState();
+  if (useLayout.getState().focusMode) { leaveFocusMode(); ws.setRail(true, overlay); return; }
+  ws.setRail(!railShown(ws, overlay), overlay);
+}
+
+/** Every region back to its default size, the sidebar expanded, and the panes equal. */
+export function resetLayout(): void {
+  useLayout.setState({ sidebarWidth: DEFAULT_WIDTH.sidebar, treeWidth: DEFAULT_WIDTH.tree, railWidth: null, sidebarCollapsed: false });
+  useWorkspace.setState((s) => ({ panes: s.panes.map((p) => ({ ...p, size: 1 })) }));
+}
 
 export const toggleSidebar = () => useLayout.getState().setSidebarCollapsed(!useLayout.getState().sidebarCollapsed);
 export const toggleFocusMode = () => useLayout.getState().setFocusMode(!useLayout.getState().focusMode);

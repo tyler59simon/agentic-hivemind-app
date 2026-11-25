@@ -104,7 +104,9 @@ describe("workspace with notebook pages", () => {
     expect((options().migrate!(v1, 1) as { panes: Pane[] }).panes.map((p) => p.size)).toEqual([1]);
     // A saved size survives the load, and a pane without one reads as 1.
     expect(paneSize({ id: "x", tabs: [], active: null })).toBe(1);
-    expect(paneSize({ id: "x", tabs: [], active: null, size: -2 })).toBe(1);
+    expect(paneSize({ id: "x", tabs: [], active: null, size: -2 })).toBe(0.05);
+    expect(paneSize({ id: "x", tabs: [], active: null, size: Number.NaN })).toBe(1);
+    expect(paneSize({ id: "x", tabs: [], active: null, size: 1e308 })).toBe(20);
     expect(paneSize({ id: "x", tabs: [], active: null, size: 0.4 })).toBe(0.4);
   });
 

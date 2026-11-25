@@ -1,6 +1,6 @@
 import { Columns2, LayoutPanelTop, PanelRight, Plus, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { NewNote } from "../features/editor/NewNote";
 import { NoteTab } from "../features/editor/NoteTab";
 import { FileTab, saveFileTab } from "../features/notes/FileTab";
@@ -17,8 +17,10 @@ import { useApp } from "../store";
 import { ErrorBoundary } from "../ui/ErrorBoundary";
 import { tabKey } from "../ui/focus";
 import { Confirm } from "../ui/Modal";
-import { useNarrow } from "../lib/narrow";
-import { remPx } from "../shell/layout";
+import { PANE_MIN_REM, paneShares } from "../shell/budget";
+import { remPx, toggleRail, useLayout } from "../shell/layout";
+import { useBudget } from "../shell/useBudget";
+import { ContextMenu } from "../ui/ContextMenu";
 import { Splitter } from "../ui/Splitter";
 import { MAX_PANES, paneSize, railShown, tabLabel, useWorkspace, type Pane, type Tab } from "./store";
 import { modalOpen } from "../ui/layers";
@@ -102,10 +104,13 @@ function NewButton({ onBefore }: { onBefore?: () => void }) {
 function PaneView({ pane, grow, focused, last, onClose }: {
   pane: Pane; grow: number; focused: boolean; last: boolean; onClose: (paneId: string, tabId: string) => void;
 }) {
-  const { activate, focus, split, panes, setRail } = useWorkspace();
-  const narrow = useNarrow();
+  const { activate, focus, split, panes } = useWorkspace();
+  const narrow = useBudget().overlay;
+  const focusMode = useLayout((s) => s.focusMode);
   const goTo = useFormat("palette.notes");
-  const rail = useWorkspace((s) => railShown(s, narrow));
+  const railOn = useWorkspace((s) => railShown(s, narrow));
+  // Focus mode hides the rail, so its button then shows it (and leaves the mode) instead of hiding it.
+  const rail = railOn && !focusMode;
   const active = pane.tabs.find((t) => t.id === pane.active) ?? pane.tabs[0];
   const strip = useRef<HTMLDivElement>(null);
   // The whole document area is white paper when the tab says so (App.css); views that draw dark or light colours redraw.
@@ -121,7 +126,7 @@ function PaneView({ pane, grow, focused, last, onClose }: {
   }, [active?.id, pane.tabs.length]);
   return (
     // The keyboard makes a pane the current one too (Tab into it), so Ctrl+W and Ctrl+S act on the pane with the focus.
-    <section className={`pane ${focused ? "focused" : ""}`} style={{ flexGrow: grow }} onMouseDown={() => !focused && focus(pane.id)} onFocus={() => !focused && focus(pane.id)}>
+    <section className={`pane ${focused ? "focused" : ""}`} id={`pane-${pane.id}`} style={{ flexGrow: grow }} onMouseDown={() => !focused && focus(pane.id)} onFocus={() => !focused && focus(pane.id)}>
       <div className="note-tabs" role="tablist" aria-label="Open notes and pages" ref={strip} onWheel={(e) => { if (e.deltaY) e.currentTarget.scrollLeft += e.deltaY; }}>
         {pane.tabs.map((t) => <TabPill key={t.id} tab={t} active={t.id === active?.id} onPick={() => activate(pane.id, t.id)} onClose={() => onClose(pane.id, t.id)} />)}
         <NewButton onBefore={() => focus(pane.id)} />
@@ -132,7 +137,7 @@ function PaneView({ pane, grow, focused, last, onClose }: {
               <button className="icon-button" title="Open this note side by side (Ctrl+\)" aria-label="Split" onClick={() => { focus(pane.id); split(); }}><Columns2 size="1.2em" aria-hidden /></button>
             )}
             <button className={`icon-button ${rail ? "on" : ""}`} title={rail ? "Hide the context rail" : "Show connections, history and outline"} aria-label="Context rail" aria-pressed={rail}
-              onClick={() => setRail(!rail, narrow)}><PanelRight size="1.2em" aria-hidden /></button>
+              onClick={() => toggleRail(narrow)}><PanelRight size="1.2em" aria-hidden /></button>
           </>
         )}
       </div>
@@ -145,36 +150,47 @@ function PaneView({ pane, grow, focused, last, onClose }: {
   );
 }
 
-/** The least width a pane keeps when a splitter moves, in rem. Two panes that together have less share what there is. */
-export const PANE_MIN_REM = 14;
-
-/** The divider between two neighbouring panes: it moves width from one to the other, and a double click makes them equal. The
- *  value is the left pane's share of the two, in percent. */
-function PaneSplitter({ left, right, at }: { left: Pane; right: Pane; at: number }) {
-  const slot = useRef<HTMLDivElement>(null);
+/** The divider between two neighbouring panes: it moves width from one to the other, and a double click makes them equal. `share`
+ *  is the left pane's part of the two as they are drawn now, in percent, and `pairRem` the width the two have together (0 until
+ *  it is measured). The menu (right-click, Shift+F10) does the same without dragging. */
+function PaneSplitter({ left, right, share, pairRem, label }: { left: Pane; right: Pane; share: number; pairRem: number; label: string }) {
   const resize = useWorkspace((s) => s.resizePanes);
-  // What the two panes measure together, in CSS pixels; 0 until measured.
-  const [total, setTotal] = useState(0);
-  useLayoutEffect(() => {
-    const measure = () => {
-      const a = slot.current?.previousElementSibling, b = slot.current?.nextElementSibling;
-      setTotal(a && b ? a.getBoundingClientRect().width + b.getBoundingClientRect().width : 0);
-    };
-    measure();
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
-  }, [left.id, right.id, left.size, right.size]);
-  const rem = remPx();
-  const unit = total > 0 ? 100 / (total / rem) : 1; // one rem in percent
-  const min = total > 0 ? Math.min(PANE_MIN_REM * unit, 50) : 0;
-  const share = (100 * paneSize(left)) / (paneSize(left) + paneSize(right));
+  const [menu, setMenu] = useState<{ x: number; y: number; from: HTMLElement } | null>(null);
+  const unit = pairRem > 0 ? 100 / pairRem : 1; // one rem in percent of the two
+  const min = pairRem > 0 ? Math.min(PANE_MIN_REM * unit, 50) : 0;
   const pct = Math.round(share);
+  const set = (v: number) => resize(left.id, right.id, Math.min(100 - min, Math.max(min, v)) / 100);
   return (
-    <div className="pane-gap" ref={slot}>
-      <Splitter label={`Width of panes ${at} and ${at + 1}`} value={share} min={min} max={100 - min} step={unit} bigStep={4 * unit} pxPerUnit={total / 100}
-        text={`${pct}% and ${100 - pct}%`} onChange={(v) => resize(left.id, right.id, v / 100)} onReset={() => resize(left.id, right.id, 0.5)} />
+    <div className="pane-gap">
+      <Splitter label={label} controls={`pane-${left.id}`} value={share} min={min} max={100 - min} step={unit} bigStep={4 * unit} pxPerUnit={(pairRem * remPx()) / 100}
+        text={`${pct}% and ${100 - pct}%`} onChange={(v) => resize(left.id, right.id, v / 100)} onReset={() => resize(left.id, right.id, 0.5)}
+        onMenu={(at, from) => setMenu({ ...at, from })} />
+      {menu && (
+        <ContextMenu at={menu} from={menu.from} label="Pane widths" onClose={() => setMenu(null)}>
+          <li role="none"><button role="menuitem" onClick={() => { setMenu(null); set(share + 4 * unit); }}><span className="grow">Make left pane wider</span></button></li>
+          <li role="none"><button role="menuitem" onClick={() => { setMenu(null); set(share - 4 * unit); }}><span className="grow">Make right pane wider</span></button></li>
+          <li role="none"><button role="menuitem" onClick={() => { setMenu(null); resize(left.id, right.id, 0.5); }}><span className="grow">Equal widths</span></button></li>
+        </ContextMenu>
+      )}
     </div>
   );
+}
+
+/** The width of the row of panes in rem, kept current as it changes (a window resize, the rail, the notes list, the sidebar), 0
+ *  until it is measured. */
+function useRowRem(row: RefObject<HTMLElement | null>): number {
+  const [rem, setRem] = useState(0);
+  useLayoutEffect(() => {
+    const el = row.current;
+    if (!el) return;
+    const measure = () => setRem(el.getBoundingClientRect().width / remPx());
+    measure();
+    window.addEventListener("resize", measure);
+    const watch = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    watch?.observe(el);
+    return () => { window.removeEventListener("resize", measure); watch?.disconnect(); };
+  }, [row]);
+  return rem;
 }
 
 /** The registry shortcuts this component handles. */
@@ -185,9 +201,11 @@ export function Workspace() {
   const panes = useWorkspace((s) => s.panes);
   const focused = useWorkspace((s) => s.focused);
   const close = useCloseTab();
-  // Flex growth factors that add up to less than 1 would leave the row unfilled (a pane left alone after a split was dragged),
-  // so the sizes are scaled to average 1: the shares stay the same.
-  const sum = panes.reduce((n, p) => n + paneSize(p), 0);
+  // How the row is shared as it is drawn: the saved sizes, with every pane kept at its minimum width when that fits. The shares
+  // add up to 1, so scaled by the number of panes (flex-grow, from a basis of 0) they always fill the row.
+  const row = useRef<HTMLDivElement>(null);
+  const rowRem = useRowRem(row);
+  const shares = paneShares(panes.map(paneSize), rowRem, PANE_MIN_REM);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (modalOpen()) return;
@@ -219,11 +237,14 @@ export function Workspace() {
     return () => window.removeEventListener("keydown", onKey);
   }, [close]);
   return (
-    <div className="workspace">
+    <div className="workspace" ref={row}>
       {panes.map((p, i) => (
         <Fragment key={p.id}>
-          {i > 0 && <PaneSplitter left={panes[i - 1]} right={p} at={i} />}
-          <PaneView pane={p} grow={(paneSize(p) * panes.length) / sum} focused={p.id === focused || panes.length === 1} last={i === panes.length - 1} onClose={close.request} />
+          {i > 0 && (
+            <PaneSplitter left={panes[i - 1]} right={p} share={(100 * shares[i - 1]) / (shares[i - 1] + shares[i])} pairRem={(shares[i - 1] + shares[i]) * rowRem}
+              label={panes.length === 2 ? "Width of the left pane" : `Width of pane ${i}`} />
+          )}
+          <PaneView pane={p} grow={shares[i] * panes.length} focused={p.id === focused || panes.length === 1} last={i === panes.length - 1} onClose={close.request} />
         </Fragment>
       ))}
       {close.dialog}

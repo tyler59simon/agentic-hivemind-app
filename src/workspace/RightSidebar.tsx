@@ -27,9 +27,9 @@ export function NoteRail() {
   const note = useQuery({ ...noteQuery(ref ?? ""), enabled: !!ref });
   // The graph draws into its container, so it is mounted only while the disclosure is open and has a size.
   const [graph, setGraph] = useState(false);
-  if (!tab || !ref) return <aside className="note-rail"><p className="muted">Open a saved note to see its connections and history.</p></aside>;
+  if (!tab || !ref) return <aside className="note-rail" id="note-rail"><p className="muted">Open a saved note to see its connections and history.</p></aside>;
   return (
-    <aside className="note-rail">
+    <aside className="note-rail" id="note-rail">
       <Section title="Connections"><LinksPanel tab={tab} /></Section>
       <Section title="Source history" actions={<ArrowLink onClick={() => updateTab(tab.id, { mode: "history" })}>All</ArrowLink>}>
         <SourceHistory key={ref} refId={ref} />
@@ -101,7 +101,7 @@ export function PageRail() {
   const title = useNotebookTitle(tab?.file?.notebook, !!tab?.file && !isLoose(tab.file));
   const [calendar, setCalendar] = useState(false);
   const [graph, setGraph] = useState(false);
-  if (!tab?.file) return <aside className="note-rail"><p className="muted">Open a page to see its outline.</p></aside>;
+  if (!tab?.file) return <aside className="note-rail" id="note-rail"><p className="muted">Open a page to see its outline.</p></aside>;
   const full = recent.data?.find((r) => recentRef(r).notebook === tab.file!.notebook)?.path;
   const rows: [string, ReactNode][] = isLoose(tab.file)
     ? [["File", <code>{full ?? tab.file.path}</code>]]
@@ -111,7 +111,7 @@ export function PageRail() {
     rows.push(["Format", `${base.format.encoding}${base.format.bom ? " with BOM" : ""}, ${base.format.eol.toUpperCase()} line endings`]);
   }
   return (
-    <aside className="note-rail">
+    <aside className="note-rail" id="note-rail">
       <Section title="On this page"><PageOutline tab={tab} /></Section>
       {/* The index covers folder notebooks; a loose file has no backlinks to show. */}
       {!isLoose(tab.file) && (

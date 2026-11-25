@@ -8,9 +8,8 @@ import { addNotebook, notebooksQuery, type Notebook } from "../../lib/notebooks"
 import { openInbox, useApp } from "../../store";
 import { toast } from "../../ui/toast";
 import { ContextRail } from "../../workspace/RightSidebar";
-import { useNarrow } from "../../lib/narrow";
-import { useLayout } from "../../shell/layout";
 import { RailSplitter, TreeSplitter } from "../../shell/RegionSplitters";
+import { useBudget } from "../../shell/useBudget";
 import { hasTabs, railShown, useWorkspace } from "../../workspace/store";
 import { statusQuery } from "../../lib/noteindex";
 import { GraphView } from "../graph/GraphView";
@@ -80,10 +79,10 @@ export function NotesPage() {
   const go = useApp((s) => s.go);
   const { project } = useCurrentProject();
   const open = useWorkspace(hasTabs);
-  const narrow = useNarrow();
+  // The rail lies over the note in a narrow window and when there is no room beside it; the widths are what fits (src/shell/budget.ts).
+  const budget = useBudget();
+  const narrow = budget.overlay;
   const rail = useWorkspace((s) => railShown(s, narrow));
-  const treeWidth = useLayout((s) => s.treeWidth);
-  const railWidth = useLayout((s) => s.railWidth);
   const add = useAddNotebook();
   const [settings, setSettings] = useState<Notebook | null>(null);
 
@@ -106,8 +105,8 @@ export function NotesPage() {
   const list = notebooks.data ?? [];
   const empty = !list.length && !memory.groups.length && !notebooks.isLoading && !memory.loading;
   return (
-    <div className="notes-page" style={{ "--tree-w": `${treeWidth}rem` } as CSSProperties}>
-      <nav className="notebooks" aria-label="Notes and notebooks">
+    <div className="notes-page" style={{ "--tree-w": `${budget.tree}rem` } as CSSProperties}>
+      <nav className="notebooks" id="notes-tree" aria-label="Notes and notebooks">
         <div className="notes-views" aria-label="Lists of notes and pages">
           <button type="button" className={`link-row${route.page === "notes" && route.view === "tasks" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "tasks" })}><ListChecks size="1em" aria-hidden /> Tasks</button>
           <button type="button" className={`link-row${route.page === "notes" && route.view === "views" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "views" })}><Kanban size="1em" aria-hidden /> Views</button>
@@ -139,8 +138,8 @@ export function NotesPage() {
           </div>
         )
         : open
-        ? <div className={`notes-area${narrow ? " narrow" : ""}`} style={railWidth === null ? undefined : { "--rail-w": `${railWidth}rem` } as CSSProperties}>
-          <Workspace />{rail && <>{!narrow && <RailSplitter />}<ContextRail /></>}
+        ? <div className={`notes-area${narrow ? " narrow" : ""}`} style={{ "--rail-w": `${budget.rail}rem` } as CSSProperties}>
+          <Workspace />{rail && <><RailSplitter /><ContextRail /></>}
         </div>
         : empty ? <Empty onAdd={add} />
         : (

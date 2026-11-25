@@ -1,5 +1,4 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { isNarrow } from "../../lib/narrow";
 import { parentFolder } from "../../lib/platform";
 import { useLayer } from "../../ui/layers";
 import { zoomBy } from "../../lib/zoom";
@@ -21,7 +20,8 @@ import { refreshStore } from "../../lib/refresh";
 import { fuzzy } from "../../lib/text";
 import { classify } from "../../lib/errors";
 import { useHidden } from "../../shell/hidden";
-import { toggleFocusMode, toggleFullscreen, toggleSidebar, useLayout } from "../../shell/layout";
+import { leaveFocusMode, toggleFocusMode, toggleFullscreen, toggleRail, toggleSidebar, useLayout } from "../../shell/layout";
+import { useBudget } from "../../shell/useBudget";
 import { toast } from "../../ui/toast";
 import { openProject, openSettings, openSystem, useApp, type Page, type Route } from "../../store";
 import { activeTab, railShown, useWorkspace } from "../../workspace/store";
@@ -66,6 +66,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
   const addNotebook = useAddNotebook();
   const collapsed = useLayout((s) => s.sidebarCollapsed);
   const focusMode = useLayout((s) => s.focusMode);
+  const overlay = useBudget().overlay;
   const keys = useShortcutVersion(); // the entries show the keys as they are now
   useEffect(() => { setQuery(""); setIndex(0); }, [app.palette]);
   // What had the focus before the palette opened, for the sheet it may open: the palette's own controls are gone by then.
@@ -162,10 +163,10 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       ] : []),
       ...EXTRA_COMMANDS.map((c) => ({ ...c, run: () => { close(); c.run(); } })),
       { key: "split", label: "Open the note side by side", detail: format("view.split"), run: () => { ws.split(); close(); } },
-      { key: "rail", label: railShown(ws, isNarrow()) ? "Hide the note's context rail" : "Show the note's context rail", run: () => { ws.setRail(!railShown(ws, isNarrow()), isNarrow()); close(); } },
-      { key: "search", label: "Search notes and pages", detail: format("search.focus"), run: () => { close(); useNotesSearch.getState().focus(); } },
-      { key: "active", label: "Search active notes", run: () => { close(); useNotesSearch.getState().byStatus("active"); } },
-      { key: "archive", label: "Search the archive", run: () => { close(); useNotesSearch.getState().byStatus("archived"); } },
+      { key: "rail", label: railShown(ws, overlay) && !focusMode ? "Hide the note's context rail" : "Show the note's context rail", run: () => { toggleRail(overlay); close(); } },
+      { key: "search", label: "Search notes and pages", detail: format("search.focus"), run: () => { close(); leaveFocusMode(); useNotesSearch.getState().focus(); } },
+      { key: "active", label: "Search active notes", run: () => { close(); leaveFocusMode(); useNotesSearch.getState().byStatus("active"); } },
+      { key: "archive", label: "Search the archive", run: () => { close(); leaveFocusMode(); useNotesSearch.getState().byStatus("archived"); } },
       { key: "back", label: "Back", detail: format("nav.back"), run: () => { close(); app.goBack(); } },
       { key: "refresh", label: "Refresh", run: () => { refreshStore(client); close(); } },
       { key: "reconnect", label: "Reconnect to Living Memory", run: () => { onReconnect(); close(); } },
@@ -182,7 +183,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       })),
     ];
     return all.filter((e) => !e.section || !hidden.includes(e.section));
-  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, wikiOn, maintenanceOn, hidden, client, onSettings, onReconnect, notebooks.data, trees, indexed.data, addNotebook, recent.data, keys, collapsed, focusMode]);
+  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, wikiOn, maintenanceOn, hidden, client, onSettings, onReconnect, notebooks.data, trees, indexed.data, addNotebook, recent.data, keys, collapsed, focusMode, overlay]);
 
   const shown = useMemo(() => {
     const best = entries
