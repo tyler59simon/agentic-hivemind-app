@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Documents on white paper: the setting, its storage and sync between windows, and which colours a document draws in.
+// Documents on white paper: the setting, its first-paint copy (sync between windows is in appearance.test.ts), and which colours a document draws in.
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,21 +32,6 @@ describe("the document background setting", () => {
   it("is not saved by applying a value that came from storage", () => {
     applyPaperDefault("white", false);
     expect(localStorage.getItem(prefs.paperKey)).toBeNull();
-  });
-
-  it("follows a change made in the other window", () => {
-    localStorage.setItem(prefs.paperKey, "white");
-    window.dispatchEvent(new StorageEvent("storage", { key: prefs.paperKey }));
-    expect(paperDefault()).toBe("white");
-    localStorage.setItem(prefs.paperKey, "theme");
-    window.dispatchEvent(new StorageEvent("storage", { key: prefs.paperKey }));
-    expect(paperDefault()).toBe("theme");
-  });
-
-  it("ignores the other keys of storage events", () => {
-    localStorage.setItem(prefs.paperKey, "white");
-    window.dispatchEvent(new StorageEvent("storage", { key: prefs.themeKey }));
-    expect(paperDefault()).toBe("theme");
   });
 
   it("starts from the saved value", () => {

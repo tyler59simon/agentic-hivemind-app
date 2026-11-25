@@ -1480,12 +1480,29 @@ fn ui_zoom_set(app: AppHandle, state: State<'_, AppState>, zoom: f64) -> Result<
     appearance::set(&app, &state.settings_path, zoom)
 }
 
+/// The theme, document background, document text size and default note mode (DESK-11), each null when not set.
+#[tauri::command]
+fn appearance_get(state: State<'_, AppState>) -> appearance::Appearance {
+    appearance::get(&settings::load(&state.settings_path))
+}
+
+/// Check and keep one appearance value (for example key "theme", value "emerald") and tell every window with `appearance`.
+#[tauri::command]
+fn appearance_set(app: AppHandle, state: State<'_, AppState>, key: String, value: serde_json::Value) -> Result<(), String> {
+    appearance::set_value(&app, &state.settings_path, &key, &value)
+}
+
 /// What a Settings form save keeps: the folder list changes only through the native picker, the rules files only through
-/// architecture_rules_set and the zoom only through ui_zoom_set, so a form opened earlier never undoes them.
+/// architecture_rules_set, the zoom only through ui_zoom_set and the appearance only through appearance_set, so a form
+/// opened earlier never undoes them.
 fn settings_to_save(previous: &Settings, value: Settings) -> Result<Settings, String> {
     let mut value = folders::keep(previous, value);
     value.architecture_rules = previous.architecture_rules.clone();
     value.ui_zoom = previous.ui_zoom;
+    value.theme = previous.theme.clone();
+    value.document_background = previous.document_background.clone();
+    value.document_size = previous.document_size;
+    value.default_mode = previous.default_mode.clone();
     if !value.shows(agent::Engine::Claude) && !value.shows(agent::Engine::Codex) {
         return Err("Keep at least one engine shown.".into());
     }
@@ -2123,7 +2140,7 @@ pub fn run() {
             exec_agent_start,
             exec_session_capture,
             exec_export,
-            lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, ui_zoom, ui_zoom_set, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
+            lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, ui_zoom, ui_zoom_set, appearance_get, appearance_set, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_roles, learning_status, learning_review, skills_list, skill_proposals, skill_decide, skill_action, skill_version, skill_history,
             skills_upkeep, skill_from_note, skills_sync, skill_link, skill_unlink, skill_resolve, uninstall_skills, uninstall_remove_skills,
             automation_list, automation_put, automation_delete, automation_spend, automation_act, architecture_drift, architecture_rules_set, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, uninstall_inventory, uninstall_remove_worktree, uninstall_delete_branch, repo_branches,
@@ -2189,6 +2206,16 @@ mod tests {
         assert_eq!(saved.architecture_rules, previous.architecture_rules);
         let hidden = Settings { hidden_engines: Some(vec!["claude".into(), "codex".into()]), ..Default::default() };
         assert!(settings_to_save(&previous, hidden).is_err());
+    }
+
+    #[test]
+    fn a_settings_form_save_keeps_the_appearance_it_did_not_change() {   // DESK-11
+        let previous = Settings { theme: Some("emerald".into()), document_background: Some("white".into()), document_size: Some(1.25), default_mode: Some("live".into()), ..Default::default() };
+        let form = Settings { python: Some("py".into()), theme: Some("purple".into()), document_background: None, document_size: Some(0.9), default_mode: Some("source".into()), ..Default::default() };
+        let saved = settings_to_save(&previous, form).unwrap();
+        assert_eq!(saved.python.as_deref(), Some("py"));
+        assert_eq!((saved.theme, saved.document_background, saved.document_size, saved.default_mode),
+            (previous.theme, previous.document_background, previous.document_size, previous.default_mode));
     }
 
     #[test]

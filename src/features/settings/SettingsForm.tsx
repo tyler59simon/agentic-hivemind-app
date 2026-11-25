@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { setDefaultMode } from "../../lib/appearance";
 import { applyDocSize, DOC_SIZES, useDocSize } from "../../lib/docSize";
 import { isMac } from "../../lib/platform";
 import { setZoom, useZoom, ZOOM_STEPS, zoomPercent } from "../../lib/zoom";
@@ -67,7 +68,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
   return (
     <form className="settings" onSubmit={(e) => {
       e.preventDefault();
-      prefs.setDefaultMode(mode);
+      setDefaultMode(mode);
       // Notes wait while the store may change, so none saves into the store being switched to; connecting again names
       // the store. Settings that were not saved change nothing.
       const resume = pauseLmStore();
@@ -193,7 +194,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
           {PAPER_DEFAULTS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
         </select>
       </label>
-      <p className="muted small">The theme and the document background change at once and are kept on this computer; they do not need Save. White shows documents as dark text on white paper while the rest of Hivemind keeps its theme. A document's page menu can switch that one tab.</p>
+      <p className="muted small">The zoom, the document text size, the theme and the document background change at once and are kept in the settings file; they do not need Save. White shows documents as dark text on white paper while the rest of Hivemind keeps its theme. A document's page menu can switch that one tab.</p>
 
       <h3>Sidebar</h3>
       {sections.map((s) => (

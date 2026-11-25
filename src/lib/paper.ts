@@ -4,6 +4,7 @@
 // Code that picks dark or light colours inside a document asks `documentIsDark(el)` and redraws on `onDocumentLook`.
 import { useSyncExternalStore } from "react";
 import type { Tab } from "../workspace/store";
+import { followAppearance, saveAppearance } from "./appearance";
 import { prefs } from "./prefs";
 import { currentTheme, onThemeChange } from "./theme";
 
@@ -17,10 +18,10 @@ const settingListeners = new Set<() => void>();
 const lookListeners = new Set<() => void>();
 let current: PaperDefault = "theme";
 
-/** Use `value` as the default in this window; with `save`, also keep it for the next start and the other window. */
+/** Use `value` as the default in this window; with `save`, also keep it in the settings file, which tells the other window. */
 export function applyPaperDefault(value: PaperDefault, save = true): void {
   current = value;
-  if (save) prefs.setPaper(value);
+  if (save) { prefs.setPaper(value); saveAppearance("document_background", value); }
   settingListeners.forEach((l) => l());
 }
 
@@ -28,10 +29,10 @@ export const paperDefault = (): PaperDefault => current;
 const subscribe = (listener: () => void) => { settingListeners.add(listener); return () => { settingListeners.delete(listener); }; };
 export const usePaperDefault = (): PaperDefault => useSyncExternalStore(subscribe, paperDefault);
 
-/** Apply the saved default and follow changes made in the other window. Called once, before the first render. */
+/** Apply the default from the first-paint copy, then follow the settings file and the other window. Called once, before the first render. */
 export function initPaperDefault(): void {
   applyPaperDefault(prefs.paper(), false);
-  window.addEventListener("storage", (e) => { if (e.key === prefs.paperKey) applyPaperDefault(prefs.paper(), false); });
+  followAppearance("document_background", () => prefs.stored(prefs.paperKey) as PaperDefault | null, (value) => { prefs.setPaper(value); applyPaperDefault(value, false); });
 }
 
 /** Whether a tab shows its document on white paper: its own choice, else the setting. */

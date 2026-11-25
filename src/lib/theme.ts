@@ -4,6 +4,7 @@
 // App.css holds the palettes as tokens; code that reads tokens at runtime listens with onThemeChange.
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useSyncExternalStore } from "react";
+import { followAppearance, saveAppearance } from "./appearance";
 import { inTauri } from "./native";
 import { prefs } from "./prefs";
 
@@ -29,10 +30,10 @@ const DARK = "(prefers-color-scheme: dark)";
 /** The Emerald theme that matches the system's light or dark mode (dark when it cannot tell). */
 export const systemTheme = (): Theme => (typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: light)").matches ? "emerald-light" : "emerald");
 
-/** Show `theme` in this window; with `save`, also keep it for the next start and the other window. */
+/** Show `theme` in this window; with `save`, also keep it in the settings file, which tells the other window. */
 export function applyTheme(theme: ThemeChoice, save = true): void {
   choice = theme;
-  if (save) prefs.setTheme(theme);
+  if (save) { prefs.setTheme(theme); saveAppearance("theme", theme); }
   show(theme === "system" ? systemTheme() : theme, theme === "system");
 }
 
@@ -65,10 +66,10 @@ export const useTheme = (): Theme => useSyncExternalStore(onThemeChange, current
 export const currentThemeChoice = (): ThemeChoice => choice;
 export const useThemeChoice = (): ThemeChoice => useSyncExternalStore(onThemeChange, currentThemeChoice);
 
-/** Apply the saved theme and follow changes made in the other window. Called once, before the first render. */
+/** Apply the theme from the first-paint copy, then follow the settings file and the other window. Called once, before the first render. */
 export function initTheme(): void {
   applyTheme(prefs.theme(), false);
-  window.addEventListener("storage", (e) => { if (e.key === prefs.themeKey) applyTheme(prefs.theme(), false); });
+  followAppearance("theme", () => prefs.stored(prefs.themeKey) as ThemeChoice | null, (theme) => { prefs.setTheme(theme); applyTheme(theme, false); });
   if (typeof matchMedia === "function") matchMedia(DARK).addEventListener("change", followSystem);
 }
 

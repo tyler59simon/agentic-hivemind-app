@@ -9,6 +9,9 @@ const set = (key: string, value: string) => { try { localStorage.setItem(key, va
 export interface CaptureTarget { kind: "memory" | "today" | "inbox"; notebook: string }
 
 export const prefs = {
+  /** The copy kept here of a value that lives in the settings file (DESK-11): null when none was kept. */
+  stored: get,
+  defaultModeKey: "hivemind.defaultMode",
   defaultMode: (): Mode => (get("hivemind.defaultMode") as Mode | null) ?? "reading",
   setDefaultMode: (mode: Mode) => set("hivemind.defaultMode", mode),
   captureDomain: () => get("hivemind.captureDomain"),

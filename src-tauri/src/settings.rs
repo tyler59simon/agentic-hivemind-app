@@ -64,6 +64,18 @@ pub struct Settings {
     /// Zoom of every window, 1.0 for 100% (DESK-ZOOM). Changed only by `ui_zoom_set`.
     #[serde(default)]
     pub ui_zoom: Option<f64>,
+    /// Colour theme, one of `THEMES` (DESK-11). Changed only by `appearance_set`; an unknown value is ignored.
+    #[serde(default)]
+    pub theme: Option<String>,
+    /// Default document background, one of `PAPERS`. Changed only by `appearance_set`.
+    #[serde(default)]
+    pub document_background: Option<String>,
+    /// Document text size multiple, one of `DOC_SIZES`. Changed only by `appearance_set`.
+    #[serde(default)]
+    pub document_size: Option<f64>,
+    /// How a note opens, one of `DEFAULT_MODES`. Changed only by `appearance_set`.
+    #[serde(default)]
+    pub default_mode: Option<String>,
 }
 
 /// On macOS Cmd+Option+M minimizes every window of the front app, so Shift is added there (MACOS-1D). Keep in step with
@@ -108,6 +120,23 @@ impl Settings {
     /// The window zoom, 1.0 when unset or out of range.
     pub fn ui_zoom(&self) -> f64 {
         self.ui_zoom.map(clamp_zoom).unwrap_or(1.0)
+    }
+
+    /// The saved theme, None when unset or not a known one.
+    pub fn theme(&self) -> Option<&str> {
+        self.theme.as_deref().filter(|v| valid_theme(v))
+    }
+
+    pub fn document_background(&self) -> Option<&str> {
+        self.document_background.as_deref().filter(|v| valid_paper(v))
+    }
+
+    pub fn document_size(&self) -> Option<f64> {
+        self.document_size.filter(|v| valid_doc_size(*v))
+    }
+
+    pub fn default_mode(&self) -> Option<&str> {
+        self.default_mode.as_deref().filter(|v| valid_default_mode(v))
     }
 
     /// The daily cap for the reviewer and the executive calls; zero turns them off.
@@ -180,6 +209,18 @@ pub const ZOOM_MAX: f64 = 2.0;
 pub fn clamp_zoom(zoom: f64) -> f64 {
     if zoom.is_finite() { zoom.clamp(ZOOM_MIN, ZOOM_MAX) } else { 1.0 }
 }
+
+/// The values the appearance settings may have (DESK-11). Keep in step with src/lib/theme.ts, paper.ts, docSize.ts and the
+/// "Open notes in" choice in src/features/settings/SettingsForm.tsx.
+pub const THEMES: [&str; 4] = ["purple", "emerald", "emerald-light", "system"];
+pub const PAPERS: [&str; 2] = ["theme", "white"];
+pub const DOC_SIZES: [f64; 5] = [0.9, 1.0, 1.1, 1.25, 1.5];
+pub const DEFAULT_MODES: [&str; 3] = ["reading", "live", "source"];
+
+pub fn valid_theme(value: &str) -> bool { THEMES.contains(&value) }
+pub fn valid_paper(value: &str) -> bool { PAPERS.contains(&value) }
+pub fn valid_doc_size(value: f64) -> bool { DOC_SIZES.contains(&value) }
+pub fn valid_default_mode(value: &str) -> bool { DEFAULT_MODES.contains(&value) }
 
 /// Serialises read, change and write of the settings file, so two commands that each change one field never undo
 /// each other's change.
@@ -264,6 +305,20 @@ mod tests {
         assert_eq!((old.python.as_deref(), old.ui_zoom), (Some("py"), None));
         let new: Settings = serde_json::from_str(r#"{"ui_zoom": 1.5}"#).unwrap();
         assert_eq!(new.ui_zoom(), 1.5);
+    }
+
+    #[test]
+    fn appearance_values_are_checked_and_unknown_ones_ignored_on_load() {   // DESK-11
+        assert!(valid_theme("emerald-light") && valid_theme("system") && !valid_theme("sepia") && !valid_theme(""));
+        assert!(valid_paper("white") && valid_paper("theme") && !valid_paper("black"));
+        assert!(valid_doc_size(0.9) && valid_doc_size(1.0) && valid_doc_size(1.5) && !valid_doc_size(1.2) && !valid_doc_size(f64::NAN));
+        assert!(valid_default_mode("live") && !valid_default_mode("history"));
+        let none = Settings::default();
+        assert_eq!((none.theme(), none.document_background(), none.document_size(), none.default_mode()), (None, None, None, None));
+        let bad: Settings = serde_json::from_str(r#"{"theme": "sepia", "document_background": "x", "document_size": 3, "default_mode": "hex"}"#).unwrap();
+        assert_eq!((bad.theme(), bad.document_background(), bad.document_size(), bad.default_mode()), (None, None, None, None));
+        let good: Settings = serde_json::from_str(r#"{"theme": "emerald", "document_background": "white", "document_size": 1.25, "default_mode": "source"}"#).unwrap();
+        assert_eq!((good.theme(), good.document_background(), good.document_size(), good.default_mode()), (Some("emerald"), Some("white"), Some(1.25), Some("source")));
     }
 
     #[test]
@@ -426,7 +481,8 @@ mod tests {
     fn save_then_load_round_trips() {
         let dir = std::env::temp_dir().join(format!("hivemind-settings-{}", std::process::id()));
         let path = dir.join("settings.json");
-        let value = Settings { python: Some("python3".into()), script: None, root: Some("/tmp/store".into()), hidden_engines: Some(vec!["claude".into()]), ..Default::default() };
+        let value = Settings { python: Some("python3".into()), script: None, root: Some("/tmp/store".into()), hidden_engines: Some(vec!["claude".into()]),
+            theme: Some("emerald".into()), document_background: Some("white".into()), document_size: Some(1.1), default_mode: Some("live".into()), ..Default::default() };
         save(&path, &value).unwrap();
         assert_eq!(load(&path), value);
         std::fs::remove_dir_all(dir).ok();

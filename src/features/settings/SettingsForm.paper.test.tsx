@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Settings: the Document background choice next to the theme. It applies at once, is kept on this computer and needs no Save.
+// Settings: the Document background choice next to the theme. It applies at once, is kept in the settings file and needs no Save.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -53,8 +53,7 @@ describe("the Document background setting", () => {
   });
 
   it("shows a change that came from the other window", async () => {
-    localStorage.setItem(prefs.paperKey, "white");
-    await act(async () => applyPaperDefault(prefs.paper(), false));
+    await act(async () => applyPaperDefault("white", false));
     expect(select().value).toBe("white");
   });
 });
