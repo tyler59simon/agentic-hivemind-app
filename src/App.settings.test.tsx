@@ -22,7 +22,7 @@ function Host() {
   const ref = (el: HTMLElement | null) => { if (el) el.scrollIntoView = () => { scrolled.push(el.id); }; };
   return (
     <>
-      {["settings-learning", "settings-spend", "settings-schedules", "settings-maintenance"].map((id) => <h3 key={id} id={id} ref={ref}>{id}</h3>)}
+      {["settings-learning", "settings-spend", "settings-schedules", "settings-maintenance", "settings-shortcuts"].map((id) => <h3 key={id} id={id} ref={ref}>{id}</h3>)}
       <div id="automation-a1" ref={ref} />
     </>
   );
@@ -51,6 +51,7 @@ describe("opening Settings at a section", () => {
     await act(async () => root!.render(<Host />));
     expect(await open(() => openSettings("maintenance"))).toEqual(["settings-maintenance"]);
     expect(await open(() => openSettings("spend"))).toEqual(["settings-spend"]);
+    expect(await open(() => openSettings("shortcuts"))).toEqual(["settings-shortcuts"]);
     expect(await open(() => openAutomation("a1"))).toEqual(["automation-a1"]);
     // A row that is not drawn (a removed automation) falls back to its section.
     expect(await open(() => openAutomation("gone"))).toEqual(["settings-schedules"]);

@@ -10,9 +10,12 @@ import { BeforeUninstall } from "./features/settings/BeforeUninstall";
 import { SettingsForm } from "./features/settings/SettingsForm";
 import { SchedulesSection } from "./features/schedules/SchedulesSection";
 import { MaintenanceSection } from "./features/maintenance/MaintenanceSection";
+import { ShortcutsDialog, useShortcutsDialog } from "./features/shortcuts/ShortcutsDialog";
+import { ShortcutsSection } from "./features/shortcuts/ShortcutsSection";
 import { agentSessions } from "./lib/agent";
 import { captureStatus, connect, domains, setBridgeGeneration } from "./lib/lm";
-import { commandKey, editableTarget, isMac } from "./lib/platform";
+import { editableTarget, isMac } from "./lib/platform";
+import { matches } from "./lib/shortcuts";
 import { prefs } from "./lib/prefs";
 import { appQuit, notifyTray, quitAck, termList } from "./lib/term";
 import { useAttentionEvents } from "./features/terminal/attention";
@@ -40,26 +43,27 @@ import { newPageHere } from "./features/notes/actions";
 import type { FilesChanged } from "./lib/notebooks";
 import { modalOpen } from "./ui/layers";
 
-/** Shortcuts that work on every page. Ctrl+K and Ctrl+Shift+F belong to the top bar's search; tab ones to the open notes. */
-function useShortcuts() {
+/** Shortcuts that work on every page, by the keys the registry has (src/lib/shortcuts.ts). Ctrl+K and Ctrl+Shift+F belong to
+ *  the top bar's search; tab ones to the open notes. */
+export function useShortcuts() {
   const client = useQueryClient();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const { setPalette, go, goBack } = useApp.getState();
       if (modalOpen()) return; // a dialog is open: nothing behind it changes (DESK-4)
       // On macOS Option+Left moves a word left in text, so it goes back only outside text fields.
-      if (e.altKey && e.key === "ArrowLeft" && !(isMac && editableTarget(e.target))) { e.preventDefault(); goBack(); return; }
-      if (!commandKey(e)) return;
-      const key = e.key.toLowerCase();
-      if (key === "p" && !e.shiftKey) { e.preventDefault(); setPalette("commands"); }
-      else if (key === "o") { e.preventDefault(); setPalette("notes"); }
-      else if (key === "n" && !e.shiftKey) {
+      if (matches(e, "nav.back") && !(isMac && editableTarget(e.target))) { e.preventDefault(); goBack(); return; }
+      if (matches(e, "palette.commands")) { e.preventDefault(); setPalette("commands"); }
+      else if (matches(e, "palette.notes")) { e.preventDefault(); setPalette("notes"); }
+      // An editor or a terminal keeps the key: Ctrl+/ is the editor's comment toggle, and the terminal sends it to the shell.
+      else if (matches(e, "shortcuts.show") && !(e.target as Element | null)?.closest?.(".cm-editor, .xterm")) { e.preventDefault(); useShortcutsDialog.getState().show(); }
+      else if (matches(e, "note.new")) {
         e.preventDefault();
         if (useApp.getState().route.page === "notes") void newPageHere(client);
         else useWorkspace.getState().openTab({ kind: "new-note" });
       }
-      else if (key === "g" && !e.shiftKey) { e.preventDefault(); go({ page: "notes", view: "graph" }); }
-      else if (key === "w") e.preventDefault(); // closes a note tab when notes are shown; never the window
+      else if (matches(e, "graph.open")) { e.preventDefault(); go({ page: "notes", view: "graph" }); }
+      else if (matches(e, "tab.close")) e.preventDefault(); // closes a note tab when notes are shown; never the window
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -282,7 +286,7 @@ export default function App() {
   const reconnect = useCallback(() => { closeSettings(); client.resetQueries(); }, [client]);
 
   // The dialogs belong to every branch: tray Quit must show its dialog while Settings is open or the connection has failed.
-  const dialogs = <>{closeGuard}{quitDialog}{folderOffer}</>;
+  const dialogs = <>{closeGuard}{quitDialog}{folderOffer}<ShortcutsDialog /></>;
   if (link.isLoading) return <><main className="center muted">Connecting to Living Memory…</main>{dialogs}</>;
   const outdated = link.isSuccess && needsLmUpdate(link.data.version);
   if (link.error || outdated || settings) {
@@ -294,6 +298,7 @@ export default function App() {
             {link.error && <p className="error">{String(link.error)}</p>}
             {outdated && <p className="error">This version of Living Memory is too old: Hivemind needs one with direct writes and unified proposals (<code>alm version</code> lists <code>direct_writes</code> and <code>proposals</code> under capabilities). Update Living Memory, then reconnect.</p>}
             <SettingsForm onSaved={reconnect} />
+            <ShortcutsSection />
             {link.isSuccess && !outdated && <><SchedulesSection /><MaintenanceSection /></>}
             <BeforeUninstall
               onOpenReview={link.isSuccess && !outdated ? (id) => { setSettings(false); openInbox(id); } : undefined}

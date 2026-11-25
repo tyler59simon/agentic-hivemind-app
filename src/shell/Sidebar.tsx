@@ -11,6 +11,7 @@ import { sessionsQuery } from "../lib/agent";
 import { useSystemsEnabled } from "../lib/connection";
 import type { ConnectInfo } from "../lib/lm";
 import { refreshStore } from "../lib/refresh";
+import { useFormat } from "../lib/shortcuts";
 import { useApp, type Page } from "../store";
 import { Menu } from "../ui/Menu";
 import { useWorkspace } from "../workspace/store";
@@ -31,6 +32,7 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
   const page = useApp((s) => s.route.page);
   const go = useApp((s) => s.go);
   const setPalette = useApp((s) => s.setPalette);
+  const paletteKeys = useFormat("palette.commands");
   const client = useQueryClient();
   const systemsOn = useSystemsEnabled();
   const available = useAvailableSections();
@@ -88,7 +90,7 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
         {(close) => (
           <>
             <li role="none"><button role="menuitem" onClick={() => { close(); onSettings(); }}><span className="grow">Settings</span></button></li>
-            <li role="none"><button role="menuitem" onClick={() => { close(); setPalette("commands"); }}><span className="grow">Command palette</span><kbd>Ctrl P</kbd></button></li>
+            <li role="none"><button role="menuitem" onClick={() => { close(); setPalette("commands"); }}><span className="grow">Command palette</span><kbd>{paletteKeys}</kbd></button></li>
             <li role="none"><button role="menuitem" onClick={() => { close(); refreshStore(client); }}><span className="grow">Refresh</span></button></li>
             <li role="none"><button role="menuitem" onClick={() => { close(); onReconnect(); }}><span className="grow">Reconnect to Living Memory</span></button></li>
             <li className="menu-note" role="none" title={info.script}>{info.root}</li>

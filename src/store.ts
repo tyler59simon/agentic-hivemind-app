@@ -20,7 +20,7 @@ export type Route =
 export type Page = Route["page"];
 
 /** The Settings sections a link can open at. Settings is not a route: it replaces the whole shell while it is open. */
-export type SettingsSection = "learning" | "spend" | "schedules" | "maintenance";
+export type SettingsSection = "learning" | "spend" | "schedules" | "maintenance" | "shortcuts";
 
 export const safeStorage: StateStorage = {
   getItem: (k) => { try { return localStorage.getItem(k); } catch { return null; } },

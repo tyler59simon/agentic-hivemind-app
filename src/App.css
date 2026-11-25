@@ -2102,3 +2102,15 @@ button.owner-chip { cursor: pointer; }
   .nav-dot, .tab-attention { forced-color-adjust: none; }
   .modal, .menu-list, .palette, .toast { border: 1px solid CanvasText; }
 }
+
+/* ---- Keyboard shortcuts: the reference sheet and the Settings rows (DESK-KEYS) ---- */
+.shortcut-group h3 { margin: var(--sp-10) 0 var(--sp-5); font-size: 1rem; }
+.shortcut-list { margin: 0; display: flex; flex-direction: column; }
+.shortcut-list .shortcut-row { display: flex; justify-content: space-between; gap: var(--sp-16); padding: var(--sp-5) 0; border-bottom: 1px solid var(--border); }
+.shortcut-list dt { min-width: 0; }
+.shortcut-list dd { margin: 0; text-align: right; }
+.shortcut-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-8); }
+.shortcut-rows .shortcut-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-10); }
+.shortcut-rows .shortcut-note { flex-basis: 100%; margin: 0; }
+.shortcut-key { min-width: 9rem; }
+.settings h4 { margin: var(--sp-8) 0 var(--sp-5); font-size: .9rem; color: var(--muted); }

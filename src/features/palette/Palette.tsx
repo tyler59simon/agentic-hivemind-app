@@ -3,6 +3,8 @@ import { isNarrow } from "../../lib/narrow";
 import { parentFolder } from "../../lib/platform";
 import { useLayer } from "../../ui/layers";
 import { zoomBy } from "../../lib/zoom";
+import { format, useShortcutVersion } from "../../lib/shortcuts";
+import { useShortcutsDialog } from "../shortcuts/ShortcutsDialog";
 import { useEffect, useMemo, useState } from "react";
 import { useMaintenanceEnabled, useProjectsEnabled, useSystemsEnabled, useWikiEnabled } from "../../lib/connection";
 import { copyDiagnostics, openLogsFolder } from "../../lib/diagnostics";
@@ -61,6 +63,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
   const trees = useQueries({ queries: (notebooks.data ?? []).map((nb) => ({ ...treeQuery(nb.id), enabled: app.palette === "notes" && indexed.isError })) });
   const recent = useQuery({ ...recentQuery(), enabled: app.palette === "notes" });
   const addNotebook = useAddNotebook();
+  const keys = useShortcutVersion(); // the entries show the keys as they are now
   useEffect(() => { setQuery(""); setIndex(0); }, [app.palette]);
   /** Run `act` for the notebook of the focused page, else the first notebook; says so when there is none. */
   const onNotebook = async (act: (notebook: string, folder: string) => unknown) => {
@@ -101,28 +104,28 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
     const macro = useRecorder.getState();
     const power: Entry[] = editor ? [
       ...LINE_TOOLS.map((t) => ({ key: `line:${t.id}`, label: `Lines: ${t.label}`, run: () => { close(); runTool(t); } })),
-      { key: "macro-record", label: macro.recording ? "Macro: stop recording" : "Macro: record", detail: "Ctrl+Shift+R", run: () => { close(); toggleRecording(); editor.focus(); } },
-      { key: "macro-play", label: "Macro: play the last one", detail: "Ctrl+Shift+P", run: () => { close(); void playMacro(editor as unknown as Target, macro.steps, 1); editor.focus(); } },
+      { key: "macro-record", label: macro.recording ? "Macro: stop recording" : "Macro: record", detail: format("editor.macro-record"), run: () => { close(); toggleRecording(); editor.focus(); } },
+      { key: "macro-play", label: "Macro: play the last one", detail: format("editor.macro-play"), run: () => { close(); void playMacro(editor as unknown as Target, macro.steps, 1); editor.focus(); } },
       { key: "macro-end", label: "Macro: play to the end of the file", run: () => { close(); void playMacro(editor as unknown as Target, macro.steps, "end"); editor.focus(); } },
     ] : [];
     const all: Entry[] = [
-      { key: "go", label: "Go to note…", detail: "Ctrl+O", run: () => app.setPalette("notes") },
-      { key: "new", label: "New note", detail: "Ctrl+N", run: () => { close(); ws.openTab({ kind: "new-note" }); } },
+      { key: "go", label: "Go to note…", detail: format("palette.notes"), run: () => app.setPalette("notes") },
+      { key: "new", label: "New note", detail: format("note.new"), run: () => { close(); ws.openTab({ kind: "new-note" }); } },
       { key: "open-file", label: "Open file…", run: () => { close(); void openFromDisk(); } },
       { key: "new-file", label: "New text file", run: () => { close(); ws.openTab({ kind: "new-file" }); } },
       { key: "compare", label: "Compare files…", run: () => { close(); useComparePicker.getState().show(tab?.kind === "file" ? tab.file : undefined); } },
       { key: "find-in-files", label: "Find in files…", detail: "search and replace across a notebook", run: () => { close(); openFindInFiles(); } },
-      { key: "zoom-in", label: "Zoom in", detail: "Ctrl+=", run: () => { close(); void zoomBy("in"); } },
-      { key: "zoom-out", label: "Zoom out", detail: "Ctrl+-", run: () => { close(); void zoomBy("out"); } },
-      { key: "zoom-reset", label: "Reset zoom", detail: "Ctrl+0", run: () => { close(); void zoomBy("reset"); } },
+      { key: "zoom-in", label: "Zoom in", detail: format("zoom.in"), run: () => { close(); void zoomBy("in"); } },
+      { key: "zoom-out", label: "Zoom out", detail: format("zoom.out"), run: () => { close(); void zoomBy("out"); } },
+      { key: "zoom-reset", label: "Reset zoom", detail: format("zoom.reset"), run: () => { close(); void zoomBy("reset"); } },
       ...power,
       { key: "home", label: "Home", run: page({ page: "home" }) },
       { key: "notes", label: "Notes", section: "notes" as Page, run: page({ page: "notes" }) },
-      { key: "new-page", label: "New page", detail: "Ctrl+N on Notes", section: "notes" as Page, run: () => { close(); void newPageHere(client); } },
+      { key: "new-page", label: "New page", detail: `${format("note.new")} on Notes`, section: "notes" as Page, run: () => { close(); void newPageHere(client); } },
       { key: "tasks", label: "Tasks", detail: "every task in your notebooks", section: "notes" as Page, run: page({ page: "notes", view: "tasks" }) },
       { key: "views", label: "Views", detail: "saved queries over page properties", section: "notes" as Page, run: page({ page: "notes", view: "views" }) },
       { key: "tags", label: "Tags", detail: "tags across notes and pages, and taxonomy", section: "notes" as Page, run: page({ page: "notes", view: "tags" }) },
-      { key: "graph", label: "Open the graph", detail: "Ctrl+G", section: "notes" as Page, run: page({ page: "notes", view: "graph" }) },
+      { key: "graph", label: "Open the graph", detail: format("graph.open"), section: "notes" as Page, run: page({ page: "notes", view: "graph" }) },
       { key: "today", label: "Today", detail: "open today's daily page", section: "notes" as Page, run: () => { close(); void onNotebook((notebook) => openToday(client, notebook)); } },
       { key: "new-from-template", label: "New page from template…", section: "notes" as Page, run: () => { close(); void onNotebook((notebook, folder) => { useTemplateIntent.getState().open(notebook, folder); app.go({ page: "notes" }); }); } },
       { key: "add-notebook", label: "Add a notebook…", section: "notes" as Page, run: () => { close(); void addNotebook(); } },
@@ -149,15 +152,16 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
         })),
       ] : []),
       ...EXTRA_COMMANDS.map((c) => ({ ...c, run: () => { close(); c.run(); } })),
-      { key: "split", label: "Open the note side by side", detail: "Ctrl+\\", run: () => { ws.split(); close(); } },
+      { key: "split", label: "Open the note side by side", detail: format("view.split"), run: () => { ws.split(); close(); } },
       { key: "rail", label: railShown(ws, isNarrow()) ? "Hide the note's context rail" : "Show the note's context rail", run: () => { ws.setRail(!railShown(ws, isNarrow()), isNarrow()); close(); } },
-      { key: "search", label: "Search notes and pages", detail: "Ctrl+K", run: () => { close(); useNotesSearch.getState().focus(); } },
+      { key: "search", label: "Search notes and pages", detail: format("search.focus"), run: () => { close(); useNotesSearch.getState().focus(); } },
       { key: "active", label: "Search active notes", run: () => { close(); useNotesSearch.getState().byStatus("active"); } },
       { key: "archive", label: "Search the archive", run: () => { close(); useNotesSearch.getState().byStatus("archived"); } },
-      { key: "back", label: "Back", detail: "Alt+Left", run: () => { close(); app.goBack(); } },
+      { key: "back", label: "Back", detail: format("nav.back"), run: () => { close(); app.goBack(); } },
       { key: "refresh", label: "Refresh", run: () => { refreshStore(client); close(); } },
       { key: "reconnect", label: "Reconnect to Living Memory", run: () => { onReconnect(); close(); } },
       { key: "settings", label: "Settings", run: () => { onSettings(); close(); } },
+      { key: "shortcuts", label: "Keyboard shortcuts", detail: format("shortcuts.show"), run: () => { close(); useShortcutsDialog.getState().show(); } },
       { key: "schedules", label: "Schedules", detail: "Settings: briefings, maintenance, rebuilds and automations", run: () => { close(); openSettings("schedules"); } },
       { key: "spend", label: "Spend", detail: "Settings: budgets and today's spending", run: () => { close(); openSettings("spend"); } },
       { key: "copy-diagnostics", label: "Copy diagnostics", detail: "version, settings summary and the end of the log; no note text", run: () => { close(); void copyDiagnostics(); } },
@@ -169,7 +173,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       })),
     ];
     return all.filter((e) => !e.section || !hidden.includes(e.section));
-  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, wikiOn, maintenanceOn, hidden, client, onSettings, onReconnect, notebooks.data, trees, indexed.data, addNotebook, recent.data]);
+  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, wikiOn, maintenanceOn, hidden, client, onSettings, onReconnect, notebooks.data, trees, indexed.data, addNotebook, recent.data, keys]);
 
   const shown = useMemo(() => {
     const best = entries
