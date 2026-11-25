@@ -6,13 +6,19 @@ import type { PaperDefault } from "./paper";
 const get = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };
 const set = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* not kept */ } };
 
+/** What each appearance setting is when nothing was chosen (DESK-11): the getters below fall back to it, and so does a
+ *  refused save when the settings file holds nothing for the key (lib/appearance). */
+export const APPEARANCE_DEFAULTS = {
+  theme: "purple" as ThemeChoice, document_background: "theme" as PaperDefault, document_size: 1, default_mode: "reading" as Mode, spellcheck: true,
+};
+
 export interface CaptureTarget { kind: "memory" | "today" | "inbox"; notebook: string }
 
 export const prefs = {
   /** The copy kept here of a value that lives in the settings file (DESK-11): null when none was kept. */
   stored: get,
   defaultModeKey: "hivemind.defaultMode",
-  defaultMode: (): Mode => (get("hivemind.defaultMode") as Mode | null) ?? "reading",
+  defaultMode: (): Mode => (get("hivemind.defaultMode") as Mode | null) ?? APPEARANCE_DEFAULTS.default_mode,
   setDefaultMode: (mode: Mode) => set("hivemind.defaultMode", mode),
   captureDomain: () => get("hivemind.captureDomain"),
   setCaptureDomain: (domain: string) => set("hivemind.captureDomain", domain),
@@ -32,18 +38,18 @@ export const prefs = {
   themeKey: "hivemind.theme",
   theme: (): ThemeChoice => {
     const saved = get("hivemind.theme");
-    return saved === "emerald" || saved === "emerald-light" || saved === "system" ? saved : "purple";
+    return saved === "purple" || saved === "emerald" || saved === "emerald-light" || saved === "system" ? saved : APPEARANCE_DEFAULTS.theme;
   },
   setTheme: (theme: ThemeChoice) => set("hivemind.theme", theme),
   paperKey: "hivemind.documentBackground",
-  paper: (): PaperDefault => (get("hivemind.documentBackground") === "white" ? "white" : "theme"),
+  paper: (): PaperDefault => { const saved = get("hivemind.documentBackground"); return saved === "white" || saved === "theme" ? saved : APPEARANCE_DEFAULTS.document_background; },
   setPaper: (paper: PaperDefault) => set("hivemind.documentBackground", paper),
   spellcheckKey: "hivemind.spellcheck",
   /** Whether notes are spell-checked: on unless it was turned off. */
-  spellcheck: (): boolean => get("hivemind.spellcheck") !== "0",
+  spellcheck: (): boolean => { const saved = get("hivemind.spellcheck"); return saved === "1" ? true : saved === "0" ? false : APPEARANCE_DEFAULTS.spellcheck; },
   setSpellcheck: (on: boolean) => set("hivemind.spellcheck", on ? "1" : "0"),
   docSizeKey: "hivemind.documentSize",
   /** The document text size multiple; 1 when unset or not a number. */
-  docSize: (): number => { const n = Number(get("hivemind.documentSize")); return Number.isFinite(n) && n > 0 ? n : 1; },
+  docSize: (): number => { const n = Number(get("hivemind.documentSize")); return Number.isFinite(n) && n > 0 ? n : APPEARANCE_DEFAULTS.document_size; },
   setDocSize: (size: number) => set("hivemind.documentSize", String(size)),
 };

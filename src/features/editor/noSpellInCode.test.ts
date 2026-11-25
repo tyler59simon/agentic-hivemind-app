@@ -5,7 +5,7 @@ import { ensureSyntaxTree } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { EditorState } from "@codemirror/state";
 import { beforeAll, describe, expect, it } from "vitest";
-import { build } from "./noSpellInCode";
+import { build, pageNames } from "./noSpellInCode";
 
 // A page with the languages loaded, as the rich editor has them: the code of a fence is a JavaScript tree mounted in the Markdown one.
 beforeAll(async () => { await languages.find((l) => l.name === "JavaScript")!.load(); });
@@ -46,6 +46,27 @@ describe("wikilinks", () => {
     expect(marked(doc, [[0, doc.indexOf("]]")]]).spans).toEqual(["Some Page"]);
     expect(marked(doc, [[0, doc.indexOf("Page")]]).spans).toEqual(["Some "]);
     expect(marked(doc, [[doc.indexOf("Some") + 2, doc.length]]).spans).toEqual(["me Page"]);
+  });
+
+  it("a lone ] ends a candidate, as in lib/note's wikilinks (Codex re-review F1)", () => {
+    expect(marked("[[draft] followed by [[Real Page]]").spans).toEqual(["Real Page"]);
+    expect(marked("[[[Inner]]").spans).toEqual(["Inner"]);
+  });
+
+  it("a link whose name starts with inline code keeps its whole name (Codex re-review F2)", () => {
+    expect(marked("[[`code` Real Page]]").spans).toEqual(["`code`", "`code` Real Page"]);
+  });
+
+  it("a link in the opener of an indented fence is code (Codex re-review F4)", () => {
+    const { spans } = marked("- item\n\n  ```js [[Fence Info]]\n  x\n  ```\n\n[[Prose]]\n");
+    expect(spans).toEqual(["Prose"]);
+  });
+
+  it("does not read links that start past the visible range (Codex re-review F3)", () => {
+    // The scanner alone: a Markdown parse of a line this long is slow by itself.
+    const text = `first line [[A]] ${"[[B]] ".repeat(250_000)}`;
+    expect(pageNames(text, 18)).toEqual([[11, 13, 14], [17, 19, 20]]);
+    expect(marked("first [[A]] line [[B]] end", [[0, 9]]).spans).toEqual(["A"]);
   });
 
   it("takes a long run of brackets in linear time, in prose and in a fence (R1)", () => {

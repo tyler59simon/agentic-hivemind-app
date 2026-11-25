@@ -11,7 +11,7 @@ import { toast } from "../ui/toast";
 import type { Mode } from "../workspace/store";
 import { inTauri } from "./native";
 import type { PaperDefault } from "./paper";
-import { prefs } from "./prefs";
+import { APPEARANCE_DEFAULTS, prefs } from "./prefs";
 import type { ThemeChoice } from "./theme";
 
 export interface Appearance {
@@ -36,10 +36,8 @@ const COPIES: Record<AppearanceKey, string> = {
   theme: prefs.themeKey, document_background: prefs.paperKey, document_size: prefs.docSizeKey, default_mode: prefs.defaultModeKey, spellcheck: prefs.spellcheckKey,
 };
 
-// What each key shows while the file holds nothing for it. Keep in step with the getters in prefs.ts.
-const DEFAULTS: { [K in AppearanceKey]: NonNullable<Appearance[K]> } = {
-  theme: "purple", document_background: "theme", document_size: 1, default_mode: "reading", spellcheck: true,
-};
+// What each key shows while the file holds nothing for it: the same defaults the prefs getters use.
+const DEFAULTS: { [K in AppearanceKey]: NonNullable<Appearance[K]> } = APPEARANCE_DEFAULTS;
 
 /** Keep `value` in the settings file; Rust checks it and tells every window. Outside the app there is no file. */
 export function saveAppearance<K extends AppearanceKey>(key: K, value: NonNullable<Appearance[K]>): void {

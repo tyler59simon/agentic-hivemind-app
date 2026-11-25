@@ -9,19 +9,21 @@ const off = { spellcheck: "false" };
 const lineOff = Decoration.line({ attributes: off });
 const markOff = Decoration.mark({ attributes: off });
 
-/** The page names of the [[wikilinks]] on one line, as [from, to) offsets into its text. A link is `[[` up to the next `]]`
- *  on the line; a line with a `[[` and no `]]` after it is done. Only the page name is left alone: a #heading and an alias
- *  are prose. One pass, so a line of nothing but brackets costs no more than its length. */
-function pageNames(text: string): [number, number][] {
-  const found: [number, number][] = [];
-  for (let at = text.indexOf("[["); at >= 0; at = text.indexOf("[[", at)) {
-    const close = text.indexOf("]]", at + 2);
-    if (close < 0) break;
-    const inner = text.slice(at + 2, close);
+/** The [[wikilinks]] on one line that start before `limit`: for each, the offset of its `[[` and the [from, to) offsets of
+ *  its page name. A link is `[[`, text with no `[` or `]`, then `]]`, as in lib/note's wikilinks(). Only the page name is
+ *  left alone: a #heading and an alias are prose. One pass, so a line of nothing but brackets costs no more than its length. */
+export function pageNames(text: string, limit: number): [number, number, number][] {
+  const found: [number, number, number][] = [];
+  for (let at = text.indexOf("[["); at >= 0 && at < limit;) {
+    let j = at + 2;
+    while (j < text.length && text[j] !== "[" && text[j] !== "]") j++;
+    if (j >= text.length) break;
+    if (text[j] === "[") { at = text.indexOf("[[", j - 1); continue; }   // a new opener: start again from it
+    if (text[j + 1] !== "]") { at = text.indexOf("[[", j + 1); continue; }   // a lone ]: not a link
+    const inner = text.slice(at + 2, j);
     const end = inner.search(/[#|]/);
-    const name = end < 0 ? inner.length : end;
-    if (inner.trim()) found.push([at + 2, at + 2 + name]);
-    at = close + 2;
+    if (inner.trim()) found.push([at, at + 2, at + 2 + (end < 0 ? inner.length : end)]);
+    at = text.indexOf("[[", j + 2);
   }
   return found;
 }
@@ -67,9 +69,10 @@ export function build(view: Seen): DecorationSet {
       const line = state.doc.line(n);
       while (next < blocks.length && blocks[next][1] < line.from) next++;
       if (next < blocks.length && blocks[next][0] <= line.from) continue;
-      for (const [a, b] of pageNames(line.text)) {
+      // A link that starts past the visible range cannot reach into it.
+      for (const [open, a, b] of pageNames(line.text, to - line.from)) {
         const start = Math.max(line.from + a, from), end = Math.min(line.from + b, to);
-        if (start < end && !inCode(tree, line.from + a)) deco.push(markOff.range(start, end));
+        if (start < end && !inCode(tree, line.from + open)) deco.push(markOff.range(start, end));
       }
     }
   }

@@ -266,13 +266,20 @@ describe("a change the file refuses (C5)", () => {
     w.theme.applyTheme("emerald");
     w.docSize.applyDocSize(1.5);
     w.appearance.setDefaultMode("source");
+    w.paper.applyPaperDefault("white");
     await flush();
     expect(w.spell.spellcheck()).toBe(true);
     expect(w.theme.currentThemeChoice()).toBe("purple");
     expect(docSizeVar()).toBe("1");
     expect(w.appearance.defaultMode()).toBe("reading");
-    expect(["hivemind.spellcheck", "hivemind.theme", "hivemind.documentSize", "hivemind.defaultMode"].map((k) => localStorage.getItem(k))).toEqual([null, null, null, null]);
-    expect(w.toasts()).toHaveLength(4);
+    expect(w.paper.paperDefault()).toBe("theme");
+    expect(["hivemind.spellcheck", "hivemind.theme", "hivemind.documentSize", "hivemind.defaultMode", "hivemind.documentBackground"]
+      .map((k) => localStorage.getItem(k))).toEqual([null, null, null, null, null]);
+    expect(w.toasts()).toHaveLength(5);
+    // What a refused save falls back to is what the first paint shows with no copy (Codex re-review F5).
+    const { prefs, APPEARANCE_DEFAULTS } = w.prefs;
+    expect({ theme: prefs.theme(), document_background: prefs.paper(), document_size: prefs.docSize(), default_mode: prefs.defaultMode(), spellcheck: prefs.spellcheck() })
+      .toEqual(APPEARANCE_DEFAULTS);
   });
 
   it("lets a newer change win over the read that follows a refused save", async () => {   // Codex re-review of 2e736f0
