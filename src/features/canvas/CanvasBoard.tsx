@@ -317,7 +317,11 @@ export function CanvasBoard(props: CanvasBoardProps) {
     else if (mod && key === "y") { e.preventDefault(); L.props.onRedo(); }
     else if (mod && key === "a") { e.preventDefault(); setSel({ nodes: L.canvas.nodes.map((n) => n.id), edge: null }); }
     else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); removeSelected(); }
-    else if (e.key === "Escape") { gesture.current = null; setPreview(null); setJoining(null); setSel(NONE); }
+    else if (e.key === "Escape") {
+      // Escape used here (a gesture, a selection) is not for focus mode too.
+      if (gesture.current || preview || joining || L.sel.size || L.edge) e.preventDefault();
+      gesture.current = null; setPreview(null); setJoining(null); setSel(NONE);
+    }
     else if ((e.key === "Enter" || e.key === "F2") && !L.readOnly) {
       const [only] = [...L.sel];
       const node = L.sel.size === 1 ? L.canvas.nodes.find((n) => n.id === only) : undefined;

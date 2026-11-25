@@ -295,6 +295,47 @@ describe("conflicts", () => {
     expect(S.matches(key("F5"), "fullscreen.toggle")).toBe(false);
   });
 
+  // R2: F11 was a free key before Full screen existed, so it may be saved for another shortcut. The user's choice wins.
+  it("settles a saved combo that is another shortcut's default: the saved one wins and the other has no key", () => {
+    S.setOverrides({ "palette.commands": "F11" });
+    expect(S.combo("palette.commands")).toBe("F11");
+    expect(S.combo("fullscreen.toggle")).toBe("");
+    expect(S.displacedBy("fullscreen.toggle")).toBe("Command palette");
+    expect(S.displacedBy("palette.commands")).toBeNull();
+    expect(S.matches(key("F11"), "palette.commands")).toBe(true);
+    expect(S.matches(key("F11"), "fullscreen.toggle")).toBe(false);
+    expect(S.format("fullscreen.toggle")).toBe("");
+    // The palette's own default is free now, and nothing else uses it.
+    expect(S.matches(key("p", { ctrlKey: true }), "palette.commands")).toBe(false);
+    // Putting the default back is refused as a clash, as it is when chosen.
+    expect(S.conflicts("F11", "fullscreen.toggle")).toEqual([{ kind: "app", with: "Command palette", refuse: true }]);
+    // And going back to the palette's default gives F11 back.
+    S.setOverrides({});
+    expect(S.displacedBy("fullscreen.toggle")).toBeNull();
+    expect(S.combo("fullscreen.toggle")).toBe("F11");
+    expect(S.matches(key("F11"), "fullscreen.toggle")).toBe(true);
+  });
+
+  it("does not displace a shortcut that has its own saved combo, and never takes a fixed one", () => {
+    S.setOverrides({ "palette.commands": "F11", "fullscreen.toggle": "Mod+Shift+U" });
+    expect(S.displacedBy("fullscreen.toggle")).toBeNull();
+    expect(S.combo("fullscreen.toggle")).toBe("Mod+Shift+U");
+    // Ctrl+Tab and Ctrl+S are fixed: a saved combo equal to one is not used.
+    S.setOverrides({ "note.new": "Mod+S", "graph.open": "Ctrl+Tab" });
+    expect(S.combo("note.new")).toBe("Mod+N");
+    expect(S.combo("graph.open")).toBe("Mod+G");
+    expect(S.matches(key("s", { ctrlKey: true }), "file.save")).toBe(true);
+  });
+
+  it("is the same every time: two saved combos on one key go to the first in the registry", () => {
+    S.setOverrides({ "graph.open": "Mod+J", "note.new": "Mod+J" });
+    expect(S.combo("note.new")).toBe("Mod+J"); // note.new comes before graph.open in the list
+    expect(S.combo("graph.open")).toBe("Mod+G");
+    S.setOverrides({ "note.new": "Mod+J", "graph.open": "Mod+J" });
+    expect(S.combo("note.new")).toBe("Mod+J");
+    expect(S.combo("graph.open")).toBe("Mod+G");
+  });
+
   it("only warns about an editor or terminal key", () => {
     expect(S.conflicts("Mod+B", "note.new")).toEqual([{ kind: "editor", with: "Bold", refuse: false }]);
     expect(S.conflicts("Mod+Shift+L", "note.new")).toEqual([{ kind: "editor", with: "Select every occurrence", refuse: false }]);

@@ -2,7 +2,7 @@
 // palette's "Keyboard shortcuts" open it.
 import { useEffect, useId, useLayoutEffect, useState } from "react";
 import { create } from "zustand";
-import { captureStatusNow, combo, defaultCombo, formatCombo, fromAccelerator, normalize, refreshCapture, SHORTCUTS, useShortcutVersion, type CaptureHotkey, type Shortcut } from "../../lib/shortcuts";
+import { captureStatusNow, combo, defaultCombo, displacedBy, formatCombo, fromAccelerator, normalize, refreshCapture, SHORTCUTS, useShortcutVersion, type CaptureHotkey, type Shortcut } from "../../lib/shortcuts";
 import { openSettings } from "../../store";
 import { Modal } from "../../ui/Modal";
 
@@ -39,7 +39,7 @@ const WHERE: Partial<Record<Shortcut["scope"], string>> = { editor: "in the edit
 /** The keys to show for a shortcut. The quick-capture hotkey is the one the app has (`status`, undefined until read): "Off"
  *  when it is turned off and "Not registered" when the system refused it; the rest come from the registry. */
 export function shown(s: Shortcut, status?: CaptureHotkey | null): string {
-  if (s.scope !== "global") return formatCombo(combo(s.id));
+  if (s.scope !== "global") return displacedBy(s.id) ? `Not set, taken by ${displacedBy(s.id)}` : formatCombo(combo(s.id));
   if (!status) return formatCombo(defaultCombo(s.id));
   if (!status.shortcut) return "Off";
   return status.error ? "Not registered" : formatCombo(fromAccelerator(status.shortcut));

@@ -321,4 +321,19 @@ describe("the Settings section", () => {
     expect(useShortcutsDialog.getState().open).toBe(true);
     useShortcutsDialog.getState().hide();
   });
+
+  // R2: F11 saved for the palette before Full screen existed. The saved key wins; Full screen says who has it, and Reset says why not.
+  it("shows a shortcut whose default another one took as not set, names who took it, and refuses its Reset", async () => {
+    await act(async () => setOverrides({ "palette.commands": "F11" }));
+    expect(shownKeys("Command palette")).toBe("F11");
+    expect(shownKeys("Full screen")).toBe("Not set, taken by Command palette");
+    expect(key("Full screen").getAttribute("aria-label")).toBe("Full screen: Not set, taken by Command palette. Press Enter to change");
+    expect(reset("Full screen").disabled).toBe(false);
+    await act(async () => reset("Full screen").click());
+    expect(sets()).toEqual([]);
+    expect(saidNow()).toBe('Not reset. F11 is already used for "Command palette".');
+    await act(async () => useShortcutsDialog.getState().show());
+    expect(document.body.textContent).toContain("Not set, taken by Command palette");
+    useShortcutsDialog.getState().hide();
+  });
 });

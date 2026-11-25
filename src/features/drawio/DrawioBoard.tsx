@@ -338,6 +338,7 @@ export function DrawioBoard(props: DrawioBoardProps) {
       commit(deleteCells(doc, safeIndex, selectedSet));
       setSelected([]);
     } else if (e.key === "Escape") {
+      if (selected.length || gesture.current) e.preventDefault(); // used here, so not for focus mode too
       setSelected([]);
     }
   };
@@ -568,7 +569,7 @@ export function DrawioBoard(props: DrawioBoardProps) {
                     onBlur={() => finishEdit(true)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") finishEdit(true);
-                      else if (e.key === "Escape") finishEdit(false);
+                      else if (e.key === "Escape") { e.preventDefault(); finishEdit(false); }
                     }}
                   />
                 ) : (
@@ -592,7 +593,7 @@ export function DrawioBoard(props: DrawioBoardProps) {
                 onBlur={() => { setRenamingPage(null); commit(renamePage(doc, i, pageDraft)); }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") { setRenamingPage(null); commit(renamePage(doc, i, pageDraft)); }
-                  else if (e.key === "Escape") setRenamingPage(null);
+                  else if (e.key === "Escape") { e.preventDefault(); setRenamingPage(null); }
                 }}
               />
             ) : (

@@ -179,17 +179,50 @@ function matchesParsed(e: ComboEvent, p: Parsed): boolean {
 // What each id is bound to now -----------------------------------------------------------------------------------------
 
 let overrides: Record<string, string> = {};
+/** The overrides that are not used because a fixed shortcut has the key, and the shortcuts that lost their default to an
+ *  override (id to the label of the one that holds the key). Worked out by `resolve` whenever the overrides change. */
+let ignored = new Set<string>();
+let displaced: Record<string, string> = {};
 let version = 0;
 const listeners = new Set<() => void>();
 
 /** The combo an id has by default on this platform. */
 export const defaultCombo = (id: string): string => { const s = BY_ID.get(id); return s ? (isMac && s.mac ? s.mac : s.default) : ""; };
 
-/** The combo an id has now: the saved one when it is a remappable shortcut and the combo can be used, else the default. */
+/** The combo an id has now: the saved one when it is a remappable shortcut and the combo can be used, else the default; nothing
+ *  ("") for a shortcut whose default another shortcut's saved combo took (see `resolve`). */
 export function combo(id: string): string {
+  if (displaced[id]) return "";
   const s = BY_ID.get(id);
-  const own = s?.remappable ? overrides[id] : undefined;
+  const own = s?.remappable && !ignored.has(id) ? overrides[id] : undefined;
   return own && usable(own) ? own : defaultCombo(id);
+}
+
+/** The label of the shortcut that has taken `id`'s default key through a saved combo, or null. The key is then not `id`'s: the
+ *  user's own choice wins over a default (an F11 saved for the palette before Full screen existed), and Reset says why it cannot
+ *  go back. */
+export const displacedBy = (id: string): string | null => displaced[id] ?? null;
+
+/** Settle the keys two shortcuts would both have, the same way every time. A saved combo wins over another shortcut's default;
+ *  the shortcut that loses it has no key until the user gives it one. A saved combo that a fixed shortcut (Ctrl+Tab, Ctrl+S) has
+ *  by default is ignored, so the fixed one is never taken away. Two saved combos that are one key (Rust refuses that) go to the
+ *  first in the registry's order. */
+function resolve(): void {
+  ignored = new Set();
+  displaced = {};
+  const held = new Map<string, string>();
+  for (const s of SHORTCUTS) {
+    const own = s.remappable ? overrides[s.id] : undefined;
+    const key = own && usable(own) ? normalize(own) : null;
+    if (!key) continue;
+    const fixed = SHORTCUTS.some((f) => f.scope === "app" && !f.remappable && normalize(defaultCombo(f.id)) === key);
+    if (fixed || held.has(key)) ignored.add(s.id); else held.set(key, s.id);
+  }
+  for (const s of SHORTCUTS) {
+    if (!s.remappable || (overrides[s.id] && !ignored.has(s.id) && usable(overrides[s.id]))) continue;
+    const holder = held.get(normalize(defaultCombo(s.id)) ?? "");
+    if (holder) displaced[s.id] = BY_ID.get(holder)!.label;
+  }
 }
 
 /** Whether the key event is the shortcut `id`. The callers keep their own guards (an open dialog, a field that takes text). */
@@ -301,6 +334,7 @@ const changed = () => { version++; listeners.forEach((l) => l()); };
 /** Use the overrides Rust holds (an id to combo map). */
 export function setOverrides(next: Record<string, string>): void {
   overrides = { ...next };
+  resolve();
   changed();
 }
 

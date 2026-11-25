@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { classify } from "../../lib/errors";
 import {
-  combo, comboOf, conflicts, defaultCombo, formatCombo, normalize, overrideCount, refreshCapture, resetShortcuts, saveShortcut, shortcut, SHORTCUTS,
+  combo, comboOf, conflicts, defaultCombo, displacedBy, formatCombo, normalize, overrideCount, refreshCapture, resetShortcuts, saveShortcut, shortcut, SHORTCUTS,
   useShortcutVersion, usable, type Conflict, type Shortcut,
 } from "../../lib/shortcuts";
 import { useApp } from "../../store";
@@ -52,6 +52,8 @@ function Row({ s }: { s: Shortcut }) {
   const held = useRef<string | null>(null);
   const noteId = `shortcut-note-${s.id}`;
   const now = combo(s.id);
+  const taken = displacedBy(s.id);
+  const nowText = taken ? `Not set, taken by ${taken}` : formatCombo(now);
   const changed = normalize(now) !== normalize(defaultCombo(s.id));
   const refuse = (text: string) => { setNote({ kind: "error", text }); announce(text, "assertive"); };
 
@@ -95,12 +97,12 @@ function Row({ s }: { s: Shortcut }) {
     <li className="shortcut-row">
       <span className="grow">{s.label}</span>
       <button ref={button} type="button" className="shortcut-key" data-own-zoom-keys aria-describedby={note ? noteId : undefined}
-        aria-label={recording ? `${s.label}: press the new keys, or Escape to cancel` : `${s.label}: ${formatCombo(now)}. Press Enter to change`}
+        aria-label={recording ? `${s.label}: press the new keys, or Escape to cancel` : `${s.label}: ${nowText}. Press Enter to change`}
         // Safari and WebKit do not focus a button on click: the keys must go to this one.
         onClick={() => { button.current?.focus(); setNote(null); setRecording(true); announce("Press the new keys, or Escape to cancel."); }}
         onKeyDown={onKeyDown} onKeyUp={(e) => { if (held.current === keyId(e.nativeEvent)) held.current = null; }}
         onBlur={() => { setRecording(false); held.current = null; }}>
-        {recording ? "Press the new keys…" : <kbd>{formatCombo(now)}</kbd>}
+        {recording ? "Press the new keys…" : taken ? <span>{nowText}</span> : <kbd>{nowText}</kbd>}
       </button>
       <button type="button" onClick={reset} disabled={!changed} aria-label={`Reset ${s.label} to ${formatCombo(defaultCombo(s.id))}`}>Reset</button>
       {note && <p id={noteId} className={`${note.kind === "error" ? "error" : "muted"} small shortcut-note`}>{note.text}</p>}

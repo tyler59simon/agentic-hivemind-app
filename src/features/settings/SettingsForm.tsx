@@ -20,6 +20,7 @@ import { projectsQuery } from "../projects/useProject";
 import { amount, BUDGET_DEFAULTS, EXECUTIVE_CALLS, withCallLimit } from "./budgets";
 import { SpendToday } from "./SpendToday";
 import { withCommands } from "./commands";
+import { LayoutSection } from "./LayoutSection";
 
 // Keep in step with DEFAULT_CAPTURE_SHORTCUT in src-tauri/src/settings.rs.
 const DEFAULT_SHORTCUT = isMac ? "CommandOrControl+Alt+Shift+M" : "CommandOrControl+Alt+M";
@@ -230,6 +231,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
           onChange={(e) => setShown(s.page, e.target.checked)} /> Show {s.label}</label>
       ))}
       <p className="muted small">Hide the sections you don't use. You can also right-click a section in the sidebar. A hidden section still opens from links and stays open if you are on it. This changes at once and is kept on this computer; it does not need Save.</p>
+      <LayoutSection />
       {error && <p className="error">{error}</p>}
       <button type="submit" className="primary">Save</button>
     </form>

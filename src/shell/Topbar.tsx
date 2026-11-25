@@ -17,6 +17,7 @@ import { activeTab, tabLabel, useWorkspace } from "../workspace/store";
 import { SECTIONS } from "./Sidebar";
 import { useWindowTitle } from "./title";
 import { modalOpen } from "../ui/layers";
+import { leaveFocusMode } from "./layout";
 
 interface Crumb { label: string; go?: () => void }
 
@@ -66,6 +67,7 @@ export function Topbar() {
       if (modalOpen()) return;
       if (matches(e, "search.focus") || matches(e, "search.alt")) {
         e.preventDefault();
+        leaveFocusMode(); // the search box is hidden in focus mode
         useNotesSearch.getState().show();
         input.current?.focus();
         input.current?.select();

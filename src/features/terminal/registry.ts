@@ -279,7 +279,8 @@ export function ensure(id: string, opts: { sessionId: string | null; engine: Eng
         case "paste":
           return false;
         case "leave":
-          document.querySelector<HTMLInputElement>(".top-search input")?.focus();
+          // The top bar is hidden in focus mode: the way out of it is the one control left.
+          (document.querySelector<HTMLElement>(".focus-exit") ?? document.querySelector<HTMLElement>(".top-search input"))?.focus();
           return false;
         case "search":
           // The find bar sits in this terminal's own box; with two panes each has one.
