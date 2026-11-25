@@ -49,10 +49,12 @@ function frame(url: unknown, line: unknown, column: unknown): ClientFrame | unde
   return file !== undefined && l !== undefined && c !== undefined ? { file, line: l, column: c } : undefined;
 }
 
-/** `    at fn (url:line:col)` or `    at url:line:col` (V8: Chromium, WebView2). */
-const V8_FRAME = /^ +at (?:.+? \()?([^\s()]+):(\d+):(\d+)\)?$/;
-/** `name@url:line:col` (WebKit). */
-const WEBKIT_FRAME = /^[^\s@()]*@([^\s()]+):(\d+):(\d+)$/;
+/** `    at fn (url:line:col)`, `    at url:line:col` or `    at async url:line:col` (V8: Chromium, WebView2). */
+const V8_FRAME = /^ +at (?:async )?(?:.+? \()?([^\s()]+):(\d+):(\d+)\)?$/;
+/** `name@url:line:col`, `global code@url:line:col` or `@url:line:col` (WebKit). */
+const WEBKIT_FRAME = /^(?:global code|[^\s@()]*)@([^\s()]+):(\d+):(\d+)$/;
+/** A WebKit row for code with no source (`parse@[native code]`, `[native code]`): skipped, never a frame. */
+const WEBKIT_NATIVE = /^[^@()\s]*@?\[native code\]$/;
 
 /** The source locations in a stack string: only the `url:line:column` of lines that have the shape of a stack frame, and
  *  only for this app's own files. A V8 stack starts with the error's own text (`Name: message`, which can run over several
@@ -62,7 +64,8 @@ export function framesOf(stack: unknown, header = ""): ClientFrame[] {
   if (typeof stack !== "string") return [];
   const v8 = header !== "" && stack.startsWith(header);
   const rows = (v8 ? stack.slice(header.length) : stack).split(/\r?\n/);
-  const webkit = !v8 && WEBKIT_FRAME.test(rows[0]);
+  // A WebKit stack can start with native rows; the first other row must be a frame, so text that is not a stack yields nothing.
+  const webkit = !v8 && WEBKIT_FRAME.test(rows.find((row) => !WEBKIT_NATIVE.test(row)) ?? "");
   if (!v8 && !webkit) return [];
   const frames: ClientFrame[] = [];
   for (const row of rows) {

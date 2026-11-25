@@ -30,8 +30,12 @@ function safeText(value: unknown): string {
 function failureOf(value: unknown): Failure {
   try {
     if (value instanceof Error) {
-      const message = safeText(value.message);
-      return { failed: true, text: message || safeText(value), detail: [`${safeText(value.name)}: ${message}`, safeText(value.stack ?? "")].filter(Boolean).join("\n\n") };
+      let text: string;
+      try { text = safeText(value.message) || safeText(value); } catch { text = safeText(value); }
+      // Copy details is read on its own, so a name or stack getter that throws cannot replace the message shown.
+      let detail: string;
+      try { detail = [`${safeText(value.name)}: ${text}`, safeText(value.stack ?? "")].filter(Boolean).join("\n\n"); } catch { detail = text; }
+      return { failed: true, text, detail };
     }
     const text = safeText(value);
     return { failed: true, text, detail: text };

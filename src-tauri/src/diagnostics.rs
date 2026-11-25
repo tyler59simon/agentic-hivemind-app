@@ -618,7 +618,7 @@ mod tests {
     #[test]
     fn the_command_list_has_every_command_lm_ts_sends() {
         let source = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/lib/lm.ts")).unwrap();
-        let re = regex::Regex::new(r#"(?:view\(\[|direct\(\[|run(?:Body)?<[^()]*>\(\[|scopeArgs\(|argv = \[|return \[)"([a-z-]+)""#).unwrap();
+        let re = regex::Regex::new(r#"(?:view\(\s*\[|direct\(\s*\[|run(?:Body)?<[^()]*>\(\s*\[|scopeArgs\(\s*|argv = \[\s*|return \[\s*)"([a-z-]+)""#).unwrap();
         let mut found: Vec<String> = re.captures_iter(&source).map(|c| c[1].replace('-', "_")).collect();
         found.sort();
         found.dedup();
@@ -626,10 +626,10 @@ mod tests {
         for name in &found {
             assert!(LM_COMMANDS.contains(&name.as_str()), "{name} is sent by lm.ts but is not in LM_COMMANDS");
         }
-        // And the list has nothing that lm.ts never writes down, so a removed command leaves it.
-        for name in LM_COMMANDS {
-            assert!(source.contains(&format!("\"{}\"", name.replace('_', "-"))), "{name} is in LM_COMMANDS but lm.ts does not mention it");
-        }
+        // And the list has nothing lm.ts does not send (Codex review of 4b05d93: compared as sets, so a missed shape fails here).
+        let mut listed: Vec<String> = LM_COMMANDS.iter().map(|s| s.to_string()).collect();
+        listed.sort();
+        assert_eq!(listed, found);
     }
 
     #[test]

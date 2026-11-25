@@ -71,6 +71,17 @@ describe("source locations and component names", () => {
     expect(framesOf(`Error: boom\n${real}`)).toEqual([]);
   });
 
+  it("keeps WebKit frames after native rows, global code and V8 async frames (Codex review of 4b05d93)", () => {
+    expect(framesOf("parse@[native code]\n[native code]\nrender@tauri://localhost/assets/a.js:1:2\nglobal code@tauri://localhost/assets/b.js:3:4")).toEqual([
+      { file: "/assets/a.js", line: 1, column: 2 }, { file: "/assets/b.js", line: 3, column: 4 },
+    ]);
+    expect(framesOf("Error: m\n    at async http://tauri.localhost/assets/a.js:5:6", "Error: m")).toEqual([{ file: "/assets/a.js", line: 5, column: 6 }]);
+    // A V8 stack whose header was not the one given is still not read as WebKit, even when its text has a frame's shape.
+    const url = `http://tauri.localhost/assets/${MARKER}.js:1:1`;
+    expect(framesOf(`Error: x@${url}`, "Error: other")).toEqual([]);
+    expect(framesOf(`parse@[native code]\nError: x@${url}`)).toEqual([]);
+  });
+
   it("takes frames only from lines shaped like frames", () => {
     const stack = "Error: m\n    at f (http://tauri.localhost/assets/a.js:1:2)\n    at http://tauri.localhost/assets/b.js:3:4\nnot a frame http://tauri.localhost/assets/c.js:5:6\n  see http://tauri.localhost/assets/d.js:7:8";
     expect(framesOf(stack, "Error: m")).toEqual([{ file: "/assets/a.js", line: 1, column: 2 }, { file: "/assets/b.js", line: 3, column: 4 }]);

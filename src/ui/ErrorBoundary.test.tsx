@@ -74,6 +74,15 @@ describe("ErrorBoundary", () => {
     }
   });
 
+  it("shows the message when the error's stack or name getter throws (Codex review of 4b05d93)", async () => {
+    const error = new Error("readable message");
+    Object.defineProperty(error, "stack", { get() { throw new Error("no stack"); } });
+    Object.defineProperty(error, "name", { get() { throw new Error("no name"); } });
+    function Throws(): never { throw error; }
+    await mount(<ErrorBoundary label="This tab"><Throws /></ErrorBoundary>);
+    expect(host.querySelector(".error")!.textContent).toBe("readable message");
+  });
+
   it("an onError that throws does not stop the log, and the log does not wait for it", async () => {
     await mount(<ErrorBoundary label="This tab" onError={() => { throw new Error("recovery failed"); }}><Bomb /></ErrorBoundary>);
     expect(sent()).toHaveLength(1);
