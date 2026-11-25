@@ -90,7 +90,7 @@ function AutomationForm({ initial, onDone }: { initial: Automation; onDone: (sav
   const timeOk = !("at" in t) || minutesOf(time) != null;
   return (
     <div className="schedule-form">
-      <h4>{initial.id ? `Edit ${initial.name}` : "New automation"}</h4>
+      <h3>{initial.id ? `Edit ${initial.name}` : "New automation"}</h3>
       <label className="field"><span>Name</span><input value={a.name} onChange={(e) => setA({ ...a, name: e.target.value })} /></label>
       <div className="flow-row">
         <label className="field grow">
@@ -308,13 +308,13 @@ export function SchedulesSection() {
   const remove = (a: Automation) => automationDelete(a.id).then(() => client.invalidateQueries({ queryKey: ["automations"] }), fail);
   return (
     <section className="settings schedules" id="settings-schedules" aria-labelledby="schedules-title">
-      <h3 id="schedules-title">Schedules</h3>
+      <h2 id="schedules-title">Schedules</h2>
       <p className="muted small">Work Hivemind starts on its own while it is open or in the tray. A scheduled run missed while it was closed runs once at the next start. Changes here take effect at once and do not need Save.</p>
       {data.isLoading && <p className="muted small">Loading…</p>}
       {data.error && <p className="error small">{classify(data.error).message}</p>}
       {!!waiting.length && (
         <div className="schedule-waiting">
-          <h4>Waiting for you ({waiting.length})</h4>
+          <h3>Waiting for you ({waiting.length})</h3>
           {waiting.map((r) => <RunRow key={r.id} run={r} name={nameOf(r.automation)} />)}
         </div>
       )}

@@ -42,7 +42,7 @@ export function PublishedSkills() {
   const removable = rows.filter((p) => p.removable).length;
   return (
     <>
-      <h4>Published skills</h4>
+      <h3>Published skills</h3>
       <p className="muted small">Hivemind publishes skills as <code>SKILL.md</code> files in your Claude Code and Codex skill folders. Uninstalling does not remove them.</p>
       {found.isLoading && <p className="muted small">Checking…</p>}
       {found.error && <p className="error">{classify(found.error).message}</p>}
@@ -107,13 +107,13 @@ export function BeforeUninstall({ onOpenReview, onOpenSession }: { onOpenReview?
 
   return (
     <section className="settings">
-      <h3>Before you uninstall</h3>
+      <h2>Before you uninstall</h2>
       <p className="muted small">Uninstalling Hivemind can delete its app data, and with it the session worktrees that hold edits you have not approved. Approved work stays on <code>hivemind/…</code> branches in your repositories. Check here first. Removing a worktree also deletes the files git ignores in it, such as build output.</p>
       <button type="button" disabled={busy} onClick={() => run(async () => {})}>{busy ? "Checking…" : found ? "Check again" : "Check"}</button>
       {error && <p className="error">{error}</p>}
       {empty && <p className="muted small">Nothing to clean up: no session worktrees and no <code>hivemind/…</code> branches.</p>}
       {found && found.trees.length > 0 && <>
-        <h4>Session worktrees</h4>
+        <h3>Session worktrees</h3>
         <ul>
           {found.trees.map((t) => (
             <li key={t.session}>
@@ -127,7 +127,7 @@ export function BeforeUninstall({ onOpenReview, onOpenSession }: { onOpenReview?
         const merged = deletable(r);
         return (
           <div key={r.repo}>
-            <h4><code style={{ overflowWrap: "anywhere" }}>{r.repo}</code></h4>
+            <h3><code style={{ overflowWrap: "anywhere" }}>{r.repo}</code></h3>
             {r.error && <p className="error">{r.error}</p>}
             {!r.target && !r.error && <p className="muted small">The repository is on a detached commit, so no branch counts as merged.</p>}
             <ul>

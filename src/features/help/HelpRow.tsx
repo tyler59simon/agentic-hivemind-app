@@ -6,7 +6,7 @@ import { useAboutDialog } from "./AboutDialog";
 export function HelpRow() {
   return (
     <section className="help-row" aria-label="Help">
-      <h3>Help</h3>
+      <h2>Help</h2>
       <div className="actions">
         <button type="button" onClick={(e) => useAboutDialog.getState().show(e.currentTarget)}>About Hivemind</button>
         <button type="button" onClick={() => void copyDiagnostics()}>Copy diagnostics</button>

@@ -97,13 +97,13 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
       saveSettings(value).then(() => { saved = true; if (picked) setDefaultMode(picked); return captureStatus().then(setStatus); }).then(onSaved)
         .catch((err) => { if (!saved) resume(); setError(String(err)); });
     }}>
-      <h3>Living Memory</h3>
+      <h2>Living Memory</h2>
       {field("python", "Python", "default: the Python Living Memory was installed with, else py -3 on Windows and python3 elsewhere")}
       {field("script", "living_memory.py", "default: the installed Living Memory copy")}
       {field("root", "Store root", "default: the store Living Memory is configured for")}
       <p className="muted small">Environment variables HIVEMIND_PYTHON, HIVEMIND_LM_SCRIPT and HIVEMIND_LM_ROOT override these.</p>
 
-      <h3>Quick capture</h3>
+      <h2>Quick capture</h2>
       <label className="check"><input type="checkbox" checked={hotkeyOn}
         onChange={(e) => setValue({ ...value, capture_shortcut: e.target.checked ? null : "" })} /> Global hotkey opens the capture window</label>
       {hotkeyOn && (
@@ -118,7 +118,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
         onChange={(e) => setValue({ ...value, close_to_tray: e.target.checked })} /> Closing the window keeps Hivemind in the tray</label>
       <p className="muted small">The tray icon also opens quick capture. Use “Quit Hivemind” in its menu to exit.</p>
 
-      <h3>Agents</h3>
+      <h2>Agents</h2>
       {ENGINES.map(showToggle)}
       <p className="muted small">Hide the engine you don't use. Sessions you already ran with it still show it.</p>
       {claudeOn && field("claude_path", "Claude Code", "default: the installed claude command")}
@@ -133,7 +133,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
       )}
       {!!live.length && (
         <>
-          <h3>Allowed commands</h3>
+          <h3 className="settings-h2">Allowed commands</h3>
           <p className="muted small">Commands a session in the Developer or Tester role may run without asking, one per line, such as <code>npm test</code>. Arguments after a command are allowed too. A command may not chain another with <code>;</code>, <code>|</code>, <code>&amp;</code> or redirect output. Unattended sessions refuse every other command.</p>
           {live.map((p) => (
             <label key={p.slug} className="field">
@@ -146,7 +146,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
       )}
       <p className="muted small">Hivemind starts {enginesText(shown, "or")} for you; {shown.length > 1 ? "each uses its own" : "it uses its"} saved sign-in.{claudeOn && <> A background task, such as generating a system's architecture, may only read the system's repositories, run Architecture Suite and write to the system's architecture folder.</>} An interactive session works in its own git worktree.{claudeOn && <> It asks before it edits files or runs commands, except where you chose “Accept edits” or your own Claude Code settings already allow the action. The spend cap per agent run (under Spend) applies to each run of the agent; continuing a session after the cap starts a new run. The cap does not apply in the terminal{shown.includes("codex") ? " or to Codex" : ""}.</>}</p>
 
-      <h3 id="settings-learning">Learning</h3>
+      <h2 id="settings-learning">Learning</h2>
       {claudeOn ? (
         <>
           <label className="check"><input type="checkbox" checked={value.learning_reviewer ?? true}
@@ -158,7 +158,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
         </>
       ) : <p className="muted small">Learning reviews use Claude Code, which is hidden.</p>}
 
-      <h3 id="settings-spend">Spend</h3>
+      <h2 id="settings-spend">Spend</h2>
       <p className="muted small">Amounts are in US dollars. Leave a field empty for its default (shown in grey). Daily budgets start again at midnight UTC, and 0 turns that kind of spending off.</p>
       <SpendToday />
       {claudeOn && money("agent_budget_usd", "Spend cap per agent run, Claude Code chat", BUDGET_DEFAULTS.agentRun, 0.01)}
@@ -179,7 +179,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
         ))}
       </details>
 
-      <h3>Editor</h3>
+      <h2>Editor</h2>
       <label className="field">
         <span>Open notes in</span>
         <select value={mode} onChange={(e) => setPicked(e.target.value as Mode)}>
@@ -191,7 +191,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
       <label className="check"><input type="checkbox" checked={spelling} onChange={(e) => setSpellcheck(e.target.checked)} /> Check spelling in notes</label>
       <p className="muted small">Source and Live show red underlines on misspelled words in text, not in code, links or URLs. This changes at once and is kept in the settings file; it does not need Save.</p>
 
-      <h3>Appearance</h3>
+      <h2>Appearance</h2>
       <label className="field">
         <span>Zoom</span>
         <select value={String(zoom)} onChange={(e) => { void setZoom(Number(e.target.value)); }}>
@@ -225,7 +225,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
       </label>
       <p className="muted small">The zoom, the density, the fonts, the document text size, line height and width, the theme and the document background change at once and are kept in the settings file; they do not need Save. White shows documents as dark text on white paper while the rest of Hivemind keeps its theme. A document's page menu can switch that one tab. The document width is the reading column of a note; a page document keeps its own width. Compact density tightens the spacing of the whole interface, not the text.</p>
 
-      <h3>Sidebar</h3>
+      <h2>Sidebar</h2>
       {sections.map((s) => (
         <label className="check" key={s.page}><input type="checkbox" checked={!hidden.includes(s.page)}
           onChange={(e) => setShown(s.page, e.target.checked)} /> Show {s.label}</label>

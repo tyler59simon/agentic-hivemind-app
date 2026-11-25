@@ -157,8 +157,12 @@ export function WikiPane() {
   };
 
   if (!enabled) return <p className="muted">This version of Living Memory has no <code>wiki</code> command. Update Living Memory to use the wiki.</p>;
+  // The pages of a wiki have a title of their own (the page header, an h1). Every other state (the project list, loading, an empty
+  // wiki) gets a hidden one, so the page always has exactly one.
+  const titled = !list && !waiting && !query.isLoading && !noNotes && !(query.error && !ix) && !!domain && !noEdition && !!ix && !!nav;
   return (
     <div className="page wiki-page">
+      {!titled && <h1 className="visually-hidden">Wiki</h1>}
       {!list && (
         <div className="wiki-bar">
           {slug ? <b className="wiki-scope">{project?.name ?? slug}</b> : (

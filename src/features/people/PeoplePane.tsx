@@ -78,14 +78,14 @@ export function PeoplePane({ onAdd }: { onAdd: () => void }) {
   const { owned, unmatched, location, loading, problems } = useOwnedItems();
   const [changing, setChanging] = useState(false);
   const [creating, setCreating] = useState(false);
-  const head = <div className="section-head"><h2><Users size="1em" aria-hidden /> People</h2></div>;
+  const head = <div className="section-head"><h1><Users size="1em" aria-hidden /> People</h1></div>;
   if (loading && !location) return <div className="people-pane">{head}<p className="muted" role="status">Loading…</p></div>;
   if (!location || changing) return <div className="people-pane">{head}<SetupForm current={location} onDone={() => setChanging(false)} onAdd={onAdd} /></div>;
   const create = (name: string) => createPerson(client, location, name).catch((e) => toast(classify(e).message, "error"));
   return (
     <div className="people-pane">
       <div className="section-head">
-        <h2><Users size="1em" aria-hidden /> People</h2>
+        <h1><Users size="1em" aria-hidden /> People</h1>
         <button onClick={() => setCreating(true)}><Plus size="1.1em" aria-hidden />New person</button>
       </div>
       <p className="muted small">Pages in <code>{location.folder}</code>. <button type="button" className="link" onClick={() => setChanging(true)}>Change location</button></p>
@@ -103,7 +103,7 @@ export function PeoplePane({ onAdd }: { onAdd: () => void }) {
       </ul>
       {unmatched.length > 0 && (
         <>
-          <h3>Owners without a page</h3>
+          <h2>Owners without a page</h2>
           <ul className="people-list plain-list">
             {unmatched.map((u) => (
               <li key={u.owner.toLowerCase()}>

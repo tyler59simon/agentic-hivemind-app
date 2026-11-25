@@ -29,7 +29,7 @@ export function RelatedPages({ file }: { file: FileRef }) {
   return (
     <div className="links-panel">
       <section className="links-section">
-        <h4>Pages <span className="muted">{pages.length}</span></h4>
+        <h3>Pages <span className="muted">{pages.length}</span></h3>
         {pages.map((p) => (
           <button key={`${p.notebook}:${p.path}`} className="back-row" title={p.path}
             onClick={(e) => openPage({ notebook: p.notebook, path: p.path }, { split: e.ctrlKey || e.metaKey })}>
@@ -41,7 +41,7 @@ export function RelatedPages({ file }: { file: FileRef }) {
         <SemanticHint state={state} />
       </section>
       <section className="links-section">
-        <h4>Memory notes <span className="muted">{memory.length}</span></h4>
+        <h3>Memory notes <span className="muted">{memory.length}</span></h3>
         {memory.map((n) => (
           <button key={n.id} className="back-row" title={n.title}
             onClick={(e) => openMemoryNote({ ref: n.id, title: n.title, domain: n.domain }, e.ctrlKey || e.metaKey)}>

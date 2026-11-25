@@ -70,7 +70,7 @@ describe("the rail's Related section", () => {
     };
     const el = await mount();
     const sections = [...el.querySelectorAll("section")];
-    expect(sections.map((s) => s.querySelector("h4")?.textContent)).toEqual(["Pages 2", "Memory notes 3"]);
+    expect(sections.map((s) => s.querySelector("h3")?.textContent)).toEqual(["Pages 2", "Memory notes 3"]);
     expect(sections[0].textContent).toContain("turn kitchen scraps into soil");
     // A page of another notebook shows its path.
     expect(sections[0].textContent).toContain("Notes/Mulch.md");
@@ -109,7 +109,7 @@ describe("the rail's Related section", () => {
     const el = await mount();
     // Only the second is near enough; the first matched words but is not near in meaning.
     expect([...el.querySelectorAll("section")[1].querySelectorAll(".back-title")].map((t) => t.textContent)).toEqual(["Decision 2"]);
-    expect(el.querySelector("section:nth-of-type(2) h4")?.textContent).toBe("Memory notes 1");
+    expect(el.querySelector("section:nth-of-type(2) h3")?.textContent).toBe("Memory notes 1");
   });
 
   it("with no similarity (Living Memory's semantic search off) keeps the notes that have relevance above 0", async () => {

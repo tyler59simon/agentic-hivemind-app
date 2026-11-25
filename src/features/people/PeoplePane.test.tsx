@@ -121,6 +121,12 @@ describe("the People pane", () => {
     expect(without[0].textContent).toContain("2 open");
   });
 
+  it("has one h1, People, with its sections as h2 (DESK-A11Y A2)", async () => {
+    metas = { "nb-1": { people: { folder: "People" } } };
+    const el = await mount(<PeoplePane onAdd={vi.fn()} />);
+    expect([...el.querySelectorAll("h1, h2, h3")].map((h) => `${h.tagName} ${h.textContent?.trim()}`)).toEqual(["H1 People", "H2 Owners without a page"]);
+  });
+
   it("creates a page for an owner without one, and opens it", async () => {
     metas = { "nb-1": { people: { folder: "People" } } };
     const el = await mount(<PeoplePane onAdd={vi.fn()} />);

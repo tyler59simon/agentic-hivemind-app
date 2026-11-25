@@ -56,7 +56,7 @@ pub fn show_capture(app: &AppHandle) -> tauri::Result<()> {
     let zoom = app.path().app_config_dir().map(|dir| crate::settings::load(&dir.join("settings.json")).ui_zoom()).unwrap_or(1.0);
     // The hash tells the shared frontend bundle to render the capture form instead of the app.
     let window = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("index.html#capture".into()))
-        .title("Hivemind · Quick capture")
+        .title("Quick capture - Hivemind")
         .inner_size(560.0 * zoom, 500.0 * zoom)
         .min_inner_size(420.0 * zoom.min(1.0), 380.0 * zoom.min(1.0))
         .always_on_top(true)

@@ -141,7 +141,7 @@ export function SkillsPane() {
   return (
     <div className="skills-pane">
       <div className="section-head">
-        <h2>Skills</h2>
+        <h1>Skills</h1>
         <span className="fill" />
         <button onClick={upkeep} title="Propose archiving skills unused for 30 days, or whose sessions are mostly rejected">Check for stale skills</button>
       </div>

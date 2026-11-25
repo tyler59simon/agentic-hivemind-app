@@ -33,7 +33,7 @@ export function LinksPanel({ tab }: { tab: Tab }) {
   if (isLoading || !links) return <p className="muted pad">Loading…</p>;
   const section = (title: string, rows: { node: LinkNode }[]) => (
     <section className="links-section">
-      <h4>{title} <span className="muted">{rows.length}</span></h4>
+      <h3>{title} <span className="muted">{rows.length}</span></h3>
       {rows.length ? rows.map((r) => <NoteLink key={r.node.ref} node={r.node} />) : <p className="muted small">None.</p>}
     </section>
   );
@@ -45,7 +45,7 @@ export function LinksPanel({ tab }: { tab: Tab }) {
       {links.incoming.some((e) => e.kind === "supersedes") && section("Replaced by", links.incoming.filter((e) => e.kind === "supersedes"))}
       {links.unresolved.size > 0 && (
         <section className="links-section">
-          <h4>Links to missing notes <span className="muted">{links.unresolved.size}</span></h4>
+          <h3>Links to missing notes <span className="muted">{links.unresolved.size}</span></h3>
           {[...links.unresolved].map((t) => (
             <button key={t} className="link-row unresolved" title="Create this note"
               onClick={() => openTab({ kind: "new-note", init: { title: t, domain: domainOf(tab.ref!) } }, { split: true })}>+ {t}</button>

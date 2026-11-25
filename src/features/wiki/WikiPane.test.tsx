@@ -71,6 +71,8 @@ describe("Notes > Wiki", () => {
     expect(rows[3]).toContain("Bare");
     expect(rows[3]).toContain("0 notes");
     expect(el.querySelector(".wiki-bar")).toBeNull();
+    // The list has no title of its own, so the pane has a hidden one (DESK-A11Y A2).
+    expect([...el.querySelectorAll("h1")].map((h) => [h.textContent, h.className])).toEqual([["Wiki", "visually-hidden"]]);
   });
 
   it("a row picks the project in the sidebar and opens its wiki on its page", async () => {
@@ -80,6 +82,9 @@ describe("Notes > Wiki", () => {
     expect(useApp.getState().route).toEqual({ page: "notes", view: "wiki" });
     expect(text(el.querySelector(".wiki-bar")!)).toContain("Core");
     expect(text(el.querySelector("[aria-label='Wiki pages'] [aria-current=page]")!)).toContain("Core");
+    // A wiki page's header is its h1, and the hidden one is not added to it.
+    expect(el.querySelectorAll("h1").length).toBe(1);
+    expect(el.querySelector("h1")!.classList.contains("visually-hidden")).toBe(false);
     expect(asked.some((a) => a[0] === "wiki" && a.includes("demo"))).toBe(true);
   });
 
@@ -100,6 +105,7 @@ describe("Notes > Wiki", () => {
     useApp.setState({ project: "bare" });
     const el = await mount();
     expect(text(el)).toContain("No notes yet");
+    expect(el.querySelectorAll("h1").length).toBe(1);
     expect(text(el)).toContain("project/bare");
     expect(el.querySelector(".error")).toBeNull();
     expect(el.querySelector(".wiki-layout")).toBeNull();

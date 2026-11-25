@@ -31,6 +31,7 @@ import { refreshStore } from "./lib/refresh";
 import { skillsSyncNow } from "./lib/skills";
 import { toggleFocusMode, toggleFullscreen, toggleSidebar } from "./shell/layout";
 import { cycleRegion } from "./shell/regions";
+import { useWindowTitle } from "./shell/title";
 import { Shell } from "./shell/Shell";
 import { closeSettings, openInbox, openSession, openSettings, useApp } from "./store";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
@@ -267,6 +268,12 @@ export function useSettingsScroll() {
   return settings;
 }
 
+/** The Settings card has no top bar, which names the window for the pages; this names it for the card ("Settings - Hivemind"). */
+function SettingsTitle() {
+  useWindowTitle(["Settings"], false);
+  return null;
+}
+
 export default function App() {
   const app = useApp();
   const client = useQueryClient();
@@ -306,6 +313,7 @@ export default function App() {
   if (link.error || outdated || settings) {
     return (
       <>
+        <SettingsTitle />
         <main className="center">
           <div className="card">
             <h1 className="brand"><img src={logo} alt="" />Hivemind</h1>

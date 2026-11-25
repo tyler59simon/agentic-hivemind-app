@@ -59,6 +59,10 @@ describe("the quick capture window", () => {
     await expectNoNewAxeViolations(document.body, BASELINE);
   });
 
+  it("names the window Quick capture - Hivemind, as capture.rs does at its start", () => {
+    expect(document.title).toBe("Quick capture - Hivemind");
+  });
+
   it("has only the violations recorded in the baseline in the page form", async () => {
     await click("Today's page");
     expect(document.querySelector("select[aria-label=Notebook]")).not.toBeNull();

@@ -71,7 +71,7 @@ export function Backlinks({ file }: { file: FileRef }) {
   return (
     <div className="links-panel">
       <section className="links-section">
-        <h4>Linked <span className="muted">{linked.length}</span></h4>
+        <h3>Linked <span className="muted">{linked.length}</span></h3>
         {linked.length ? linked.map((r) => (
           <button key={`${r.notebook}:${r.path}`} className="back-row" onClick={(e) => open({ notebook: r.notebook, path: r.path }, e)} title={r.path}>
             <span className="back-title">{r.title}{r.notebook !== file.notebook && <span className="muted small"> · {r.path}</span>}</span>
@@ -81,7 +81,7 @@ export function Backlinks({ file }: { file: FileRef }) {
         )) : <p className="muted small">No page links here yet.</p>}
       </section>
       <section className="links-section">
-        <h4>Unlinked mentions <span className="muted">{mentions.length}</span></h4>
+        <h3>Unlinked mentions <span className="muted">{mentions.length}</span></h3>
         {mentions.length ? mentions.map((m) => (
           <button key={`${m.notebook}:${m.path}`} className="back-row" onClick={(e) => open({ notebook: m.notebook, path: m.path }, e)} title={m.path}>
             <span className="back-title">{m.title}</span>

@@ -53,7 +53,7 @@ function StatusCard({ s }: { s: MaintenanceStatus }) {
   return (
     <div className="maintenance-status">
       <div className="section-head">
-        <h4>{s.enabled ? "On" : "Off"}</h4>
+        <h3>{s.enabled ? "On" : "Off"}</h3>
         <span className="fill" />
         {!s.enabled && (
           <select aria-label="Domain to maintain" value={target} onChange={(e) => setPicked(e.target.value)}>
@@ -79,7 +79,7 @@ function StatusCard({ s }: { s: MaintenanceStatus }) {
         {s.enabled_at && <div><dt>Enabled</dt><dd>{when(s.enabled_at)}</dd></div>}
       </dl>
       {a && <>
-        <h4 className="work-day">Today ({a.day})</h4>
+        <h3 className="work-day">Today ({a.day})</h3>
         <p>{a.reviewed} notes reviewed, {costText(a.charged_usd, a.cost_complete)} charged{Number(a.reserved_usd) > 0 ? `, ${usd(a.reserved_usd)} reserved for a run in progress` : ""}.</p>
       </>}
       {last && <p className="muted">Last run: {when(last.attempted_at)}, {last.status}. {runSummary(last)}.</p>}
@@ -150,14 +150,14 @@ export function MaintenanceSection() {
   const runs = history.data?.runs ?? [];
   return (
     <section className="settings maintenance" id="settings-maintenance">
-      <h3>Maintenance</h3>
+      <h2>Maintenance</h2>
       <p className="muted small">Automatic review of notes: what it checks, what it changed, and how to undo it.</p>
       {(status.isLoading || history.isLoading) && <p className="muted">Loading…</p>}
       {unbound ? <p className="muted">This project has no bound domain, so there is nothing to maintain yet.</p> : error ? <p className="error">{classify(error).message}</p> : null}
       {status.data && <StatusCard s={status.data} />}
       {history.data && (
         <>
-          <h4>Runs</h4>
+          <h3>Runs</h3>
           {!runs.length && <p className="muted">No maintenance runs yet.</p>}
           {runs.slice(0, shown).map((r) => <RunRow key={r.id} r={r} open={open === r.id} onToggle={() => setOpen(open === r.id ? null : r.id)} />)}
           {runs.length > shown && <button type="button" className="link" onClick={() => setShown(shown + PAGE)}>Show more ({runs.length - shown} older)</button>}

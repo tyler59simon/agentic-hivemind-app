@@ -130,11 +130,11 @@ export function ShortcutsSection() {
   );
   return (
     <section className="settings shortcuts" id="settings-shortcuts" aria-labelledby="shortcuts-title">
-      <h3 id="shortcuts-title" ref={heading} tabIndex={-1}>Keyboard shortcuts</h3>
+      <h2 id="shortcuts-title" ref={heading} tabIndex={-1}>Keyboard shortcuts</h2>
       <p className="muted small">Choose a key, press Enter, then press the new combination. Escape cancels. Changes take effect at once in every window and do not need Save.</p>
       {groups.map((group) => (
         <div key={group} role="group" aria-label={group}>
-          <h4>{group}</h4>
+          <h3>{group}</h3>
           <ul className="shortcut-rows">{SHORTCUTS.filter((s) => s.remappable && s.group === group).map((s) => <Row key={s.id} s={s} />)}</ul>
         </div>
       ))}

@@ -89,7 +89,7 @@ describe("confirmBacklinks", () => {
 describe("the rail's backlinks", () => {
   it("lists linked pages with their context, and unlinked mentions without the pages that link", async () => {
     const el = await mount(<Backlinks file={file} />);
-    const sections = [...el.querySelectorAll("section")].map((s) => s.querySelector("h4")?.textContent);
+    const sections = [...el.querySelectorAll("section")].map((s) => s.querySelector("h3")?.textContent);
     expect(sections).toEqual(["Linked 3", "Unlinked mentions 1"]);
     const linked = [...el.querySelectorAll("section")[0].querySelectorAll(".back-row")].map((r) => r.textContent);
     expect(linked[0]).toContain("Inbox");

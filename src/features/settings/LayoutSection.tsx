@@ -28,7 +28,7 @@ export function LayoutSection() {
   const [viewport, rootPx] = useViewport(); // the rail follows the window until it is set
   return (
     <section className="settings layout" aria-labelledby="layout-title">
-      <h3 id="layout-title">Layout</h3>
+      <h2 id="layout-title">Layout</h2>
       <label className="check"><input type="checkbox" checked={layout.sidebarCollapsed} onChange={(e) => layout.setSidebarCollapsed(e.target.checked)} /> Collapse sidebar</label>
       <Width label="Sidebar width" min={LIMITS.sidebar.min} max={LIMITS.sidebar.max} value={layout.sidebarWidth} onChange={layout.setSidebarWidth} />
       <Width label="Notes list width" min={LIMITS.tree.min} max={LIMITS.tree.max} value={layout.treeWidth} onChange={layout.setTreeWidth} />

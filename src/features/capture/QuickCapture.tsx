@@ -9,6 +9,7 @@ import { defaultTags, HEADINGS } from "../../lib/note";
 import { NOT_CAPTURED, typeOptions, useNoteTypes } from "../../lib/noteTypes";
 import { recordOperation } from "../../lib/oplog";
 import { prefs, type CaptureTarget } from "../../lib/prefs";
+import { useWindowTitle } from "../../shell/title";
 import { Tabs } from "../../ui/Page";
 import { TagPicker } from "../editor/PropertiesForm";
 import { appendToPage, captureLine } from "../notes/append";
@@ -56,6 +57,8 @@ async function openInMain(ref: string) {
 
 /** The always-on-top quick capture window (global hotkey or tray). Ctrl+Enter saves, Esc hides. */
 export function QuickCapture() {
+  // The window's own title, in the app's form ("Quick capture - Hivemind"); capture.rs gives the window the same one at its start.
+  useWindowTitle(["Quick capture"], false);
   const ids = useId();
   const client = useQueryClient();
   const known = useQuery({ queryKey: ["domains"], queryFn: domains });

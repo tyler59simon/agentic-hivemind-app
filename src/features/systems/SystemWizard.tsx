@@ -120,7 +120,7 @@ function CreateSystem({ onClose, onDone }: SystemWizardProps) {
           <input value={effectiveSlug} onChange={(e) => { setSlugTouched(true); setSlug(e.target.value); }} />
           <span className="muted small">Tags the notes of the system as <code>system/{effectiveSlug || "…"}</code>.</span></label>
         <Fields form={form} set={(patch) => setForm({ ...form, ...patch })} others={all.filter((s) => s.status !== "retired")} projects={projects} />
-        <h3>Passport note</h3>
+        <h3 className="settings-h2">Passport note</h3>
         <label className="field"><span>Domain</span>
           <select value={passportDomain} onChange={(e) => setDomain(e.target.value)}>
             {domainNames.map((d) => <option key={d} value={d}>{d}</option>)}

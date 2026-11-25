@@ -80,7 +80,7 @@ afterEach(async () => {
 describe("the Settings section", () => {
   it("lists the shortcuts that can change, by group, and leaves out the fixed ones", () => {
     expect(document.getElementById("settings-shortcuts")).not.toBeNull();
-    expect([...document.querySelectorAll("#settings-shortcuts h4")].map((h) => h.textContent)).toEqual(["Navigation", "Notes", "Tabs and panes", "Window"]);
+    expect([...document.querySelectorAll("#settings-shortcuts h3")].map((h) => h.textContent)).toEqual(["Navigation", "Notes", "Tabs and panes", "Window"]);
     expect(shownKeys("Command palette")).toBe("Ctrl+P");
     expect(shownKeys("Zoom in")).toBe("Ctrl+=");
     for (const fixed of ["Save the file", "Next tab", "Bold", "Paste"]) expect([...document.querySelectorAll("li.shortcut-row .grow")].some((r) => r.textContent === fixed), fixed).toBe(false);

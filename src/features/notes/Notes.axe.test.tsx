@@ -70,12 +70,8 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-/** What axe reports on this page today. Each entry names its cause; remove the entry in the commit that fixes it. */
-const BASELINE = [
-  // The rail panels put an h4 under the Section h2 (ui/Page.tsx:55) and skip h3 (links/LinksPanel.tsx:36, RelatedPanel.tsx:32).
-  "heading-order @ .section:nth-child(2) > .links-panel > .links-section:nth-child(1) > h4",
-  "heading-order @ .section:nth-child(4) > .links-panel > .links-section:nth-child(1) > h4",
-];
+/** What axe reports on this page today: nothing. */
+const BASELINE: string[] = [];
 
 describe("the Notes page: tree, two panes with tabs, and the context rail", () => {
   it("draws the tree, both panes and the rail", () => {

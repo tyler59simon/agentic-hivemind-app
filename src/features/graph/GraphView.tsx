@@ -46,6 +46,7 @@ export function GraphView({ projectTag, projectName }: { projectTag?: string; pr
 
   return (
     <div className="graph-view">
+      <h1 className="visually-hidden">Graph</h1>
       <div className="graph-filters">
         {projectName && (
           <button type="button" className={`chip${allMemory ? " on" : ""}`} aria-pressed={allMemory}

@@ -43,17 +43,27 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-/** What axe reports on this page today. Each entry names its cause; remove the entry in the commit that fixes it. */
-const BASELINE = [
-  // The card's h1 (App.tsx:308) is followed by the form's first h3, with no h2 between (SettingsForm.tsx:100).
-  "heading-order @ form > h3:nth-child(1)",
-];
+/** What axe reports on this page today: nothing. */
+const BASELINE: string[] = [];
 
 describe("the Settings card", () => {
   it("draws the form, the shortcuts and the Help row", () => {
     expect(document.querySelector("main.center .card h1")).not.toBeNull();
     expect(document.querySelector("form.settings")).not.toBeNull();
     expect(document.querySelector('section[aria-label="Help"]')).not.toBeNull();
+  });
+
+  it("names the window Settings - Hivemind", () => {
+    expect(document.title).toBe("Settings - Hivemind");
+  });
+
+  it("has one h1, the sections as h2 and their groups as h3, with no level skipped", () => {
+    const levels = [...document.querySelectorAll("h1, h2, h3, h4, h5, h6")].map((h) => Number(h.tagName[1]));
+    expect(levels.filter((l) => l === 1).length).toBe(1);
+    expect(levels[0]).toBe(1);
+    expect(levels.filter((l) => l === 2).length).toBeGreaterThanOrEqual(5); // Living Memory, Quick capture, Agents, Keyboard shortcuts, Help...
+    expect(Math.max(...levels)).toBe(3);
+    levels.forEach((l, i) => { if (i > 0) expect(l, `heading ${i}`).toBeLessThanOrEqual(levels[i - 1] + 1); });
   });
 
   it("has only the violations recorded in the baseline", async () => {

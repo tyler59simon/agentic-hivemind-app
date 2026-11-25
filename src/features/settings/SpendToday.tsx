@@ -19,7 +19,7 @@ export function SpendToday() {
   const m = maintenance.data;
   return (
     <div className="spend-today">
-      <h4>Today</h4>
+      <h3>Today</h3>
       <dl className="properties">
         {automations.data && <div><dt>Automations</dt><dd>{usd(automations.data.spentToday)} of {usd(automations.data.dailyUsd)}</dd></div>}
         {learning.data && <div><dt>Learning and executive</dt><dd>{usd(learning.data.spentToday)} of {usd(learning.data.dailyUsd)}</dd></div>}
