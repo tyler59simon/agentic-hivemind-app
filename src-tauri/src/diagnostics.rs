@@ -163,6 +163,15 @@ pub fn install_panic_hook() {
     }));
 }
 
+/// The error codes Living Memory sends (`error_code` and `serve` in its core/cli.py).
+const LM_CODES: [&str; 6] = ["busy", "hivemind", "stale", "conflict", "invalid", "internal"];
+/// The names of the JavaScript and DOM errors a webview can throw, plus Hivemind's own.
+const ERROR_NAMES: [&str; 16] = [
+    "Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError", "URIError", "EvalError", "AggregateError",
+    "DOMException", "AbortError", "NotAllowedError", "NotFoundError", "SecurityError", "QuotaExceededError",
+    "InvalidStateError", "LmError",
+];
+
 /// `/assets/index-abc.js` or `/src/main.tsx`: a file of this app's own bundle (or of its dev server), by path only.
 fn bundle_path(path: &str) -> Option<&str> {
     let rest = path.strip_prefix("/assets/").or_else(|| path.strip_prefix("/src/"))?;
@@ -177,7 +186,14 @@ pub fn format_client_event(event: &Value) -> (log::Level, String) {
     let mut text = format!("webview {kind}");
     for field in ["name", "code"] {
         if event.get(field).is_some_and(|v| !v.is_null()) {
-            text.push_str(&format!(" {field}={}", event[field].as_str().and_then(identifier).unwrap_or("other")));
+            // An identifier can still be a word taken from a note, so codes and error names must be known ones. An lm
+            // command name comes from Hivemind's own code, so the identifier check is enough there.
+            let known = |v: &&str| match field {
+                "code" => LM_CODES.contains(v),
+                _ if kind == "lm_failure" => true,
+                _ => ERROR_NAMES.contains(v),
+            };
+            text.push_str(&format!(" {field}={}", event[field].as_str().and_then(identifier).filter(known).unwrap_or("other")));
         }
     }
     if let Some(exit) = event["exit"].as_i64().filter(|n| i32::try_from(*n).is_ok()) {
@@ -486,7 +502,15 @@ mod tests {
             "component": ["Bomb", "ErrorBoundary", "div"],
         });
         assert_eq!(format_client_event(&event), (log::Level::Error, "webview render_error name=TypeError code=invalid exit=2 at /assets/index-abc.js:10:20 /src/main.tsx:1:2 in Bomb>ErrorBoundary>div".into()));
-        assert_eq!(format_client_event(&json!({ "kind": "lm_failure", "name": "read", "code": "stale_revision", "exit": 6 })), (log::Level::Warn, "webview lm_failure name=read code=stale_revision exit=6".into()));
+        assert_eq!(format_client_event(&json!({ "kind": "lm_failure", "name": "read", "code": "stale", "exit": 6 })), (log::Level::Warn, "webview lm_failure name=read code=stale exit=6".into()));
+    }
+
+    #[test]
+    fn an_unknown_code_or_error_name_is_other_even_when_it_looks_like_an_identifier() {   // Claude review of c6af9b6
+        // A word from a note title can pass the identifier check; only known codes and names are kept.
+        assert_eq!(format_client_event(&json!({ "kind": "lm_failure", "name": "read", "code": "Quarterly_budget", "exit": 2 })).1,
+            "webview lm_failure name=read code=other exit=2");
+        assert_eq!(format_client_event(&json!({ "kind": "window_error", "name": "MyDiaryEntry" })).1, "webview window_error name=other");
     }
 
     #[test]
