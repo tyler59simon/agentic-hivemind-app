@@ -19,7 +19,8 @@ function build(view: EditorView): DecorationSet {
       from, to,
       enter: (node) => {
         if (node.name === "FencedCode" || node.name === "CodeBlock") {
-          for (let pos = node.from; pos <= node.to;) {
+          // Only the visible lines: a long fence would otherwise be walked whole on every keystroke.
+          for (let pos = Math.max(node.from, from), end = Math.min(node.to, to); pos <= end;) {
             const line = state.doc.lineAt(pos);
             deco.push(lineOff.range(line.from));
             pos = line.to + 1;
