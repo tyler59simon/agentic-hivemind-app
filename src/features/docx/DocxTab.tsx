@@ -12,7 +12,8 @@ import { useWorkspace, type Mode, type Tab } from "../../workspace/store";
 import { HexView } from "../bigfile/HexView";
 import { DocumentHeader, HISTORY_MODE } from "../editor/DocumentHeader";
 import { BinaryHistory } from "../history/BinaryHistory";
-import { trashPath } from "../notes/actions";
+import { rawDocx } from "../../lib/docx";
+import { saveBinaryCopy, trashPath } from "../notes/actions";
 import { DeleteConfirm } from "../notes/DeleteConfirm";
 import { addDocxMedia, docxKey, editDocx, openDocx, restoreDocxSnapshot, saveDocxSession, useDocxStore } from "./store";
 
@@ -118,6 +119,12 @@ export function DocxTab({ tab }: { tab: Tab }) {
                 );
                 return (
                   <>
+                    {item("Save a copy as…", () => {
+                      void rawDocx(ref.notebook, ref.path)
+                        .then((buf) => saveBinaryCopy(new Uint8Array(buf), fileName(ref.path), true))
+                        .then((saved) => { if (saved) toast(`Saved copy as ${fileName(saved.path)}`); })
+                        .catch((e) => toast(classify(e).message, "error"));
+                    })}
                     {item(`Show in ${fileManager()}`, () => revealFile(ref.notebook, ref.path).catch((e) => toast(classify(e).message, "error")))}
                     {item("Open with default app", () => revealFile(ref.notebook, ref.path, true).catch((e) => toast(classify(e).message, "error")))}
                     {item("Hex view", () => updateTab(tab.id, { mode: "hex" }))}

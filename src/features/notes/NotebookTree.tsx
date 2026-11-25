@@ -10,7 +10,7 @@ import { Menu } from "../../ui/Menu";
 import { toast } from "../../ui/toast";
 import { activeTab, useWorkspace } from "../../workspace/store";
 import { dropOnBoard } from "../canvas/treeDrop";
-import { convertToRich, movePath, newCanvas, newDocx, newDrawio, newMermaid, newPage, newRichPage, newSection, newSvg, openPage, renamed, trashPath } from "./actions";
+import { convertToRich, movePath, newCanvas, newDocx, newDrawio, newMermaid, newPage, newPdf, newRichPage, newSection, newSvg, openPage, renamed, trashPath } from "./actions";
 import { openToday } from "./dailyActions";
 import { useTemplateIntent } from "./DailyViews";
 import { runExport } from "./richActions";
@@ -183,6 +183,10 @@ export function NotebookTree({ notebook, onSettings, edits, onEdits }: {
     const folder = folderFor(node);
     newDocx(client, notebook.id, folder).then(() => { if (node) toggle(node.path, true); }, fail);
   };
+  const createPdf = (node: Node | null) => {
+    const folder = folderFor(node);
+    newPdf(client, notebook.id, folder).then(() => { if (node) toggle(node.path, true); }, fail);
+  };
   /** Keep the new name. After Enter the focus goes back to the row; after a blur it stays where the user moved it. */
   const commitRename = (refocus = false) => {
     const r = renaming;
@@ -246,6 +250,7 @@ export function NotebookTree({ notebook, onSettings, edits, onEdits }: {
               {<li><button role="menuitem" onClick={() => { close(); createDrawio(null); }}>New Draw.io diagram</button></li>}
               {<li><button role="menuitem" onClick={() => { close(); createSvg(null); }}>New SVG</button></li>}
               {<li><button role="menuitem" onClick={() => { close(); createDocx(null); }}>New Word document</button></li>}
+              {<li><button role="menuitem" onClick={() => { close(); createPdf(null); }}>New PDF document</button></li>}
               <li><button role="menuitem" onClick={() => { close(); onSettings(); }}>Notebook settings…</button></li>
               <li><button role="menuitem" onClick={() => { close(); revealFile(notebook.id, null).catch(fail); }}>Show in {fileManager()}</button></li>
               {<li><button role="menuitem" onClick={() => { close(); openFindInFiles({ notebook: notebook.id }); }}>Find in files…</button></li>}

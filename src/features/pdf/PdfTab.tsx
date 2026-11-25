@@ -12,7 +12,7 @@ import { useWorkspace, type Mode, type Tab } from "../../workspace/store";
 import { HexView } from "../bigfile/HexView";
 import { DocumentHeader, HISTORY_MODE } from "../editor/DocumentHeader";
 import { BinaryHistory } from "../history/BinaryHistory";
-import { trashPath } from "../notes/actions";
+import { saveBinaryCopy, trashPath } from "../notes/actions";
 import { DeleteConfirm } from "../notes/DeleteConfirm";
 import { openPdf, pdfKey, restorePdfSnapshot, savePdfSession, usePdfStore } from "./store";
 
@@ -119,6 +119,15 @@ export function PdfTab({ tab }: { tab: Tab }) {
                 return (
                   <>
                     {canEdit && session.formFields.length > 0 && item("Save and flatten form fields", () => void doSave({ flattenForm: true }))}
+                    {session.baseBytes && item("Save a copy as…", () => {
+                      void (async () => {
+                        const bytes = dirty
+                          ? await (await import("./pdfWriter")).applyPdfEdits(session.baseBytes!, session.mergedSources, session.edits)
+                          : session.baseBytes!;
+                        const saved = await saveBinaryCopy(bytes, fileName(ref.path), true);
+                        if (saved) toast(`Saved copy as ${fileName(saved.path)}`);
+                      })().catch((e) => toast(classify(e).message, "error"));
+                    })}
                     {item(`Show in ${fileManager()}`, () => revealFile(ref.notebook, ref.path).catch((e) => toast(classify(e).message, "error")))}
                     {item("Open with default app", () => revealFile(ref.notebook, ref.path, true).catch((e) => toast(classify(e).message, "error")))}
                     {item("Hex view", () => updateTab(tab.id, { mode: "hex" }))}
