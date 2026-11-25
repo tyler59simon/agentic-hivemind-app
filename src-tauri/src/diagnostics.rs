@@ -434,8 +434,14 @@ fn render(info: &AppInfo, settings: &str, log: &str, unavailable: Option<&str>) 
 /// `text` with the user's home folder written as `~` wherever a path starts with it, in either slash form. A path that only
 /// begins with the same letters (`/home/ann2`) is left alone. `ignore_case` is for file systems that do not tell
 /// `C:\Users\Ann` from `c:\users\ann` (Windows).
+#[cfg(test)]
 fn hide_home(text: &str, home: &str, ignore_case: bool) -> String {
-    let home = home.trim_end_matches(['/', '\\']);
+    hide_root(text, home, "~", ignore_case)
+}
+
+/// `text` with every path that starts with `root` written as `label` instead, by the rules of `hide_home`.
+fn hide_root(text: &str, root: &str, label: &str, ignore_case: bool) -> String {
+    let home = root.trim_end_matches(['/', '\\']);
     if home.is_empty() {
         return text.to_string();
     }
@@ -451,7 +457,7 @@ fn hide_home(text: &str, home: &str, ignore_case: bool) -> String {
         let end = at + needle.len();
         let ends_here = hay[end..].chars().next().is_none_or(|c| !(c.is_alphanumeric() || "_-.".contains(c)));
         out.push_str(&text[from..at]);
-        out.push_str(if ends_here { "~" } else { &text[at..end] });
+        out.push_str(if ends_here { label } else { &text[at..end] });
         from = end;
     }
     out.push_str(&text[from..]);
@@ -472,10 +478,20 @@ pub fn diagnostics(app: AppHandle, state: State<'_, AppState>) -> Result<String,
     let log = if unavailable.is_some() { String::new() } else { tail_lines(&Path::new(&info.log_dir).join(format!("{LOG_NAME}.log")), TAIL_LINES) };
     let text = render(&info, &settings_summary(&settings::load(&state.settings_path)), &log, unavailable);
     // The About dialog shows full paths; the block that is pasted into a public issue does not carry the user's name.
-    Ok(match dirs::home_dir() {
-        Some(home) => hide_home(&text, &home.display().to_string(), cfg!(windows)),
-        None => text,
-    })
+    Ok(hide_paths(&text, &known_roots(), cfg!(windows)))
+}
+
+/// The folders whose paths can name the user or a server (Windows can redirect AppData to a network share, outside the
+/// home folder), each with the label diagnostics writes instead. Most specific first; the home folder last.
+fn known_roots() -> Vec<(String, &'static str)> {
+    [(dirs::data_local_dir(), "<local app data>"), (dirs::data_dir(), "<app data>"), (dirs::config_dir(), "<config>"), (dirs::home_dir(), "~")]
+        .into_iter()
+        .filter_map(|(dir, label)| dir.map(|d| (d.display().to_string(), label)))
+        .collect()
+}
+
+fn hide_paths(text: &str, roots: &[(String, &str)], ignore_case: bool) -> String {
+    roots.iter().fold(text.to_string(), |text, (root, label)| hide_root(&text, root, label, ignore_case))
 }
 
 /// Open the log folder in the file manager. Done here so the webview's opener scope stays as narrow as it is.
@@ -588,6 +604,15 @@ mod tests {
         assert!(body.contains("could%20not%20be%20copied"), "{body}");
         assert!(!body.contains("copied%20text"), "{body}");
         assert_ne!(url, issue_url(true));
+    }
+
+    #[test]
+    fn a_redirected_app_data_folder_is_hidden_as_well_as_the_home_folder() {   // Codex review of d831d7e
+        let roots = vec![("\\\\fileserver\\profiles$\\ann\\AppData\\Roaming".to_string(), "<app data>"), ("C:\\Users\\Ann".to_string(), "~")];
+        let text = "Data folder: \\\\fileserver\\profiles$\\ann\\AppData\\Roaming\\dev.hivemind.app\nLog folder: C:\\Users\\Ann\\AppData\\Local\\dev.hivemind.app\\logs";
+        let out = hide_paths(text, &roots, true);
+        assert_eq!(out, "Data folder: <app data>\\dev.hivemind.app\nLog folder: ~\\AppData\\Local\\dev.hivemind.app\\logs");
+        assert!(!out.to_lowercase().contains("ann") && !out.contains("fileserver"), "{out}");
     }
 
     #[test]

@@ -42,7 +42,7 @@ export async function reportProblem(): Promise<void> {
     return;
   }
   if (failed === null) toast("Diagnostics copied. Paste them into the new issue.");
-  else toast(`Could not copy diagnostics (${failed}). The issue page is open without them: Copy diagnostics from the command palette and paste them in.`, "error");
+  else toast(`Could not copy diagnostics (${failed}). The issue page is open without them: return to Hivemind, choose Copy diagnostics in Help, and paste them in.`, "error");
 }
 
 export async function openLogsFolder(): Promise<void> {
