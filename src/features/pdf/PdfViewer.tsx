@@ -10,6 +10,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FileRef } from "../../documents/keys";
 import { classify } from "../../lib/errors";
+import { scrollBehavior } from "../../lib/motion";
 import { fileName, folderOf } from "../../lib/notebooks";
 import { isLoose } from "../../lib/opens";
 import { createPdfBytes, pdfRange, pickPdfForMerge } from "../../lib/pdf";
@@ -680,7 +681,7 @@ export default function PdfViewer({ file, session, editing }: PdfViewerProps) {
   const jumpToPage = (idx: number) => {
     const clamped = Math.min(Math.max(0, idx), Math.max(0, pages.length - 1));
     setActivePage(clamped);
-    scrollRef.current?.querySelector(`[data-pdf-page="${clamped + 1}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    scrollRef.current?.querySelector(`[data-pdf-page="${clamped + 1}"]`)?.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
   };
 
   const handleInsertImage = async (f: File) => {

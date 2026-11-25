@@ -26,7 +26,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 
 vi.mock("docx-preview", () => ({
   renderAsync: vi.fn(async (_data: ArrayBuffer, el: HTMLElement) => {
-    el.innerHTML = '<div class="docx-wrapper"><section>Rendered Word Layout <a href="https://example.com">External</a></section></div>';
+    el.innerHTML = '<div class="docx-wrapper"><section>Rendered Word Layout <a href="https://example.com">External</a><a href="#sec">Jump</a><h2 id="sec">Section</h2></section></div>';
   }),
 }));
 
@@ -110,6 +110,29 @@ describe("DocxTab & DocxStore", () => {
     });
     expect(defaultPrevented).toBe(true);
     expect(openedUrls).toEqual(["https://example.com"]);
+  });
+
+  it("scrolls to an in-document link smoothly, and without animation when the system asked for less motion (DESK-A11Y A4)", async () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    let reduced = false;
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: q.includes("reduced-motion") && reduced, addEventListener() {}, removeEventListener() {} }));
+    try {
+      useWorkspace.getState().openTab({ kind: "file", file: { notebook: "nb-1", path: "Spec.docx" }, mode: "preview" });
+      const el = document.createElement("div");
+      document.body.append(el);
+      root = createRoot(el);
+      await act(async () => {
+        root!.render(<QueryClientProvider client={new QueryClient()}><FileTab tab={useWorkspace.getState().panes[0].tabs[0]} /></QueryClientProvider>);
+      });
+      await until(() => el.textContent?.includes("Rendered Word Layout"));
+      const jump = [...el.querySelectorAll<HTMLAnchorElement>("a[href]")].find((a) => a.getAttribute("href") === "#sec")!;
+      await act(async () => { jump.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); });
+      expect(scroll).toHaveBeenLastCalledWith({ behavior: "smooth", block: "start" });
+      reduced = true;
+      await act(async () => { jump.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); });
+      expect(scroll).toHaveBeenLastCalledWith({ behavior: "auto", block: "start" });
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it("does not mark clean .docx dirty when opening Edit mode, tracks dirty edits, retains in-flight edits, retargets on rename, and evicts on close", async () => {

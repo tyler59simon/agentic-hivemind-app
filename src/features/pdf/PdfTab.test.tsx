@@ -128,6 +128,29 @@ describe("PdfTab & PdfStore", () => {
     expect(unsavedBinaryFiles(useWorkspace.getState())).toBe(false);
   });
 
+  it("jumps to a page smoothly, and without animation when the system asked for less motion (DESK-A11Y A4)", async () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    let reduced = false;
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: q.includes("reduced-motion") && reduced, addEventListener() {}, removeEventListener() {} }));
+    try {
+      useWorkspace.getState().openTab({ kind: "file", file: { notebook: "nb-1", path: "Report.pdf" }, mode: "edit" });
+      const el = document.createElement("div");
+      document.body.append(el);
+      root = createRoot(el);
+      await act(async () => {
+        root!.render(<QueryClientProvider client={new QueryClient()}><FileTab tab={useWorkspace.getState().panes[0].tabs[0]} /></QueryClientProvider>);
+      });
+      await until(() => el.querySelectorAll(".pdf-page-card").length === 2);
+      const next = el.querySelector<HTMLButtonElement>('button[aria-label="Next page"]')!;
+      await act(async () => { next.click(); });
+      expect(scroll).toHaveBeenLastCalledWith({ behavior: "smooth", block: "start" });
+      reduced = true;
+      await act(async () => { el.querySelector<HTMLButtonElement>('button[aria-label="Previous page"]')!.click(); });
+      expect(scroll).toHaveBeenLastCalledWith({ behavior: "auto", block: "start" });
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it("retains edits made while a PDF save is in flight, carries sessions across renames, and evicts on tab close", async () => {
     const stop = startDocumentSync();
     try {

@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FileRef } from "../../documents/keys";
 import { rawDocx } from "../../lib/docx";
 import { classify } from "../../lib/errors";
+import { scrollBehavior } from "../../lib/motion";
 
 export interface DocxPreviewProps {
   file: FileRef;
@@ -84,7 +85,7 @@ export default function DocxPreview({ file, version, dirty }: DocxPreviewProps) 
                 if (targetId && container.current) {
                   const target = [...container.current.querySelectorAll<HTMLElement>("[id], [name]")]
                     .find((el) => el.id === targetId || el.getAttribute("name") === targetId);
-                  target?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  target?.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
                 }
                 return;
               }
