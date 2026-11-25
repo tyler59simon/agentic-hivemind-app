@@ -5,6 +5,7 @@ import { useLayer } from "../../ui/layers";
 import { zoomBy } from "../../lib/zoom";
 import { useEffect, useMemo, useState } from "react";
 import { useMaintenanceEnabled, useProjectsEnabled, useSystemsEnabled, useWikiEnabled } from "../../lib/connection";
+import { copyDiagnostics, openLogsFolder } from "../../lib/diagnostics";
 import { domains, list } from "../../lib/lm";
 import { folderOf, notebooksQuery, pageTitle, treeQuery } from "../../lib/notebooks";
 import { pagesQuery } from "../../lib/noteindex";
@@ -159,6 +160,8 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "settings", label: "Settings", run: () => { onSettings(); close(); } },
       { key: "schedules", label: "Schedules", detail: "Settings: briefings, maintenance, rebuilds and automations", run: () => { close(); openSettings("schedules"); } },
       { key: "spend", label: "Spend", detail: "Settings: budgets and today's spending", run: () => { close(); openSettings("spend"); } },
+      { key: "copy-diagnostics", label: "Copy diagnostics", detail: "version, settings summary and the end of the log; no note text", run: () => { close(); void copyDiagnostics(); } },
+      { key: "open-logs", label: "Open logs folder", run: () => { close(); void openLogsFolder(); } },
       ...(maintenanceOn ? [{ key: "maintenance", label: "Maintenance", detail: "Settings: automatic note review", run: () => { close(); openSettings("maintenance"); } }] : []),
       ...(known.data?.domains ?? []).map((d) => ({
         key: "domain:" + d.name, label: `Switch domain: ${d.name}`, detail: `${d.active} notes`,

@@ -1,8 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { LmError, addAction, archiveNote, isPlan, supersedeNote, taxonomyAdd, undo, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, ruleAllowed, setPin, setRule, list, listArgs, openArgs, writeProject, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setTransport, writeSystem, systemsArgs, update, setBridgeGeneration, noteTypes, typeWrite, timelineArgs, links, deletePlan, wikiModel, agentWikiModel, type Invoke } from "./lm";
 
-afterEach(() => setTransport(invoke as Invoke));
+const logged = vi.hoisted(() => vi.fn());
+vi.mock("./log", async (original) => ({ ...(await original<typeof import("./log")>()), logWarnLine: logged }));
+
+afterEach(() => { setTransport(invoke as Invoke); logged.mockClear(); });
 
 function fake(reply: unknown) {
   const calls: unknown[] = [];
@@ -31,6 +34,23 @@ describe("run", () => {
     const calls = fake({ exit_code: 0, result: { total: 0, notes: [] }, error: null });
     await expect(list({ domain: "demo" })).resolves.toEqual({ total: 0, notes: [] });
     expect(calls[0]).toEqual(["lm", { argv: listArgs({ domain: "demo" }), stdin: null }]);
+  });
+
+  it("logs a failed command by name and code, with the message cut, and never the arguments", async () => {
+    fake({ exit_code: 2, result: null, error: { code: "invalid", message: "m".repeat(500) } });
+    await expect(run(["read", "demo:secret-ref", "--query", "private words"], "note body")).rejects.toBeInstanceOf(LmError);
+    expect(logged).toHaveBeenCalledTimes(1);
+    const line = logged.mock.calls[0][0] as string;
+    expect(line).toBe(`lm read failed (invalid, exit 2): ${"m".repeat(300)}...`);
+    expect(line).not.toContain("private words");
+    expect(line).not.toContain("secret-ref");
+    expect(line).not.toContain("note body");
+  });
+
+  it("logs nothing for a command that succeeds", async () => {
+    fake({ exit_code: 0, result: {}, error: null });
+    await run(["domains"]);
+    expect(logged).not.toHaveBeenCalled();
   });
 
   it("read asks for the most text and stays read-only", async () => {

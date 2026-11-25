@@ -14,6 +14,7 @@ vi.mock("sigma", () => ({ default: class {} }));
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string) => {
     switch (cmd) {
+      case "diagnostics": return "Hivemind 0.1.0";
       case "notebooks_list": return [];
       case "lm": return { exit_code: 0, error: null, result: { domains: [], notes: [] } };
     }
@@ -98,6 +99,21 @@ describe("the command palette", () => {
     await open("Lines:");
     expect(labels().filter((l) => l.startsWith("Lines:"))).toEqual([]);
     expect(labels().filter((l) => l.startsWith("Macro:"))).toEqual([]);
+  });
+
+  it("offers Copy diagnostics and Open logs folder, and Copy diagnostics copies", async () => {
+    const writeText = vi.fn(async (_text: string) => {});
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    await open("diagnostics");
+    expect(labels()).toEqual(["Copy diagnostics"]);
+    await act(async () => { document.querySelector<HTMLButtonElement>(".palette li button")!.click(); });
+    await settle();
+    expect(writeText).toHaveBeenCalledWith("Hivemind 0.1.0");
+    expect(document.querySelector(".palette")).toBeNull();
+    await act(async () => root?.unmount());
+    root = null;
+    await open("logs folder");
+    expect(labels()).toEqual(["Open logs folder"]);
   });
 
   it("offers Compare files, and starts the picker from the focused file", async () => {

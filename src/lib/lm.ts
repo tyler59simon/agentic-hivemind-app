@@ -1,6 +1,7 @@
 // Typed wrappers over the Living Memory CLI, reached through the Rust bridge (`serve --stdio`).
 // Reads run as the viewer actor: read-only, and they leave no usage-diary events.
 import { invoke } from "@tauri-apps/api/core";
+import { cap, logWarnLine } from "./log";
 
 /** Living Memory's own note types. A store can define more (`types`), so a note's type is any string. */
 export const BUILTIN_TYPES = [
@@ -44,12 +45,17 @@ const bound = (argv: string[], at?: number) => {
   return (argv[0] === "doc" || argv[0] === "proposals" || at !== undefined) && g !== undefined ? { generation: g } : {};
 };
 
+/** The error for a failed command. It is logged with the command and what it failed with, never the arguments: they hold
+ *  note text and search terms. */
+function failure(argv: string[], reply: Reply): LmError {
+  const error = reply.error ?? { code: "invalid", message: `Exit code ${reply.exit_code}` };
+  logWarnLine(`lm ${argv[0]} failed (${error.code}, exit ${reply.exit_code}): ${cap(error.message, 300)}`);
+  return new LmError(error.code, error.message, reply.exit_code);
+}
+
 export async function run<T>(argv: string[], stdin?: string, at?: number): Promise<T> {
   const reply = (await call("lm", { argv, stdin: stdin ?? null, ...bound(argv, at) })) as Reply<T>;
-  if (reply.exit_code !== 0) {
-    const error = reply.error ?? { code: "invalid", message: `Exit code ${reply.exit_code}` };
-    throw new LmError(error.code, error.message, reply.exit_code);
-  }
+  if (reply.exit_code !== 0) throw failure(argv, reply);
   return reply.result;
 }
 
@@ -614,10 +620,7 @@ const PRIVATE = "--include-private";
 /** A command that carries a page body: Rust sends it as stdin, or through a staging file when it is large (NS-2C). */
 async function runBody<T>(argv: string[], body: string, flag?: "--spec-file"): Promise<T> {
   const reply = (await call("lm_body", { argv, body, ...(flag ? { flag } : {}), ...bound(argv) })) as Reply<T>;
-  if (reply.exit_code !== 0) {
-    const error = reply.error ?? { code: "invalid", message: `Exit code ${reply.exit_code}` };
-    throw new LmError(error.code, error.message, reply.exit_code);
-  }
+  if (reply.exit_code !== 0) throw failure(argv, reply);
   return reply.result;
 }
 

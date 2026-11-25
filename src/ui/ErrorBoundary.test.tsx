@@ -5,6 +5,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorBoundary } from "./ErrorBoundary";
 
+const logged = vi.hoisted(() => vi.fn());
+vi.mock("../lib/log", async (original) => ({ ...(await original<typeof import("../lib/log")>()), logErrorLine: logged }));
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 let root: Root | null = null;
@@ -12,7 +15,7 @@ let host: HTMLElement;
 let broken = true;
 function Bomb() { if (broken) throw new Error("boom"); return <p>fine</p>; }
 
-beforeEach(() => { broken = true; vi.spyOn(console, "error").mockImplementation(() => {}); });
+beforeEach(() => { logged.mockClear(); broken = true; vi.spyOn(console, "error").mockImplementation(() => {}); });
 afterEach(async () => { await act(async () => root?.unmount()); root = null; document.body.innerHTML = ""; vi.restoreAllMocks(); });
 
 async function mount(node: React.ReactNode) {
@@ -31,6 +34,15 @@ describe("ErrorBoundary", () => {
     expect(host.textContent).toContain("boom");
     expect(host.textContent).toContain("sibling");
     expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs the error with its name, message, stack and component stack", async () => {
+    await mount(<ErrorBoundary label="This tab"><Bomb /></ErrorBoundary>);
+    expect(logged).toHaveBeenCalledTimes(1);
+    const line = logged.mock.calls[0][0] as string;
+    expect(line).toContain("This tab stopped: Error: boom");
+    expect(line).toContain("at Bomb");
+    expect(line).toContain("Component stack:");
   });
 
   it("Try again draws the children again", async () => {

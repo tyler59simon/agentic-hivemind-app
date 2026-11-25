@@ -12,6 +12,7 @@ import { initDocSize } from "./lib/docSize";
 import { guardReload } from "./lib/keys";
 import { inTauri } from "./lib/native";
 import { initPaperDefault } from "./lib/paper";
+import { installGlobalLogging } from "./lib/log";
 import { isMac } from "./lib/platform";
 import { initSpellcheck } from "./lib/spellcheck";
 import { initTheme } from "./lib/theme";
@@ -20,6 +21,7 @@ import { initZoom } from "./lib/zoom";
 import { Announcer } from "./ui/announce";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
 
+installGlobalLogging();
 initTheme();
 initPaperDefault();
 initDocSize();
