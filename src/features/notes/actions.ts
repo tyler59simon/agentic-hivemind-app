@@ -14,10 +14,11 @@ import { NEW_SVG_TEXT } from "../svg/svg";
 import { newPageText } from "../hmdoc/envelope";
 import { planFor, useRewritePlan } from "../links/plan";
 import { createDocx } from "../../lib/docx";
+import { createPdfBytes } from "../../lib/pdf";
 import { discardDocxUnder, docxKey, unsavedDocxUnder, useDocxStore, waitDocxSaves } from "../docx/store";
 import { discardPdfUnder, pdfKey, unsavedPdfUnder, usePdfStore, waitPdfSaves } from "../pdf/store";
 import { fileName, folderOf, isCanvas, isDocx, isDrawio, isMarkdown, isMermaid, isPdf, isRichDoc, isSvg, notebooksQuery, pageTitle } from "../../lib/notebooks";
-import { isLoose, saveAs } from "../../lib/opens";
+import { isLoose, saveAs, saveBytesAs } from "../../lib/opens";
 import { untitledText } from "./untitled";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
@@ -122,6 +123,27 @@ export async function newDocx(client: QueryClient, notebook: string, folder = ""
     }
   }
   throw new Error(`Too many documents named ${title} in this folder`);
+}
+
+/** A new blank PDF document: `Untitled.pdf` with one empty US Letter page (612 x 792 pt). */
+export async function newPdf(client: QueryClient, notebook: string, folder = "", title = "Untitled") {
+  const { PDFDocument } = await import("pdf-lib");
+  const pdf = await PDFDocument.create();
+  pdf.addPage([612, 792]);
+  const bytes = await pdf.save();
+  for (let n = 1; n < 100; n++) {
+    const name = n === 1 ? title : `${title} ${n}`;
+    const path = join(folder, `${name}.pdf`);
+    try {
+      await createPdfBytes(notebook, path, bytes);
+      client.invalidateQueries({ queryKey: ["notebook-tree", notebook] });
+      openPage({ notebook, path });
+      return path;
+    } catch (e) {
+      if (!/exists/i.test(String(e))) throw e;
+    }
+  }
+  throw new Error(`Too many PDFs named ${title} in this folder`);
 }
 
 /** The text of a page as it is now: an open page's, unsaved edits included, else the file's. */
@@ -253,6 +275,13 @@ export async function saveUntitled(tabId: string, text: string, suggested: strin
 export async function saveCopy(text: string, name: string) {
   const ref = await saveAsAndRefresh(text, name);
   if (ref) openPage(ref);
+}
+
+/** Save a binary copy (`.pdf`, `.docx`, `.png`, ...) where the user picks. Opens the copy when `openAfter` is true. */
+export async function saveBinaryCopy(bytes: Uint8Array, name: string, openAfter = false): Promise<FileRef | null> {
+  const ref = await saveBytesAs(bytes, name);
+  if (ref && openAfter) openPage(ref);
+  return ref;
 }
 
 /** The path after renaming `path` to `name` in place. A page keeps its extension when the new name has none; a section

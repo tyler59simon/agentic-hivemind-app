@@ -476,6 +476,36 @@ pub fn save_as(path: &Path, text: &str) -> Result<(), String> {
     }
 }
 
+/// Save raw binary bytes where the user picked (Save As). Follows the same symlink, 64 MB cap, and held-replace
+/// safety rules as `save_as`.
+pub fn save_bytes_as(path: &Path, data: &[u8]) -> Result<(), String> {
+    if data.len() as u64 > MAX_READ {
+        return Err("File exceeds the 64 MB save limit".into());
+    }
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return create_bytes(path, data).map(|_| ()),
+        Err(e) => return Err(format!("Could not read {}: {e}", path.display())),
+    };
+    if meta.file_type().is_symlink() {
+        return Err(format!("{} is a link; choose another name", path.display()));
+    }
+    if meta.len() > MAX_READ {
+        return Err(format!("{} is larger than 64 MB, so Hivemind does not replace it", path.display()));
+    }
+    let existing = match std::fs::File::open(path).and_then(|mut file| read_capped(&mut file)) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return Err(format!("{} is larger than 64 MB, so Hivemind does not replace it", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return create_bytes(path, data).map(|_| ()),
+        Err(e) => return Err(format!("Could not read {}: {e}", path.display())),
+    };
+    match save_bytes(path, data, &stamp(&existing, path))? {
+        SaveOutcome::Saved(_) => Ok(()),
+        SaveOutcome::Stale { .. } => Err(format!("{} changed while Hivemind was saving over it; try again", path.display())),
+        SaveOutcome::Gone => create_bytes(path, data).map(|_| ()),
+    }
+}
+
 /// Rename or move a file or folder. Refuses when the target exists, except a change of letter case only, which
 /// goes through a temporary name.
 pub fn rename(from: &Path, to: &Path) -> Result<(), String> {

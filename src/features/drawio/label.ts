@@ -60,6 +60,19 @@ export function sanitizeDrawioLabel(value: string, html: boolean): string {
   return [...doc.body.childNodes].map(walk).join("");
 }
 
+const RICH_HTML_MARKER = /<(?:b|strong|i|em|u|sub|sup|span|font)\b|\bstyle\s*=/i;
+
+/** True when an `html=1` label contains inline formatting tags or styles that plain-text editing would strip. */
+export function hasRichHtml(value: string, html: boolean): boolean {
+  return html && RICH_HTML_MARKER.test(value);
+}
+
+/** Sanitize edited `contentEditable` HTML back into safe draw.io HTML while preserving allowed inline formatting. */
+export function normalizeEditedHtml(innerHtml: string): string {
+  const clean = sanitizeDrawioLabel(innerHtml, true);
+  return clean.replace(/(?:<br \/>)+$/i, "");
+}
+
 /** Plain text representation of a cell label for editing or aria labels. */
 export function labelToPlainText(value: string, html: boolean): string {
   if (!value) return "";

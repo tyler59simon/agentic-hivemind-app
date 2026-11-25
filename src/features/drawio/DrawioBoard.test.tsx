@@ -77,4 +77,31 @@ describe("DrawioEditor component", () => {
     expect(el.querySelector(".drawio-node.on")).toBeNull();
     expect(escape().defaultPrevented).toBe(false); // nothing left: for the shell
   });
+
+  it("preserves rich HTML label formatting when double-clicking and editing an html=1 cell", async () => {
+    const richSample = `<mxfile host="Test"><diagram id="p1" name="Rich"><mxGraphModel><root><mxCell id="0" /><mxCell id="1" parent="0" /><mxCell id="r" value="&lt;b&gt;API&lt;/b&gt; &lt;font color=&quot;#dc2626&quot;&gt;v2&lt;/font&gt;" style="rounded=1;html=1;" vertex="1" parent="1"><mxGeometry x="40" y="40" width="160" height="70" as="geometry" /></mxCell></root></mxGraphModel></diagram></mxfile>`;
+    let latest = richSample;
+    const onChange = vi.fn((next: string) => { latest = next; });
+    const el = document.createElement("div");
+    document.body.append(el);
+    root = createRoot(el);
+    await act(async () => { root!.render(<DrawioEditor text={latest} readOnly={false} fileName="rich.drawio" onChange={onChange} />); });
+    const node = el.querySelector<HTMLElement>("[data-drawio-cell='r']")!;
+    await act(async () => { node.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); });
+    const editor = el.querySelector<HTMLDivElement>(".drawio-label-rich-input")!;
+    expect(editor).not.toBeNull();
+    expect(editor.innerHTML).toContain("<b>API</b>");
+    // Modify text inside while keeping bold/color tags, then commit with Ctrl+Enter.
+    editor.innerHTML = '<b>API</b> <font color="#dc2626">v3</font>';
+    await act(async () => { editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true })); });
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const parsed = parseDrawio(latest);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      const val = parsed.doc.pages[0].cells.find((c) => c.id === "r")!.value;
+      expect(val).toContain("<b>API</b>");
+      expect(val).toContain('color="#dc2626"');
+      expect(val).toContain("v3");
+    }
+  });
 });

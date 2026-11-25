@@ -4,13 +4,15 @@ import { ArrowDownToLine, ArrowUpToLine, Download, Maximize2, Minus, Plus, Redo2
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { classify } from "../../lib/errors";
 import { nudgeOf } from "../../lib/nudge";
+import { Menu } from "../../ui/Menu";
 import { toast } from "../../ui/toast";
-import { saveCopy } from "../notes/actions";
-import { labelToPlainText, sanitizeDrawioLabel } from "./label";
+import { saveBinaryCopy, saveCopy } from "../notes/actions";
+import { rasterizeSvgToPng } from "../svg/svg";
+import { hasRichHtml, labelToPlainText, normalizeEditedHtml, sanitizeDrawioLabel } from "./label";
 import {
-  absoluteRects, addEdge, addPage, addShape, deleteCells, deletePage, edgePoints, fitView, moveCells, polylineMidpoint,
-  renamePage, reorderCells, resizeCell, setCellLabel, setCellStyle,
-  type DrawioCell, type DrawioDoc, type DrawioPoint, type DrawioRect, type DrawioView, type NewShapePreset,
+  absoluteRects, addEdge, addPage, addShape, deleteCells, deletePage, edgeLabelPoints, edgePoints, fitView,
+  isEdgeLabelCell, moveCells, pageGridSize, polylineMidpoint, renamePage, reorderCells, resizeCell, setCellLabel,
+  setCellStyle, type DrawioCell, type DrawioDoc, type DrawioPoint, type DrawioRect, type DrawioView, type NewShapePreset,
 } from "./model";
 import { parseStyle, type ParsedStyle } from "./style";
 
@@ -121,8 +123,91 @@ function arrowHeadPoints(from: DrawioPoint, to: DrawioPoint, size = 10): string 
   return `${to.x},${to.y} ${x1},${y1} ${x2},${y2}`;
 }
 
-/** Export the current page's vertices and edges as a standalone SVG string. */
-function exportPageSvg(cells: DrawioCell[], rects: Map<string, DrawioRect>): string {
+const CLOUD_PATH = "M 25 54 H 78 C 89 54 96 46 96 36 C 96 27 89 20 80 19 C 78 9 68 3 56 4 C 46 5 38 11 35 19 C 28 16 19 20 17 28 C 9 29 4 35 4 42 C 4 49 12 54 25 54 Z";
+
+/** Emit standalone SVG markup for one vertex shape at `(x, y, w, h)` matching `ShapeGraphic` geometry. */
+function shapeSvgMarkup(x: number, y: number, w: number, h: number, st: ParsedStyle, esc: (s: string) => string): string {
+  if (st.shape === "text" || st.shape === "group") return "";
+  if (st.shape === "image") {
+    return st.image ? `<image x="${x}" y="${y}" width="${w}" height="${h}" href="${esc(st.image)}" />` : "";
+  }
+  const fill = esc(st.fillColor ?? "#ffffff");
+  const stroke = esc(st.strokeColor ?? "#5f6368");
+  const sw = st.strokeWidth;
+  const dash = st.dashed ? ' stroke-dasharray="6 4"' : "";
+  const pad = sw;
+  const iw = Math.max(1, w - pad * 2);
+  const ih = Math.max(1, h - pad * 2);
+
+  if (st.shape === "ellipse") {
+    return `<ellipse cx="${x + w / 2}" cy="${y + h / 2}" rx="${iw / 2}" ry="${ih / 2}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${dash} />`;
+  }
+  if (st.shape === "diamond") {
+    const pts = `${x + w / 2},${y + pad} ${x + w - pad},${y + h / 2} ${x + w / 2},${y + h - pad} ${x + pad},${y + h / 2}`;
+    return `<polygon points="${pts}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${dash} />`;
+  }
+  if (st.shape === "hexagon") {
+    const inset = Math.min(iw * 0.2, 24);
+    const pts = `${x + pad + inset},${y + pad} ${x + w - pad - inset},${y + pad} ${x + w - pad},${y + h / 2} ${x + w - pad - inset},${y + h - pad} ${x + pad + inset},${y + h - pad} ${x + pad},${y + h / 2}`;
+    return `<polygon points="${pts}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${dash} />`;
+  }
+  if (st.shape === "cylinder") {
+    const ry = Math.min(14, ih * 0.16);
+    const body = `M ${x + pad} ${y + pad + ry} L ${x + pad} ${y + h - pad - ry} A ${iw / 2} ${ry} 0 0 0 ${x + w - pad} ${y + h - pad - ry} L ${x + w - pad} ${y + pad + ry} A ${iw / 2} ${ry} 0 0 0 ${x + pad} ${y + pad + ry} Z`;
+    const cap = `M ${x + pad} ${y + pad + ry} A ${iw / 2} ${ry} 0 0 0 ${x + w - pad} ${y + pad + ry}`;
+    return `<path d="${body}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${dash} /><path d="${cap}" fill="none" stroke="${stroke}" stroke-width="${sw}" />`;
+  }
+  if (st.shape === "cloud") {
+    const sx = w / 100;
+    const sy = h / 64;
+    return `<g transform="translate(${x} ${y}) scale(${sx} ${sy})"><path d="${CLOUD_PATH}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${dash} vector-effect="non-scaling-stroke" /></g>`;
+  }
+  const rx = st.shape === "rounded" ? Math.min(iw, ih) * (st.arcSize / 100) : 0;
+  const rect = `<rect x="${x + pad}" y="${y + pad}" width="${iw}" height="${ih}" rx="${rx}" ry="${rx}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${dash} />`;
+  if (st.shape === "swimlane") {
+    const divY = y + Math.min(28, ih);
+    return `${rect}<line x1="${x + pad}" y1="${divY}" x2="${x + w - pad}" y2="${divY}" stroke="${stroke}" stroke-width="${sw}" />`;
+  }
+  return rect;
+}
+
+function labelSvgMarkup(
+  cx: number, cy: number, boxX: number, boxY: number, boxW: number, boxH: number,
+  text: string, st: ParsedStyle, esc: (s: string) => string, centered = false,
+): string {
+  const lines = text.split("\n");
+  const lineH = st.fontSize * 1.2;
+  const tx = centered ? cx : st.align === "left" ? boxX + 6 : st.align === "right" ? boxX + boxW - 6 : boxX + boxW / 2;
+  const anchor = centered ? "middle" : st.align === "left" ? "start" : st.align === "right" ? "end" : "middle";
+  const startY = centered
+    ? cy - ((lines.length - 1) * lineH) / 2 + st.fontSize * 0.35
+    : st.verticalAlign === "top"
+      ? boxY + st.fontSize + 4
+      : st.verticalAlign === "bottom"
+        ? boxY + boxH - (lines.length - 1) * lineH - 4
+        : boxY + boxH / 2 - ((lines.length - 1) * lineH) / 2 + st.fontSize * 0.35;
+  const weight = st.fontBold ? ' font-weight="700"' : "";
+  const italic = st.fontItalic ? ' font-style="italic"' : "";
+  const deco = st.fontUnderline ? ' text-decoration="underline"' : "";
+  let out = "";
+  if (st.labelBackgroundColor && st.labelBackgroundColor !== "none") {
+    const maxLen = Math.max(...lines.map((l) => l.length), 1);
+    const bgW = Math.max(20, maxLen * st.fontSize * 0.62 + 10);
+    const bgH = lines.length * lineH + 6;
+    const bgX = anchor === "start" ? tx - 4 : anchor === "end" ? tx - bgW + 4 : tx - bgW / 2;
+    const bgY = startY - st.fontSize * 0.9 - 2;
+    out += `<rect x="${bgX}" y="${bgY}" width="${bgW}" height="${bgH}" rx="3" fill="${esc(st.labelBackgroundColor)}" />`;
+  }
+  lines.forEach((line, idx) => {
+    out += `<text x="${tx}" y="${startY + idx * lineH}" text-anchor="${anchor}" font-size="${st.fontSize}" font-family="${esc(st.fontFamily ?? "sans-serif")}" fill="${esc(st.fontColor ?? "#1f2937")}"${weight}${italic}${deco}>${esc(line)}</text>`;
+  });
+  return out;
+}
+
+/** Export the current page's vertices, edges, arrows, and edge labels as a standalone SVG string. */
+export function exportPageSvg(cells: DrawioCell[], rects: Map<string, DrawioRect>): string {
+  const byId = new Map(cells.map((c) => [c.id, c]));
+  const lblPoints = edgeLabelPoints(cells, rects);
   const all = [...rects.values()];
   let minX = 0, minY = 0, maxX = 800, maxY = 500;
   if (all.length) {
@@ -136,30 +221,17 @@ function exportPageSvg(cells: DrawioCell[], rects: Map<string, DrawioRect>): str
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   const parts: string[] = [];
   for (const c of cells) {
-    if (c.vertex) {
+    if (c.vertex && !isEdgeLabelCell(c, byId)) {
       const r = rects.get(c.id);
       if (!r) continue;
       const st = parseStyle(c.style);
       const x = r.x - minX, y = r.y - minY;
-      if (st.shape !== "text" && st.shape !== "group" && st.shape !== "image") {
-        const fill = st.fillColor ?? "#ffffff";
-        const stroke = st.strokeColor ?? "#5f6368";
-        const dash = st.dashed ? ' stroke-dasharray="6 4"' : "";
-        const rx = st.shape === "rounded" ? Math.min(r.width, r.height) * (st.arcSize / 100) : 0;
-        parts.push(`<rect x="${x}" y="${y}" width="${r.width}" height="${r.height}" rx="${rx}" fill="${esc(fill)}" stroke="${esc(stroke)}" stroke-width="${st.strokeWidth}"${dash} />`);
-      } else if (st.shape === "image" && st.image) {
-        parts.push(`<image x="${x}" y="${y}" width="${r.width}" height="${r.height}" href="${esc(st.image)}" />`);
-      }
+      const body = shapeSvgMarkup(x, y, r.width, r.height, st, esc);
       const txt = labelToPlainText(c.value, st.html).trim();
-      if (txt) {
-        const tx = st.align === "left" ? x + 6 : st.align === "right" ? x + r.width - 6 : x + r.width / 2;
-        const anchor = st.align === "left" ? "start" : st.align === "right" ? "end" : "middle";
-        const lines = txt.split("\n");
-        const startY = st.verticalAlign === "top" ? y + st.fontSize + 4 : y + r.height / 2 - ((lines.length - 1) * st.fontSize * 1.2) / 2 + st.fontSize * 0.35;
-        lines.forEach((line, idx) => {
-          parts.push(`<text x="${tx}" y="${startY + idx * st.fontSize * 1.2}" text-anchor="${anchor}" font-size="${st.fontSize}" font-family="${esc(st.fontFamily ?? "sans-serif")}" fill="${esc(st.fontColor ?? "#1f2937")}">${esc(line)}</text>`);
-        });
-      }
+      const label = txt ? labelSvgMarkup(x + r.width / 2, y + r.height / 2, x, y, r.width, r.height, txt, st, esc, false) : "";
+      const inner = `${body}${label}`;
+      if (!inner) continue;
+      parts.push(st.opacity < 1 ? `<g opacity="${st.opacity}">${inner}</g>` : inner);
     } else if (c.edge) {
       const pts = edgePoints(c, rects);
       if (pts.length < 2) continue;
@@ -167,12 +239,33 @@ function exportPageSvg(cells: DrawioCell[], rects: Map<string, DrawioRect>): str
       const stroke = st.strokeColor ?? "#526580";
       const dash = st.dashed ? ' stroke-dasharray="6 4"' : "";
       const poly = pts.map((p) => `${p.x - minX},${p.y - minY}`).join(" ");
-      parts.push(`<polyline points="${poly}" fill="none" stroke="${esc(stroke)}" stroke-width="${st.strokeWidth}"${dash} />`);
+      let edgeOut = `<polyline points="${poly}" fill="none" stroke="${esc(stroke)}" stroke-width="${st.strokeWidth}"${dash} />`;
       if (st.endArrow !== "none") {
         const a = pts[pts.length - 2], b = pts[pts.length - 1];
         const shifted = arrowHeadPoints({ x: a.x - minX, y: a.y - minY }, { x: b.x - minX, y: b.y - minY });
-        parts.push(`<polygon points="${shifted}" fill="${esc(stroke)}" />`);
+        edgeOut += `<polygon points="${shifted}" fill="${esc(stroke)}" />`;
       }
+      if (st.startArrow !== "none") {
+        const s0 = pts[1], s1 = pts[0];
+        const shifted = arrowHeadPoints({ x: s0.x - minX, y: s0.y - minY }, { x: s1.x - minX, y: s1.y - minY });
+        edgeOut += `<polygon points="${shifted}" fill="${esc(stroke)}" />`;
+      }
+      const txt = labelToPlainText(c.value, st.html).trim();
+      if (txt) {
+        const mid = polylineMidpoint(pts);
+        const edgeLblStyle: ParsedStyle = { ...st, labelBackgroundColor: st.labelBackgroundColor ?? "#ffffff" };
+        edgeOut += labelSvgMarkup(mid.x - minX, mid.y - minY, 0, 0, 0, 0, txt, edgeLblStyle, esc, true);
+      }
+      parts.push(st.opacity < 1 ? `<g opacity="${st.opacity}">${edgeOut}</g>` : edgeOut);
+    } else if (isEdgeLabelCell(c, byId)) {
+      const pos = lblPoints.get(c.id);
+      if (!pos) continue;
+      const st = parseStyle(c.style);
+      const txt = labelToPlainText(c.value, st.html).trim();
+      if (!txt) continue;
+      const lblStyle: ParsedStyle = { ...st, labelBackgroundColor: st.labelBackgroundColor ?? "#ffffff" };
+      const inner = labelSvgMarkup(pos.x - minX, pos.y - minY, 0, 0, 0, 0, txt, lblStyle, esc, true);
+      parts.push(st.opacity < 1 ? `<g opacity="${st.opacity}">${inner}</g>` : inner);
     }
   }
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><rect width="100%" height="100%" fill="#ffffff" />${parts.join("")}</svg>`;
@@ -233,6 +326,9 @@ export function DrawioBoard(props: DrawioBoardProps) {
   const [selected, setSelected] = useState<string[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
+  const [editRich, setEditRich] = useState(false);
+  const editInitialHtml = useRef("");
+  const richEditRef = useRef<HTMLDivElement>(null);
   const [renamingPage, setRenamingPage] = useState<number | null>(null);
   const [pageDraft, setPageDraft] = useState("");
   const [joining, setJoining] = useState<{ from: DrawioPoint; to: DrawioPoint } | null>(null);
@@ -249,6 +345,7 @@ export function DrawioBoard(props: DrawioBoardProps) {
   const shown = preview ?? doc;
   const page = shown.pages[safeIndex] ?? shown.pages[0];
   const rects = useMemo(() => absoluteRects(page.cells), [page.cells]);
+  const childEdgeLabels = useMemo(() => edgeLabelPoints(page.cells, rects), [page.cells, rects]);
   const selectedSet = useMemo(() => new Set(selected.filter((id) => page.cells.some((c) => c.id === id))), [selected, page.cells]);
   const singleCell = selectedSet.size === 1 ? page.cells.find((c) => selectedSet.has(c.id)) ?? null : null;
 
@@ -322,7 +419,8 @@ export function DrawioBoard(props: DrawioBoardProps) {
       } else if (g.kind === "move") {
         const dx = (e.clientX - g.sx) / L.view.k;
         const dy = (e.clientY - g.sy) / L.view.k;
-        const next = moveCells(g.base, L.pageIndex, g.ids, dx, dy);
+        const grid = e.altKey ? undefined : pageGridSize(L.page);
+        const next = moveCells(g.base, L.pageIndex, g.ids, dx, dy, grid);
         g.last = next;
         setPreview(next);
       } else if (g.kind === "resize") {
@@ -402,20 +500,46 @@ export function DrawioBoard(props: DrawioBoardProps) {
     focusOn(id);
   }); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Seed contentEditable once when entering rich HTML edit mode so React re-renders never reset the caret.
+  useLayoutEffect(() => {
+    if (!editing || !editRich || !richEditRef.current) return;
+    richEditRef.current.innerHTML = editInitialHtml.current;
+    richEditRef.current.focus();
+  }, [editing, editRich]);
+
   const startEdit = (cell: DrawioCell) => {
     if (readOnly) return;
     const st = parseStyle(cell.style);
+    const rich = hasRichHtml(cell.value, st.html);
+    setEditRich(rich);
+    if (rich) {
+      const safe = sanitizeDrawioLabel(cell.value, true);
+      editInitialHtml.current = safe;
+      setEditText(safe);
+    } else {
+      editInitialHtml.current = "";
+      setEditText(labelToPlainText(cell.value, st.html));
+    }
     setEditing(cell.id);
-    setEditText(labelToPlainText(cell.value, st.html));
   };
 
   const finishEdit = (save: boolean, byKey = false) => {
     const id = editing;
+    const wasRich = editRich;
     if (byKey && id) focusAfter.current = id;
     setEditing(null);
+    setEditRich(false);
     if (!save || !id) return;
     const cell = page.cells.find((c) => c.id === id);
     if (!cell) return;
+    if (wasRich) {
+      const rawHtml = richEditRef.current?.innerHTML ?? editInitialHtml.current;
+      const nextHtml = normalizeEditedHtml(rawHtml);
+      if (nextHtml !== normalizeEditedHtml(editInitialHtml.current)) {
+        commit(setCellLabel(doc, safeIndex, id, nextHtml));
+      }
+      return;
+    }
     const st = parseStyle(cell.style);
     const nextVal = st.html ? editText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>") : editText;
     if (nextVal !== cell.value) commit(setCellLabel(doc, safeIndex, id, nextVal));
@@ -461,7 +585,7 @@ export function DrawioBoard(props: DrawioBoardProps) {
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     const t = e.target as HTMLElement;
-    if (t?.closest?.("input, textarea, select, .canvas-panel-host")) return;
+    if (t?.closest?.("input, textarea, select, [contenteditable='true'], .canvas-panel-host")) return;
     // What acts on a shape is for the shape or the shell having focus, not for a toolbar button.
     const focused = t.hasAttribute?.("data-drawio-cell") ? t.dataset.drawioCell : undefined;
     const direct = t === e.currentTarget || !!focused;
@@ -549,6 +673,16 @@ export function DrawioBoard(props: DrawioBoardProps) {
               <button type="button" onClick={() => insertPreset("diamond")}>+ Diamond</button>
               <button type="button" onClick={() => insertPreset("ellipse")}>+ Ellipse</button>
               <button type="button" onClick={() => insertPreset("text")}>+ Text</button>
+              <Menu label="More shapes" buttonLabel={null} align="left" button="+ More" className="drawio-more-menu">
+                {(close) => (
+                  <>
+                    <li><button role="menuitem" onClick={() => { close(); insertPreset("cloud"); }}>Cloud</button></li>
+                    <li><button role="menuitem" onClick={() => { close(); insertPreset("hexagon"); }}>Hexagon</button></li>
+                    <li><button role="menuitem" onClick={() => { close(); insertPreset("swimlane"); }}>Swimlane</button></li>
+                    <li><button role="menuitem" onClick={() => { close(); insertPreset("group"); }}>Group</button></li>
+                  </>
+                )}
+              </Menu>
               <span className="canvas-sep" aria-hidden />
               <button type="button" disabled={!props.canUndo} onClick={props.onUndo} title="Undo (Ctrl+Z)" aria-label="Undo"><Undo2 size="1em" aria-hidden /></button>
               <button type="button" disabled={!props.canRedo} onClick={props.onRedo} title="Redo (Ctrl+Y)" aria-label="Redo"><Redo2 size="1em" aria-hidden /></button>
@@ -573,6 +707,21 @@ export function DrawioBoard(props: DrawioBoardProps) {
             }}
           >
             <Download size="0.95em" aria-hidden /> Export SVG
+          </button>
+          <button
+            type="button"
+            title="Export current page as PNG"
+            onClick={() => {
+              const svg = exportPageSvg(page.cells, rects);
+              const name = `${props.fileName.replace(/\.(drawio|dio)$/i, "")}.png`;
+              void rasterizeSvgToPng(svg, 2)
+                .then((blob) => blob.arrayBuffer())
+                .then((buf) => saveBinaryCopy(new Uint8Array(buf), name))
+                .then((saved) => { if (saved) toast(`Exported ${name}`); })
+                .catch((err) => toast(classify(err).message, "error"));
+            }}
+          >
+            <Download size="0.95em" aria-hidden /> Export PNG
           </button>
         </div>
 
@@ -650,18 +799,36 @@ export function DrawioBoard(props: DrawioBoardProps) {
               >
                 <ShapeGraphic w={r.width} h={r.height} st={st} />
                 {isEdit ? (
-                  <textarea
-                    className="drawio-label-input"
-                    aria-label="Shape label"
-                    autoFocus
-                    value={editText}
-                    onChange={(e) => setEditText(e.target.value)}
-                    onBlur={() => finishEdit(true)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Escape") { e.preventDefault(); finishEdit(false, true); }
-                      else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); finishEdit(true, true); }
-                    }}
-                  />
+                  editRich ? (
+                    <div
+                      ref={richEditRef}
+                      className="drawio-label-input drawio-label-rich-input"
+                      role="textbox"
+                      aria-label="Shape label"
+                      aria-multiline="true"
+                      contentEditable
+                      suppressContentEditableWarning
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onBlur={() => finishEdit(true)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") { e.preventDefault(); finishEdit(false, true); }
+                        else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); finishEdit(true, true); }
+                      }}
+                    />
+                  ) : (
+                    <textarea
+                      className="drawio-label-input"
+                      aria-label="Shape label"
+                      autoFocus
+                      value={editText}
+                      onChange={(e) => setEditText(e.target.value)}
+                      onBlur={() => finishEdit(true)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") { e.preventDefault(); finishEdit(false, true); }
+                        else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); finishEdit(true, true); }
+                      }}
+                    />
+                  )
                 ) : safeHtml ? (
                   <div
                     className="drawio-label"
@@ -757,17 +924,84 @@ export function DrawioBoard(props: DrawioBoardProps) {
                 onDoubleClick={(e) => { e.stopPropagation(); startEdit(edge); }}
               >
                 {isEdit ? (
-                  <input
-                    autoFocus
-                    aria-label="Arrow label"
-                    value={editText}
-                    onChange={(e) => setEditText(e.target.value)}
-                    onBlur={() => finishEdit(true)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") finishEdit(true, true);
-                      else if (e.key === "Escape") { e.preventDefault(); finishEdit(false, true); }
-                    }}
-                  />
+                  editRich ? (
+                    <div
+                      ref={richEditRef}
+                      className="drawio-label-input drawio-label-rich-input"
+                      role="textbox"
+                      aria-label="Arrow label"
+                      contentEditable
+                      suppressContentEditableWarning
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onBlur={() => finishEdit(true)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); finishEdit(true, true); }
+                        else if (e.key === "Escape") { e.preventDefault(); finishEdit(false, true); }
+                      }}
+                    />
+                  ) : (
+                    <input
+                      autoFocus
+                      aria-label="Arrow label"
+                      value={editText}
+                      onChange={(e) => setEditText(e.target.value)}
+                      onBlur={() => finishEdit(true)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") finishEdit(true, true);
+                        else if (e.key === "Escape") { e.preventDefault(); finishEdit(false, true); }
+                      }}
+                    />
+                  )
+                ) : (
+                  <span dangerouslySetInnerHTML={{ __html: html }} />
+                )}
+              </div>
+            );
+          })}
+
+          {page.cells.filter((c) => childEdgeLabels.has(c.id)).map((lblCell) => {
+            const pos = childEdgeLabels.get(lblCell.id)!;
+            const st = parseStyle(lblCell.style);
+            const isEdit = editing === lblCell.id;
+            const html = sanitizeDrawioLabel(lblCell.value, st.html);
+            if (!html && !isEdit) return null;
+            return (
+              <div
+                key={`elbl-${lblCell.id}`}
+                className={`canvas-edge-label drawio-edge-label${selectedSet.has(lblCell.id) ? " on" : ""}`}
+                style={{ left: pos.x, top: pos.y, fontSize: st.fontSize }}
+                onClick={(e) => { e.stopPropagation(); setSelected([lblCell.id]); }}
+                onDoubleClick={(e) => { e.stopPropagation(); startEdit(lblCell); }}
+              >
+                {isEdit ? (
+                  editRich ? (
+                    <div
+                      ref={richEditRef}
+                      className="drawio-label-input drawio-label-rich-input"
+                      role="textbox"
+                      aria-label="Arrow label"
+                      contentEditable
+                      suppressContentEditableWarning
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onBlur={() => finishEdit(true)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); finishEdit(true, true); }
+                        else if (e.key === "Escape") { e.preventDefault(); finishEdit(false, true); }
+                      }}
+                    />
+                  ) : (
+                    <input
+                      autoFocus
+                      aria-label="Arrow label"
+                      value={editText}
+                      onChange={(e) => setEditText(e.target.value)}
+                      onBlur={() => finishEdit(true)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") finishEdit(true, true);
+                        else if (e.key === "Escape") { e.preventDefault(); finishEdit(false, true); }
+                      }}
+                    />
+                  )
                 ) : (
                   <span dangerouslySetInnerHTML={{ __html: html }} />
                 )}

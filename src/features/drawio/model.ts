@@ -52,9 +52,23 @@ export interface DrawioDoc {
 export interface DrawioView { x: number; y: number; k: number }
 
 const GRID = 8;
-const snap = (n: number) => Math.round(n / GRID) * GRID;
 
-/** Resolve absolute world rects for every vertex cell by accumulating parent offsets (with cycle guard). */
+/** Return the page's configured `<mxGraphModel gridSize>`, clamped to `1..100` (defaults to 8). */
+export function pageGridSize(page: DrawioPage): number {
+  const raw = Number(page.modelAttrs?.gridSize);
+  if (!Number.isFinite(raw) || raw < 1) return GRID;
+  return Math.min(100, Math.round(raw));
+}
+
+const snapTo = (n: number, grid: number) => Math.round(n / grid) * grid;
+
+/** True when `cell` is a standard draw.io edge-label vertex whose parent is an edge cell. */
+export function isEdgeLabelCell(cell: DrawioCell, byId: ReadonlyMap<string, DrawioCell>): boolean {
+  return cell.vertex && !!cell.parent && !!byId.get(cell.parent)?.edge;
+}
+
+/** Resolve absolute world rects for every vertex cell by accumulating parent offsets (with cycle guard).
+ *  Excludes edge-label child vertices (which position relative to their parent edge's polyline). */
 export function absoluteRects(cells: DrawioCell[]): Map<string, DrawioRect> {
   const byId = new Map(cells.map((c) => [c.id, c]));
   const cache = new Map<string, DrawioRect>();
@@ -65,7 +79,7 @@ export function absoluteRects(cells: DrawioCell[]): Map<string, DrawioRect> {
     if (cached) return cached;
     if (visiting.has(id)) return null;
     const cell = byId.get(id);
-    if (!cell || !cell.vertex || !cell.geometry) return null;
+    if (!cell || !cell.vertex || !cell.geometry || isEdgeLabelCell(cell, byId)) return null;
     visiting.add(id);
     let ox = 0;
     let oy = 0;
@@ -85,7 +99,7 @@ export function absoluteRects(cells: DrawioCell[]): Map<string, DrawioRect> {
   };
 
   for (const c of cells) {
-    if (c.vertex && c.geometry) resolve(c.id);
+    if (c.vertex && c.geometry && !isEdgeLabelCell(c, byId)) resolve(c.id);
   }
   return cache;
 }
@@ -151,8 +165,8 @@ export function edgePoints(cell: DrawioCell, rects: Map<string, DrawioRect>): Dr
   return [start, end];
 }
 
-/** Midpoint of a polyline, used to position inline edge labels. */
-export function polylineMidpoint(pts: DrawioPoint[]): DrawioPoint {
+/** Point at normalized fraction `t` (`0..1`) along a polyline, optionally offset perpendicularly by `perp`. */
+export function pointAlongPolyline(pts: DrawioPoint[], t: number, perp = 0): DrawioPoint {
   if (!pts.length) return { x: 0, y: 0 };
   if (pts.length === 1) return pts[0];
   let total = 0;
@@ -162,15 +176,64 @@ export function polylineMidpoint(pts: DrawioPoint[]): DrawioPoint {
     segs.push(len);
     total += len;
   }
-  let want = total / 2;
+  const clamped = Math.min(1, Math.max(0, t));
+  let want = total * clamped;
   for (let i = 0; i < segs.length; i++) {
     if (want <= segs[i] || i === segs.length - 1) {
-      const t = segs[i] > 0 ? want / segs[i] : 0.5;
-      return { x: pts[i].x + (pts[i + 1].x - pts[i].x) * t, y: pts[i].y + (pts[i + 1].y - pts[i].y) * t };
+      const len = segs[i];
+      const frac = len > 0 ? want / len : 0.5;
+      const a = pts[i], b = pts[i + 1];
+      let x = a.x + (b.x - a.x) * frac;
+      let y = a.y + (b.y - a.y) * frac;
+      if (perp && len > 0) {
+        const nx = -(b.y - a.y) / len;
+        const ny = (b.x - a.x) / len;
+        x += nx * perp;
+        y += ny * perp;
+      }
+      return { x, y };
     }
     want -= segs[i];
   }
   return pts[0];
+}
+
+/** Midpoint of a polyline, used to position inline edge labels. */
+export function polylineMidpoint(pts: DrawioPoint[]): DrawioPoint {
+  return pointAlongPolyline(pts, 0.5, 0);
+}
+
+/** Extract optional `<mxPoint x="..." y="..." as="offset"/>` from preserved `<mxGeometry>` child XML. */
+function parseOffsetPoint(extraChildrenXml: string | undefined): DrawioPoint {
+  if (!extraChildrenXml) return { x: 0, y: 0 };
+  const m = /<mxPoint\b([^>]*\bas=["']offset["'][^>]*)>/i.exec(extraChildrenXml);
+  if (!m) return { x: 0, y: 0 };
+  const attrs = m[1];
+  const xm = /\bx=["']([^"']+)["']/i.exec(attrs);
+  const ym = /\by=["']([^"']+)["']/i.exec(attrs);
+  const x = xm ? Number(xm[1]) : 0;
+  const y = ym ? Number(ym[1]) : 0;
+  return { x: Number.isFinite(x) ? x : 0, y: Number.isFinite(y) ? y : 0 };
+}
+
+/** Resolve absolute world coordinates for draw.io `edgeLabel` child vertices along their parent edge polylines. */
+export function edgeLabelPoints(cells: DrawioCell[], rects: Map<string, DrawioRect>): Map<string, DrawioPoint> {
+  const byId = new Map(cells.map((c) => [c.id, c]));
+  const out = new Map<string, DrawioPoint>();
+  for (const c of cells) {
+    if (!isEdgeLabelCell(c, byId)) continue;
+    const edge = byId.get(c.parent);
+    if (!edge) continue;
+    const pts = edgePoints(edge, rects);
+    if (pts.length < 2) continue;
+    const gx = c.geometry?.x ?? 0;
+    const gy = c.geometry?.y ?? 0;
+    const t = c.geometry?.relative ? (gx + 1) / 2 : 0.5;
+    const base = pointAlongPolyline(pts, t, c.geometry?.relative ? gy : 0);
+    const off = parseOffsetPoint(c.geometry?.extraChildrenXml);
+    out.set(c.id, { x: base.x + off.x, y: base.y + off.y });
+  }
+  return out;
 }
 
 /** Fit every vertex cell of a page comfortably into a viewport of `width` x `height`. */
@@ -204,42 +267,47 @@ function nextCellId(cells: DrawioCell[], prefix = "c"): string {
   return `${prefix}-${Date.now().toString(36)}`;
 }
 
-/** Move selected vertices by `(dx, dy)`. Skips children whose ancestor is also selected so nothing double-moves. */
-export function moveCells(doc: DrawioDoc, pageIndex: number, ids: ReadonlySet<string>, dx: number, dy: number): DrawioDoc {
+/** Move selected vertices by `(dx, dy)`. Skips children whose ancestor is also selected so nothing double-moves.
+ *  When `snapGrid` is a positive number, snaps each moved vertex's new coordinates to that grid. */
+export function moveCells(doc: DrawioDoc, pageIndex: number, ids: ReadonlySet<string>, dx: number, dy: number, snapGrid?: number): DrawioDoc {
   const page = doc.pages[pageIndex];
   if (!page || (!dx && !dy)) return doc;
   const desc = descendantIds(page.cells, ids);
+  const round = (v: number) => (snapGrid && snapGrid > 0 ? snapTo(v, snapGrid) : Math.round(v));
   return updatePage(doc, pageIndex, (p) => ({
     ...p,
     cells: p.cells.map((c) => {
       if (!ids.has(c.id) || desc.has(c.id) || !c.vertex || !c.geometry) return c;
-      return { ...c, geometry: { ...c.geometry, x: Math.round(c.geometry.x + dx), y: Math.round(c.geometry.y + dy) } };
+      return { ...c, geometry: { ...c.geometry, x: round(c.geometry.x + dx), y: round(c.geometry.y + dy) } };
     }),
   }));
 }
 
-/** Resize a vertex cell from a corner (`nw`, `ne`, `sw`, `se`), snapping to an 8px grid. */
+/** Resize a vertex cell from a corner (`nw`, `ne`, `sw`, `se`), snapping to the page's grid. */
 export function resizeCell(doc: DrawioDoc, pageIndex: number, id: string, corner: string, dx: number, dy: number): DrawioDoc {
-  return updatePage(doc, pageIndex, (p) => ({
-    ...p,
-    cells: p.cells.map((c) => {
-      if (c.id !== id || !c.geometry) return c;
-      let { x, y, width, height } = c.geometry;
-      if (corner.includes("e")) width = Math.max(24, snap(width + dx));
-      if (corner.includes("s")) height = Math.max(16, snap(height + dy));
-      if (corner.includes("w")) {
-        const nextW = Math.max(24, snap(width - dx));
-        x = x + (width - nextW);
-        width = nextW;
-      }
-      if (corner.includes("n")) {
-        const nextH = Math.max(16, snap(height - dy));
-        y = y + (height - nextH);
-        height = nextH;
-      }
-      return { ...c, geometry: { ...c.geometry, x, y, width, height } };
-    }),
-  }));
+  return updatePage(doc, pageIndex, (p) => {
+    const grid = pageGridSize(p);
+    return {
+      ...p,
+      cells: p.cells.map((c) => {
+        if (c.id !== id || !c.geometry) return c;
+        let { x, y, width, height } = c.geometry;
+        if (corner.includes("e")) width = Math.max(24, snapTo(width + dx, grid));
+        if (corner.includes("s")) height = Math.max(16, snapTo(height + dy, grid));
+        if (corner.includes("w")) {
+          const nextW = Math.max(24, snapTo(width - dx, grid));
+          x = x + (width - nextW);
+          width = nextW;
+        }
+        if (corner.includes("n")) {
+          const nextH = Math.max(16, snapTo(height - dy, grid));
+          y = y + (height - nextH);
+          height = nextH;
+        }
+        return { ...c, geometry: { ...c.geometry, x, y, width, height } };
+      }),
+    };
+  });
 }
 
 export function setCellLabel(doc: DrawioDoc, pageIndex: number, id: string, value: string): DrawioDoc {
@@ -256,7 +324,9 @@ export function setCellStyle(doc: DrawioDoc, pageIndex: number, ids: ReadonlySet
   }));
 }
 
-export type NewShapePreset = "rect" | "rounded" | "container" | "cylinder" | "diamond" | "ellipse" | "text";
+export type NewShapePreset =
+  | "rect" | "rounded" | "container" | "cylinder" | "diamond" | "ellipse" | "text"
+  | "cloud" | "hexagon" | "swimlane" | "group";
 
 const PRESET_STYLES: Record<NewShapePreset, { style: string; width: number; height: number; value: string }> = {
   rect: { style: "whiteSpace=wrap;html=1;fillColor=#edf6ff;strokeColor=#438dd5;", width: 160, height: 72, value: "Box" },
@@ -266,10 +336,15 @@ const PRESET_STYLES: Record<NewShapePreset, { style: string; width: number; heig
   diamond: { style: "rhombus;whiteSpace=wrap;html=1;fillColor=#fff3e6;strokeColor=#e65100;", width: 120, height: 96, value: "Decision" },
   ellipse: { style: "ellipse;whiteSpace=wrap;html=1;fillColor=#f3e8ff;strokeColor=#7c3aed;", width: 140, height: 80, value: "Node" },
   text: { style: "text;html=1;align=left;verticalAlign=top;fontSize=14;", width: 160, height: 32, value: "Label" },
+  cloud: { style: "ellipse;shape=cloud;whiteSpace=wrap;html=1;fillColor=#edf6ff;strokeColor=#438dd5;", width: 160, height: 96, value: "Cloud" },
+  hexagon: { style: "shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fixedSize=1;fillColor=#fff3e6;strokeColor=#e65100;", width: 144, height: 80, value: "Process" },
+  swimlane: { style: "swimlane;whiteSpace=wrap;html=1;fillColor=#f8f9fa;strokeColor=#5f6368;verticalAlign=top;", width: 280, height: 200, value: "Swimlane" },
+  group: { style: "group;html=1;", width: 240, height: 160, value: "" },
 };
 
 export function addShape(doc: DrawioDoc, pageIndex: number, preset: NewShapePreset, at: DrawioPoint): { doc: DrawioDoc; id: string } {
   const page = doc.pages[pageIndex];
+  const grid = pageGridSize(page);
   const spec = PRESET_STYLES[preset];
   const id = nextCellId(page.cells, "n");
   const cell: DrawioCell = {
@@ -279,7 +354,7 @@ export function addShape(doc: DrawioDoc, pageIndex: number, preset: NewShapePres
     style: spec.style,
     vertex: true,
     edge: false,
-    geometry: { x: snap(at.x - spec.width / 2), y: snap(at.y - spec.height / 2), width: spec.width, height: spec.height },
+    geometry: { x: snapTo(at.x - spec.width / 2, grid), y: snapTo(at.y - spec.height / 2, grid), width: spec.width, height: spec.height },
     extraAttrs: {},
   };
   return {
@@ -322,14 +397,40 @@ export function deleteCells(doc: DrawioDoc, pageIndex: number, ids: ReadonlySet<
   }));
 }
 
-/** Bring selected cells to front or send behind other siblings. */
+/** Bring selected cells to front or send behind siblings sharing the same parent, always keeping every parent container
+ *  strictly before its children in z-order. */
 export function reorderCells(doc: DrawioDoc, pageIndex: number, ids: ReadonlySet<string>, direction: "front" | "back"): DrawioDoc {
   return updatePage(doc, pageIndex, (p) => {
-    const roots = p.cells.filter((c) => c.id === "0" || c.id === "1");
-    const rest = p.cells.filter((c) => c.id !== "0" && c.id !== "1");
-    const picked = rest.filter((c) => ids.has(c.id));
-    const others = rest.filter((c) => !ids.has(c.id));
-    return { ...p, cells: direction === "front" ? [...roots, ...others, ...picked] : [...roots, ...picked, ...others] };
+    const byId = new Map(p.cells.map((c) => [c.id, c]));
+    const childrenOf = new Map<string, DrawioCell[]>();
+    const roots: DrawioCell[] = [];
+    for (const c of p.cells) {
+      if (c.id === "0" || !c.parent || !byId.has(c.parent)) {
+        roots.push(c);
+      } else {
+        const list = childrenOf.get(c.parent) ?? [];
+        list.push(c);
+        childrenOf.set(c.parent, list);
+      }
+    }
+    for (const [parentId, kids] of childrenOf) {
+      if (!kids.some((k) => ids.has(k.id))) continue;
+      const picked = kids.filter((k) => ids.has(k.id));
+      const others = kids.filter((k) => !ids.has(k.id));
+      childrenOf.set(parentId, direction === "front" ? [...others, ...picked] : [...picked, ...others]);
+    }
+    const out: DrawioCell[] = [];
+    const emitted = new Set<string>();
+    const emit = (cell: DrawioCell) => {
+      if (emitted.has(cell.id)) return;
+      emitted.add(cell.id);
+      out.push(cell);
+      for (const child of childrenOf.get(cell.id) ?? []) emit(child);
+    };
+    for (const r of roots) emit(r);
+    // Emit any remaining cells (e.g. cyclic parents) so nothing is ever lost.
+    for (const c of p.cells) emit(c);
+    return { ...p, cells: out };
   });
 }
 

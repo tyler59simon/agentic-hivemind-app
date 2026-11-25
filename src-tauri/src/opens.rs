@@ -281,6 +281,77 @@ pub async fn file_save_as(app: AppHandle, text: String, suggested: String) -> Re
     .await
 }
 
+fn percent_decode_header(input: &str) -> Result<String, String> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).map_err(|_| "Invalid header encoding")?;
+            let val = u8::from_str_radix(hex, 16).map_err(|_| "Invalid percent escape")?;
+            out.push(val);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| "Header is not valid UTF-8".into())
+}
+
+/// Write binary bytes to `path` with the same protected-path and history guards as `file_save_bytes_as`.
+pub(crate) fn write_bytes_as_checked(
+    protected: &crate::files::guard::Protected,
+    history: &Path,
+    path: &Path,
+    bytes: &[u8],
+) -> Result<(), String> {
+    if bytes.len() as u64 > files::MAX_READ {
+        return Err("File exceeds the 64 MB save limit".into());
+    }
+    may_save_as(protected, path)?;
+    if !crate::history::has_history(history, path) {
+        let _ = crate::history::snapshot_file(history, path, None, "disk", crate::history::now_ms());
+    }
+    files::save_bytes_as(path, bytes)?;
+    let _ = crate::history::snapshot_file(history, path, None, "you", crate::history::now_ms());
+    Ok(())
+}
+
+/// Save binary bytes (`.pdf`, `.docx`, `.png`, ...) where the user picks with the native save dialog.
+#[tauri::command]
+pub async fn file_save_bytes_as(app: AppHandle, req: tauri::ipc::Request<'_>) -> Result<Option<OpenRef>, String> {
+    use tauri::ipc::InvokeBody;
+    use tauri_plugin_dialog::DialogExt;
+    let suggested = req
+        .headers()
+        .get("suggested")
+        .and_then(|v| v.to_str().ok())
+        .map(percent_decode_header)
+        .transpose()?
+        .unwrap_or_else(|| "Untitled".into());
+    let bytes = match req.body() {
+        InvokeBody::Raw(b) => {
+            if b.len() as u64 > files::MAX_READ {
+                return Err("File exceeds the 64 MB save limit".into());
+            }
+            b.clone()
+        }
+        InvokeBody::Json(_) => return Err("Expected raw binary bytes".into()),
+    };
+    let handle = app.clone();
+    blocking(move || {
+        let Some(picked) = handle.dialog().file().set_file_name(&suggested).blocking_save_file() else { return Ok(None) };
+        let path = picked.into_path().map_err(|e| e.to_string())?;
+        let state = handle.state::<AppState>();
+        write_bytes_as_checked(&protected(&state), &state.history_dir, &path, &bytes)?;
+        let opened = ref_for(&state, &path, &now())?;
+        crate::studio::indexed(&state, &opened);
+        Ok(Some(opened))
+    })
+    .await
+}
+
 /// Whether Save As may write `path`: never into the store, a managed vault, Hivemind's own folders or a reserved folder.
 fn may_save_as(protected: &crate::files::guard::Protected, path: &Path) -> Result<(), String> {
     protected.check(path)?;
@@ -580,6 +651,31 @@ mod tests {
             grants.add(&PathBuf::from(format!(r"C:\many\{i}.txt")), "t").unwrap();
         }
         assert_eq!(grants.list().len(), MAX_GRANTS);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn write_bytes_as_checked_writes_snapshots_and_enforces_guards() {
+        let dir = scratch();
+        let hist = dir.join("history");
+        let open = crate::files::guard::Protected::new(None);
+        let target = dir.join("export.pdf");
+        let v1 = b"%PDF-1.4\n%%EOF\n";
+        let v2 = b"%PDF-1.4\n%v2\n%%EOF\n";
+
+        write_bytes_as_checked(&open, &hist, &target, v1).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), v1);
+        assert_eq!(crate::history::list(&hist, &target).len(), 1);
+
+        // Overwriting snapshots the new bytes and keeps history.
+        write_bytes_as_checked(&open, &hist, &target, v2).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), v2);
+        assert_eq!(crate::history::list(&hist, &target).len(), 2);
+
+        // Refuses reserved .git folder.
+        let git_path = dir.join(".git").join("out.bin");
+        assert!(write_bytes_as_checked(&open, &hist, &git_path, v1).unwrap_err().contains(".git"));
+
         std::fs::remove_dir_all(&dir).ok();
     }
 }

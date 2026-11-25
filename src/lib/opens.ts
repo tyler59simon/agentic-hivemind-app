@@ -20,6 +20,11 @@ export const openRecent = () => invoke<Recent[]>("open_recent");
 export const openForget = (id: string) => invoke<void>("open_forget", { id });
 /** Save a new text file where the user picks; null when they cancelled. */
 export const saveAs = (text: string, suggested: string) => invoke<FileRef | null>("file_save_as", { text, suggested });
+/** Save raw binary bytes (`.pdf`, `.docx`, `.png`, ...) where the user picks; null when they cancelled. */
+export const saveBytesAs = (bytes: Uint8Array, suggested: string) =>
+  invoke<FileRef | null>("file_save_bytes_as", bytes, {
+    headers: { suggested: encodeURIComponent(suggested) },
+  });
 /** The URL prefix pictures beside the page load from. */
 export const assetBase = (notebook: string, path: string) => invoke<string>("asset_base", { notebook, path });
 /** Add a folder dropped on the window as a notebook, by the token Rust gave for it. */
