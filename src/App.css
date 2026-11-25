@@ -2166,6 +2166,8 @@ button.owner-chip { cursor: pointer; }
 .tab-close::before, .tag-x::before, .tree-toggle::before, .drawio-page-del::before, .canvas-swatch::before, .status-menu .menu-button::before,
 .pdf-ann-del::before, .hm-toggle-caret::before, .hm-frame-remove::before, .rich-grip::before, .md-editor .cm-rich-resize::before { content: ""; position: absolute; left: 50%; top: 50%; width: max(100%, 24px); height: max(100%, 24px); transform: translate(-50%, -50%); }
 /* The divider between source and preview is 5 px wide; its box lies over both sides and takes no layout width (as .splitter does). */
+/* The divider is drawn above the preview after it, or the preview would cover the right half of the hit box. */
+.split-divider { z-index: 1; }
 .split-divider::before { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 24px; transform: translateX(-50%); }
 /* The board handles are drawn at 12 and 10 screen px whatever the zoom (--k scales the board); the box is 24 screen px. */
 .canvas-handle::before, .canvas-corner::before { content: ""; position: absolute; left: 50%; top: 50%; width: calc(24px / var(--k, 1)); height: calc(24px / var(--k, 1)); transform: translate(-50%, -50%); }

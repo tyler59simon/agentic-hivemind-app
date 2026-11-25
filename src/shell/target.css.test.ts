@@ -88,6 +88,11 @@ describe("target size, WCAG 2.5.8 (DESK-A11Y A4)", () => {
     expect(declsOf(".hm-frame-handle").get("position")).toBe("relative");
   });
 
+  it("draws the source and preview divider above the preview, so the preview does not cover the right half of its hit box", () => {
+    expect(declsOf(".split-divider").get("position")).toBe("relative");
+    expect(Number(declsOf(".split-divider").get("z-index"))).toBeGreaterThanOrEqual(1);
+  });
+
   it("names the 2.5.8 exceptions it relies on", () => {
     expect(css).not.toMatch(/input\[type="checkbox"\][^{]*\{[^}]*(width|height)/); // a checkbox the author sizes is not a user agent control
     expect(rawCss()).toContain("Left alone on purpose, under the 2.5.8 exceptions");
