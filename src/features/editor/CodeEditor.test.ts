@@ -1,8 +1,9 @@
 import { language } from "@codemirror/language";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { tags } from "@lezer/highlight";
+import { setSpellcheck } from "../../lib/spellcheck";
 import { editorExtensions, editorHighlight, followSpec, isOwnEdit, type CodeEditorProps } from "./CodeEditor";
 
 const props = (over: Partial<CodeEditorProps> = {}): CodeEditorProps => ({
@@ -14,6 +15,31 @@ const stateOf = (p: CodeEditorProps) => {
   return EditorState.create({ doc: p.doc, extensions: editorExtensions(p, { current: p }, sw) });
 };
 const wraps = (s: EditorState) => s.facet(EditorView.contentAttributes).some((a) => typeof a === "object" && String(a.class ?? "").includes("cm-lineWrapping"));
+
+// The spellcheck and autocorrect attributes the editor puts on its content element (DESK-8).
+const attr = (s: EditorState, name: string) => s.facet(EditorView.contentAttributes).flatMap((a) => (typeof a === "object" && name in a ? [a[name]] : []));
+
+describe("spell checking (DESK-8)", () => {
+  afterEach(() => setSpellcheck(true));
+
+  it("is on for Markdown, with the keyboard's own corrections off", () => {
+    const s = stateOf(props());
+    expect(attr(s, "spellcheck")).toEqual(["true"]);
+    expect(attr(s, "autocorrect")).toEqual(["off"]);
+    expect(attr(s, "autocapitalize")).toEqual(["off"]);
+  });
+
+  it("is off for a text file", () => {
+    expect(attr(stateOf(props({ language: "text" })), "spellcheck")).toEqual(["false"]);
+  });
+
+  it("is off for Markdown when the setting is off", () => {
+    setSpellcheck(false);
+    const s = stateOf(props());
+    expect(attr(s, "spellcheck")).toEqual(["false"]);
+    expect(attr(s, "autocorrect")).toEqual([]);
+  });
+});
 
 describe("editor configuration", () => {
   it("a note gets the Markdown editor it always had: wrapped, editable, Markdown language", () => {

@@ -76,6 +76,9 @@ pub struct Settings {
     /// How a note opens, one of `DEFAULT_MODES`. Changed only by `appearance_set`.
     #[serde(default, deserialize_with = "lenient")]
     pub default_mode: Option<String>,
+    /// Whether notes are spell-checked, on when unset (DESK-8). Changed only by `appearance_set`.
+    #[serde(default, deserialize_with = "lenient")]
+    pub spellcheck: Option<bool>,
 }
 
 /// A value of the wrong type reads as unset, so one bad appearance field never fails the whole settings file.
@@ -143,6 +146,10 @@ impl Settings {
 
     pub fn default_mode(&self) -> Option<&str> {
         self.default_mode.as_deref().filter(|v| valid_default_mode(v))
+    }
+
+    pub fn spellcheck(&self) -> Option<bool> {
+        self.spellcheck
     }
 
     /// The daily cap for the reviewer and the executive calls; zero turns them off.
@@ -335,16 +342,17 @@ mod tests {
         assert_eq!((none.theme(), none.document_background(), none.document_size(), none.default_mode()), (None, None, None, None));
         let bad: Settings = serde_json::from_str(r#"{"theme": "sepia", "document_background": "x", "document_size": 3, "default_mode": "hex"}"#).unwrap();
         assert_eq!((bad.theme(), bad.document_background(), bad.document_size(), bad.default_mode()), (None, None, None, None));
-        let good: Settings = serde_json::from_str(r#"{"theme": "emerald", "document_background": "white", "document_size": 1.25, "default_mode": "source"}"#).unwrap();
-        assert_eq!((good.theme(), good.document_background(), good.document_size(), good.default_mode()), (Some("emerald"), Some("white"), Some(1.25), Some("source")));
+        let good: Settings = serde_json::from_str(r#"{"theme": "emerald", "document_background": "white", "document_size": 1.25, "default_mode": "source", "spellcheck": false}"#).unwrap();
+        assert_eq!((good.theme(), good.document_background(), good.document_size(), good.default_mode(), good.spellcheck()), (Some("emerald"), Some("white"), Some(1.25), Some("source"), Some(false)));
+        assert_eq!(Settings::default().spellcheck(), None);
     }
 
     #[test]
     fn an_appearance_field_of_the_wrong_type_does_not_fail_the_file() {   // DESK-11, C6
-        let text = r#"{"python": "py", "ui_zoom": 1.5, "theme": 3, "document_background": ["white"], "document_size": "1.1", "default_mode": {"a": 1}}"#;
+        let text = r#"{"python": "py", "ui_zoom": 1.5, "theme": 3, "document_background": ["white"], "document_size": "1.1", "default_mode": {"a": 1}, "spellcheck": "yes"}"#;
         let loaded: Settings = serde_json::from_str(text).unwrap();
         assert_eq!((loaded.python.as_deref(), loaded.ui_zoom), (Some("py"), Some(1.5)));
-        assert_eq!((loaded.theme, loaded.document_background, loaded.document_size, loaded.default_mode), (None, None, None, None));
+        assert_eq!((loaded.theme, loaded.document_background, loaded.document_size, loaded.default_mode, loaded.spellcheck), (None, None, None, None, None));
         let dir = std::env::temp_dir().join(format!("hivemind-settings-lenient-{}", std::process::id()));
         let path = dir.join("settings.json");
         std::fs::create_dir_all(&dir).unwrap();

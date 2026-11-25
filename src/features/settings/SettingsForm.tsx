@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { setDefaultMode, useDefaultMode } from "../../lib/appearance";
+import { setSpellcheck, useSpellcheck } from "../../lib/spellcheck";
 import { applyDocSize, DOC_SIZES, useDocSize } from "../../lib/docSize";
 import { isMac } from "../../lib/platform";
 import { setZoom, useZoom, ZOOM_STEPS, zoomPercent } from "../../lib/zoom";
@@ -36,6 +37,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
   const zoom = useZoom();
   const docSize = useDocSize();
   const paper = usePaperDefault();
+  const spelling = useSpellcheck();
   const sections = useAvailableSections().filter((s) => s.page !== "home");
   const hidden = useHidden((s) => s.hidden);
   const setShown = useHidden((s) => s.setShown);
@@ -169,6 +171,8 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
           <option value="source">Source (plain Markdown)</option>
         </select>
       </label>
+      <label className="check"><input type="checkbox" checked={spelling} onChange={(e) => setSpellcheck(e.target.checked)} /> Check spelling in notes</label>
+      <p className="muted small">Source and Live show red underlines on misspelled words in text, not in code, links or URLs. This changes at once and is kept in the settings file; it does not need Save.</p>
 
       <h3>Appearance</h3>
       <label className="field">

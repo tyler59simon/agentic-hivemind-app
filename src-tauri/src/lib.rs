@@ -1510,6 +1510,7 @@ fn settings_to_save(previous: &Settings, value: Settings) -> Result<Settings, St
     value.document_background = previous.document_background.clone();
     value.document_size = previous.document_size;
     value.default_mode = previous.default_mode.clone();
+    value.spellcheck = previous.spellcheck;
     if !value.shows(agent::Engine::Claude) && !value.shows(agent::Engine::Codex) {
         return Err("Keep at least one engine shown.".into());
     }
@@ -2217,12 +2218,12 @@ mod tests {
 
     #[test]
     fn a_settings_form_save_keeps_the_appearance_it_did_not_change() {   // DESK-11
-        let previous = Settings { theme: Some("emerald".into()), document_background: Some("white".into()), document_size: Some(1.25), default_mode: Some("live".into()), ..Default::default() };
-        let form = Settings { python: Some("py".into()), theme: Some("purple".into()), document_background: None, document_size: Some(0.9), default_mode: Some("source".into()), ..Default::default() };
+        let previous = Settings { theme: Some("emerald".into()), document_background: Some("white".into()), document_size: Some(1.25), default_mode: Some("live".into()), spellcheck: Some(false), ..Default::default() };
+        let form = Settings { python: Some("py".into()), theme: Some("purple".into()), document_background: None, document_size: Some(0.9), default_mode: Some("source".into()), spellcheck: Some(true), ..Default::default() };
         let saved = settings_to_save(&previous, form).unwrap();
         assert_eq!(saved.python.as_deref(), Some("py"));
-        assert_eq!((saved.theme, saved.document_background, saved.document_size, saved.default_mode),
-            (previous.theme, previous.document_background, previous.document_size, previous.default_mode));
+        assert_eq!((saved.theme, saved.document_background, saved.document_size, saved.default_mode, saved.spellcheck),
+            (previous.theme, previous.document_background, previous.document_size, previous.default_mode, previous.spellcheck));
     }
 
     #[test]

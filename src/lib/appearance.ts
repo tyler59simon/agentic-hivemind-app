@@ -1,8 +1,9 @@
-// Appearance settings in the settings file (DESK-11): theme, document background, document text size and the default note
-// mode. Rust keeps them (`appearance_get`, `appearance_set`) and tells every window with `appearance`. localStorage holds
-// a copy only so the first paint needs no round trip: after start the file wins, and a value only the copy has (kept
-// before the settings file held it) is sent to the file once. To add a setting: a field in `Appearance`, an arm in
-// `appearance::change` and a validator in settings.rs, then `followAppearance` in the module that shows it.
+// Appearance settings in the settings file (DESK-11): theme, document background, document text size, the default note
+// mode and the spelling check (DESK-8). Rust keeps them (`appearance_get`, `appearance_set`) and tells every window with
+// `appearance`. localStorage holds a copy only so the first paint needs no round trip: after start the file wins, and a
+// value only the copy has (kept before the settings file held it) is sent to the file once. To add a setting: a field in
+// `Appearance`, an arm in `appearance::change` and a validator in settings.rs, then `followAppearance` in the module that
+// shows it.
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSyncExternalStore } from "react";
@@ -18,6 +19,7 @@ export interface Appearance {
   document_background: PaperDefault | null;
   document_size: number | null;
   default_mode: Mode | null;
+  spellcheck: boolean | null;
 }
 export type AppearanceKey = keyof Appearance;
 
@@ -28,10 +30,10 @@ const changed = (key: AppearanceKey) => { changes[key] = (changes[key] ?? 0) + 1
 // What shows each key in this window, so a refused save can put back what the file holds.
 const applies = new Map<AppearanceKey, (value: never) => void>();
 const NAMES: Record<AppearanceKey, string> = {
-  theme: "theme", document_background: "document background", document_size: "document text size", default_mode: "default note mode",
+  theme: "theme", document_background: "document background", document_size: "document text size", default_mode: "default note mode", spellcheck: "spelling check",
 };
 const COPIES: Record<AppearanceKey, string> = {
-  theme: prefs.themeKey, document_background: prefs.paperKey, document_size: prefs.docSizeKey, default_mode: prefs.defaultModeKey,
+  theme: prefs.themeKey, document_background: prefs.paperKey, document_size: prefs.docSizeKey, default_mode: prefs.defaultModeKey, spellcheck: prefs.spellcheckKey,
 };
 
 /** Keep `value` in the settings file; Rust checks it and tells every window. Outside the app there is no file. */

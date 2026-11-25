@@ -34,6 +34,7 @@ pub struct Appearance {
     pub document_background: Option<String>,
     pub document_size: Option<f64>,
     pub default_mode: Option<String>,
+    pub spellcheck: Option<bool>,
 }
 
 pub fn get(saved: &settings::Settings) -> Appearance {
@@ -42,6 +43,7 @@ pub fn get(saved: &settings::Settings) -> Appearance {
         document_background: saved.document_background().map(String::from),
         document_size: saved.document_size(),
         default_mode: saved.default_mode().map(String::from),
+        spellcheck: saved.spellcheck(),
     }
 }
 
@@ -52,6 +54,7 @@ pub fn change(saved: &mut settings::Settings, key: &str, value: &serde_json::Val
         "theme" => saved.theme = Some(text(settings::valid_theme)?),
         "document_background" => saved.document_background = Some(text(settings::valid_paper)?),
         "default_mode" => saved.default_mode = Some(text(settings::valid_default_mode)?),
+        "spellcheck" => saved.spellcheck = Some(value.as_bool().ok_or_else(|| format!("{key}: {value} is not a known value"))?),
         "document_size" => saved.document_size = Some(value.as_f64().filter(|v| settings::valid_doc_size(*v)).ok_or_else(|| format!("{key}: {value} is not a known value"))?),
         _ => return Err(format!("Unknown appearance setting: {key}")),
     }
@@ -66,6 +69,7 @@ fn is_set(saved: &settings::Settings, key: &str) -> Result<bool, String> {
         "document_background" => Ok(now.document_background.is_some()),
         "document_size" => Ok(now.document_size.is_some()),
         "default_mode" => Ok(now.default_mode.is_some()),
+        "spellcheck" => Ok(now.spellcheck.is_some()),
         _ => Err(format!("Unknown appearance setting: {key}")),
     }
 }
@@ -102,12 +106,15 @@ mod tests {
         change(&mut saved, "document_background", &json!("white")).unwrap();
         change(&mut saved, "document_size", &json!(1.25)).unwrap();
         change(&mut saved, "default_mode", &json!("live")).unwrap();
+        change(&mut saved, "spellcheck", &json!(false)).unwrap();
         let kept = get(&saved);
-        assert_eq!((kept.theme.as_deref(), kept.document_background.as_deref(), kept.document_size, kept.default_mode.as_deref()),
-            (Some("emerald-light"), Some("white"), Some(1.25), Some("live")));
+        assert_eq!((kept.theme.as_deref(), kept.document_background.as_deref(), kept.document_size, kept.default_mode.as_deref(), kept.spellcheck),
+            (Some("emerald-light"), Some("white"), Some(1.25), Some("live"), Some(false)));
+        change(&mut saved, "spellcheck", &json!(true)).unwrap();
+        assert_eq!(saved.spellcheck(), Some(true));
         let before = saved.clone();
         for (key, value) in [("theme", json!("sepia")), ("theme", json!(3)), ("document_background", json!("black")), ("document_size", json!(1.2)),
-            ("document_size", json!("1")), ("default_mode", json!("history")), ("default_mode", json!(null)), ("ui_zoom", json!(1.5))] {
+            ("document_size", json!("1")), ("default_mode", json!("history")), ("default_mode", json!(null)), ("spellcheck", json!("true")), ("spellcheck", json!(1)), ("spellcheck", json!(null)), ("ui_zoom", json!(1.5))] {
             assert!(change(&mut saved, key, &value).is_err(), "{key} {value}");
         }
         assert_eq!(saved, before);
@@ -127,13 +134,17 @@ mod tests {
         // Bad values and unknown keys are still refused, set or not.
         assert!(write(&mut saved, "default_mode", &json!("history"), true).is_err());
         assert!(write(&mut saved, "ui_zoom", &json!(1.5), true).is_err());
+        // A saved false is a value: an init never turns it back on.
+        assert!(write(&mut saved, "spellcheck", &json!(false), true).unwrap().is_some());
+        assert!(write(&mut saved, "spellcheck", &json!(true), true).unwrap().is_none());
+        assert_eq!(saved.spellcheck(), Some(false));
         assert!(write(&mut saved, "theme", &json!("purple"), false).unwrap().is_some());
     }
 
     #[test]
     fn get_leaves_out_unknown_saved_values() {
         let saved = settings::Settings { theme: Some("sepia".into()), document_size: Some(1.0), ..Default::default() };
-        assert_eq!(get(&saved), Appearance { theme: None, document_background: None, document_size: Some(1.0), default_mode: None });
+        assert_eq!(get(&saved), Appearance { theme: None, document_background: None, document_size: Some(1.0), default_mode: None, spellcheck: None });
     }
 
     #[test]

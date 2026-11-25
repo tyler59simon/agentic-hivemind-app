@@ -9,8 +9,10 @@ import { tags as t } from "@lezer/highlight";
 import { useEffect, useMemo, useRef, type MutableRefObject } from "react";
 import { registerDropTarget } from "../notes/drops";
 import { livePreview } from "./livePreview";
+import { noSpellInCode } from "./noSpellInCode";
 import { documentIsDark, onDocumentLook } from "../../lib/paper";
 import { linkClick } from "../../lib/platform";
+import { spellcheck, subscribeSpellcheck } from "../../lib/spellcheck";
 import { dropPictures, RICH_LIMIT, richDark, richEditing, richLanguage, richLook, richPreview, richRefresh, slashSource, type RichContext } from "./rich";
 import { richContext as richContextFacet } from "./rich/context";
 import { Toolbar } from "./toolbar";
@@ -102,7 +104,7 @@ export interface CodeEditorProps {
 export interface PowerProps { id: string; fileName: string; language?: string; on: boolean }
 
 /** The pieces a caller can switch after the editor exists. `power` and `language` exist only for a file tab. */
-export interface Switches { preview: Compartment; readOnly: Compartment; gutter: Compartment; rich: Compartment; power?: Compartment; language?: Compartment }
+export interface Switches { preview: Compartment; readOnly: Compartment; gutter: Compartment; rich: Compartment; spell?: Compartment; power?: Compartment; language?: Compartment }
 
 /** Marks a change that came from the document store (another pane), so it is not reported back as an edit. */
 const fromStore = Annotation.define<boolean>();
@@ -141,6 +143,10 @@ function latestRich(latest: MutableRefObject<CodeEditorProps>): RichContext {
     fail: (message) => rich()?.fail(message),
   };
 }
+/** Spell checking (DESK-8): on for the prose of a Markdown editor, off in code and in text files, which have none. */
+const spellExt = (language: CodeEditorProps["language"], on: boolean): Extension => (on && language === "markdown"
+  ? [EditorView.contentAttributes.of({ spellcheck: "true", autocorrect: "off", autocapitalize: "off" }), noSpellInCode]
+  : EditorView.contentAttributes.of({ spellcheck: "false" }));
 const gutterExt = (on: boolean): Extension => (on ? [lineNumbers(), highlightActiveLine()] : []);
 let powerExt: Extension | null = null;
 const powerOn = (on: boolean): Extension => (on ? (powerExt ??= powerExtensions()) : []);
@@ -175,6 +181,7 @@ export function editorExtensions(props: CodeEditorProps, latest: MutableRefObjec
     ...(props.power && props.language === "text" ? [(sw.language ??= new Compartment()).of([])] : []),
     ...(props.placeholder ? [placeholder(props.placeholder)] : []),
     theme,
+    (sw.spell ??= new Compartment()).of(spellExt(props.language, spellcheck())),
     sw.readOnly.of(readOnlyExt(props.readOnly)),
     sw.gutter.of(gutterExt(props.lineNumbers)),
     EditorView.updateListener.of((u) => {
@@ -227,6 +234,13 @@ export function CodeEditor(props: CodeEditorProps) {
   useEffect(() => {
     view.current?.dispatch({ effects: sw.current.preview.reconfigure(props.live && props.language === "markdown" ? livePreview : []) });
   }, [props.live, props.language]);
+
+  // The Settings choice applies to open editors at once.
+  useEffect(() => {
+    const apply = () => view.current?.dispatch({ effects: sw.current.spell?.reconfigure(spellExt(props.language, spellcheck())) });
+    apply();
+    return subscribeSpellcheck(apply);
+  }, [props.language]);
 
   useEffect(() => {
     view.current?.dispatch({ effects: sw.current.readOnly.reconfigure(readOnlyExt(props.readOnly)) });

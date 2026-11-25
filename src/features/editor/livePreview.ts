@@ -46,7 +46,7 @@ function activeLines(state: EditorState): Set<number> {
   return lines;
 }
 
-const CODE = new Set(["FencedCode", "CodeBlock", "InlineCode", "CodeText"]);
+export const CODE = new Set(["FencedCode", "CodeBlock", "InlineCode", "CodeText"]);
 
 function build(view: EditorView): DecorationSet {
   const { state } = view;

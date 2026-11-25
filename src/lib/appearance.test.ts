@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const fake = vi.hoisted(() => {
   const KNOWN: Record<string, unknown[]> = {
     theme: ["purple", "emerald", "emerald-light", "system"], document_background: ["theme", "white"],
-    document_size: [0.9, 1, 1.1, 1.25, 1.5], default_mode: ["reading", "live", "source"],
+    document_size: [0.9, 1, 1.1, 1.25, 1.5], default_mode: ["reading", "live", "source"], spellcheck: [true, false],
   };
   type Listener = { name: string; cb: (e: { payload: unknown }) => void };
   const f = {
@@ -72,15 +72,15 @@ vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setTheme: 
 /** A new window: its own copy of every module, as the main and the capture window each have, with the same localStorage. */
 async function openWindow() {
   vi.resetModules();
-  const [appearance, theme, paper, docSize, prefs, toast] = await Promise.all([
-    import("./appearance"), import("./theme"), import("./paper"), import("./docSize"), import("./prefs"), import("../ui/toast"),
+  const [appearance, theme, paper, docSize, spell, prefs, toast] = await Promise.all([
+    import("./appearance"), import("./theme"), import("./paper"), import("./docSize"), import("./spellcheck"), import("./prefs"), import("../ui/toast"),
   ]);
-  return { appearance, theme, paper, docSize, prefs, toasts: () => toast.useToasts.getState().items };
+  return { appearance, theme, paper, docSize, spell, prefs, toasts: () => toast.useToasts.getState().items };
 }
 type Win = Awaited<ReturnType<typeof openWindow>>;
 
 const flush = async () => { for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0)); };
-const start = (w: Win) => { w.theme.initTheme(); w.paper.initPaperDefault(); w.docSize.initDocSize(); w.appearance.initDefaultMode(); };
+const start = (w: Win) => { w.theme.initTheme(); w.paper.initPaperDefault(); w.docSize.initDocSize(); w.appearance.initDefaultMode(); w.spell.initSpellcheck(); };
 const startAndWait = async (w: Win) => { start(w); await flush(); };
 const state = (w: Win) => [w.theme.currentThemeChoice(), w.paper.paperDefault()];
 const docSizeVar = () => document.documentElement.style.getPropertyValue("--doc-size");
@@ -286,5 +286,81 @@ describe("the default note mode when localStorage cannot be used (C7)", () => {
     expect(w.appearance.defaultMode()).toBe("source");
     w.appearance.setDefaultMode("live");
     expect(w.appearance.defaultMode()).toBe("live");
+  });
+});
+
+describe("the spelling check (DESK-8)", () => {
+  it("is on when nothing sets it, and sends nothing", async () => {
+    const w = await openWindow();
+    await startAndWait(w);
+    expect(w.spell.spellcheck()).toBe(true);
+    expect(fake.writes).toEqual([]);
+  });
+
+  it("moves a choice only the localStorage copy has into the settings file, an off one too", async () => {
+    localStorage.setItem("hivemind.spellcheck", "0");
+    const w = await openWindow();
+    await startAndWait(w);
+    expect(fake.file).toEqual({ spellcheck: false });
+    expect(fake.writes).toEqual([{ cmd: "appearance_init", key: "spellcheck", value: false }]);
+    expect(w.spell.spellcheck()).toBe(false);
+  });
+
+  it("applies the settings file's value over the copy", async () => {
+    localStorage.setItem("hivemind.spellcheck", "0");
+    fake.file = { spellcheck: true };
+    const w = await openWindow();
+    await startAndWait(w);
+    expect(w.spell.spellcheck()).toBe(true);
+    expect(w.prefs.prefs.spellcheck()).toBe(true);
+    expect(fake.writes).toEqual([]);
+  });
+
+  it("follows the appearance event, tells the editors, and sends nothing back", async () => {
+    const w = await openWindow();
+    await startAndWait(w);
+    const heard = vi.fn();
+    w.spell.subscribeSpellcheck(heard);
+    fake.externalSet({ spellcheck: false });
+    await flush();
+    expect(w.spell.spellcheck()).toBe(false);
+    expect(w.prefs.prefs.spellcheck()).toBe(false);
+    expect(heard).toHaveBeenCalledTimes(1);
+    fake.externalSet({ theme: "emerald" });   // an event without a value for it leaves it alone
+    await flush();
+    expect(w.spell.spellcheck()).toBe(false);
+    expect(fake.writes).toEqual([]);
+  });
+
+  it("reaches the other window from the setter", async () => {
+    const [main, capture] = [await openWindow(), await openWindow()];
+    await startAndWait(capture);
+    main.spell.setSpellcheck(false);
+    await flush();
+    expect(fake.file).toEqual({ spellcheck: false });
+    expect(capture.spell.spellcheck()).toBe(false);
+  });
+
+  it("shows what the file holds when it refuses a change, and says so", async () => {
+    fake.file = { spellcheck: true };
+    const w = await openWindow();
+    await startAndWait(w);
+    fake.failSets = true;
+    w.spell.setSpellcheck(false);
+    await flush();
+    expect(w.spell.spellcheck()).toBe(true);
+    expect(w.prefs.prefs.spellcheck()).toBe(true);
+    expect(w.toasts().map((t) => [t.kind, t.text])).toEqual([["error", "Could not save the spelling check setting."]]);
+  });
+
+  it("holds the choice in memory when localStorage cannot be used", async () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("blocked"); });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
+    fake.file = { spellcheck: false };
+    const w = await openWindow();
+    await startAndWait(w);
+    expect(w.spell.spellcheck()).toBe(false);
+    w.spell.setSpellcheck(true);
+    expect(w.spell.spellcheck()).toBe(true);
   });
 });

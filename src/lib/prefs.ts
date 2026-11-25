@@ -38,6 +38,10 @@ export const prefs = {
   paperKey: "hivemind.documentBackground",
   paper: (): PaperDefault => (get("hivemind.documentBackground") === "white" ? "white" : "theme"),
   setPaper: (paper: PaperDefault) => set("hivemind.documentBackground", paper),
+  spellcheckKey: "hivemind.spellcheck",
+  /** Whether notes are spell-checked: on unless it was turned off. */
+  spellcheck: (): boolean => get("hivemind.spellcheck") !== "0",
+  setSpellcheck: (on: boolean) => set("hivemind.spellcheck", on ? "1" : "0"),
   docSizeKey: "hivemind.documentSize",
   /** The document text size multiple; 1 when unset or not a number. */
   docSize: (): number => { const n = Number(get("hivemind.documentSize")); return Number.isFinite(n) && n > 0 ? n : 1; },

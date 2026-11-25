@@ -22,9 +22,9 @@ describe("what only a file tab has", () => {
   it("a note keeps exactly the extension list it had before NS-6A", () => {
     const sw = switches();
     const list = editorExtensions(props(), { current: props() }, sw);
-    // history, selection drawing, five Markdown pieces, keymap, preview, theme, read-only, gutter, change listener and the
-    // link handler: 14 entries. Power editing adds none of its own to a note.
-    expect(list).toHaveLength(14);
+    // history, selection drawing, five Markdown pieces, keymap, preview, theme, spell checking, read-only, gutter, change
+    // listener and the link handler: 15 entries. Power editing adds none of its own to a note.
+    expect(list).toHaveLength(15);
     expect(sw.power).toBeUndefined();
     expect(sw.language).toBeUndefined();
   });
@@ -32,7 +32,7 @@ describe("what only a file tab has", () => {
   it("a file tab's text file adds the power switch and the language switch", () => {
     const sw = switches();
     const p = props({ language: "text", lineNumbers: true, power: power() });
-    expect(editorExtensions(p, { current: p }, sw)).toHaveLength(12);
+    expect(editorExtensions(p, { current: p }, sw)).toHaveLength(13);
     expect(sw.power).toBeDefined();
     expect(sw.language).toBeDefined();
   });
