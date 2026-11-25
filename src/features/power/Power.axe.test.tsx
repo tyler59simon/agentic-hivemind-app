@@ -40,7 +40,7 @@ const nameOf = (b: HTMLElement) => b.getAttribute("aria-label") ?? b.textContent
 describe("the power bar", () => {
   it("names its text menu buttons by their text", async () => {
     await mount(<PowerBar view={() => null} readOnly={false} />);
-    expect(buttons().map((b) => [b.textContent, nameOf(b)])).toEqual([["Lines", "Lines"], ["Macro", "Macro"]]);
+    expect(buttons().map((b) => [b.textContent, nameOf(b)])).toEqual([["Lines", "Lines"], ["Bookmarks", "Bookmarks"], ["Macro", "Macro"]]);
   });
 
   it("has no axe violations, with Label in Name checked", async () => {

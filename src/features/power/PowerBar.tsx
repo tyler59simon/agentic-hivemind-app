@@ -1,10 +1,11 @@
 // The strip above a text file's editor (NS-6A): line tools and macros. Both act on the editor of the tab.
 import type { EditorView } from "@codemirror/view";
-import { ArrowDownAZ, Circle, Play, Square } from "lucide-react";
+import { ArrowDownAZ, Bookmark, Circle, Pilcrow, Play, Square, WrapText } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Menu } from "../../ui/Menu";
 import { Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
+import { bookmarkedLinesText, clearBookmarks, deleteBookmarkedLines, nextBookmark, prevBookmark, toggleBookmark } from "./bookmarks";
 import { LINE_TOOLS, runLineTool, type LineTool } from "./lineTools";
 import { cancelPlayback, deleteMacro, loadMacros, playMacro, saveMacro, toggleRecording, useRecorder, type Step, type Target } from "./macros";
 
@@ -45,7 +46,16 @@ function Ask({ title, label, initial, type, action, onDone, onClose }: {
   );
 }
 
-export function PowerBar({ view, readOnly }: { view: () => EditorView | null; readOnly: boolean }) {
+export interface PowerBarProps {
+  view: () => EditorView | null;
+  readOnly: boolean;
+  wrap?: boolean;
+  onToggleWrap?: () => void;
+  whitespace?: boolean;
+  onToggleWhitespace?: () => void;
+}
+
+export function PowerBar({ view, readOnly, wrap, onToggleWrap, whitespace, onToggleWhitespace }: PowerBarProps) {
   const run = toolRunner(view);
   const recording = useRecorder((s) => s.recording);
   const playing = useRecorder((s) => s.playing);
@@ -73,6 +83,26 @@ export function PowerBar({ view, readOnly }: { view: () => EditorView | null; re
     toast(`Saved the macro "${name.trim()}".`);
   };
 
+  const copyOrCutBookmarked = (cut: boolean) => {
+    const v = view();
+    if (!v) return;
+    if (cut && v.state.readOnly) { toast("This file is read-only.", "warn"); return; }
+    const text = bookmarkedLinesText(v.state);
+    if (text === null) { toast("No bookmarked lines."); return; }
+    void navigator.clipboard.writeText(text).then(
+      () => {
+        if (cut) {
+          const n = deleteBookmarkedLines(v);
+          toast(`Cut ${n} bookmarked ${n === 1 ? "line" : "lines"}.`);
+        } else {
+          toast("Copied bookmarked lines.");
+        }
+        v.focus();
+      },
+      () => toast("Could not write to clipboard.", "error"),
+    );
+  };
+
   return (
     <div className="power-bar" role="toolbar" aria-label="Line tools and macros">
       <Menu label="Line tools" buttonLabel={null} align="left" button={<><ArrowDownAZ size="1.1em" aria-hidden />Lines</>} className="power-menu">
@@ -89,6 +119,29 @@ export function PowerBar({ view, readOnly }: { view: () => EditorView | null; re
           </>
         )}
       </Menu>
+      <Menu label="Bookmarks" buttonLabel={null} align="left" button={<><Bookmark size="1em" aria-hidden />Bookmarks</>} className="power-menu">
+        {(close) => (
+          <>
+            <li><button role="menuitem" onClick={() => { close(); const v = view(); if (v) { toggleBookmark(v); v.focus(); } }}>Toggle bookmark (Ctrl+F2)</button></li>
+            <li><button role="menuitem" onClick={() => { close(); const v = view(); if (v) { if (!nextBookmark(v)) toast("No bookmarks."); v.focus(); } }}>Next bookmark (F2)</button></li>
+            <li><button role="menuitem" onClick={() => { close(); const v = view(); if (v) { if (!prevBookmark(v)) toast("No bookmarks."); v.focus(); } }}>Previous bookmark (Shift+F2)</button></li>
+            <li><button role="menuitem" onClick={() => { close(); copyOrCutBookmarked(false); }}>Copy bookmarked lines</button></li>
+            <li><button role="menuitem" disabled={readOnly} onClick={() => { close(); copyOrCutBookmarked(true); }}>Cut bookmarked lines</button></li>
+            <li><button role="menuitem" disabled={readOnly} onClick={() => { close(); const v = view(); if (v) { const n = deleteBookmarkedLines(v); toast(n ? `Deleted ${n} bookmarked ${n === 1 ? "line" : "lines"}.` : "No bookmarked lines."); v.focus(); } }}>Delete bookmarked lines</button></li>
+            <li><button role="menuitem" onClick={() => { close(); const v = view(); if (v) { clearBookmarks(v); v.focus(); } }}>Clear all bookmarks</button></li>
+          </>
+        )}
+      </Menu>
+      {onToggleWrap && (
+        <button type="button" className={`icon-button${wrap ? " on" : ""}`} aria-pressed={!!wrap} onClick={onToggleWrap} title="Toggle word wrap (Alt+Z)">
+          <WrapText size="1em" aria-hidden />Wrap
+        </button>
+      )}
+      {onToggleWhitespace && (
+        <button type="button" className={`icon-button${whitespace ? " on" : ""}`} aria-pressed={!!whitespace} onClick={onToggleWhitespace} title="Show whitespace characters">
+          <Pilcrow size="1em" aria-hidden />Whitespace
+        </button>
+      )}
       <span className="power-sep" aria-hidden />
       {recording
         ? <button className="icon-button recording" onClick={toggleRecording} title="Stop recording (Ctrl+Shift+R)" aria-label="Stop recording"><Square size="1em" aria-hidden />Stop</button>

@@ -940,6 +940,11 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .power-bar .icon-button, .power-bar .menu-button { display: inline-flex; align-items: center; gap: var(--sp-6); padding: var(--sp-4) var(--sp-10); font-size: .9rem; }
 .power-bar .small { white-space: nowrap; }
 .power-bar .icon-button.recording { color: var(--error); }
+.power-bar .icon-button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--fg); }
+.cm-bookmark-gutter { width: 1.1rem; }
+.cm-bookmark-gutter .cm-gutterElement { cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0 2px; }
+.cm-bookmark-dot { color: var(--accent); font-size: .8rem; line-height: 1; }
+.cm-bookmarked-line { background: var(--accent-soft); }
 .power-sep { width: 1px; align-self: stretch; background: var(--border-soft); margin: 0 var(--sp-4); }
 .power-menu .menu-list { min-width: 15rem; }
 .saved-macro { display: flex; align-items: center; }
@@ -1998,6 +2003,7 @@ button.owner-chip { cursor: pointer; }
 .drawio-image-fallback { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; border: 1px dashed var(--border-strong); color: var(--muted); font-size: .8rem; }
 .drawio-label { position: relative; z-index: 1; width: 100%; height: 100%; display: flex; padding: 2px 4px; box-sizing: border-box; overflow: hidden; word-break: break-word; line-height: 1.25; pointer-events: none; }
 .drawio-label-input { position: relative; z-index: 2; width: 100%; height: 100%; box-sizing: border-box; resize: none; border: 1px solid var(--selected); background: #ffffff; color: #111827; font: inherit; font-size: .88rem; padding: 3px 5px; }
+.drawio-label-rich-input { overflow: auto; white-space: pre-wrap; word-break: break-word; text-align: left; }
 .drawio-edges { z-index: 2; }
 .drawio-pages { display: flex; align-items: center; gap: var(--sp-5); padding: var(--sp-6) var(--sp-12); border-top: 1px solid var(--border); background: var(--bg-alt); overflow-x: auto; }
 .drawio-page-tab { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: .35rem; background: var(--bg); }
@@ -2050,14 +2056,23 @@ button.owner-chip { cursor: pointer; }
 .pdf-text-layer { position: absolute; inset: 0; overflow: hidden; user-select: text; }
 .pdf-text-span { position: absolute; color: transparent; white-space: pre; line-height: 1; }
 .pdf-text-span.hit { background: rgba(250, 204, 21, .45); border-radius: 2px; }
+.pdf-text-span.hit.active { background: rgba(234, 88, 12, .55); outline: 1px solid #ea580c; }
 .pdf-ann-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.pdf-ann-hit { pointer-events: auto; cursor: move; }
 .pdf-ann-interactive { position: absolute; box-sizing: border-box; z-index: 3; }
+.pdf-ann-selected-frame { border: 1.5px dashed var(--accent); cursor: move; }
+.pdf-ann-grip { position: absolute; top: -11px; left: -1px; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 14px; border-radius: 3px 3px 0 0; background: var(--accent); color: #ffffff; cursor: move; opacity: .88; }
+.pdf-ann-handle { position: absolute; z-index: 5; width: 10px; height: 10px; box-sizing: border-box; border-radius: 2px; background: #ffffff; border: 2px solid var(--accent); cursor: nwse-resize; }
+.pdf-ann-corner-nw { top: -5px; left: -5px; cursor: nwse-resize; }
+.pdf-ann-corner-ne { top: -5px; right: -5px; cursor: nesw-resize; }
+.pdf-ann-corner-sw { bottom: -5px; left: -5px; cursor: nesw-resize; }
+.pdf-ann-corner-se { bottom: -5px; right: -5px; cursor: nwse-resize; }
 .pdf-note-box { min-width: 9rem; max-width: 14rem; padding: .3rem .4rem; border: 1px solid #ca8a04; border-radius: .3rem; color: #111827; font-size: .8rem; box-shadow: 0 2px 6px rgba(0, 0, 0, .15); }
-.pdf-note-box textarea, .pdf-text-box textarea, .pdf-whiteout-box textarea { width: 100%; box-sizing: border-box; border: none; background: transparent; resize: both; color: inherit; font: inherit; outline: none; }
+.pdf-note-box textarea, .pdf-text-box textarea, .pdf-whiteout-box textarea { width: 100%; height: 100%; box-sizing: border-box; border: none; background: transparent; resize: none; color: inherit; font: inherit; outline: none; }
 .pdf-text-box { border: 1px dashed var(--accent); padding: 2px 4px; }
 .pdf-whiteout-box { border: 1px dashed var(--border-strong); padding: 2px 4px; }
 .pdf-img-stamp { border: 1px dashed transparent; }
-.pdf-img-stamp:hover { border-color: var(--accent); }
+.pdf-img-stamp:hover, .pdf-img-stamp.on { border-color: var(--accent); }
 .pdf-img-stamp img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .pdf-ann-del { position: absolute; top: -8px; right: -8px; width: 18px; height: 18px; padding: 0; border-radius: 50%; font-size: 12px; line-height: 1; background: var(--bg); border: 1px solid var(--border-strong); color: var(--fg); }
 .pdf-form-field { position: absolute; z-index: 4; box-sizing: border-box; border: 1px solid rgba(26, 115, 232, .55); background: rgba(237, 246, 255, .7); color: #111827; font-size: .85rem; padding: 0 3px; }

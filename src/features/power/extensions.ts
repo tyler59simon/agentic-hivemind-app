@@ -4,6 +4,7 @@ import { defaultKeymap, indentWithTab } from "@codemirror/commands";
 import { selectNextOccurrence, selectSelectionMatches } from "@codemirror/search";
 import { countColumn, EditorSelection, EditorState, findColumn, Prec, StateEffect, StateField, type Extension, type StateCommand } from "@codemirror/state";
 import { crosshairCursor, EditorView, keymap, rectangularSelection, type KeyBinding } from "@codemirror/view";
+import { bookmarkExtensions } from "./bookmarks";
 import { cancelPlayback, isReplaying, playLast, registerCommand, toggleRecording, useRecorder, type Run, type Target } from "./macros";
 
 // Rectangular selection by keyboard --------------------------------------------------------------------------------------
@@ -92,6 +93,7 @@ export function powerExtensions(): Extension {
     rectangularSelection(),
     crosshairCursor(),
     rectField,
+    bookmarkExtensions(),
     Prec.high(keymap.of([
       // The keys are taken whatever the editor does with them, so the page does not reload (Ctrl+Shift+R) or print.
       { key: "Mod-Shift-r", run: () => { toggleRecording(); return true; }, preventDefault: true },

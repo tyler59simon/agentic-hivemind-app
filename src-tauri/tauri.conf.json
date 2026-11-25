@@ -77,6 +77,55 @@
         "name": "Draw.io diagram",
         "description": "Draw.io diagram",
         "role": "Editor"
+      },
+      {
+        "ext": [
+          "docx"
+        ],
+        "name": "Word document",
+        "description": "Word OpenXML document",
+        "role": "Editor"
+      },
+      {
+        "ext": [
+          "pdf"
+        ],
+        "name": "PDF document",
+        "description": "Portable Document Format",
+        "role": "Editor"
+      },
+      {
+        "ext": [
+          "svg"
+        ],
+        "name": "SVG image",
+        "description": "Scalable Vector Graphics",
+        "role": "Editor"
+      },
+      {
+        "ext": [
+          "excalidraw"
+        ],
+        "name": "Excalidraw drawing",
+        "description": "Excalidraw drawing",
+        "role": "Editor"
+      },
+      {
+        "ext": [
+          "xlsx",
+          "ods"
+        ],
+        "name": "Spreadsheet",
+        "description": "Spreadsheet workbook",
+        "role": "Editor"
+      },
+      {
+        "ext": [
+          "vsdx"
+        ],
+        "name": "Visio diagram",
+        "description": "Microsoft Visio diagram",
+        "role": "Editor"
       }
     ],
     "windows": {

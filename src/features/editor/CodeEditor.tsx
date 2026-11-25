@@ -4,9 +4,9 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { bracketMatching, foldGutter, foldKeymap, HighlightStyle, syntaxHighlighting, type LanguageSupport } from "@codemirror/language";
 import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { Annotation, Compartment, EditorState, Transaction, type Extension, type TransactionSpec } from "@codemirror/state";
-import { drawSelection, EditorView, highlightActiveLine, keymap, lineNumbers, placeholder } from "@codemirror/view";
+import { drawSelection, EditorView, highlightActiveLine, highlightTrailingWhitespace, highlightWhitespace, keymap, lineNumbers, placeholder } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
-import { useEffect, useMemo, useRef, type MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { registerDropTarget } from "../notes/drops";
 import { livePreview } from "./livePreview";
 import { noSpellInCode } from "./noSpellInCode";
@@ -103,8 +103,19 @@ export interface CodeEditorProps {
  *  `language`: a name chosen in the status line to use instead of the one the file name gives. */
 export interface PowerProps { id: string; fileName: string; language?: string; on: boolean }
 
-/** The pieces a caller can switch after the editor exists. `power` and `language` exist only for a file tab. */
-export interface Switches { preview: Compartment; readOnly: Compartment; gutter: Compartment; rich: Compartment; spell?: Compartment; power?: Compartment; language?: Compartment }
+/** The pieces a caller can switch after the editor exists. `power`, `language`, `wrap`, `whitespace` and `fold` are optional. */
+export interface Switches {
+  preview: Compartment;
+  readOnly: Compartment;
+  gutter: Compartment;
+  rich: Compartment;
+  spell?: Compartment;
+  power?: Compartment;
+  language?: Compartment;
+  wrap?: Compartment;
+  whitespace?: Compartment;
+  fold?: Compartment;
+}
 
 /** Marks a change that came from the document store (another pane), so it is not reported back as an edit. */
 const fromStore = Annotation.define<boolean>();
@@ -153,25 +164,50 @@ const powerOn = (on: boolean): Extension => (on ? (powerExt ??= powerExtensions(
 /** A text file's language: its colours, bracket matching and folding. */
 const languageExt = (lang: LanguageSupport | null): Extension => (lang ? [lang, syntaxHighlighting(editorHighlight), bracketMatching(), foldGutter(), keymap.of(foldKeymap)] : []);
 
+const wrapExt = (on: boolean): Extension => (on ? EditorView.lineWrapping : []);
+const whitespaceExt = (on: boolean): Extension => (on ? [highlightWhitespace(), highlightTrailingWhitespace()] : []);
+
 /** Everything the editor is made of. For a note (markdown, not read-only, no line numbers) this is the same list, in
  * the same order, as the note editor has always had. */
-export function editorExtensions(props: CodeEditorProps, latest: MutableRefObject<CodeEditorProps>, sw: Switches, dark?: () => boolean): Extension[] {
+export function editorExtensions(
+  props: CodeEditorProps,
+  latest: MutableRefObject<CodeEditorProps>,
+  sw: Switches,
+  dark?: () => boolean,
+  onToggleWrap?: () => void,
+): Extension[] {
   const rich = props.rich && props.language === "markdown" ? latestRich(latest) : null;
-  const markdownOnly = props.language === "markdown"
+  const isFileTab = !!props.power || !!props.rich;
+  const markdownOnly: Extension[] = props.language === "markdown"
     ? [
-      EditorView.lineWrapping,
+      isFileTab
+        ? [
+          (sw.wrap ??= new Compartment()).of(wrapExt(true)),
+          (sw.whitespace ??= new Compartment()).of([]),
+          (sw.fold ??= new Compartment()).of([foldGutter(), keymap.of(foldKeymap)]),
+        ]
+        : EditorView.lineWrapping,
       rich ? richLanguage() : markdown({ base: markdownLanguage }),
       syntaxHighlighting(editorHighlight),
       highlightSelectionMatches(),
       autocompletion({ override: [wikilinkSource(() => latest.current.titles()), ...(rich ? [slashSource] : [])], icons: false }),
     ]
-    : [highlightSelectionMatches()];
+    : [
+      isFileTab
+        ? [
+          highlightSelectionMatches(),
+          (sw.wrap ??= new Compartment()).of(wrapExt(false)),
+          (sw.whitespace ??= new Compartment()).of([]),
+        ]
+        : highlightSelectionMatches(),
+    ];
   return [
     history(),
     drawSelection(),
     ...markdownOnly,
     keymap.of([
       { key: "Mod-s", preventDefault: true, run: () => { latest.current.onSave(); return true; } },
+      ...(onToggleWrap ? [{ key: "Alt-z", preventDefault: true, run: () => { onToggleWrap(); return true; } }] : []),
       ...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab,
     ]),
     sw.preview.of(props.live && props.language === "markdown" ? livePreview : []),
@@ -209,11 +245,14 @@ export function CodeEditor(props: CodeEditorProps) {
   const sw = useRef<Switches>({ preview: new Compartment(), readOnly: new Compartment(), gutter: new Compartment(), rich: new Compartment() });
   const latest = useRef(props);
   latest.current = props;
+  const [wrap, setWrap] = useState(props.language === "markdown");
+  const [showWhitespace, setShowWhitespace] = useState(false);
+  const toggleWrap = useCallback(() => setWrap((w) => !w), []);
 
   useEffect(() => {
     const v = new EditorView({
       parent: host.current!,
-      state: EditorState.create({ doc: props.doc, extensions: editorExtensions(props, latest, sw.current, () => documentIsDark(host.current)) }),
+      state: EditorState.create({ doc: props.doc, extensions: editorExtensions(props, latest, sw.current, () => documentIsDark(host.current), toggleWrap) }),
     });
     view.current = v;
     // Diagrams draw in the colours of the document, so a change of theme or of the pane's background draws them again.
@@ -283,6 +322,14 @@ export function CodeEditor(props: CodeEditorProps) {
     view.current?.dispatch({ effects: sw.current.gutter.reconfigure(gutterExt(props.lineNumbers)) });
   }, [props.lineNumbers]);
 
+  useEffect(() => {
+    view.current?.dispatch({ effects: sw.current.wrap?.reconfigure(wrapExt(wrap)) });
+  }, [wrap]);
+
+  useEffect(() => {
+    view.current?.dispatch({ effects: sw.current.whitespace?.reconfigure(whitespaceExt(showWhitespace)) });
+  }, [showWhitespace]);
+
   const shownVersion = useRef(props.docVersion);
   useEffect(() => {
     const v = view.current;
@@ -309,7 +356,16 @@ export function CodeEditor(props: CodeEditorProps) {
 
   const toolbarRich = useMemo(() => latestRich(latest), []);
   const editor = <div className={props.language === "markdown" ? "md-editor" : "md-editor text-editor"} ref={host} />;
-  const bar = powered ? <PowerBar view={() => view.current} readOnly={props.readOnly} /> : null;
+  const bar = powered ? (
+    <PowerBar
+      view={() => view.current}
+      readOnly={props.readOnly}
+      wrap={wrap}
+      onToggleWrap={toggleWrap}
+      whitespace={showWhitespace}
+      onToggleWhitespace={() => setShowWhitespace((w) => !w)}
+    />
+  ) : null;
   // The editor keeps its place whether or not the power bar shows: the view is made once in its host, and a host React
   // unmounted and made again would be left empty (a canvas that opens as Source turns the bar on after the first render).
   if (!props.rich || props.language !== "markdown") return <>{bar}{editor}</>;
