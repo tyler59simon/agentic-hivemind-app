@@ -47,4 +47,17 @@ describe("the axe helper", () => {
     expect(found[0].target).toBe('button.a[aria-label="Close tab"]');
     expect(found[0].help).toContain('The name "Close tab" does not contain the visible text "x"');
   });
+
+  it("finds a menu button whose text is not in its name, and accepts one named by its text", async () => {
+    // What `Menu` draws: `aria-label` defaults to the menu's label, so "Lines" shown with the name "Line tools" fails.
+    const menu = (label: string | null, text: string) => `<button class="menu-button" aria-haspopup="menu" aria-expanded="false"${label === null ? "" : ` aria-label="${label}"`}>${text}</button>`;
+    document.body.innerHTML = `<main>${menu("Line tools", "Lines")}${menu("Encoding", "UTF-8")}</main>`;
+    const found = await axeViolations(document.body);
+    expect(found.map((v) => [v.id, v.target])).toEqual([
+      ["label-in-name", 'button.menu-button[aria-label="Line tools"]'],
+      ["label-in-name", 'button.menu-button[aria-label="Encoding"]'],
+    ]);
+    document.body.innerHTML = `<main>${menu(null, "Lines")}${menu("UTF-8, encoding", "UTF-8")}</main>`;
+    expect(await axeViolations(document.body)).toEqual([]);
+  });
 });

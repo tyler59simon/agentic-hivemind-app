@@ -79,7 +79,10 @@ const settle = () => act(async () => { for (let i = 0; i < 12; i++) await new Pr
 const doc = (path: string) => docs.useDocuments.getState().docs[docs.keyOf(ref(path))];
 const view = () => EditorView.findFromDOM(el.querySelector<HTMLElement>(".cm-content")!)!;
 const status = () => el.querySelector(".file-status")!;
-const menuButton = (label: string) => status().querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+// Each status button is named by the value it shows, then what it is: "UTF-8, encoding" (WCAG 2.5.3).
+const menuButton = (label: string) => [...status().querySelectorAll<HTMLButtonElement>("button.menu-button")]
+  .find((b) => b.getAttribute("aria-label")?.endsWith(`, ${label.toLowerCase()}`)) ?? null as unknown as HTMLButtonElement;
+const lineTools = () => [...el.querySelectorAll<HTMLButtonElement>("button.menu-button")].find((b) => b.textContent === "Lines")!;
 const items = () => [...status().querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
 const item = (text: string) => items().find((b) => b.textContent === text)!;
 const clickIn = async (node: HTMLElement | undefined) => { await act(async () => { node!.click(); }); await settle(); };
@@ -119,7 +122,7 @@ describe("a file tab with power editing", () => {
   it("runs a line tool from the menu as one edit of the page", async () => {
     files.set("a.txt", { text: "c\nb\na\n" });
     await show("a.txt");
-    await clickIn(el.querySelector<HTMLButtonElement>('button[aria-label="Line tools"]')!);
+    await clickIn(lineTools());
     const sort = [...el.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) => b.textContent === "Sort ascending")!;
     await clickIn(sort);
     expect(view().state.doc.toString()).toBe("a\nb\nc\n");
@@ -129,7 +132,7 @@ describe("a file tab with power editing", () => {
   it("does not offer the line tools on a read-only file", async () => {
     files.set("a.txt", { text: "b\na\n", readOnly: "This file is read-only on disk" });
     await show("a.txt");
-    await clickIn(el.querySelector<HTMLButtonElement>('button[aria-label="Line tools"]')!);
+    await clickIn(lineTools());
     const sort = [...el.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) => b.textContent === "Sort ascending")!;
     expect(sort.disabled).toBe(true);
   });
@@ -257,7 +260,7 @@ describe("a file tab with power editing", () => {
       files.set("p.md", { text: "# T\n" });
       await show("p.md", "source");
       expect(status().textContent).toContain("Markdown");
-      expect(status().querySelector('button[aria-label="Language"]')).toBeNull();
+      expect(menuButton("Language")).toBeNull();
     });
   });
 });

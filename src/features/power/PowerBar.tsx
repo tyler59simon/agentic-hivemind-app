@@ -75,7 +75,7 @@ export function PowerBar({ view, readOnly }: { view: () => EditorView | null; re
 
   return (
     <div className="power-bar" role="toolbar" aria-label="Line tools and macros">
-      <Menu label="Line tools" align="left" button={<><ArrowDownAZ size="1.1em" aria-hidden />Lines</>} className="power-menu">
+      <Menu label="Line tools" buttonLabel={null} align="left" button={<><ArrowDownAZ size="1.1em" aria-hidden />Lines</>} className="power-menu">
         {(close) => (
           <>
             {TOOL_GROUPS.map((g) => (
@@ -94,7 +94,7 @@ export function PowerBar({ view, readOnly }: { view: () => EditorView | null; re
         ? <button className="icon-button recording" onClick={toggleRecording} title="Stop recording (Ctrl+Shift+R)" aria-label="Stop recording"><Square size="1em" aria-hidden />Stop</button>
         : <button className="icon-button" onClick={toggleRecording} disabled={readOnly || playing} title="Record a macro (Ctrl+Shift+R)" aria-label="Record macro"><Circle size="1em" aria-hidden />Record</button>}
       <button className="icon-button" onClick={() => play(steps, 1)} disabled={!canPlay} title="Play the last macro (Ctrl+Shift+P)" aria-label="Play macro"><Play size="1em" aria-hidden />Play</button>
-      <Menu label="More macro actions" align="left" button="Macro" className="power-menu">
+      <Menu label="More macro actions" buttonLabel={null} align="left" button="Macro" className="power-menu">
         {(close) => (
           <>
             <li><button role="menuitem" disabled={!canPlay} onClick={() => { close(); setAsking("times"); }}>Play several times…</button></li>

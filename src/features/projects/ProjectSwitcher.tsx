@@ -42,6 +42,7 @@ export function ProjectSwitcher() {
     return <div className="project-switcher static" title="Projects need Living Memory API 2 with the projects command"><Layers size="1.25em" aria-hidden /><span className="grow">Living Memory</span></div>;
   }
 
+  const shown = picked === OTHER_FOLDERS ? "Other folders" : project?.name ?? "All memory";
   const item = (p: Project, close: () => void) => (
     <li key={p.slug} role="none">
       <button role="menuitem" title={p.description || p.name} onClick={() => { close(); openProject(p.slug); }}>
@@ -56,7 +57,8 @@ export function ProjectSwitcher() {
   return (
     <>
       <Menu className="project-switcher" label="Choose a project"
-        button={<><Layers size="1.25em" aria-hidden /><span className="grow">{picked === OTHER_FOLDERS ? "Other folders" : project?.name ?? "All memory"}</span>{!!warnings.length && <TriangleAlert size="1em" className="warn-text" aria-label="Registry warnings" />}<ChevronDown size="1.1em" aria-hidden /></>}>
+        buttonLabel={`${shown}, choose a project${warnings.length ? ", registry warnings" : ""}`}
+        button={<><Layers size="1.25em" aria-hidden /><span className="grow">{shown}</span>{!!warnings.length && <TriangleAlert size="1em" className="warn-text" aria-label="Registry warnings" />}<ChevronDown size="1.1em" aria-hidden /></>}>
         {(close) => (
           <>
             {live.map((p) => item(p, close))}

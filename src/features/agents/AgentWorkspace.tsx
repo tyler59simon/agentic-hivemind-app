@@ -166,7 +166,7 @@ function Toolbar({ info, face, sessions, onAsk }: { info?: SessionInfo; face: In
   };
   return (
     <div className="agent-toolbar">
-      <Menu className="engine-menu" label="Engine" button={<><Sparkle size="1.2em" aria-hidden />{engineName(adapterOf(engine))}<ChevronDown size="1.1em" aria-hidden /></>}>
+      <Menu className="engine-menu" label="Engine" buttonLabel={`${engineName(adapterOf(engine))}, engine`} button={<><Sparkle size="1.2em" aria-hidden />{engineName(adapterOf(engine))}<ChevronDown size="1.1em" aria-hidden /></>}>
         {(close) => (
           <>
             {info && (

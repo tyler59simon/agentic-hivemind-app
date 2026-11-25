@@ -73,6 +73,7 @@ export function StatusLine({ doc, docKey, tabId, fileName, markdown, language, o
   const f = doc.base.format;
   const binary = doc.base.binary;
   const encoding = binary ? "Not text" : `${encodingLabel(f)}${f.confidence === "guess" ? " (guessed)" : ""}${doc.convert ? " (converted, not saved yet)" : ""}${doc.reformat && !doc.convert ? " (not saved yet)" : ""}`;
+  const eol = `${EOL_NAMES[f.eol] || "No line breaks"}${doc.reformat && f.eol !== doc.reformat.from.eol ? " (not saved yet)" : ""}`;
   const canReopen = (doc.status === "clean" || doc.status === "readOnly") && !doc.kept;
   const whyNot = isUnsaved(doc) ? "Save or discard your edits to reopen the file in another encoding." : doc.kept ? "Discard the draft kept beside this page first." : "This file cannot be reopened now.";
   // The next save can write another encoding or line ending for a page that is open for editing; a mixed-endings page
@@ -84,7 +85,8 @@ export function StatusLine({ doc, docKey, tabId, fileName, markdown, language, o
 
   return (
     <div className="file-status muted">
-      <Menu up label="Encoding" align="left" className="status-menu" button={encoding}>
+      {/* Each button shows its value, so its name starts with the value and then says what it is (WCAG 2.5.3). */}
+      <Menu up label="Encoding" buttonLabel={`${encoding}, encoding`} align="left" className="status-menu" button={encoding}>
         {(close) => (
           <>
             <li role="none"><div className="menu-group muted">Reopen with encoding</div></li>
@@ -108,7 +110,7 @@ export function StatusLine({ doc, docKey, tabId, fileName, markdown, language, o
       {!binary && (
         <>
           <span aria-hidden> · </span>
-          <Menu up label="Line endings" align="left" className="status-menu" button={`${EOL_NAMES[f.eol] || "No line breaks"}${doc.reformat && f.eol !== doc.reformat.from.eol ? " (not saved yet)" : ""}`}>
+          <Menu up label="Line endings" buttonLabel={`${eol}, line endings`} align="left" className="status-menu" button={eol}>
             {(close) => (
               <>
                 {f.eol === "mixed" && <li role="none"><div className="menu-note muted">This file mixes line-ending styles. Choose one to edit it.</div></li>}
@@ -121,7 +123,7 @@ export function StatusLine({ doc, docKey, tabId, fileName, markdown, language, o
             )}
           </Menu>
           <span aria-hidden> · </span>
-          <Menu up label="Indentation" align="left" className="status-menu" button={indent}>
+          <Menu up label="Indentation" buttonLabel={`${indent}, indentation`} align="left" className="status-menu" button={indent}>
             {(close) => (
               <>
                 <li><button role="menuitem" disabled={!editor} onClick={() => { close(); indentTool("tabs-to-spaces"); }}>Tabs to spaces</button></li>
@@ -134,7 +136,7 @@ export function StatusLine({ doc, docKey, tabId, fileName, markdown, language, o
           {markdown
             ? <span>{languageName}</span>
             : (
-              <Menu up label="Language" align="left" className="status-menu" button={languageName || "Language"}>
+              <Menu up label="Language" buttonLabel={languageName ? `${languageName}, language` : null} align="left" className="status-menu" button={languageName || "Language"}>
                 {(close) => (
                   <>
                     <li><button role="menuitem" aria-current={!language} onClick={() => { close(); onLanguage(undefined); }}>Choose from the file name</button></li>
