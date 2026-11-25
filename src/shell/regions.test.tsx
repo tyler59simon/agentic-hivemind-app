@@ -24,9 +24,12 @@ vi.mock("../features/agents/AgentWorkspace", () => ({ AgentWorkspace: () => null
 vi.mock("../features/review/InboxPage", () => ({ InboxPage: () => null }));
 vi.mock("../features/editor/NoteTab", () => ({ NoteTab: () => null }));
 vi.mock("../features/editor/NewNote", () => ({ NewNote: () => null }));
-// The first page has an editor, the others only text, so a pane's stop is the editor or else its panel.
+// The first page has an editor, the others only text, so a pane's stop is the editor or else its panel. Like a real page, the
+// editor comes after a closed properties form with a text area in it, which F6 must pass over.
 vi.mock("../features/notes/FileTab", () => ({
-  FileTab: ({ tab }: { tab: { id: string } }) => (tab.id === "c" ? <p>Reading</p> : <div className="cm-content" contentEditable tabIndex={0}>Editor</div>),
+  FileTab: ({ tab }: { tab: { id: string } }) => (tab.id === "c" ? <p>Reading</p> : (
+    <><details><summary>Properties</summary><textarea aria-label="Files" /></details><div className="cm-content" contentEditable tabIndex={0}>Editor</div></>
+  )),
   saveFileTab: vi.fn(),
 }));
 vi.mock("../features/notes/NewFileTab", () => ({ NewFileTab: () => null }));
@@ -148,6 +151,14 @@ describe("F6 and Shift+F6", () => {
     expect(where()).toBe("Right pane panel");
     await f6(true);
     expect(where()).toBe("Left pane editor");
+  });
+
+  it("land on a pane's panel when its editor does not take the focus", async () => {
+    await show(2);
+    document.querySelector<HTMLElement>("#pane-p0 .cm-content")!.focus = () => {};
+    document.querySelector<HTMLElement>("nav.notebooks button, nav.notebooks [role=treeitem]")!.focus();
+    await f6();
+    expect(where()).toBe("Left pane panel");
   });
 
   it("name a single pane Open notes and put three panes in order", async () => {

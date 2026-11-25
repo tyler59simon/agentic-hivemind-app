@@ -108,6 +108,17 @@ describe("the unified top-bar search box (CON-11)", () => {
     expect(asked).toEqual(expect.arrayContaining([expect.objectContaining({ notebook: "nb-1" }), expect.objectContaining({ excludeNotebook: "nb-1" })]));
   });
 
+  it("closes when the keyboard moves the focus out of the box and its panel, and stays open while it moves inside", async () => {
+    await mount();
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    await act(async () => input().focus());
+    await act(async () => document.querySelector<HTMLElement>(".search-panel select, .search-panel button")!.focus());
+    expect(document.querySelector(".search-panel")).not.toBeNull();
+    await act(async () => outside.focus());
+    expect(document.querySelector(".search-panel")).toBeNull();
+  });
+
   it("has no Living Memory pages group even when Living Memory reports pages, and never asks it for them (CON-18)", async () => {
     await mount();
     await act(async () => input().focus());

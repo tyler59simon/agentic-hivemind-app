@@ -18,12 +18,21 @@ interface Region {
   box: HTMLElement;
   /** Where focus goes when the region is chosen. */
   target: HTMLElement | null;
+  /** Where it goes when the target does not take it (a pane's panel, when its editor refuses). */
+  fallback?: HTMLElement | null;
 }
 
 const find = <T extends HTMLElement = HTMLElement>(from: ParentNode, selector: string) => from.querySelector<T>(selector);
 
-/** An editor in a tab panel: CodeMirror's content, a text area or any editable element. */
-const EDITOR = ".cm-content, textarea, [contenteditable='true']";
+/** The editor of a tab panel: the main editor (CodeMirror, ProseMirror, any editable element) before a text area, since a page's
+ *  properties form holds text areas above the editor. A field inside a closed disclosure cannot take the focus and is passed over. */
+function editorIn(panel: HTMLElement): HTMLElement | null {
+  for (const selector of [".cm-content, [contenteditable='true']", "textarea"]) {
+    const found = [...panel.querySelectorAll<HTMLElement>(selector)].find((el) => !el.closest("details:not([open])"));
+    if (found) return found;
+  }
+  return null;
+}
 
 /** The regions that are drawn, in the order F6 visits them: sidebar, top bar, notes list (Notes page only), each pane in
  *  order, the context rail. A page without panes (Home, Agents, a list view of Notes) has the page itself in the panes' place. */
@@ -33,8 +42,8 @@ export function regions(): Region[] {
   // Only focus mode hides a whole region; the other layout changes hide splitters and buttons (see `hiddenBy`).
   const hidden = hiddenBy(useLayout.getState().focusMode, false, false, false);
   const list: Region[] = [];
-  const add = (box: HTMLElement | null, target: HTMLElement | null) => {
-    if (box && !(hidden && box.closest(hidden))) list.push({ box, target: target ?? box });
+  const add = (box: HTMLElement | null, target: HTMLElement | null, fallback?: HTMLElement | null) => {
+    if (box && !(hidden && box.closest(hidden))) list.push({ box, target: target ?? box, fallback });
   };
   const sidebar = find(shell, "aside.sidebar");
   add(sidebar, sidebar && (find(sidebar, ".nav-item.on") ?? find(sidebar, ".nav-item")));
@@ -47,7 +56,7 @@ export function regions(): Region[] {
     const panel = find(pane, "[role=tabpanel]");
     const hasTab = !!find(pane, "[role=tab]");
     // The editor when the tab has one, else the tab's panel, else (an empty pane) the strip's first button.
-    add(pane, hasTab ? (panel && (find(panel, EDITOR) ?? panel)) : find(pane, ".pane-tabs button"));
+    add(pane, hasTab ? (panel && (editorIn(panel) ?? panel)) : find(pane, ".pane-tabs button"), panel);
   }
   if (!panes.length) add(find(shell, "main.page-host"), null);
   add(find(shell, "aside.note-rail"), null);
@@ -78,7 +87,14 @@ export function cycleRegion(step: 1 | -1): boolean {
   // From between two regions, "next" is the one after the focus and "previous" the one before it.
   else if (!here.inside) to = step === 1 ? here.at + 1 : here.at;
   else to = here.at + step;
-  list[((to % list.length) + list.length) % list.length].target!.focus();
+  // A region whose target and fallback both refuse the focus is passed over, so the key never leaves the focus where it was.
+  for (let tried = 0; tried < list.length; tried++, to += step) {
+    const region = list[((to % list.length) + list.length) % list.length];
+    for (const el of [region.target, region.fallback]) {
+      el?.focus();
+      if (el && el === document.activeElement) return true;
+    }
+  }
   return true;
 }
 

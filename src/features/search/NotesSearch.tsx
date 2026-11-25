@@ -234,7 +234,8 @@ export function NotesSearchBox({ inputRef }: { inputRef: RefObject<HTMLInputElem
   };
 
   return (
-    <div className="top-search-wrap" ref={wrap}>
+    // The panel also closes when the keyboard takes the focus out of the box and its panel (Tab past the last filter, F6).
+    <div className="top-search-wrap" ref={wrap} onBlur={(e) => { if (open && e.relatedTarget && !e.currentTarget.contains(e.relatedTarget as Node)) close(); }}>
       <form className="top-search" role="search" onSubmit={(e) => e.preventDefault()}>
         <Search size="1.2em" aria-hidden />
         <input ref={inputRef} value={query} placeholder={placeholder} aria-label={placeholder} role="combobox" aria-expanded={open} aria-controls="notes-search-results"
