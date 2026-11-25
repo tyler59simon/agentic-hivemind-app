@@ -240,7 +240,7 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
   const refresh = () => client.invalidateQueries({ queryKey: ["agent", "sessions"] });
   const end = () => agentEnd(info.id).then(refresh).catch((e) => toast(String(e), "error"));
   return (
-    <aside className="split-rail agents-rail">
+    <aside className="split-rail agents-rail" aria-label="Session details">
       <Section title="Session context">
         {info.project && <Row icon={<Layers size="1.3em" aria-hidden />} meta={project?.name ?? info.project} onClick={() => openProject(info.project)}>Project</Row>}
         {task && <Row icon={<CodeXml size="1.3em" aria-hidden />} meta={repoName(task.repo)} title={task.repo}>Repo</Row>}
@@ -398,7 +398,7 @@ function Session({ id }: { id: string }) {
         {interactive && <Composer info={live} transcript={state} />}
       </div>
       {interactive ? <InteractiveRail info={live} onReview={review} /> : (
-        <aside className="split-rail agents-rail">
+        <aside className="split-rail agents-rail" aria-label="Session details">
           <Section title="Session context">
             {passport && (
               <Row icon={<Network size="1.3em" aria-hidden />} meta={system?.name ?? passport.slug} onClick={() => openSystem(passport.slug)}>System</Row>

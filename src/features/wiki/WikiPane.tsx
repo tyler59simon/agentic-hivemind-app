@@ -207,7 +207,7 @@ export function WikiPane() {
         : noEdition ? <EmptyEdition domain={domain} project={scope} busy={!!building} blocked={blocked} onBuild={() => setPlanning(true)} />
         : ix && nav && (
           <div className="wiki-layout">
-            <aside className="wiki-side">
+            <aside className="wiki-side" aria-label="Wiki navigation">
               <label className="wiki-search">
                 <Search size="1.2em" aria-hidden />
                 <input value={q} placeholder="Search this wiki" aria-label="Search this wiki" onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape") setQ(""); }} />

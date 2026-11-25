@@ -76,15 +76,21 @@ export function useCloseTab() {
   return { request, dialog };
 }
 
+/** One tab: a pill holding the tab itself (the part that is named, focused and opened) and the close mark beside it, not inside
+ *  it (a tab holds no controls). The pill carries the look and the tooltip. */
 function TabPill({ tab, active, onPick, onClose }: { tab: Tab; active: boolean; onPick: () => void; onClose: () => void }) {
   const dirty = useWorkspace((s) => !!s.dirty[tab.id]);
   return (
-    <div role="tab" aria-selected={active} tabIndex={active ? 0 : -1} className={`note-tab-pill ${active ? "on" : ""}`} title={tabLabel(tab)}
-      onClick={onPick} onAuxClick={(e) => { if (e.button === 1) onClose(); }} onKeyDown={(e) => tabKey(e, { open: onPick, close: onClose })}>
-      {tab.kind === "file" && isRichDoc(tab.file?.path ?? "") && <LayoutPanelTop size="1em" aria-hidden className="tab-icon" />}
-      <span className="tab-label">{tabLabel(tab)}</span>
-      {dirty && <span className="dot" aria-label="unsaved">●</span>}
-      <button className="tab-close" tabIndex={-1} aria-label="Close tab" onClick={(e) => { e.stopPropagation(); onClose(); }}><X size="1em" aria-hidden /></button>
+    <div className={`note-tab-pill ${active ? "on" : ""}`} title={tabLabel(tab)} onAuxClick={(e) => { if (e.button === 1) onClose(); }}>
+      <div role="tab" aria-selected={active} tabIndex={active ? 0 : -1} className="tab-main"
+        onClick={onPick} onKeyDown={(e) => tabKey(e, { open: onPick, close: onClose })}>
+        {tab.kind === "file" && isRichDoc(tab.file?.path ?? "") && <LayoutPanelTop size="1em" aria-hidden className="tab-icon" />}
+        <span className="tab-label">{tabLabel(tab)}</span>
+        {dirty && <><span className="dot" aria-hidden>●</span><span className="visually-hidden">, unsaved</span></>}
+      </div>
+      {/* A mouse shortcut, hidden from assistive technology: a button inside the tab list is not allowed. The keyboard closes a tab
+          with Delete on the tab and with Ctrl+W. */}
+      <span className="tab-close" aria-hidden onClick={onClose}><X size="1em" /></span>
     </div>
   );
 }
@@ -102,8 +108,14 @@ function NewButton({ onBefore }: { onBefore?: () => void }) {
   );
 }
 
-function PaneView({ pane, grow, focused, last, onClose }: {
-  pane: Pane; grow: number; focused: boolean; last: boolean; onClose: (paneId: string, tabId: string) => void;
+/** What a pane is called as a region: the notes when there is one pane, else its place in the row. */
+function paneName(index: number, count: number): string {
+  if (count === 1) return "Open notes";
+  return count === 2 ? (index === 0 ? "Left pane" : "Right pane") : `Pane ${index + 1}`;
+}
+
+function PaneView({ pane, name, grow, focused, last, onClose }: {
+  pane: Pane; name: string; grow: number; focused: boolean; last: boolean; onClose: (paneId: string, tabId: string) => void;
 }) {
   const { activate, focus, split, panes } = useWorkspace();
   const narrow = useBudget().overlay;
@@ -127,9 +139,11 @@ function PaneView({ pane, grow, focused, last, onClose }: {
   }, [active?.id, pane.tabs.length]);
   return (
     // The keyboard makes a pane the current one too (Tab into it), so Ctrl+W and Ctrl+S act on the pane with the focus.
-    <section className={`pane ${focused ? "focused" : ""}`} id={`pane-${pane.id}`} style={{ flexGrow: grow }} onMouseDown={() => !focused && focus(pane.id)} onFocus={() => !focused && focus(pane.id)}>
-      <div className="note-tabs" role="tablist" aria-label="Open notes and pages" ref={strip} onWheel={(e) => { if (e.deltaY) e.currentTarget.scrollLeft += e.deltaY; }}>
-        {pane.tabs.map((t) => <TabPill key={t.id} tab={t} active={t.id === active?.id} onPick={() => activate(pane.id, t.id)} onClose={() => onClose(pane.id, t.id)} />)}
+    <section className={`pane ${focused ? "focused" : ""}`} id={`pane-${pane.id}`} aria-label={name} style={{ flexGrow: grow }} onMouseDown={() => !focused && focus(pane.id)} onFocus={() => !focused && focus(pane.id)}>
+      <div className="note-tabs" ref={strip} onWheel={(e) => { if (e.deltaY) e.currentTarget.scrollLeft += e.deltaY; }}>
+        <div className="tab-list" role="tablist" aria-label="Open notes and pages">
+          {pane.tabs.map((t) => <TabPill key={t.id} tab={t} active={t.id === active?.id} onPick={() => activate(pane.id, t.id)} onClose={() => onClose(pane.id, t.id)} />)}
+        </div>
         <NewButton onBefore={() => focus(pane.id)} />
         <span className="fill" />
         {last && (
@@ -142,7 +156,7 @@ function PaneView({ pane, grow, focused, last, onClose }: {
           </>
         )}
       </div>
-      <div className="pane-body" data-paper={white ? "" : undefined} role="tabpanel" aria-label={active ? tabLabel(active) : "No tab open"}>
+      <div className="pane-body" data-paper={white ? "" : undefined} role="tabpanel" tabIndex={-1} aria-label={active ? tabLabel(active) : "No tab open"}>
         {active ? <ErrorBoundary label="This tab" resetKey={active.id} onError={() => void flushAllDrafts()}>{TAB_VIEWS[active.kind](active)}</ErrorBoundary> : (
           <div className="center muted"><p>Open a note or page here: Ctrl+click a link, or press <kbd>{goTo}</kbd>.</p></div>
         )}
@@ -257,7 +271,7 @@ export function Workspace() {
             <PaneSplitter left={panes[i - 1]} onShare={(percent, force) => setPair(i, percent, force)} share={(100 * shares[i - 1]) / (shares[i - 1] + shares[i])} pairRem={(shares[i - 1] + shares[i]) * rowRem}
               label={panes.length === 2 ? "Width of the left pane" : `Width of pane ${i}`} />
           )}
-          <PaneView pane={p} grow={shares[i] * panes.length} focused={p.id === focused || panes.length === 1} last={i === panes.length - 1} onClose={close.request} />
+          <PaneView pane={p} name={paneName(i, panes.length)} grow={shares[i] * panes.length} focused={p.id === focused || panes.length === 1} last={i === panes.length - 1} onClose={close.request} />
         </Fragment>
       ))}
       {close.dialog}

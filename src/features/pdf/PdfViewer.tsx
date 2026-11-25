@@ -842,7 +842,7 @@ export default function PdfViewer({ file, session, editing }: PdfViewerProps) {
 
       <div className="pdf-body">
         {sidebar && (
-          <aside className="pdf-sidebar">
+          <aside className="pdf-sidebar" aria-label={sidebar === "outline" ? "Outline" : "Pages"}>
             {sidebar === "outline" ? (
               <ul className="pdf-outline">
                 {outline.map((item, i) => (

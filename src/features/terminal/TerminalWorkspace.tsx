@@ -85,7 +85,7 @@ function Rail({ s }: { s: SessionInfo }) {
   const tree = s.worktree;
   const task = s.task.kind === "work" ? s.task : null;
   return (
-    <aside className="split-rail agents-rail term-rail">
+    <aside className="split-rail agents-rail term-rail" aria-label="Terminal workspace">
       <Section title="Workspace">
         <h3 className="rail-sub">Source</h3>
         {task && <Row icon={<Database size="1.3em" aria-hidden />} title={task.repo}>{repoName(task.repo)}</Row>}
@@ -213,23 +213,27 @@ function PaneView({ index, tabs, activeId, views, onView, focused, split, over, 
           const dot = dotOf([attention[s.id]]);
           const title = isShell(s) ? shellTitle(s) : `${s.title} · ${whereLabel(s)}`;
           return (
-            <div key={s.id} role="tab" aria-selected={on} tabIndex={on ? 0 : -1} className={`note-tab-pill ${on ? "on" : ""}`} title={title}
-              onPointerDown={(e) => onDragStart(e, s)}
-              onClick={() => { if (!clicked()) onTab(s); }} onAuxClick={(e) => { if (e.button === 1) onClose(s); }}
-              onContextMenu={(e) => { e.preventDefault(); setTabMenu({ s, x: e.clientX, y: e.clientY, from: e.currentTarget }); }}
-              onKeyDown={(e) => {
-                if (e.key === "F2" && !isShell(s) && e.target === e.currentTarget) { e.preventDefault(); setRenaming(s.id); return; }
-                const from = e.currentTarget;
-                tabKey(e, { open: () => onTab(s), close: () => onClose(s), menu: (at) => setTabMenu({ s, ...at, from }) });
-              }}>
-              {dot && <span className={`tab-attention ${dot}`} role="img" title={dotTitle(dot)} aria-label={dotTitle(dot)} />}
-              {isShell(s) ? <span className="tab-label">{shellLabel(s)}</span>
-                : renaming === s.id
-                  ? <RenameInput s={s} onDone={() => setRenaming(null)} />
-                  : <span className="tab-label" onDoubleClick={() => setRenaming(s.id)}>{tabLabel(s)}</span>}
-              {!isShell(s) && <button className="tab-close tab-move" tabIndex={-1} aria-label="Open PowerShell here" title="Open PowerShell here" onClick={(e) => { e.stopPropagation(); onShell({ session: s.id }); }}><SquareTerminal size="1em" aria-hidden /></button>}
-              {split && <button className="tab-close tab-move" tabIndex={-1} aria-label="Move to other pane" title="Move to other pane" onClick={(e) => { e.stopPropagation(); onMove(s); }}><ArrowRightLeft size="1em" aria-hidden /></button>}
-              <button className="tab-close" tabIndex={-1} aria-label="Close terminal" onClick={(e) => { e.stopPropagation(); onClose(s); }}><X size="1em" aria-hidden /></button>
+            <div key={s.id} className={`note-tab-pill ${on ? "on" : ""}`} title={title} onAuxClick={(e) => { if (e.button === 1) onClose(s); }}>
+              {/* The tab is the label; the marks beside it are mouse shortcuts, hidden from assistive technology (a tab holds no
+                  controls, and the tab list allows no buttons). The keyboard uses Delete, F2 and the tab's menu (Shift+F10). */}
+              <div role="tab" aria-selected={on} tabIndex={on ? 0 : -1} className="tab-main"
+                onPointerDown={(e) => onDragStart(e, s)}
+                onClick={() => { if (!clicked()) onTab(s); }}
+                onContextMenu={(e) => { e.preventDefault(); setTabMenu({ s, x: e.clientX, y: e.clientY, from: e.currentTarget }); }}
+                onKeyDown={(e) => {
+                  if (e.key === "F2" && !isShell(s) && e.target === e.currentTarget) { e.preventDefault(); setRenaming(s.id); return; }
+                  const from = e.currentTarget;
+                  tabKey(e, { open: () => onTab(s), close: () => onClose(s), menu: (at) => setTabMenu({ s, ...at, from }) });
+                }}>
+                {dot && <span className={`tab-attention ${dot}`} role="img" title={dotTitle(dot)} aria-label={dotTitle(dot)} />}
+                {isShell(s) ? <span className="tab-label">{shellLabel(s)}</span>
+                  : renaming === s.id
+                    ? <RenameInput s={s} onDone={() => setRenaming(null)} />
+                    : <span className="tab-label" onDoubleClick={() => setRenaming(s.id)}>{tabLabel(s)}</span>}
+              </div>
+              {!isShell(s) && <span className="tab-close tab-move" aria-hidden title="Open PowerShell here" onClick={() => onShell({ session: s.id })}><SquareTerminal size="1em" /></span>}
+              {split && <span className="tab-close tab-move" aria-hidden title="Move to other pane" onClick={() => onMove(s)}><ArrowRightLeft size="1em" /></span>}
+              <span className="tab-close" aria-hidden title="Close terminal" onClick={() => onClose(s)}><X size="1em" /></span>
             </div>
           );
         })}

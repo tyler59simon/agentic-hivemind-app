@@ -38,6 +38,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   app("search.focus", "Search notes and pages", "Navigation", "Mod+K"),
   app("search.alt", "Search notes and pages (second key)", "Navigation", "Mod+Shift+F"),
   app("nav.back", "Back", "Navigation", "Alt+ArrowLeft"),
+  app("region.next", "Next region", "Navigation", "F6"),
+  app("region.prev", "Previous region", "Navigation", "Shift+F6"),
   app("shortcuts.show", "Keyboard shortcuts", "Navigation", "Mod+/"),
   app("note.new", "New note", "Notes", "Mod+N"),
   app("graph.open", "Open the graph", "Notes", "Mod+G"),

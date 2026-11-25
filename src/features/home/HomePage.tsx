@@ -161,7 +161,7 @@ function ProjectHome({ project }: { project: Project }) {
         </>} />
       {tabs}
       {tab === "architecture" ? <ArchitectureTab /> : <Continue project={project} members={members} />}
-      {tab === "overview" && <Split rail={<>
+      {tab === "overview" && <Split label="Project context" rail={<>
         <NeedsReview project={project} />
         {row && <HealthCard row={row} />}
         <BriefingCard project={project} />
@@ -231,7 +231,7 @@ function AllHome({ projectsOn }: { projectsOn: boolean }) {
       {tabs}
       {tab === "architecture" && <ArchitectureTab />}
       {tab === "overview" && !projectsOn && <div className="banner warn">Projects, open work and review need a newer Living Memory (API 2 with the <code>projects</code> command). Notes, search, the graph and activity work as they are.</div>}
-      {tab === "overview" && <Split rail={projectsOn && <>
+      {tab === "overview" && <Split label="Overview" rail={projectsOn && <>
         <NeedsReview />
         <BriefingCard project={undefined} />
         <AskBox project={undefined} />

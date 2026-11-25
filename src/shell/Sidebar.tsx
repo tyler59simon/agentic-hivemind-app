@@ -67,7 +67,7 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
   const mark = (p: Page) => (p === "agents" && waiting ? "An agent session is waiting for you" : p === "agents" && attention === "done" ? "A terminal finished" : p === "agents" && running ? "An agent session is running" : p === "notes" && unsaved ? "A document has unsaved edits" : null);
 
   return (
-    <aside className="sidebar" id="app-sidebar">
+    <aside className="sidebar" id="app-sidebar" aria-label="Sidebar">
       <div className="brand-block">
         <img src={logo} alt="" /><span>Hivemind</span>
         {/* Under 960 px the sidebar is icons only whatever this says, so the button is hidden there (App.css). It sits in the brand row, so the navigation keeps its height. */}

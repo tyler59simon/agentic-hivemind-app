@@ -4,7 +4,9 @@ import { isMac } from "../../lib/platform";
 export interface Key { type: string; key: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }
 export type KeyAction = "copy" | "paste" | "leave" | "search" | "newline" | "pass";
 
-/** What the terminal does with a key before xterm sees it. */
+/** What the terminal does with a key before xterm sees it. F6 and Shift+F6 (the app's next and previous region) are not taken:
+ *  programs in a terminal use F6 (htop sorts with it, Midnight Commander moves files), so the terminal passes it on and the
+ *  way out of a terminal stays Ctrl+Shift+K ("leave"). */
 export function keyAction(e: Key, hasSelection: boolean): KeyAction {
   if (e.type !== "keydown") return "pass";
   // On macOS only Cmd: Ctrl+C, Ctrl+V and the rest go to the program in the terminal.

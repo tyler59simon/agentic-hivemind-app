@@ -47,7 +47,7 @@ export function MainPage() {
           </div>
         ) : <p className="muted">This domain has no notes yet.</p>}
       </Sec>
-      <Split rail={<>
+      <Split label="Wiki start" rail={<>
         {!!start.length && <Infobox title="Start here" icon={<Package size="1.2em" aria-hidden />}>
           <div className="wiki-links">{start.map((n) => <PageRow key={n.id} at={noteAt(n)} label={n.title} type={n.type} />)}</div>
         </Infobox>}
@@ -77,7 +77,7 @@ export function ProjectPage({ project: p }: { project: WikiProject }) {
   return (
     <>
       <PageHeader eyebrow="Project" title={p.name} subtitle={p.description} />
-      <Split rail={<>
+      <Split label="Project details" rail={<>
         <Infobox title={p.name} icon={<Package size="1.2em" aria-hidden />} pairs={[
           ["Aliases", p.aliases.join(", ")], ["Status", p.status], ["Repositories", p.repos.map((r) => <Mono key={r} text={r} />)],
           ["Pages", String(p.count)], ["Updated", p.updated], ["Charter", p.charter ? links([p.charter]) : null], ["Brief", links(p.briefs)], ["Code maps", links(p.maps)],
@@ -179,7 +179,7 @@ export function NotePage({ note: n }: { note: WikiNote }) {
       <PageHeader eyebrow={isSource(n) ? "Source note" : `${p?.name} · ${section?.label}`} title={shortTitle(n)} meta={path ? <PathLine text={path} /> : undefined}
         actions={<button className="outline" onClick={openNote}>Open note</button>} />
       {n.retired && <div className="wiki-banner">This page is {n.status}. It is kept for history and may be out of date.</div>}
-      <Split rail={<>
+      <Split label="Page details" rail={<>
         <Infobox title="Page details" icon={<Package size="1.2em" aria-hidden />} pairs={[
           ["Type", <TypeBadge key="t" type={n.type} />], ["Status", <span key="s" className={`status-chip ${n.retired ? "warn" : "active"}`}>{n.status}</span>],
           ["Project", p ? <a key="p" href={`#${projectAt(p.slug)}`} onClick={(e) => { e.preventDefault(); goTo(projectAt(p.slug)); }}>{p.name}</a> : null],

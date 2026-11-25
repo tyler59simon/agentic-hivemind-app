@@ -7,6 +7,7 @@ import { InboxPage } from "../features/review/InboxPage";
 import type { ConnectInfo } from "../lib/lm";
 import { useApp, type Page } from "../store";
 import { useLayout } from "./layout";
+import { hiddenBy, skipToContent } from "./regions";
 import { SidebarSplitter } from "./RegionSplitters";
 import { Sidebar } from "./Sidebar";
 import { useBudget } from "./useBudget";
@@ -23,16 +24,6 @@ const PAGES: Record<Page, () => ReactNode> = {
   notes: () => <NotesPage />,
   inbox: () => <InboxPage />,
 };
-
-/** What a layout change hides, as a selector: the regions and the splitters (App.css). */
-function hiddenBy(focus: boolean, collapsed: boolean, folded: boolean, overlay: boolean): string {
-  if (focus) return ".sidebar, .topbar, .notebooks, .note-rail, .shell > .splitter, .notes-page > .splitter, .notes-area > .splitter";
-  const hidden: string[] = [];
-  if (collapsed || folded) hidden.push(".shell > .splitter");
-  if (folded) hidden.push(".notes-page > .splitter", ".sidebar-toggle");
-  if (overlay) hidden.push(".notes-area > .splitter");
-  return hidden.join(", ");
-}
 
 /** Focus never stays on something the layout just hid, nor falls to the top of the page when the control that was used goes:
  *  entering focus mode, collapsing the sidebar and a window width that folds regions move it to a control that is drawn, the
@@ -81,6 +72,8 @@ export function Shell({ info, onSettings, onReconnect }: { info: ConnectInfo; on
   const exitKeys = useFormat("focus.toggle");
   return (
     <div className={`shell${collapsed ? " collapsed" : ""}${focus ? " focus" : ""}`} style={{ "--sidebar-w": `${budget.sidebar}rem` } as CSSProperties}>
+      {/* The first thing the Tab key reaches; it shows only while it has the focus (App.css). */}
+      <button type="button" className="skip-link" onClick={skipToContent}>Skip to content</button>
       <Sidebar info={info} onSettings={onSettings} onReconnect={onReconnect} />
       <SidebarSplitter />
       <div className="main">

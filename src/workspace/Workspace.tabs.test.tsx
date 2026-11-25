@@ -36,8 +36,6 @@ describe("the tab strip from the keyboard", () => {
     expect(tabs().map((t) => t.tabIndex)).toEqual([0, -1, -1]);
     expect(document.querySelector("[role=tablist]")!.getAttribute("aria-label")).toBe("Open notes and pages");
     expect(document.querySelector("[role=tabpanel]")).not.toBeNull();
-    // Buttons inside a tab are not extra Tab stops.
-    expect([...tabs()[0].querySelectorAll("button")].every((b) => b.tabIndex === -1)).toBe(true);
     tabs()[0].focus();
     await press("ArrowRight");
     expect(document.activeElement).toBe(tabs()[1]);
@@ -75,5 +73,49 @@ describe("the tab strip from the keyboard", () => {
     expect(useWorkspace.getState().panes[1].active).toBe("b");
     await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "w", ctrlKey: true, cancelable: true })); });
     expect(useWorkspace.getState().panes.map((p) => p.tabs.map((t) => t.id))).toEqual([["a"], ["c"]]);
+  });
+});
+
+describe("the tab strip's markup", () => {
+  async function mount(dirty: Record<string, boolean>) {
+    useWorkspace.setState({ panes: [{ id: "p0", tabs: [page("a", "A.md"), page("b", "B.md")], active: "a" }], focused: "p0", dirty, reveal: null });
+    const el = document.createElement("div");
+    document.body.append(el);
+    root = createRoot(el);
+    await act(async () => root!.render(<QueryClientProvider client={new QueryClient()}><Workspace /></QueryClientProvider>));
+  }
+
+  it("keeps only tabs in the tab list, with the buttons beside it and the close mark outside the tab", async () => {
+    await mount({});
+    const list = document.querySelector("[role=tablist]")!;
+    expect(list.querySelectorAll("button, a, input, [tabindex='0']").length).toBe(1); // the active tab
+    expect([...list.querySelectorAll("[role=tab]")].every((t) => !t.querySelector("button, .tab-close"))).toBe(true);
+    // The buttons that were in the strip are still in it, after the tab list.
+    const strip = list.parentElement!;
+    expect([...strip.querySelectorAll("button")].map((b) => b.getAttribute("aria-label"))).toEqual(["New note", "Split", "Context rail"]);
+    expect(list.contains(strip.querySelector("button"))).toBe(false);
+    // The close mark is for the mouse: hidden from assistive technology, not a Tab stop, and it closes the tab.
+    const mark = document.querySelector<HTMLElement>(".note-tab-pill .tab-close")!;
+    expect(mark.getAttribute("aria-hidden")).toBe("true");
+    expect(mark.closest("[role=tab]")).toBeNull();
+    await act(async () => mark.click());
+    expect(useWorkspace.getState().panes[0].tabs.map((t) => t.id)).toEqual(["b"]);
+  });
+
+  it("names a tab by the page, and says so in words when it has unsaved edits", async () => {
+    await mount({ a: true });
+    const [a, b] = tabs();
+    expect(a.textContent).toBe("A●, unsaved");
+    expect(b.textContent).toBe("B");
+    expect(a.querySelector(".dot")!.getAttribute("aria-hidden")).toBe("true");
+    expect(a.querySelector(".visually-hidden")!.textContent).toBe(", unsaved");
+    expect(a.closest(".note-tab-pill")!.getAttribute("title")).toBe("A");
+  });
+
+  it("names the pane and its tab panel", async () => {
+    await mount({});
+    expect(document.querySelector("section.pane")!.getAttribute("aria-label")).toBe("Open notes");
+    expect(document.querySelector("[role=tabpanel]")!.getAttribute("aria-label")).toBe("A");
+    expect(document.querySelector<HTMLElement>("[role=tabpanel]")!.tabIndex).toBe(-1);
   });
 });

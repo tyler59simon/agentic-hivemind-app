@@ -23,7 +23,7 @@ export function AgentMainPage() {
       {build && !build.complete && (
         <div className="wiki-banner">The build stopped before every page was written. Refresh continues from where it stopped.</div>
       )}
-      <Split rail={
+      <Split label="Build details" rail={
         <Infobox title="Build" icon={<Package size="1.2em" aria-hidden />} pairs={[
           ["Scope", m.scope === "domain" || !m.scope ? "Whole domain" : `Project ${m.scope}`],
           ["Sections", String(sections.length)],
@@ -106,7 +106,7 @@ export function AgentPage({ note: n }: { note: WikiNote }) {
       <PageHeader eyebrow={section?.label} title={n.title} meta={<PageFlag note={n} />} />
       {status === "planned" && <div className="wiki-banner">This page is planned and not written yet. A build writes it from the notes listed under Planned sources.</div>}
       {status === "stale" && <div className="wiki-banner">A source of this page changed or was removed since it was written. Refresh the wiki to rewrite it.</div>}
-      <Split rail={<>
+      <Split label="Page details" rail={<>
         <Infobox title="Page details" icon={<Package size="1.2em" aria-hidden />} pairs={[
           ["Status", status === "planned" ? "Planned" : status === "stale" ? "Written, stale" : "Written, current"],
           ["Section", section ? <a key="x" href={`#${sectionAt(n.project, n.section)}`} onClick={(e) => { e.preventDefault(); goTo(sectionAt(n.project, n.section)); }}>{section.label}</a> : null],

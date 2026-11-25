@@ -312,7 +312,7 @@ function SystemView({ system, all }: { system: System; all: System[] }) {
 
   return (
     <>
-      <Split rail={<>
+      <Split label="System details" rail={<>
         {picked && shownModel && <Inspector slug={system.slug} node={picked} model={shownModel} decisions={parts.decisions} stale={shownId ? undefined : stale} onClose={() => setPicked(null)} />}
         <Section title={system.name} actions={
           <Menu label="System actions" align="right" button={<Ellipsis size="1.3em" aria-hidden />} className="icon-menu">

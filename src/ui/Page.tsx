@@ -33,12 +33,12 @@ export function PageHeader({ eyebrow, title, subtitle, meta, actions }: {
   );
 }
 
-/** A main column with a context rail on the right, split by a divider. */
-export function Split({ children, rail, wide }: { children: ReactNode; rail: ReactNode; wide?: boolean }) {
+/** A main column with a context rail on the right, split by a divider. `label` names the rail for screen readers. */
+export function Split({ children, rail, wide, label = "Details" }: { children: ReactNode; rail: ReactNode; wide?: boolean; label?: string }) {
   return (
     <div className={`split ${wide ? "wide-rail" : ""}`}>
       <div className="split-main">{children}</div>
-      <aside className="split-rail">{rail}</aside>
+      <aside className="split-rail" aria-label={label}>{rail}</aside>
     </div>
   );
 }

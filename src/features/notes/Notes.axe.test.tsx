@@ -72,17 +72,8 @@ afterEach(async () => {
 
 /** What axe reports on this page today. Each entry names its cause; remove the entry in the commit that fixes it. */
 const BASELINE = [
-  // The tablist holds the "New page", "Split" and "Context rail" buttons next to the tabs (Workspace.tsx:131-141).
-  'aria-required-children @ #pane-p0 > .note-tabs[role="tablist"][aria-label="Open notes and pages"]',
-  'aria-required-children @ #pane-p1 > .note-tabs[role="tablist"][aria-label="Open notes and pages"]',
-  // The close button sits inside the role=tab element (Workspace.tsx:82-88).
-  'nested-interactive @ .note-tab-pill[title="Inbox"][role="tab"]',
-  'nested-interactive @ #pane-p0 > .note-tabs[role="tablist"][aria-label="Open notes and pages"] > .note-tab-pill[title="Plan"][role="tab"]',
-  'nested-interactive @ #pane-p1 > .note-tabs[role="tablist"][aria-label="Open notes and pages"] > .note-tab-pill[title="Plan"][role="tab"]',
   // The tree's expand button has an icon and no name (NotebookTree.tsx:284).
   'button-name @ button[aria-hidden="false"]',
-  // Two complementary landmarks without names: the sidebar (Sidebar.tsx:70) and the rail (RightSidebar.tsx:30, 32, 35).
-  "landmark-unique @ #app-sidebar",
   // The rail panels put an h4 under the Section h2 (ui/Page.tsx:55) and skip h3 (links/LinksPanel.tsx:36, RelatedPanel.tsx:32).
   "heading-order @ .section:nth-child(2) > .links-panel > .links-section:nth-child(1) > h4",
   "heading-order @ .section:nth-child(4) > .links-panel > .links-section:nth-child(1) > h4",

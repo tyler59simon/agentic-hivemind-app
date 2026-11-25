@@ -248,7 +248,7 @@ function StartForm({ project }: { project: Project | null }) {
     <>
       <div className="start-body">
         {selected?.error && <div className="banner warn">{selected.error}</div>}
-        <Split rail={project && !folderMode ? (
+        <Split label="Briefing" rail={project && !folderMode ? (
           <>
             <Section title="Briefing preview"><p className="muted">Scope: {project.name} / {repoName(repo)}</p></Section>
             <Section title="Included memory">

@@ -30,6 +30,7 @@ import { needsLmUpdate, useConnection } from "./lib/connection";
 import { refreshStore } from "./lib/refresh";
 import { skillsSyncNow } from "./lib/skills";
 import { toggleFocusMode, toggleFullscreen, toggleSidebar } from "./shell/layout";
+import { cycleRegion } from "./shell/regions";
 import { Shell } from "./shell/Shell";
 import { closeSettings, openInbox, openSession, openSettings, useApp } from "./store";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
@@ -75,6 +76,8 @@ export function useShortcuts() {
       else if (matches(e, "sidebar.toggle")) { e.preventDefault(); toggleSidebar(); }
       else if (matches(e, "focus.toggle")) { e.preventDefault(); toggleFocusMode(); }
       else if (matches(e, "fullscreen.toggle")) { e.preventDefault(); void toggleFullscreen(); }
+      // The window's regions in turn (DESK-A11Y A2). A page with no shell (the Settings card) has none, and the key is left alone.
+      else if (matches(e, "region.next") || matches(e, "region.prev")) { if (cycleRegion(matches(e, "region.next") ? 1 : -1)) e.preventDefault(); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
