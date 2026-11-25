@@ -1,5 +1,5 @@
 // Appearance settings in the settings file (DESK-11): theme, document background, document text size, the default note
-// mode and the spelling check (DESK-8). Rust keeps them (`appearance_get`, `appearance_set`) and tells every window with
+// mode, the spelling check (DESK-8) and the fonts, document line height and width and density (DESK-TYPE). Rust keeps them (`appearance_get`, `appearance_set`) and tells every window with
 // `appearance`. localStorage holds a copy only so the first paint needs no round trip: after start the file wins, and a
 // value only the copy has (kept before the settings file held it) is sent to the file once. To add a setting: a field in
 // `Appearance`, an arm in `appearance::change` and a validator in settings.rs, then `followAppearance` in the module that
@@ -9,6 +9,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useSyncExternalStore } from "react";
 import { toast } from "../ui/toast";
 import type { Mode } from "../workspace/store";
+import type { Density, DocFont, DocWidth, LineHeight, MonoFont, UiFont } from "./fonts";
 import { inTauri } from "./native";
 import type { PaperDefault } from "./paper";
 import { APPEARANCE_DEFAULTS, prefs } from "./prefs";
@@ -20,6 +21,12 @@ export interface Appearance {
   document_size: number | null;
   default_mode: Mode | null;
   spellcheck: boolean | null;
+  ui_font: UiFont | null;
+  doc_font: DocFont | null;
+  mono_font: MonoFont | null;
+  doc_line_height: LineHeight | null;
+  doc_width: DocWidth | null;
+  density: Density | null;
 }
 export type AppearanceKey = keyof Appearance;
 
@@ -31,9 +38,11 @@ const changed = (key: AppearanceKey) => { changes[key] = (changes[key] ?? 0) + 1
 const applies = new Map<AppearanceKey, (value: never) => void>();
 const NAMES: Record<AppearanceKey, string> = {
   theme: "theme", document_background: "document background", document_size: "document text size", default_mode: "default note mode", spellcheck: "spelling check",
+  ui_font: "interface font", doc_font: "document font", mono_font: "code font", doc_line_height: "document line height", doc_width: "document width", density: "density",
 };
 const COPIES: Record<AppearanceKey, string> = {
   theme: prefs.themeKey, document_background: prefs.paperKey, document_size: prefs.docSizeKey, default_mode: prefs.defaultModeKey, spellcheck: prefs.spellcheckKey,
+  ...prefs.typeKeys,
 };
 
 // What each key shows while the file holds nothing for it: the same defaults the prefs getters use.

@@ -47,7 +47,7 @@ export const editorHighlight = HighlightStyle.define([
 const theme = EditorView.theme({
   "&": { backgroundColor: "transparent", color: "var(--fg)", height: "100%" },
   "&.cm-focused": { outline: "none" },
-  ".cm-scroller": { fontFamily: "inherit", lineHeight: "1.6" },
+  ".cm-scroller": { fontFamily: "inherit", lineHeight: "var(--doc-line-height)" },
   ".cm-content": { caretColor: "var(--fg)", padding: "8px 0 120px" },
   ".cm-cursor": { borderLeftColor: "var(--fg)" },
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection": { backgroundColor: "var(--accent-soft) !important" },

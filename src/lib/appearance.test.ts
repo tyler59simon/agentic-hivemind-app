@@ -7,6 +7,8 @@ const fake = vi.hoisted(() => {
   const KNOWN: Record<string, unknown[]> = {
     theme: ["purple", "emerald", "emerald-light", "system"], document_background: ["theme", "white"],
     document_size: [0.9, 1, 1.1, 1.25, 1.5], default_mode: ["reading", "live", "source"], spellcheck: [true, false],
+    ui_font: ["jakarta", "segoe", "system"], doc_font: ["jakarta", "segoe", "system", "georgia", "cambria"], mono_font: ["jetbrains", "cascadia", "consolas"],
+    doc_line_height: [1.4, 1.6, 1.8], doc_width: ["narrow", "normal", "wide", "full"], density: ["comfortable", "compact"],
   };
   type Listener = { name: string; cb: (e: { payload: unknown }) => void };
   const f = {
@@ -72,15 +74,15 @@ vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setTheme: 
 /** A new window: its own copy of every module, as the main and the capture window each have, with the same localStorage. */
 async function openWindow() {
   vi.resetModules();
-  const [appearance, theme, paper, docSize, spell, prefs, toast] = await Promise.all([
-    import("./appearance"), import("./theme"), import("./paper"), import("./docSize"), import("./spellcheck"), import("./prefs"), import("../ui/toast"),
+  const [appearance, theme, paper, docSize, spell, type, prefs, toast] = await Promise.all([
+    import("./appearance"), import("./theme"), import("./paper"), import("./docSize"), import("./spellcheck"), import("./typography"), import("./prefs"), import("../ui/toast"),
   ]);
-  return { appearance, theme, paper, docSize, spell, prefs, toasts: () => toast.useToasts.getState().items };
+  return { appearance, theme, paper, docSize, spell, type, prefs, toasts: () => toast.useToasts.getState().items };
 }
 type Win = Awaited<ReturnType<typeof openWindow>>;
 
 const flush = async () => { for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0)); };
-const start = (w: Win) => { w.theme.initTheme(); w.paper.initPaperDefault(); w.docSize.initDocSize(); w.appearance.initDefaultMode(); w.spell.initSpellcheck(); };
+const start = (w: Win) => { w.theme.initTheme(); w.paper.initPaperDefault(); w.docSize.initDocSize(); w.appearance.initDefaultMode(); w.spell.initSpellcheck(); w.type.initTypography(); };
 const startAndWait = async (w: Win) => { start(w); await flush(); };
 const state = (w: Win) => [w.theme.currentThemeChoice(), w.paper.paperDefault()];
 const docSizeVar = () => document.documentElement.style.getPropertyValue("--doc-size");
@@ -91,6 +93,8 @@ beforeEach(() => {
   fake.reset();
   delete document.documentElement.dataset.theme;
   document.documentElement.style.removeProperty("--doc-size");
+  document.documentElement.removeAttribute("style");
+  delete document.documentElement.dataset.density;
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -278,8 +282,8 @@ describe("a change the file refuses (C5)", () => {
     expect(w.toasts()).toHaveLength(5);
     // What a refused save falls back to is what the first paint shows with no copy (Codex re-review F5).
     const { prefs, APPEARANCE_DEFAULTS } = w.prefs;
-    expect({ theme: prefs.theme(), document_background: prefs.paper(), document_size: prefs.docSize(), default_mode: prefs.defaultMode(), spellcheck: prefs.spellcheck() })
-      .toEqual(APPEARANCE_DEFAULTS);
+    expect({ theme: prefs.theme(), document_background: prefs.paper(), document_size: prefs.docSize(), default_mode: prefs.defaultMode(), spellcheck: prefs.spellcheck(),
+      ...Object.fromEntries(Object.keys(prefs.typeKeys).map((k) => [k, prefs.typeValue(k as keyof typeof prefs.typeKeys)])) }).toEqual(APPEARANCE_DEFAULTS);
   });
 
   it("lets a newer change win over the read that follows a refused save", async () => {   // Codex re-review of 2e736f0
@@ -386,5 +390,105 @@ describe("the spelling check (DESK-8)", () => {
     expect(w.spell.spellcheck()).toBe(false);
     w.spell.setSpellcheck(true);
     expect(w.spell.spellcheck()).toBe(true);
+  });
+});
+
+describe("fonts, line height, width and density (DESK-TYPE)", () => {
+  const css = (name: string) => document.documentElement.style.getPropertyValue(name);
+
+  it("shows the defaults when nothing sets them, and sends nothing", async () => {
+    await startAndWait(await openWindow());
+    expect(css("--font-ui")).toContain("Plus Jakarta Sans Variable");
+    expect(css("--font-doc")).toBe(css("--font-ui"));
+    expect(css("--font-mono")).toContain("JetBrains Mono Variable");
+    expect(css("--doc-line-height")).toBe("1.6");
+    expect(css("--doc-width")).toBe("54rem");
+    expect(document.documentElement.dataset.density).toBe("comfortable");
+    expect(fake.writes).toEqual([]);
+  });
+
+  it("applies the copy before the file answers, and moves a copy only it has into the settings file", async () => {
+    localStorage.setItem("hivemind.docFont", "georgia");
+    localStorage.setItem("hivemind.docLineHeight", "1.8");
+    localStorage.setItem("hivemind.density", "compact");
+    localStorage.setItem("hivemind.docWidth", "54rem");   // not a preset key: ignored
+    const w = await openWindow();
+    w.type.initTypography();
+    expect(css("--font-doc")).toContain("Georgia");
+    expect(css("--doc-line-height")).toBe("1.8");
+    expect(css("--doc-width")).toBe("54rem");
+    expect(document.documentElement.dataset.density).toBe("compact");
+    await flush();
+    expect(fake.file).toEqual({ doc_font: "georgia", doc_line_height: 1.8, density: "compact" });
+    expect(fake.writes.map((x) => x.cmd)).toEqual(Array(3).fill("appearance_init"));
+  });
+
+  it("follows the settings file at start and any change in another window, without sending anything back", async () => {
+    fake.file = { ui_font: "system", mono_font: "consolas", doc_width: "full" };
+    const w = await openWindow();
+    await startAndWait(w);
+    expect(css("--font-ui")).toMatch(/^system-ui/);
+    expect(css("--font-mono")).toMatch(/^Consolas/);
+    expect(css("--doc-width")).toBe("none");
+    expect(w.prefs.prefs.typeValue("doc_width")).toBe("full");
+    const heard = vi.fn();
+    w.type.onTypeChange(heard);
+    fake.externalSet({ doc_font: "cambria", doc_line_height: 1.4, density: "compact", doc_width: "narrow" });
+    await flush();
+    expect(css("--font-doc")).toMatch(/^Cambria/);
+    expect(css("--doc-line-height")).toBe("1.4");
+    expect(css("--doc-width")).toBe("46rem");
+    expect(document.documentElement.dataset.density).toBe("compact");
+    expect([w.prefs.prefs.typeValue("doc_font"), w.prefs.prefs.typeValue("doc_line_height"), w.prefs.prefs.typeValue("density")]).toEqual(["cambria", 1.4, "compact"]);
+    expect(heard).toHaveBeenCalled();
+    expect(fake.writes).toEqual([]);
+  });
+
+  it("reaches the other window from the setter", async () => {
+    const [main, capture] = [await openWindow(), await openWindow()];
+    await startAndWait(capture);
+    const heard = vi.fn();
+    capture.type.onTypeChange(heard);
+    main.type.applyType("density", "compact");
+    main.type.applyType("doc_line_height", 1.8);
+    await flush();
+    expect(fake.file).toEqual({ density: "compact", doc_line_height: 1.8 });
+    expect(heard).toHaveBeenCalled();
+    expect(css("--doc-line-height")).toBe("1.8");
+  });
+
+  it("shows the default and drops the copy when the file refuses a first choice", async () => {
+    const w = await openWindow();
+    await startAndWait(w);
+    fake.failSets = true;
+    w.type.applyType("ui_font", "segoe");
+    w.type.applyType("density", "compact");
+    await flush();
+    expect(css("--font-ui")).toContain("Plus Jakarta Sans Variable");
+    expect(document.documentElement.dataset.density).toBe("comfortable");
+    expect([localStorage.getItem("hivemind.uiFont"), localStorage.getItem("hivemind.density")]).toEqual([null, null]);
+    expect(w.toasts().map((t) => t.text)).toEqual(["Could not save the interface font setting.", "Could not save the density setting."]);
+  });
+
+  it("shows what the file holds when it refuses a change", async () => {
+    fake.file = { doc_line_height: 1.4 };
+    const w = await openWindow();
+    await startAndWait(w);
+    fake.failSets = true;
+    w.type.applyType("doc_line_height", 1.8);
+    await flush();
+    expect(css("--doc-line-height")).toBe("1.4");
+    expect(w.prefs.prefs.typeValue("doc_line_height")).toBe(1.4);
+  });
+
+  it("falls back to the defaults when localStorage cannot be used", async () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("blocked"); });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
+    fake.file = { density: "compact" };
+    const w = await openWindow();
+    await startAndWait(w);
+    expect(document.documentElement.dataset.density).toBe("compact");
+    w.type.applyType("density", "comfortable");
+    expect(document.documentElement.dataset.density).toBe("comfortable");
   });
 });

@@ -79,6 +79,19 @@ pub struct Settings {
     /// Whether notes are spell-checked, on when unset (DESK-8). Changed only by `appearance_set`.
     #[serde(default, deserialize_with = "lenient")]
     pub spellcheck: Option<bool>,
+    /// Typography and density (DESK-TYPE), each one of the lists below. Changed only by `appearance_set`.
+    #[serde(default, deserialize_with = "lenient")]
+    pub ui_font: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    pub doc_font: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    pub mono_font: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    pub doc_line_height: Option<f64>,
+    #[serde(default, deserialize_with = "lenient")]
+    pub doc_width: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    pub density: Option<String>,
 }
 
 /// A value of the wrong type reads as unset, so one bad appearance field never fails the whole settings file.
@@ -152,6 +165,30 @@ impl Settings {
         self.spellcheck
     }
 
+    pub fn ui_font(&self) -> Option<&str> {
+        self.ui_font.as_deref().filter(|v| valid_ui_font(v))
+    }
+
+    pub fn doc_font(&self) -> Option<&str> {
+        self.doc_font.as_deref().filter(|v| valid_doc_font(v))
+    }
+
+    pub fn mono_font(&self) -> Option<&str> {
+        self.mono_font.as_deref().filter(|v| valid_mono_font(v))
+    }
+
+    pub fn doc_line_height(&self) -> Option<f64> {
+        self.doc_line_height.filter(|v| valid_line_height(*v))
+    }
+
+    pub fn doc_width(&self) -> Option<&str> {
+        self.doc_width.as_deref().filter(|v| valid_doc_width(v))
+    }
+
+    pub fn density(&self) -> Option<&str> {
+        self.density.as_deref().filter(|v| valid_density(v))
+    }
+
     /// The daily cap for the reviewer and the executive calls; zero turns them off.
     pub fn learning_daily_usd(&self) -> f64 {
         daily(self.learning_daily_usd, DEFAULT_LEARNING_DAILY_USD)
@@ -223,17 +260,30 @@ pub fn clamp_zoom(zoom: f64) -> f64 {
     if zoom.is_finite() { zoom.clamp(ZOOM_MIN, ZOOM_MAX) } else { 1.0 }
 }
 
-/// The values the appearance settings may have (DESK-11). Keep in step with src/lib/theme.ts, paper.ts, docSize.ts and the
-/// "Open notes in" choice in src/features/settings/SettingsForm.tsx.
+/// The values the appearance settings may have (DESK-11). Keep in step with src/lib/theme.ts, paper.ts, docSize.ts, typography.ts
+/// and the "Open notes in" choice in src/features/settings/SettingsForm.tsx.
 pub const THEMES: [&str; 4] = ["purple", "emerald", "emerald-light", "system"];
 pub const PAPERS: [&str; 2] = ["theme", "white"];
 pub const DOC_SIZES: [f64; 5] = [0.9, 1.0, 1.1, 1.25, 1.5];
 pub const DEFAULT_MODES: [&str; 3] = ["reading", "live", "source"];
 
+pub const UI_FONTS: [&str; 3] = ["jakarta", "segoe", "system"];
+pub const DOC_FONTS: [&str; 5] = ["jakarta", "segoe", "system", "georgia", "cambria"];
+pub const MONO_FONTS: [&str; 3] = ["jetbrains", "cascadia", "consolas"];
+pub const LINE_HEIGHTS: [f64; 3] = [1.4, 1.6, 1.8];
+pub const DOC_WIDTHS: [&str; 4] = ["narrow", "normal", "wide", "full"];
+pub const DENSITIES: [&str; 2] = ["comfortable", "compact"];
+
 pub fn valid_theme(value: &str) -> bool { THEMES.contains(&value) }
 pub fn valid_paper(value: &str) -> bool { PAPERS.contains(&value) }
 pub fn valid_doc_size(value: f64) -> bool { DOC_SIZES.contains(&value) }
 pub fn valid_default_mode(value: &str) -> bool { DEFAULT_MODES.contains(&value) }
+pub fn valid_ui_font(value: &str) -> bool { UI_FONTS.contains(&value) }
+pub fn valid_doc_font(value: &str) -> bool { DOC_FONTS.contains(&value) }
+pub fn valid_mono_font(value: &str) -> bool { MONO_FONTS.contains(&value) }
+pub fn valid_line_height(value: f64) -> bool { LINE_HEIGHTS.contains(&value) }
+pub fn valid_doc_width(value: &str) -> bool { DOC_WIDTHS.contains(&value) }
+pub fn valid_density(value: &str) -> bool { DENSITIES.contains(&value) }
 
 /// Serialises read, change and write of the settings file, so two commands that each change one field never undo
 /// each other's change.
@@ -345,6 +395,27 @@ mod tests {
         let good: Settings = serde_json::from_str(r#"{"theme": "emerald", "document_background": "white", "document_size": 1.25, "default_mode": "source", "spellcheck": false}"#).unwrap();
         assert_eq!((good.theme(), good.document_background(), good.document_size(), good.default_mode(), good.spellcheck()), (Some("emerald"), Some("white"), Some(1.25), Some("source"), Some(false)));
         assert_eq!(Settings::default().spellcheck(), None);
+    }
+
+    #[test]
+    fn typography_values_are_checked_and_unknown_ones_ignored_on_load() {   // DESK-TYPE
+        assert!(valid_ui_font("jakarta") && valid_ui_font("segoe") && valid_ui_font("system") && !valid_ui_font("georgia") && !valid_ui_font("Arial, serif"));
+        assert!(valid_doc_font("georgia") && valid_doc_font("cambria") && valid_doc_font("jakarta") && !valid_doc_font("consolas"));
+        assert!(valid_mono_font("jetbrains") && valid_mono_font("cascadia") && valid_mono_font("consolas") && !valid_mono_font("monospace"));
+        assert!(valid_line_height(1.4) && valid_line_height(1.6) && valid_line_height(1.8) && !valid_line_height(1.5) && !valid_line_height(f64::NAN));
+        assert!(valid_doc_width("narrow") && valid_doc_width("full") && !valid_doc_width("54rem"));
+        assert!(valid_density("compact") && valid_density("comfortable") && !valid_density("dense"));
+        let none = Settings::default();
+        assert_eq!((none.ui_font(), none.doc_font(), none.mono_font(), none.doc_line_height(), none.doc_width(), none.density()), (None, None, None, None, None, None));
+        let good: Settings = serde_json::from_str(r#"{"ui_font": "segoe", "doc_font": "georgia", "mono_font": "cascadia", "doc_line_height": 1.8, "doc_width": "wide", "density": "compact"}"#).unwrap();
+        assert_eq!((good.ui_font(), good.doc_font(), good.mono_font(), good.doc_line_height(), good.doc_width(), good.density()),
+            (Some("segoe"), Some("georgia"), Some("cascadia"), Some(1.8), Some("wide"), Some("compact")));
+        // An unknown value reads as unset; a value of the wrong type does not fail the file.
+        let unknown: Settings = serde_json::from_str(r#"{"ui_font": "comic", "doc_line_height": 1.5, "density": "dense"}"#).unwrap();
+        assert_eq!((unknown.ui_font(), unknown.doc_line_height(), unknown.density()), (None, None, None));
+        let bad: Settings = serde_json::from_str(r#"{"python": "py", "doc_font": 3, "mono_font": ["x"], "doc_line_height": "1.6", "doc_width": {"a": 1}, "density": 1.0}"#).unwrap();
+        assert_eq!(bad.python.as_deref(), Some("py"));
+        assert_eq!((bad.doc_font, bad.mono_font, bad.doc_line_height, bad.doc_width, bad.density), (None, None, None, None, None));
     }
 
     #[test]

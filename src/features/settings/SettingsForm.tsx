@@ -2,7 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { setDefaultMode, useDefaultMode } from "../../lib/appearance";
 import { setSpellcheck, useSpellcheck } from "../../lib/spellcheck";
 import { applyDocSize, DOC_SIZES, useDocSize } from "../../lib/docSize";
+import { TYPE_CHOICES, type TypeKey } from "../../lib/fonts";
 import { isMac } from "../../lib/platform";
+import { applyType, useType } from "../../lib/typography";
 import { setZoom, useZoom, ZOOM_STEPS, zoomPercent } from "../../lib/zoom";
 import { useEffect, useState } from "react";
 import { ENGINE_LABELS, ENGINES, enginesText, shownEngines, type Engine } from "../../lib/agent";
@@ -22,6 +24,20 @@ import { withCommands } from "./commands";
 // Keep in step with DEFAULT_CAPTURE_SHORTCUT in src-tauri/src/settings.rs.
 const DEFAULT_SHORTCUT = isMac ? "CommandOrControl+Alt+Shift+M" : "CommandOrControl+Alt+M";
 type PathKey = "python" | "script" | "root" | "claude_path" | "codex_path" | "architecture_suite_plugin";
+
+/** One of the typography choices: shows the setting in effect and changes it at once, with no Save. */
+function TypeField({ name, label }: { name: TypeKey; label: string }) {
+  const current = useType(name);
+  const choices = TYPE_CHOICES[name] as { value: string | number; label: string }[];
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <select value={String(current)} onChange={(e) => applyType(name, choices.find((c) => String(c.value) === e.target.value)!.value as never)}>
+        {choices.map((c) => <option key={String(c.value)} value={String(c.value)}>{c.label}</option>)}
+      </select>
+    </label>
+  );
+}
 
 /** Where Hivemind finds Python, living_memory.py and the store; quick capture; editor default. */
 export function SettingsForm({ onSaved }: { onSaved: () => void }) {
@@ -188,6 +204,11 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
           {DOC_SIZES.map((s) => <option key={s.value} value={String(s.value)}>{s.label}</option>)}
         </select>
       </label>
+      <TypeField name="ui_font" label="Interface font" />
+      <TypeField name="doc_font" label="Document font" />
+      <TypeField name="mono_font" label="Code font" />
+      <TypeField name="doc_line_height" label="Document line height" />
+      <TypeField name="doc_width" label="Document width" />
       <label className="field">
         <span>Theme</span>
         <select value={theme} onChange={(e) => applyTheme(e.target.value as ThemeChoice)}>
@@ -200,7 +221,7 @@ export function SettingsForm({ onSaved }: { onSaved: () => void }) {
           {PAPER_DEFAULTS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
         </select>
       </label>
-      <p className="muted small">The zoom, the document text size, the theme and the document background change at once and are kept in the settings file; they do not need Save. White shows documents as dark text on white paper while the rest of Hivemind keeps its theme. A document's page menu can switch that one tab.</p>
+      <p className="muted small">The zoom, the fonts, the document text size, line height and width, the theme and the document background change at once and are kept in the settings file; they do not need Save. White shows documents as dark text on white paper while the rest of Hivemind keeps its theme. A document's page menu can switch that one tab. The document width is the reading column of a note; a page document keeps its own width.</p>
 
       <h3>Sidebar</h3>
       {sections.map((s) => (

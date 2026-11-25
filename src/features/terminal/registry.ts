@@ -13,6 +13,7 @@ import { useSyncExternalStore } from "react";
 import type { Engine, SessionInfo } from "../../lib/agent";
 import { isMac } from "../../lib/platform";
 import { onThemeChange } from "../../lib/theme";
+import { onTypeChange } from "../../lib/typography";
 import { termClose, termLogin, termOpen, termResize, termShell, termWrite, type ShellTarget, type StartMode, type TermExit, type TermInfo } from "../../lib/term";
 import { keyAction } from "./keys";
 import { decodeOsc52 } from "./osc52";
@@ -78,6 +79,11 @@ const read = (token: string) => getComputedStyle(document.documentElement).getPr
 onThemeChange(() => {
   const theme = xtermTheme(read);
   lives.forEach((live) => { live.term.options.theme = theme; });
+});
+// A new code font (Settings) changes every open terminal's font and refits the ones on screen.
+onTypeChange(() => {
+  const fontFamily = read("--font-mono");
+  lives.forEach((live, id) => { if (live.term.options.fontFamily !== fontFamily) { live.term.options.fontFamily = fontFamily; refit(id); } });
 });
 const rootPx = () => parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
 const openLink = (_e: MouseEvent, uri: string) => { if (/^https?:/i.test(uri)) openUrl(uri).catch(() => undefined); };

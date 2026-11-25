@@ -35,6 +35,12 @@ pub struct Appearance {
     pub document_size: Option<f64>,
     pub default_mode: Option<String>,
     pub spellcheck: Option<bool>,
+    pub ui_font: Option<String>,
+    pub doc_font: Option<String>,
+    pub mono_font: Option<String>,
+    pub doc_line_height: Option<f64>,
+    pub doc_width: Option<String>,
+    pub density: Option<String>,
 }
 
 pub fn get(saved: &settings::Settings) -> Appearance {
@@ -44,6 +50,12 @@ pub fn get(saved: &settings::Settings) -> Appearance {
         document_size: saved.document_size(),
         default_mode: saved.default_mode().map(String::from),
         spellcheck: saved.spellcheck(),
+        ui_font: saved.ui_font().map(String::from),
+        doc_font: saved.doc_font().map(String::from),
+        mono_font: saved.mono_font().map(String::from),
+        doc_line_height: saved.doc_line_height(),
+        doc_width: saved.doc_width().map(String::from),
+        density: saved.density().map(String::from),
     }
 }
 
@@ -56,6 +68,12 @@ pub fn change(saved: &mut settings::Settings, key: &str, value: &serde_json::Val
         "default_mode" => saved.default_mode = Some(text(settings::valid_default_mode)?),
         "spellcheck" => saved.spellcheck = Some(value.as_bool().ok_or_else(|| format!("{key}: {value} is not a known value"))?),
         "document_size" => saved.document_size = Some(value.as_f64().filter(|v| settings::valid_doc_size(*v)).ok_or_else(|| format!("{key}: {value} is not a known value"))?),
+        "ui_font" => saved.ui_font = Some(text(settings::valid_ui_font)?),
+        "doc_font" => saved.doc_font = Some(text(settings::valid_doc_font)?),
+        "mono_font" => saved.mono_font = Some(text(settings::valid_mono_font)?),
+        "doc_width" => saved.doc_width = Some(text(settings::valid_doc_width)?),
+        "density" => saved.density = Some(text(settings::valid_density)?),
+        "doc_line_height" => saved.doc_line_height = Some(value.as_f64().filter(|v| settings::valid_line_height(*v)).ok_or_else(|| format!("{key}: {value} is not a known value"))?),
         _ => return Err(format!("Unknown appearance setting: {key}")),
     }
     Ok(())
@@ -70,6 +88,12 @@ fn is_set(saved: &settings::Settings, key: &str) -> Result<bool, String> {
         "document_size" => Ok(now.document_size.is_some()),
         "default_mode" => Ok(now.default_mode.is_some()),
         "spellcheck" => Ok(now.spellcheck.is_some()),
+        "ui_font" => Ok(now.ui_font.is_some()),
+        "doc_font" => Ok(now.doc_font.is_some()),
+        "mono_font" => Ok(now.mono_font.is_some()),
+        "doc_line_height" => Ok(now.doc_line_height.is_some()),
+        "doc_width" => Ok(now.doc_width.is_some()),
+        "density" => Ok(now.density.is_some()),
         _ => Err(format!("Unknown appearance setting: {key}")),
     }
 }
@@ -121,6 +145,28 @@ mod tests {
     }
 
     #[test]
+    fn change_keeps_known_typography_values_and_refuses_the_rest() {   // DESK-TYPE
+        let mut saved = settings::Settings::default();
+        for (key, value) in [("ui_font", json!("segoe")), ("doc_font", json!("cambria")), ("mono_font", json!("consolas")), ("doc_line_height", json!(1.8)),
+            ("doc_width", json!("full")), ("density", json!("compact"))] {
+            change(&mut saved, key, &value).unwrap();
+        }
+        let kept = get(&saved);
+        assert_eq!((kept.ui_font.as_deref(), kept.doc_font.as_deref(), kept.mono_font.as_deref(), kept.doc_line_height, kept.doc_width.as_deref(), kept.density.as_deref()),
+            (Some("segoe"), Some("cambria"), Some("consolas"), Some(1.8), Some("full"), Some("compact")));
+        let before = saved.clone();
+        for (key, value) in [("ui_font", json!("georgia")), ("ui_font", json!("Arial; color: red")), ("ui_font", json!(1)), ("doc_font", json!("consolas")), ("mono_font", json!("monospace")),
+            ("doc_line_height", json!(1.5)), ("doc_line_height", json!("1.6")), ("doc_width", json!("54rem")), ("doc_width", json!(null)), ("density", json!("dense")), ("density", json!(true))] {
+            assert!(change(&mut saved, key, &value).is_err(), "{key} {value}");
+        }
+        assert_eq!(saved, before);
+        // An init never replaces a value that is set, and writes one that is not.
+        assert!(write(&mut saved, "density", &json!("comfortable"), true).unwrap().is_none());
+        assert!(write(&mut settings::Settings::default(), "doc_line_height", &json!(1.4), true).unwrap().is_some());
+        assert!(write(&mut saved, "doc_width", &json!("wide"), true).unwrap().is_none());
+    }
+
+    #[test]
     fn only_if_unset_writes_a_missing_value_and_never_replaces_one() {   // DESK-11, C3
         let mut saved = settings::Settings::default();
         assert!(write(&mut saved, "theme", &json!("emerald"), true).unwrap().is_some());
@@ -144,7 +190,8 @@ mod tests {
     #[test]
     fn get_leaves_out_unknown_saved_values() {
         let saved = settings::Settings { theme: Some("sepia".into()), document_size: Some(1.0), ..Default::default() };
-        assert_eq!(get(&saved), Appearance { theme: None, document_background: None, document_size: Some(1.0), default_mode: None, spellcheck: None });
+        assert_eq!(get(&saved), Appearance { theme: None, document_background: None, document_size: Some(1.0), default_mode: None, spellcheck: None,
+            ui_font: None, doc_font: None, mono_font: None, doc_line_height: None, doc_width: None, density: None });
     }
 
     #[test]

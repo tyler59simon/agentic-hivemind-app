@@ -29,7 +29,7 @@ const look = {
   ".cm-deletedChunk": { backgroundColor: "var(--diff-del)", paddingLeft: "0" },
   ".cm-deletedChunk .cm-deletedLine": { padding: "0 1rem 0 2.2rem", position: "relative" },
   ".cm-deletedChunk .cm-deletedLine::before": { content: '"\\2212"', position: "absolute", left: ".7rem", color: "var(--error)" },
-  ".cm-collapsedLines": { background: "var(--bg-alt)", color: "var(--muted)", fontFamily: "var(--font-sans)", fontSize: ".86rem" },
+  ".cm-collapsedLines": { background: "var(--bg-alt)", color: "var(--muted)", fontFamily: "var(--font-ui)", fontSize: ".86rem" },
 };
 // CodeMirror's own defaults (selection, merge marks) follow the light or dark base.
 export const darkTheme = EditorView.theme(look, { dark: true });

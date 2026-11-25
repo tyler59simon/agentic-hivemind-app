@@ -1,5 +1,6 @@
 // Per-device conveniences kept in localStorage (shared by the main and capture windows).
 import type { Mode } from "../workspace/store";
+import { TYPE_CHOICES, TYPE_DEFAULTS, type TypeKey, type TypeValue } from "./fonts";
 import type { ThemeChoice } from "./theme";
 import type { PaperDefault } from "./paper";
 
@@ -10,6 +11,7 @@ const set = (key: string, value: string) => { try { localStorage.setItem(key, va
  *  refused save when the settings file holds nothing for the key (lib/appearance). */
 export const APPEARANCE_DEFAULTS = {
   theme: "purple" as ThemeChoice, document_background: "theme" as PaperDefault, document_size: 1, default_mode: "reading" as Mode, spellcheck: true,
+  ...TYPE_DEFAULTS,
 };
 
 export interface CaptureTarget { kind: "memory" | "today" | "inbox"; notebook: string }
@@ -48,6 +50,15 @@ export const prefs = {
   /** Whether notes are spell-checked: on unless it was turned off. */
   spellcheck: (): boolean => { const saved = get("hivemind.spellcheck"); return saved === "1" ? true : saved === "0" ? false : APPEARANCE_DEFAULTS.spellcheck; },
   setSpellcheck: (on: boolean) => set("hivemind.spellcheck", on ? "1" : "0"),
+  /** The localStorage key of each typography and density setting (DESK-TYPE). */
+  typeKeys: { ui_font: "hivemind.uiFont", doc_font: "hivemind.docFont", mono_font: "hivemind.monoFont", doc_line_height: "hivemind.docLineHeight", doc_width: "hivemind.docWidth", density: "hivemind.density" } as Record<TypeKey, string>,
+  /** The copy of a typography or density setting: the default when none was kept or it is not a known value. */
+  typeValue: <K extends TypeKey>(key: K): TypeValue<K> => {
+    const saved = get(prefs.typeKeys[key]);
+    const known = TYPE_CHOICES[key].find((c) => String(c.value) === saved);
+    return (known?.value ?? TYPE_DEFAULTS[key]) as TypeValue<K>;
+  },
+  setTypeValue: (key: TypeKey, value: string | number) => set(prefs.typeKeys[key], String(value)),
   docSizeKey: "hivemind.documentSize",
   /** The document text size multiple; 1 when unset or not a number. */
   docSize: (): number => { const n = Number(get("hivemind.documentSize")); return Number.isFinite(n) && n > 0 ? n : APPEARANCE_DEFAULTS.document_size; },

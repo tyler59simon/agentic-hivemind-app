@@ -104,9 +104,14 @@
   --term-white: var(--muted);
   --term-bright-black: var(--border-strong);
   --term-blue: #7fb0ff;
-  --font-sans: "Plus Jakarta Sans Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+  /* The fonts, the document line height and the note width are set on <html> by lib/typography.ts (DESK-TYPE); these are
+     the defaults it starts from. Keep them in step with FONT_STACKS and TYPE_DEFAULTS in lib/fonts.ts. */
+  --font-ui: "Plus Jakarta Sans Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-doc: var(--font-ui);
   --font-mono: "JetBrains Mono Variable", ui-monospace, "Cascadia Code", Consolas, monospace;
-  font-family: var(--font-sans);
+  --doc-line-height: 1.6;
+  --doc-width: 54rem;
+  font-family: var(--font-ui);
   /* A fixed base: the user sizes the interface with the window zoom (Ctrl+= / Ctrl+-) and documents with the document
      text size in Settings (DESK-ZOOM), never with the window width. */
   font-size: 16px;
@@ -589,7 +594,7 @@ input[type="checkbox"] { accent-color: var(--success); }
 .tag.unknown { border-color: var(--warn); color: var(--warn); }
 .tag-x { border: none; padding: 0 0 0 .25rem; line-height: 1; }
 
-.md-editor { min-height: 22rem; font-size: calc(1rem * var(--doc-size, 1)); }
+.md-editor { min-height: 22rem; font-size: calc(1rem * var(--doc-size, 1)); font-family: var(--font-doc); }
 .md-editor .cm-h1 { font-size: 1.55em; } .md-editor .cm-h2 { font-size: 1.3em; } .md-editor .cm-h3 { font-size: 1.15em; }
 .md-editor .cm-h { font-weight: 700; }
 .md-editor .cm-h2 { padding-top: .7rem; }
@@ -772,13 +777,13 @@ input[type="checkbox"] { accent-color: var(--success); }
 .tag { font-size: .86rem; padding: 0 .4rem; border-radius: .3rem; border: 1px solid var(--border); white-space: nowrap; }
 .result-meta { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
 
-.note { max-width: 54rem; padding: 1.4rem 1.6rem 4rem; }
+.note { max-width: var(--doc-width); padding: 1.4rem 1.6rem 4rem; }
 .properties { display: grid; grid-template-columns: 1fr; gap: .15rem; margin: 0; }
 .properties div { display: grid; grid-template-columns: minmax(4.5rem, 7rem) 1fr; gap: .5rem; }
 .properties dt { color: var(--muted); }
 .properties dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .properties.editable { margin-bottom: .6rem; }
-.markdown { font-size: calc(1.05rem * var(--doc-size, 1)); line-height: 1.6; overflow-wrap: anywhere; }
+.markdown { font-size: calc(1.05rem * var(--doc-size, 1)); font-family: var(--font-doc); line-height: var(--doc-line-height); overflow-wrap: anywhere; }
 .markdown > :first-child { margin-top: 0; }
 .markdown h1 { font-size: 1.62em; }
 .markdown h2 { font-size: 1.38em; margin: 1.9rem 0 .5rem; }

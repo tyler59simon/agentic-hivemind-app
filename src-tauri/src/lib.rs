@@ -1511,6 +1511,12 @@ fn settings_to_save(previous: &Settings, value: Settings) -> Result<Settings, St
     value.document_size = previous.document_size;
     value.default_mode = previous.default_mode.clone();
     value.spellcheck = previous.spellcheck;
+    value.ui_font = previous.ui_font.clone();
+    value.doc_font = previous.doc_font.clone();
+    value.mono_font = previous.mono_font.clone();
+    value.doc_line_height = previous.doc_line_height;
+    value.doc_width = previous.doc_width.clone();
+    value.density = previous.density.clone();
     if !value.shows(agent::Engine::Claude) && !value.shows(agent::Engine::Codex) {
         return Err("Keep at least one engine shown.".into());
     }
@@ -2224,6 +2230,18 @@ mod tests {
         assert_eq!(saved.python.as_deref(), Some("py"));
         assert_eq!((saved.theme, saved.document_background, saved.document_size, saved.default_mode, saved.spellcheck),
             (previous.theme, previous.document_background, previous.document_size, previous.default_mode, previous.spellcheck));
+    }
+
+    #[test]
+    fn a_settings_form_save_keeps_the_typography_it_did_not_change() {   // DESK-TYPE
+        let previous = Settings { ui_font: Some("segoe".into()), doc_font: Some("georgia".into()), mono_font: Some("consolas".into()), doc_line_height: Some(1.8),
+            doc_width: Some("wide".into()), density: Some("compact".into()), ..Default::default() };
+        let form = Settings { python: Some("py".into()), ui_font: Some("system".into()), doc_font: None, mono_font: Some("cascadia".into()), doc_line_height: Some(1.4),
+            doc_width: Some("narrow".into()), density: Some("comfortable".into()), ..Default::default() };
+        let saved = settings_to_save(&previous, form).unwrap();
+        assert_eq!(saved.python.as_deref(), Some("py"));
+        assert_eq!((saved.ui_font, saved.doc_font, saved.mono_font, saved.doc_line_height, saved.doc_width, saved.density),
+            (previous.ui_font, previous.doc_font, previous.mono_font, previous.doc_line_height, previous.doc_width, previous.density));
     }
 
     #[test]
