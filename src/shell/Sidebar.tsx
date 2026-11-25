@@ -4,11 +4,14 @@ import { contextMenuKey, menuPointFor } from "../ui/focus";
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, House, NotebookPen, PanelLeftClose, PanelLeftOpen, Settings, SquareCheck, Terminal, type LucideIcon } from "lucide-react";
 import logo from "../assets/logo.png";
+import { useAboutDialog } from "../features/help/AboutDialog";
 import { ProjectSwitcher } from "../features/projects/ProjectSwitcher";
 import { useInboxItems } from "../features/review/useInboxItems";
+import { useShortcutsDialog } from "../features/shortcuts/ShortcutsDialog";
 import { dotOf, useAttention } from "../features/terminal/attention";
 import { sessionsQuery } from "../lib/agent";
 import { useSystemsEnabled } from "../lib/connection";
+import { copyDiagnostics, openLogsFolder, reportProblem } from "../lib/diagnostics";
 import type { ConnectInfo } from "../lib/lm";
 import { refreshStore } from "../lib/refresh";
 import { useFormat } from "../lib/shortcuts";
@@ -35,6 +38,7 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
   const setPalette = useApp((s) => s.setPalette);
   const paletteKeys = useFormat("palette.commands");
   const toggleKeys = useFormat("sidebar.toggle");
+  const shortcutKeys = useFormat("shortcuts.show");
   const collapsed = useLayout((s) => s.sidebarCollapsed);
   const setCollapsed = useLayout((s) => s.setSidebarCollapsed);
   const client = useQueryClient();
@@ -104,6 +108,13 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
             <li role="none"><button role="menuitem" onClick={() => { close(); setPalette("commands"); }}><span className="grow">Command palette</span><kbd>{paletteKeys}</kbd></button></li>
             <li role="none"><button role="menuitem" onClick={() => { close(); refreshStore(client); }}><span className="grow">Refresh</span></button></li>
             <li role="none"><button role="menuitem" onClick={() => { close(); onReconnect(); }}><span className="grow">Reconnect to Living Memory</span></button></li>
+            {/* Help. Each item closes the menu first, which puts the focus on the account button: the dialogs return it there. */}
+            <li className="menu-sep" role="none" />
+            <li role="none"><button role="menuitem" onClick={() => { close(); useAboutDialog.getState().show(); }}><span className="grow">About Hivemind</span></button></li>
+            <li role="none"><button role="menuitem" onClick={() => { close(); useShortcutsDialog.getState().show(); }}><span className="grow">Keyboard shortcuts</span><kbd>{shortcutKeys}</kbd></button></li>
+            <li role="none"><button role="menuitem" onClick={() => { close(); void openLogsFolder(); }}><span className="grow">Open logs folder</span></button></li>
+            <li role="none"><button role="menuitem" onClick={() => { close(); void copyDiagnostics(); }}><span className="grow">Copy diagnostics</span></button></li>
+            <li role="none"><button role="menuitem" onClick={() => { close(); void reportProblem(); }}><span className="grow">Report a problem</span></button></li>
             <li className="menu-note" role="none" title={info.script}>{info.root}</li>
           </>
         )}

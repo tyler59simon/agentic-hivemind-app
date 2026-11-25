@@ -10,6 +10,7 @@ import { BeforeUninstall } from "./features/settings/BeforeUninstall";
 import { SettingsForm } from "./features/settings/SettingsForm";
 import { SchedulesSection } from "./features/schedules/SchedulesSection";
 import { MaintenanceSection } from "./features/maintenance/MaintenanceSection";
+import { AboutDialog } from "./features/help/AboutDialog";
 import { ShortcutsDialog, useShortcutsDialog } from "./features/shortcuts/ShortcutsDialog";
 import { ShortcutsSection } from "./features/shortcuts/ShortcutsSection";
 import { agentSessions } from "./lib/agent";
@@ -295,7 +296,7 @@ export default function App() {
   const reconnect = useCallback(() => { closeSettings(); client.resetQueries(); }, [client]);
 
   // The dialogs belong to every branch: tray Quit must show its dialog while Settings is open or the connection has failed.
-  const dialogs = <>{closeGuard}{quitDialog}{folderOffer}<ShortcutsDialog /></>;
+  const dialogs = <>{closeGuard}{quitDialog}{folderOffer}<ShortcutsDialog /><AboutDialog /></>;
   if (link.isLoading) return <><main className="center muted">Connecting to Living Memory…</main>{dialogs}</>;
   const outdated = link.isSuccess && needsLmUpdate(link.data.version);
   if (link.error || outdated || settings) {

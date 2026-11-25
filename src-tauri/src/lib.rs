@@ -2182,7 +2182,7 @@ pub fn run() {
             exec_agent_start,
             exec_session_capture,
             exec_export,
-            diagnostics::app_info, diagnostics::diagnostics, diagnostics::open_logs_folder, diagnostics::log_client,
+            diagnostics::app_info, diagnostics::diagnostics, diagnostics::open_logs_folder, diagnostics::open_issue_page, diagnostics::log_client,
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, ui_zoom, ui_zoom_set, appearance_get, appearance_set, appearance_init, shortcuts_get, shortcuts_set, shortcuts_reset, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_roles, learning_status, learning_review, skills_list, skill_proposals, skill_decide, skill_action, skill_version, skill_history,
             skills_upkeep, skill_from_note, skills_sync, skill_link, skill_unlink, skill_resolve, uninstall_skills, uninstall_remove_skills,

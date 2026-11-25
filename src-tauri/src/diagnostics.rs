@@ -455,6 +455,32 @@ pub fn open_logs_folder(app: AppHandle) -> Result<(), String> {
     app.opener().open_path(dir.display().to_string(), None::<&str>).map_err(|e| e.to_string())
 }
 
+/// The repository's New issue page, opened by "Report a problem".
+const ISSUE_PAGE: &str = "https://github.com/tyler59simon/agentic-hivemind-app/issues/new";
+/// What the new issue starts with: fixed wording, nothing from the user's data.
+const ISSUE_BODY: &str = "What happened:
+
+
+Diagnostics (paste the copied text here):
+";
+
+/// `ISSUE_PAGE` with `ISSUE_BODY` as the `body` query value, percent-encoded.
+fn issue_url() -> String {
+    let encoded: String = ISSUE_BODY
+        .bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect();
+    format!("{ISSUE_PAGE}?body={encoded}")
+}
+
+/// Open the New issue page in the browser. The address is fixed here and the webview passes nothing, so its opener scope
+/// stays as narrow as it is.
+#[tauri::command]
+pub fn open_issue_page(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_url(issue_url(), None::<&str>).map_err(|e| e.to_string())
+}
+
 /// A logger that keeps what the app logs, so a test can look at the records of the code under test.
 #[cfg(test)]
 pub mod capture {
@@ -506,6 +532,15 @@ mod tests {
             version: "0.1.0".into(), tauri: "2.12.5".into(), webview_engine: "WebView2".into(), webview: "140.0".into(), os: "windows".into(), arch: "x86_64".into(),
             os_version: Some("Windows 11 (build 26100)".into()), data_dir: "D".into(), config_dir: "C".into(), log_dir: "L".into(),
         }
+    }
+
+    #[test]
+    fn the_issue_url_is_the_fixed_new_issue_page_with_an_encoded_fixed_body() {
+        let url = issue_url();
+        let body = url.strip_prefix("https://github.com/tyler59simon/agentic-hivemind-app/issues/new?body=").expect("the fixed page and a body");
+        assert!(body.chars().all(|c| c.is_ascii_alphanumeric() || "-._~%".contains(c)), "{body}");
+        assert!(body.starts_with("What%20happened%3A%0A%0A%0A"), "{body}");
+        assert!(body.ends_with("here%29%3A%0A"), "{body}");
     }
 
     #[test]
