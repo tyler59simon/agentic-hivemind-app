@@ -245,6 +245,35 @@ describe("a change the file refuses (C5)", () => {
     expect(w.prefs.prefs.theme()).toBe("emerald-light");
     expect(w.toasts().map((t) => [t.kind, t.text])).toEqual([["error", "Could not save the theme setting."]]);
   });
+
+  it("drops a refused first value from the copy, so the next start does not move it into the file", async () => {   // Codex re-review of 2e736f0
+    const w = await openWindow();
+    await startAndWait(w);
+    fake.failSets = true;
+    w.theme.applyTheme("emerald");
+    await flush();
+    expect(localStorage.getItem("hivemind.theme")).toBeNull();
+    fake.failSets = false;
+    await startAndWait(await openWindow());
+    expect(fake.file.theme).toBeUndefined();
+  });
+
+  it("lets a newer change win over the read that follows a refused save", async () => {   // Codex re-review of 2e736f0
+    fake.file = { theme: "emerald-light" };
+    const w = await openWindow();
+    await startAndWait(w);
+    const release = fake.hold("appearance_get");
+    fake.failSets = true;
+    w.theme.applyTheme("emerald");      // refused; the read of the file is held
+    await flush();
+    fake.failSets = false;
+    w.theme.applyTheme("system");       // kept, and heard back
+    await flush();
+    release();
+    await flush();
+    expect(w.theme.currentThemeChoice()).toBe("system");
+    expect(fake.file.theme).toBe("system");
+  });
 });
 
 describe("the default note mode when localStorage cannot be used (C7)", () => {

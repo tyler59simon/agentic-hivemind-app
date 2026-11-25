@@ -57,6 +57,15 @@ describe("the Open notes in setting", () => {
     expect(mocks.save.mock.invocationCallOrder[0]).toBeLessThan(mocks.setDefaultMode.mock.invocationCallOrder[0]);
   });
 
+  it("shows a mode that arrives after the form opened, until one is picked here", async () => {   // Codex re-review of 2e736f0
+    const actual = await vi.importActual<typeof import("../../lib/appearance")>("../../lib/appearance");
+    await act(async () => actual.setDefaultMode("live"));   // as the settings file's value arriving would
+    expect(modeSelect().value).toBe("live");
+    await act(async () => { modeSelect().value = "source"; modeSelect().dispatchEvent(new Event("change", { bubbles: true })); });
+    await act(async () => actual.setDefaultMode("reading"));
+    expect(modeSelect().value).toBe("source");
+  });
+
   it("is not sent when the settings were refused (C5)", async () => {
     mocks.save.mockRejectedValue("Keep at least one engine shown.");
     await act(async () => { modeSelect().value = "live"; modeSelect().dispatchEvent(new Event("change", { bubbles: true })); });

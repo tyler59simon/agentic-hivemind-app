@@ -83,7 +83,7 @@ fn write(saved: &mut settings::Settings, key: &str, value: &serde_json::Value, o
 /// Check and keep one value, then tell every window with `appearance` (the new values of all of them). With `only_if_unset`
 /// nothing is written or sent when the key already has a value. Returns whether it wrote.
 pub fn set_value<R: Runtime>(app: &AppHandle<R>, settings_path: &Path, key: &str, value: &serde_json::Value, only_if_unset: bool) -> Result<bool, String> {
-    let now = settings::update(settings_path, |saved| write(saved, key, value, only_if_unset))?;
+    let now = settings::update_some(settings_path, |saved| write(saved, key, value, only_if_unset))?;
     if let Some(now) = &now {
         let _ = app.emit("appearance", now);
     }
@@ -143,6 +143,20 @@ mod tests {
         settings::update(&path, |s| change(s, "theme", &json!("emerald"))).unwrap();
         assert!(settings::update(&path, |s| change(s, "theme", &json!("sepia"))).is_err());
         assert_eq!(settings::load(&path).theme(), Some("emerald"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_init_with_nothing_to_do_leaves_the_file_unwritten() {   // Codex re-review of 2e736f0
+        let dir = std::env::temp_dir().join(format!("hivemind-appearance-noop-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        // Compact JSON: a save would rewrite it pretty-printed, so an unchanged text shows nothing was written.
+        std::fs::write(&path, r#"{"theme":"emerald"}"#).unwrap();
+        assert!(settings::update_some(&path, |s| write(s, "theme", &json!("purple"), true)).unwrap().is_none());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), r#"{"theme":"emerald"}"#);
+        assert!(settings::update_some(&path, |s| write(s, "document_size", &json!(1.25), true)).unwrap().is_some());
+        assert_eq!(settings::load(&path).document_size(), Some(1.25));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

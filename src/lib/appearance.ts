@@ -5,6 +5,7 @@
 // `appearance::change` and a validator in settings.rs, then `followAppearance` in the module that shows it.
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { useSyncExternalStore } from "react";
 import { toast } from "../ui/toast";
 import type { Mode } from "../workspace/store";
 import { inTauri } from "./native";
@@ -20,24 +21,35 @@ export interface Appearance {
 }
 export type AppearanceKey = keyof Appearance;
 
-// Counts saves of each key from this window, so a start-up read that answers after a save does not undo it.
-const saves: Partial<Record<AppearanceKey, number>> = {};
+// Counts the changes to each key this window made (saves) or heard (events), so a read that answers after a newer change
+// (a start-up read, or the read after a refused save) does not undo it.
+const changes: Partial<Record<AppearanceKey, number>> = {};
+const changed = (key: AppearanceKey) => { changes[key] = (changes[key] ?? 0) + 1; };
 // What shows each key in this window, so a refused save can put back what the file holds.
 const applies = new Map<AppearanceKey, (value: never) => void>();
 const NAMES: Record<AppearanceKey, string> = {
   theme: "theme", document_background: "document background", document_size: "document text size", default_mode: "default note mode",
 };
+const COPIES: Record<AppearanceKey, string> = {
+  theme: prefs.themeKey, document_background: prefs.paperKey, document_size: prefs.docSizeKey, default_mode: prefs.defaultModeKey,
+};
 
 /** Keep `value` in the settings file; Rust checks it and tells every window. Outside the app there is no file. */
 export function saveAppearance<K extends AppearanceKey>(key: K, value: NonNullable<Appearance[K]>): void {
-  saves[key] = (saves[key] ?? 0) + 1;
+  changed(key);
   if (inTauri()) invoke("appearance_set", { key, value }).catch(() => refused(key));
 }
 
-/** The file did not take a change: say so, and show what it holds, so the screen and the copy match it. */
+/** The file did not take a change: say so, and show what it holds, so the screen and the copy match it. When the file holds
+ *  nothing for the key, the refused value is dropped from the copy, so the next start does not move it into the file. */
 function refused(key: AppearanceKey): void {
   toast(`Could not save the ${NAMES[key]} setting.`, "error");
-  invoke<Appearance>("appearance_get").then((all) => { if (all[key] != null) applies.get(key)?.(all[key] as never); }, () => undefined);
+  const at = changes[key];
+  invoke<Appearance>("appearance_get").then((all) => {
+    if (changes[key] !== at) return;
+    if (all[key] != null) applies.get(key)?.(all[key] as never);
+    else try { localStorage.removeItem(COPIES[key]); } catch { /* no copy kept */ }
+  }, () => undefined);
 }
 
 /** Call `apply` with the setting's value from the settings file at start and whenever any window changes it. `stored` reads
@@ -47,12 +59,11 @@ export function followAppearance<K extends AppearanceKey>(
 ): () => void {
   if (!inTauri()) return () => {};
   let stopped = false;
-  let heard = false;
-  const savesAtStart = saves[key];
+  const atStart = changes[key];
   applies.set(key, apply as (value: never) => void);
   const read = () => invoke<Appearance>("appearance_get").then((all) => {
     // A change made or heard while the read was on its way is newer than what it read.
-    if (stopped || heard || saves[key] !== savesAtStart) return;
+    if (stopped || changes[key] !== atStart) return;
     const value = all[key];
     if (value != null) apply(value as NonNullable<Appearance[K]>);
     else {
@@ -64,7 +75,7 @@ export function followAppearance<K extends AppearanceKey>(
   const unlisten = listen<Appearance>("appearance", (e) => {
     const value = e.payload[key];
     if (value == null) return;
-    heard = true;
+    changed(key);
     apply(value as NonNullable<Appearance[K]>);
   });
   // The read waits for the subscription, so a change between the two is heard, not missed.
@@ -74,19 +85,22 @@ export function followAppearance<K extends AppearanceKey>(
 
 // The mode in effect, kept here too so it holds when localStorage cannot be used.
 let mode: Mode | null = null;
+const modeListeners = new Set<() => void>();
+const showMode = (next: Mode) => { mode = next; prefs.setDefaultMode(next); modeListeners.forEach((l) => l()); };
 
 /** How a note opens by default. */
 export const defaultMode = (): Mode => mode ?? prefs.defaultMode();
+export const useDefaultMode = (): Mode => useSyncExternalStore(
+  (l) => { modeListeners.add(l); return () => { modeListeners.delete(l); }; }, defaultMode);
 
 /** Open notes in `next` from now on: kept in the settings file, and in this window's copy. */
 export function setDefaultMode(next: Mode): void {
-  mode = next;
-  prefs.setDefaultMode(next);
+  showMode(next);
   saveAppearance("default_mode", next);
 }
 
 /** Follow the settings file for the default note mode. Called once, before the first render. */
 export function initDefaultMode(): () => void {
   mode = prefs.defaultMode();
-  return followAppearance("default_mode", () => prefs.stored(prefs.defaultModeKey) as Mode | null, (next) => { mode = next; prefs.setDefaultMode(next); });
+  return followAppearance("default_mode", () => prefs.stored(prefs.defaultModeKey) as Mode | null, showMode);
 }

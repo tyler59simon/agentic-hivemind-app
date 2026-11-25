@@ -242,6 +242,18 @@ pub fn update<T>(path: &Path, change: impl FnOnce(&mut Settings) -> Result<T, St
     Ok(out)
 }
 
+/// Like `update`, but the file is written only when `change` returns Some: a change that turns out to be nothing leaves it
+/// untouched.
+pub fn update_some<T>(path: &Path, change: impl FnOnce(&mut Settings) -> Result<Option<T>, String>) -> Result<Option<T>, String> {
+    let _held = WRITE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut saved = load(path);
+    let out = change(&mut saved)?;
+    if out.is_some() {
+        save(path, &saved)?;
+    }
+    Ok(out)
+}
+
 pub fn load(path: &Path) -> Settings {
     std::fs::read_to_string(path)
         .ok()
