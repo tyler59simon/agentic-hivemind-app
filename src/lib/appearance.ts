@@ -19,8 +19,12 @@ export interface Appearance {
 }
 export type AppearanceKey = keyof Appearance;
 
+// Counts saves of each key from this window, so a start-up read that answers after a save does not undo it.
+const saves: Partial<Record<AppearanceKey, number>> = {};
+
 /** Keep `value` in the settings file; Rust checks it and tells every window. Outside the app there is no file. */
 export function saveAppearance<K extends AppearanceKey>(key: K, value: NonNullable<Appearance[K]>): void {
+  saves[key] = (saves[key] ?? 0) + 1;
   if (inTauri()) invoke("appearance_set", { key, value }).catch(() => undefined);
 }
 
@@ -31,13 +35,17 @@ export function followAppearance<K extends AppearanceKey>(
 ): () => void {
   if (!inTauri()) return () => {};
   let stopped = false;
+  let heard = false;
+  const savesAtStart = saves[key];
   invoke<Appearance>("appearance_get").then((all) => {
-    if (stopped) return;
+    // A change made or heard while the read was on its way is newer than what it read.
+    if (stopped || heard || saves[key] !== savesAtStart) return;
     const value = all[key];
     if (value != null) apply(value as NonNullable<Appearance[K]>);
     else { const copy = stored(); if (copy != null) saveAppearance(key, copy as NonNullable<Appearance[K]>); }
   }, () => undefined);
   const unlisten = listen<Appearance>("appearance", (e) => {
+    heard = true;
     const value = e.payload[key];
     if (value != null) apply(value as NonNullable<Appearance[K]>);
   });

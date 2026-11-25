@@ -66,6 +66,23 @@ describe("start", () => {
     expect([prefs.theme(), prefs.paper(), prefs.docSize(), prefs.defaultMode()]).toEqual(["emerald-light", "white", 1.5, "source"]);
     expect(sent()).toEqual([]);
   });
+
+  it("does not undo a change made or heard while the start-up read was on its way", async () => {
+    const answers: ((v: unknown) => void)[] = [];
+    mocks.invoke.mockImplementation((cmd: string) => (cmd === "appearance_get"
+      ? new Promise((r) => { answers.push(r); }) : Promise.resolve(undefined)));
+    initTheme(); initPaperDefault();
+    await flush();
+    const stale = { ...none, theme: "purple", document_background: "theme" };
+    applyTheme("emerald");
+    answers[0](stale);   // the theme's read, after a save in this window
+    await flush();
+    emit({ ...none, document_background: "white" });
+    answers[1](stale);   // the background's read, after an event from another window
+    await flush();
+    expect(currentThemeChoice()).toBe("emerald");
+    expect(paperDefault()).toBe("white");
+  });
 });
 
 describe("a change in any window", () => {
