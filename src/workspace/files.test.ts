@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useApp } from "../store";
-import { activeTab, useWorkspace, type Pane } from "./store";
+import { activeTab, paneSize, useWorkspace, type Pane } from "./store";
 
 const ws = () => useWorkspace.getState();
 const reset = () => {
@@ -62,17 +62,17 @@ describe("workspace with notebook pages", () => {
     ]);
   });
 
-  it("loads version 2 data unchanged and sends version 1 through notesOnly", () => {
+  it("loads version 2 data as it is (with a pane size of 1) and sends version 1 through notesOnly", () => {
     const v2 = { panes: [{ id: "p", tabs: [{ id: "t", kind: "note", ref: "d:1" }], active: "t" }], focused: "p" };
-    expect(options().migrate!(v2, 2)).toEqual(v2);
+    expect(options().migrate!(v2, 2)).toEqual({ ...v2, panes: [{ ...v2.panes[0], size: 1 }] });
     const v1 = { panes: [{ id: "p", tabs: [{ id: "t", kind: "graph" }, { id: "u", kind: "note", ref: "d:1" }], active: "t" }], focused: "p" };
     const migrated = options().migrate!(v1, 1) as { panes: Pane[] };
     expect(migrated.panes[0].tabs.map((t) => t.kind)).toEqual(["note"]);
   });
 
   // CON-18: a tab of a hosted notebook (container lm:<domain>:<notebook>) has no notebook to read from any more.
-  it("is version 4, and drops the tabs of hosted notebooks, keeping the rest and a sensible active tab", () => {
-    expect(options().version).toBe(4);
+  it("drops the tabs of hosted notebooks (version 4), keeping the rest and a sensible active tab", () => {
+    expect(options().version).toBe(5);
     const file = (id: string, notebook: string, path = "A.md") => ({ id, kind: "file" as const, file: { notebook, path } });
     const stored = {
       panes: [
@@ -91,6 +91,38 @@ describe("workspace with notebook pages", () => {
     // The merge that loads it keeps every pane, so the workspace never holds a tab of a notebook that is gone.
     const merged = options().merge!(options().migrate!(stored, 3), ws()) as { panes: Pane[] };
     expect(merged.panes.flatMap((p) => p.tabs.map((t) => t.file?.notebook ?? t.ref))).toEqual(["nb-1", "d:1", "nb-1"]);
+  });
+
+  // DESK-LAYOUT: version 5 gives every pane a size, whatever version the layout was saved in.
+  it("gives every pane a size of 1 when it migrates from versions 1 to 4", () => {
+    const v4 = { panes: [{ id: "a", tabs: [{ id: "t", kind: "note", ref: "d:1" }], active: "t" }, { id: "b", tabs: [], active: null }], focused: "a" };
+    for (const version of [4, 3, 2]) {
+      const migrated = options().migrate!(JSON.parse(JSON.stringify(v4)), version) as { panes: Pane[] };
+      expect(migrated.panes.map((p) => p.size)).toEqual([1, 1]);
+    }
+    const v1 = { panes: [{ id: "p", tabs: [{ id: "u", kind: "note", ref: "d:1" }], active: "u" }], focused: "p" };
+    expect((options().migrate!(v1, 1) as { panes: Pane[] }).panes.map((p) => p.size)).toEqual([1]);
+    // A saved size survives the load, and a pane without one reads as 1.
+    expect(paneSize({ id: "x", tabs: [], active: null })).toBe(1);
+    expect(paneSize({ id: "x", tabs: [], active: null, size: -2 })).toBe(1);
+    expect(paneSize({ id: "x", tabs: [], active: null, size: 0.4 })).toBe(0.4);
+  });
+
+  it("moves width between two panes without changing what they have together, and keeps both open", () => {
+    ws().openTab({ kind: "new-note" });
+    ws().split();
+    const [a, b] = ws().panes.map((p) => p.id);
+    expect(ws().panes.map(paneSize)).toEqual([1, 1]);
+    ws().resizePanes(a, b, 0.7);
+    expect(ws().panes.map(paneSize)).toEqual([1.4, 0.6].map((n) => expect.closeTo(n, 5)));
+    ws().resizePanes(a, b, 0); // never to nothing
+    expect(paneSize(ws().panes[0])).toBeCloseTo(0.1, 5);
+    ws().resizePanes(a, b, Number.NaN); // ignored
+    expect(paneSize(ws().panes[0])).toBeCloseTo(0.1, 5);
+    ws().resizePanes(a, b, 0.5);
+    expect(ws().panes.map(paneSize)).toEqual([1, 1].map((n) => expect.closeTo(n, 5)));
+    ws().resizePanes(a, "gone", 0.9); // an unknown pane changes nothing
+    expect(ws().panes.map(paneSize)).toEqual([1, 1].map((n) => expect.closeTo(n, 5)));
   });
 
   it("drops tabs of unknown kinds and file tabs without a file", () => {

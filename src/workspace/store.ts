@@ -23,7 +23,8 @@ export interface Tab {
   paper?: boolean;        // true: white paper, false: the theme's colours; undefined follows the setting (documents only)
   init?: { title?: string; type?: NoteType; domain?: string; tags?: string[] }; // new-note tabs
 }
-export interface Pane { id: string; tabs: Tab[]; active: string | null }
+/** `size` is the pane's share of the width relative to the other panes (1 each at first; DESK-LAYOUT). Read it with `paneSize`. */
+export interface Pane { id: string; tabs: Tab[]; active: string | null; size?: number }
 
 interface WorkspaceState {
   panes: Pane[];
@@ -45,6 +46,8 @@ interface WorkspaceState {
   updateTab: (tabId: string, patch: Partial<Tab>) => void;
   setDirty: (tabId: string, dirty: boolean) => void;
   setRail: (rail: boolean, narrow?: boolean) => void;
+  /** Move width between two neighbouring panes: `left` gets `share` (0 to 1) of what the two have together. */
+  resizePanes: (left: string, right: string, share: number) => void;
   revealLine: (tabId: string, line: number, col?: number) => void;
   replaceRef: (from: string, to: string) => void;
   /** A page or folder of a notebook was renamed or moved: its tabs follow. */
@@ -53,7 +56,9 @@ interface WorkspaceState {
 
 let counter = 0;
 const newId = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${(counter++).toString(36)}`;
-const firstPane = (): Pane => ({ id: newId("pane"), tabs: [], active: null });
+const firstPane = (): Pane => ({ id: newId("pane"), tabs: [], active: null, size: 1 });
+/** A pane's size, 1 when it has none or a bad one. */
+export const paneSize = (p: Pane): number => (typeof p.size === "number" && Number.isFinite(p.size) && p.size > 0 ? p.size : 1);
 export const MAX_PANES = 3;
 
 /** Whether a never-saved text file holds text. It has no draft, so closing the window or quitting loses it. */
@@ -173,6 +178,12 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
       set((s) => ({ panes: s.panes.map((p) => ({ ...p, tabs: p.tabs.map((t) => (t.id === tabId ? { ...t, ...patch } : t)) })) })),
     setDirty: (tabId, dirty) => set((s) => (Boolean(s.dirty[tabId]) === dirty ? s : { dirty: { ...s.dirty, [tabId]: dirty } })),
     setRail: (shown, narrow = false) => set((s) => (narrow ? { railNarrow: shown } : s.panes.length > 1 ? { railSplit: shown } : { rail: shown })),
+    resizePanes: (left, right, share) => set((s) => {
+      const a = s.panes.find((p) => p.id === left), b = s.panes.find((p) => p.id === right);
+      if (!a || !b || !Number.isFinite(share)) return s;
+      const total = paneSize(a) + paneSize(b), size = total * Math.min(0.95, Math.max(0.05, share));
+      return { panes: s.panes.map((p) => (p === a ? { ...p, size } : p === b ? { ...p, size: total - size } : p)) };
+    }),
     revealLine: (tabId, line, col) => set({ reveal: { tabId, line, ...(col ? { col } : {}), at: Date.now() } }),
     // After a new note is captured, its tab becomes a note tab.
     replaceRef: (from, to) =>
@@ -197,12 +208,13 @@ export const useWorkspace = create<WorkspaceState>()(persist((set, get) => {
   };
 }, {
   name: "hivemind.workspace",
-  version: 4,
+  version: 5,
   storage: createJSONStorage(() => safeStorage),
   // Version 1 also kept graph, project, system and session tabs; those are pages now. Version 2 had notes only and loads
-  // as it is. Version 4 drops the tabs of hosted notebooks, which CON-18 retired (2026-11-24).
+  // as it is. Version 4 drops the tabs of hosted notebooks, which CON-18 retired (2026-11-24). Version 5 gives every pane a size
+  // of 1 (DESK-LAYOUT).
   migrate: (stored, version) =>
-    withoutHostedTabs(version >= 2 ? (stored as WorkspaceState) : notesOnly(stored as { panes?: Pane[]; focused?: string; panel?: string | null })),
+    withPaneSizes(withoutHostedTabs(version >= 2 ? (stored as WorkspaceState) : notesOnly(stored as { panes?: Pane[]; focused?: string; panel?: string | null }))),
   // Tabs of a kind this build does not know (written by a newer one) are dropped.
   merge: (stored, current) => ({ ...current, ...knownKinds(stored as Partial<WorkspaceState>) }),
   partialize: (s) => ({
@@ -235,6 +247,11 @@ export function withoutHostedTabs<T extends { panes?: Pane[] }>(stored: T): T {
     return tabs.length === p.tabs.length ? p : { ...p, tabs, active: tabs.some((t) => t.id === p.active) ? p.active : tabs[0]?.id ?? null };
   });
   return { ...stored, panes };
+}
+
+/** A stored layout whose panes all have a size of 1: before version 5 they shared the width equally. */
+export function withPaneSizes<T extends { panes?: Pane[] }>(stored: T): T {
+  return stored?.panes ? { ...stored, panes: stored.panes.map((p) => ({ ...p, size: 1 })) } : stored;
 }
 
 /** A stored layout without tabs of unknown kinds. A tab saved in Rich mode, which was deleted (CON-19), opens in Live. */
