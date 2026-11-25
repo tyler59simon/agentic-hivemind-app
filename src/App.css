@@ -652,6 +652,7 @@ input[type="checkbox"] { accent-color: var(--success); }
 .tag-picker { display: flex; flex-wrap: wrap; gap: var(--sp-5); align-items: center; border: 1px solid var(--control-border); border-radius: .45rem; padding: var(--sp-4) var(--sp-5); background: var(--bg-input); }
 .tag-picker input { border: none; background: none; flex: 1; min-width: 8rem; padding: var(--sp-2) var(--sp-5); }
 .tag-picker input:focus { outline: none; }
+.tag-picker:focus-within { border-color: var(--accent); }
 .tag.unknown { border-color: var(--warn); color: var(--warn); }
 .tag-x { border: none; padding: 0 0 0 var(--sp-5); line-height: 1; }
 
@@ -875,7 +876,7 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 
 .palette { width: min(40rem, calc(100% - 2rem)); background: var(--bg-alt); border: 1px solid var(--border-strong); border-radius: .6rem; overflow: hidden; }
 .palette input { width: 100%; border: none; border-bottom: 1px solid var(--border); border-radius: 0; padding: var(--sp-16) var(--sp-20); font-size: 1.07rem; background: none; }
-.palette input:focus { outline: none; }
+.palette input:focus { outline: none; border-bottom-color: var(--accent); }
 .palette ul { list-style: none; margin: 0; padding: var(--sp-5); max-height: 50vh; overflow: auto; }
 .palette li button { display: flex; justify-content: space-between; gap: var(--sp-16); width: 100%; text-align: left; border: none; padding: var(--sp-8) var(--sp-14); }
 .palette li button.on { background: var(--accent-soft); }
@@ -2149,6 +2150,8 @@ button.owner-chip { cursor: pointer; }
 /* ---- Keyboard focus (DESK-4, DESK-6, DESK-10) ---- */
 .modal:focus { outline: none; }
 .tree-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* The boards and the PDF viewer are tab stops of their own (outline: none above, for when a script moves the focus into them). */
+.canvas-board:focus-visible, .drawio-shell:focus-visible, .pdf-shell:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .tab-main:focus { outline: none; }
 .note-tab-pill:has(> .tab-main:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
 .canvas-node:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
@@ -2184,16 +2187,55 @@ button.owner-chip { cursor: pointer; }
   .spin { animation: none; }
 }
 
-/* ---- Windows contrast themes (DESK-OS): states that were shown by colour alone get a line. ---- */
+/* ---- Windows contrast themes (DESK-OS, DESK-A11Y A4): states that were shown by colour alone get a line. ----
+   A contrast theme replaces background, text, border and outline colours, and removes gradients and shadows, but it leaves the fill and
+   stroke of SVG alone, and a canvas draws as it likes. So: a chosen or active state gets an outline in Highlight, an SVG gets system
+   colours here, and the graph (sigma) and Mermaid take theirs from lib/forcedColors.ts. src/lib/forcedColors.css.test.ts keeps the lists. */
 @media (forced-colors: active) {
-  [role="tab"][aria-selected="true"], [aria-selected="true"].tree-row, .tree-row.on, .note-tab-pill.on, .nav-item.on { outline: 2px solid Highlight; outline-offset: -2px; }
+  [role="tab"][aria-selected="true"], [aria-selected="true"].tree-row, .tree-row.on, .note-tab-pill.on, .nav-item.on,
+  .wiki-tree-row.on, .chip.on, .icon-button.on, .icon-button.active, .segmented .on, .pill-tabs .on, .folder-pick.on, .tree-item.on, .tag-row.on,
+  .palette li button.on, .search-group li button.on, .history-list button.on, .session-item.on, .review-item.on, .item-row.on, .link-row.on,
+  .rich-slash button.active, .drawio-page-tab.on, .docx-preview-bar button.on, .pdf-toolbar button.on, .panzoom-tools button.on, .pdf-thumb-row.on,
+  .bigfile-row.selected, .calendar-day.shown, .mini-node.on, button[aria-pressed="true"], [aria-current="true"], [aria-current="page"] { outline: 2px solid Highlight; outline-offset: -2px; }
+  .line-tabs .on { border-bottom-color: Highlight; }
+  .calendar-day.today { border-color: Highlight; }
   .switch span { border: 1px solid ButtonText; }
   .switch input:checked + span { background: Highlight; }
   .switch input:checked + span::after { background: HighlightText; }
-  .bigfile:focus-visible, .canvas-node.on { outline: 2px solid Highlight; }
-  .splitter:hover::after, .splitter:active::after, .splitter:focus-visible::after { background: Highlight; }
+  .bigfile:focus-visible, .canvas-node.on, .drawio-node.on, .canvas-edge-label.on, .pdf-toolbar .canvas-swatch.on { outline: 2px solid Highlight; }
+  .splitter:hover::after, .splitter:active::after, .splitter:focus-visible::after, .split-divider:hover, .split-divider:focus-visible { background: Highlight; }
   .nav-dot, .tab-attention { forced-color-adjust: none; }
   .modal, .menu-list, .palette, .toast { border: 1px solid CanvasText; }
+  /* The focus ring is Highlight in every place that draws one with the accent colour, and a box that shows focus by its border gets a ring. */
+  button:focus-visible, a:focus-visible, [role="tab"]:focus-visible, input:focus, select:focus, .field textarea:focus, .start-task:focus,
+  .exec textarea:focus, .modal .exec-capture-text:focus, .modal .exec-form textarea:focus, .exec-item textarea:focus, .md-editor .cm-rich-table input:focus,
+  .tree-row:focus-visible, .page-host:focus-visible, .pane-body:focus-visible, .note-rail:focus-visible, .splitter:focus-visible, .hmdoc-cover:focus-visible,
+  .canvas-node:focus-visible, .drawio-node:focus-visible, .switch input:focus-visible + span, .note-tab-pill:has(> .tab-main:focus-visible),
+  .top-search:focus-within, .composer-box:focus-within, .term-box:focus-within, .wiki-search:focus-within, .tag-picker:focus-within { outline-color: Highlight; }
+  .top-search:focus-within, .composer-box:focus-within, .term-box:focus-within, .wiki-search:focus-within, .tag-picker:focus-within { outline-style: solid; outline-width: 2px; outline-offset: -1px; }
+  .palette input:focus, .title-input:focus, .canvas-board:focus-visible, .drawio-shell:focus-visible, .pdf-shell:focus-visible { outline: 2px solid Highlight; outline-offset: -2px; }
+  /* Architecture and canvas boards: lines and text in the text colour, surfaces in the page colour, the chosen one in Highlight. */
+  .canvas-boundary { fill: Canvas; stroke: CanvasText; }
+  .canvas-boundary-name { fill: CanvasText; }
+  .canvas-edge path, .canvas-edge-line { stroke: CanvasText; }
+  .canvas-edge text { fill: CanvasText; stroke: Canvas; }
+  .canvas-edge.on path, .canvas-edge.on .canvas-edge-line, .canvas-joining { stroke: Highlight; }
+  #canvas-arrow path, .canvas-arrow { fill: CanvasText; }
+  .canvas-edge.on .canvas-arrow { fill: Highlight; }
+  /* What the diff marks with a colour gets a line style as well. */
+  .canvas-node.diff-added { outline: 3px double CanvasText; outline-offset: 1px; }
+  .canvas-node.diff-changed { outline: 3px dotted CanvasText; outline-offset: 1px; }
+  .canvas-edge.diff-added path { stroke-width: 3; }
+  .canvas-edge.diff-changed path { stroke-dasharray: 2 3; }
+  /* Draw.io shapes are SVG: the fill would stay light under text the theme made light. */
+  .drawio-shape-svg rect, .drawio-shape-svg ellipse, .drawio-shape-svg polygon, .drawio-shape-svg path { fill: Canvas; stroke: CanvasText; }
+  .drawio-shape-svg line { stroke: CanvasText; }
+  .drawio-edges polyline:not(.canvas-edge-hit) { stroke: CanvasText; }
+  .drawio-edges polygon { fill: CanvasText; }
+  .drawio-edges .canvas-edge.on polyline:not(.canvas-edge-hit) { stroke: Highlight; }
+  .drawio-edges .canvas-edge.on polygon { fill: Highlight; }
+  /* The handles are filled with the accent colour, which the theme would turn into the page colour. */
+  .canvas-handle, .canvas-corner { forced-color-adjust: none; background: Highlight; border-color: Canvas; }
 }
 
 /* ---- Keyboard shortcuts: the reference sheet and the Settings rows (DESK-KEYS) ---- */

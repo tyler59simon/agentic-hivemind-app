@@ -9,6 +9,7 @@ import { treeQuery } from "../../documents/io";
 import { fileName, folderOf, isCanvas, isDocx, isDrawio, isMarkdown, isMermaid, isPdf, isRichDoc, isSvg, notebooksQuery, pageTitle, revealFile, type Notebook } from "../../lib/notebooks";
 import { assetBase, isLoose, recentQuery, recentRef } from "../../lib/opens";
 import { useWhitePaper } from "../../lib/paper";
+import { announce } from "../../ui/announce";
 import { Menu } from "../../ui/Menu";
 import { Tabs } from "../../ui/Page";
 import { toast } from "../../ui/toast";
@@ -85,8 +86,11 @@ export async function saveFileTab(key: string) {
     else if (usePdfStore.getState().sessions[key]?.status === "stale") toast("This PDF changed on disk. Choose Keep mine or Reload.", "warn");
     return;
   }
+  const wasDirty = useDocuments.getState().docs[key]?.status === "dirty";
   const after = await save(key);
   if (after?.status === "stale") toast("This page changed on disk. Merge your edits to save them.", "warn");
+  // The Save button only changes its label; a screen reader hears the outcome here (the other kinds above say it with a toast).
+  else if (wasDirty && after?.status === "clean") announce("Saved.");
 }
 
 /** Drop unsaved edits and show the file; typing while it reads keeps the edits instead. */

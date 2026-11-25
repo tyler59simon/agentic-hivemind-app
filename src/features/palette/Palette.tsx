@@ -226,6 +226,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
           ))}
           {app.palette === "notes" && notes.isLoading && <li className="muted pad">Loading…</li>}
         </ul>
+        <div className="visually-hidden" role="status">{shown.length ? `${shown.length} ${shown.length === 1 ? "result" : "results"}` : "No results"}</div>
       </div>
     </div>
   );

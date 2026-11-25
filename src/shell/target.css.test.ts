@@ -1,39 +1,12 @@
-// @ts-expect-error no @types/node package (as in vite.config.ts); vitest empties CSS imports, so the file is read directly
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { appCss, parseCss, rawCss } from "../test/css";
 
 // Target size (DESK-A11Y A4, WCAG 2.5.8). axe's target-size rule needs layout, which jsdom does not have, so this reads App.css and checks
 // that each control that was under 24 by 24 CSS px has a rule that makes it that size, at every density (the sizes are in px, so they do
 // not follow the spacing scale). The sizes of the controls that were already large enough were measured in a browser and are not listed.
 
-const css: string = readFileSync(new URL("../App.css", import.meta.url), "utf8").replace(/\r\n/g, "\n").replace(/\/\*[\s\S]*?\*\//g, "");
-
-type Rule = { selectors: string[]; decls: Map<string, string>; media: string };
-
-/** Every rule of the style sheet, with the media query it is inside ("" for none). @keyframes and other at-rules are skipped. */
-function parse(text: string, media = ""): Rule[] {
-  const out: Rule[] = [];
-  let i = 0;
-  while (i < text.length) {
-    const open = text.indexOf("{", i);
-    if (open < 0) break;
-    let depth = 1;
-    let j = open + 1;
-    while (depth && j < text.length) { if (text[j] === "{") depth++; else if (text[j] === "}") depth--; j++; }
-    const head = text.slice(i, open).trim();
-    const body = text.slice(open + 1, j - 1);
-    if (head.startsWith("@media")) out.push(...parse(body, head));
-    else if (!head.startsWith("@")) {
-      const decls = new Map<string, string>();
-      for (const d of body.split(";")) { const k = d.indexOf(":"); if (k > 0) decls.set(d.slice(0, k).trim(), d.slice(k + 1).replace("!important", "").trim()); }
-      out.push({ selectors: head.split(",").map((s) => s.trim()), decls, media });
-    }
-    i = j;
-  }
-  return out;
-}
-
-const rules = parse(css);
+const css = appCss();
+const rules = parseCss(css);
 
 /** The declarations the rules outside any media query give to exactly this selector, later rules over earlier ones. */
 const declsOf = (selector: string) => {
@@ -117,6 +90,6 @@ describe("target size, WCAG 2.5.8 (DESK-A11Y A4)", () => {
 
   it("names the 2.5.8 exceptions it relies on", () => {
     expect(css).not.toMatch(/input\[type="checkbox"\][^{]*\{[^}]*(width|height)/); // a checkbox the author sizes is not a user agent control
-    expect(readFileSync(new URL("../App.css", import.meta.url), "utf8")).toContain("Left alone on purpose, under the 2.5.8 exceptions");
+    expect(rawCss()).toContain("Left alone on purpose, under the 2.5.8 exceptions");
   });
 });

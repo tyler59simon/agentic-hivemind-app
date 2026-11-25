@@ -103,6 +103,8 @@ describe("the unified top-bar search box (CON-11)", () => {
       "Plan decision · Paystream · decision", "Plan · Projects", "Inbox", "Plan notes · Work",
     ]);
     expect(document.querySelector(".search-panel mark")?.textContent).toBe("Plan");
+    // The count is in a status region that was in the page before the results came (WCAG 4.1.3).
+    expect(document.querySelector(".top-search-wrap > [role=status]")?.textContent).toBe("4 results");
     expect(document.body.textContent).not.toContain("Show all in Memory");
     const asked = calls.filter((c) => c.cmd === "index_search").map((c) => c.args.filters);
     expect(asked).toEqual(expect.arrayContaining([expect.objectContaining({ notebook: "nb-1" }), expect.objectContaining({ excludeNotebook: "nb-1" })]));

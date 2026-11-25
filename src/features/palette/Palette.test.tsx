@@ -55,6 +55,8 @@ describe("Ctrl+O", () => {
       "board.canvas | Work",
       "Open file from disk… | any file",
     ]);
+    // The count sits in a status region that is in the dialog before the list changes, so a screen reader hears it (WCAG 4.1.3).
+    expect(document.querySelector(".palette [role=status]")?.textContent).toBe("5 results");
   });
 
   it("lists the pages from the notebook trees while the index cannot answer", async () => {

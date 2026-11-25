@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import Sigma from "sigma";
+import { systemPalette, useForcedColors } from "../../lib/forcedColors";
+import { useReducedMotion } from "../../lib/motion";
 import { useTheme } from "../../lib/theme";
 import { PagePreviewCard, PreviewCard } from "../preview/HoverPreview";
 import { graphSummary, toGraphology, type UnifiedGraph, type UnifiedNode } from "./graphData";
+import { cameraSettings, graphColors } from "./graphLook";
 
 const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#888";
 
@@ -18,6 +21,8 @@ export function GraphCanvas({ data, focus, onOpen, compact, dim }: {
   const open = useRef(onOpen);
   open.current = onOpen;
   const theme = useTheme();   // the colours below are read from the theme's tokens
+  const forced = useForcedColors();   // in a Windows contrast theme they are the system colours instead
+  const reduced = useReducedMotion();   // and the camera does not animate
 
   useEffect(() => {
     if (!host.current) return;
@@ -25,15 +30,17 @@ export function GraphCanvas({ data, focus, onOpen, compact, dim }: {
     const graph = toGraphology(data);
     let hovered: string | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const [fg, muted, border, accent] = [css("--fg"), css("--muted"), css("--border"), css("--accent")];
+    const { fg, muted, border, accent, node: nodeColor, focus: focusColor } = graphColors(forced ? systemPalette() : null, css);
     const sigma = new Sigma(graph, host.current, {
       settings: {
         renderEdgeLabels: false, itemSizesReference: "screen", autoRescale: true,
         labelRenderedSizeThreshold: compact ? 4 : 6, labelDensity: compact ? 1 : 0.6, stagePadding: compact ? 24 : 48,
+        ...cameraSettings(reduced),
       },
       nodeReducer: (node, display) => {
         const out: Partial<typeof display> = { labelColor: fg };
-        if (node === focus) { out.highlighted = true; out.labelVisibility = "visible"; }
+        if (nodeColor) out.color = nodeColor;
+        if (node === focus) { out.highlighted = true; out.labelVisibility = "visible"; if (focusColor) out.color = focusColor; }
         if (graph.getNodeAttribute(node, "status") !== "active") out.opacity = 0.5;
         if (dim?.has(node) && !(hovered && (node === hovered || graph.areNeighbors(node, hovered)))) { out.color = border; out.labelColor = muted; }
         if (hovered && node !== hovered && !graph.areNeighbors(node, hovered)) { out.color = border; out.labelColor = muted; out.labelVisibility = "hidden"; }
@@ -70,7 +77,7 @@ export function GraphCanvas({ data, focus, onOpen, compact, dim }: {
     const resize = new ResizeObserver(() => { sigma.resize(); sigma.refresh(); });
     resize.observe(host.current);
     return () => { resize.disconnect(); if (timer) clearTimeout(timer); setPreview(null); sigma.kill(); };
-  }, [data, focus, compact, dim, theme]);
+  }, [data, focus, compact, dim, theme, forced, reduced]);
 
   return (
     <div className={`graph-canvas ${compact ? "compact" : ""}`}>

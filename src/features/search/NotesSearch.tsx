@@ -242,6 +242,8 @@ export function NotesSearchBox({ inputRef }: { inputRef: RefObject<HTMLInputElem
           autoComplete="off" onChange={(e) => setQuery(e.target.value)} onFocus={show} onKeyDown={onKeyDown} />
         <kbd>Ctrl K</kbd>
       </form>
+      {/* Always in the page, so the count is read when it changes (WCAG 4.1.3); the list below is not a live region. */}
+      <div className="visually-hidden" role="status">{open && asked && !busy ? (rows.length ? `${rows.length} ${rows.length === 1 ? "result" : "results"}` : "No matches.") : ""}</div>
       {open && (
         <div className="search-panel" id="notes-search-results" onMouseDown={(e) => { if (!(e.target instanceof HTMLSelectElement || e.target instanceof HTMLInputElement)) e.preventDefault(); }}>
           <Filters notebooks={notebooks.data ?? []} projectName={project?.name} />

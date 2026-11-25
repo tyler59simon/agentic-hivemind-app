@@ -40,7 +40,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 const { EditorView } = await import("@codemirror/view");
-const { FileTab } = await import("./FileTab");
+const { FileTab, saveFileTab } = await import("./FileTab");
+const { Announcer } = await import("../../ui/announce");
 const { NewFileTab } = await import("./NewFileTab");
 const { untitledText } = await import("./untitled");
 const { useRowDrag } = await import("./NotebookTree");
@@ -98,6 +99,23 @@ describe("notebook pages, mounted", () => {
     expect(views[1].state.doc.toString()).toBe("alpha\nleft\nright\n");
     await act(async () => { await docs.save(docs.keyOf(ref("A.md"))); });
     expect(files.get("A.md")).toBe("alpha\nleft\nright\n");
+  });
+
+  it("says Saved through the announcer when a page save finishes, and nothing when there was nothing to save (DESK-A11Y A4)", async () => {
+    files.set("A.md", "alpha\n");
+    ws().openTab({ kind: "file", file: ref("A.md"), mode: "source" });
+    const tab = ws().panes[0].tabs[0];
+    const el = await mount(<><Announcer /><FileTab tab={tab} /></>);
+    await settle();
+    const said = () => document.querySelector('[data-announce="polite"]')!.textContent;
+    const view = EditorView.findFromDOM(el.querySelector<HTMLElement>(".cm-content")!)!;
+    await act(async () => { saveFileTab(docs.keyOf(ref("A.md"))); });
+    await settle();
+    expect(said()).toBe("");
+    await act(async () => { view.dispatch({ changes: { from: view.state.doc.length, insert: "more\n" }, userEvent: "input.type" }); });
+    await act(async () => { await saveFileTab(docs.keyOf(ref("A.md"))); });
+    expect(files.get("A.md")).toBe("alpha\nmore\n");
+    expect(said()).toBe("Saved.");
   });
 
   it("D1: an untitled file keeps its text when its tab is shown again, and forgets it when the tab closes", async () => {   // Codex review of 52051c8

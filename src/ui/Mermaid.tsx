@@ -1,6 +1,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { isValidElement, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import type { Components } from "react-markdown";
+import { forcedColorsActive, systemPalette, useForcedColors, type SystemPalette } from "../lib/forcedColors";
 import { documentIsDark, onDocumentLook } from "../lib/paper";
 
 /** The diagram source when a Markdown `pre` holds one ```mermaid code block, else null. */
@@ -57,12 +58,34 @@ export function labelDiagram(svg: string, source: string): string {
 
 let nextId = 0;
 
+/** Mermaid's theme: its dark or default one, or in a Windows contrast theme (`palette` given) the base theme with the system colours,
+ *  since the browser does not recolour what Mermaid writes into an SVG: a light node under text that the contrast theme made white
+ *  would be unreadable. Every surface is Canvas, every line and text CanvasText, and an active part Highlight. */
+export function mermaidTheme(dark: boolean, palette: SystemPalette | null): { theme: "base" | "dark" | "default"; themeVariables?: Record<string, string | boolean> } {
+  if (!palette) return { theme: dark ? "dark" : "default" };
+  const { canvas, text, highlight, highlightText } = palette;
+  return {
+    theme: "base",
+    themeVariables: {
+      darkMode: canvas === "rgb(0, 0, 0)",
+      background: canvas, mainBkg: canvas, primaryColor: canvas, secondaryColor: canvas, tertiaryColor: canvas,
+      primaryTextColor: text, secondaryTextColor: text, tertiaryTextColor: text, textColor: text, titleColor: text, labelTextColor: text,
+      primaryBorderColor: text, secondaryBorderColor: text, tertiaryBorderColor: text, nodeBorder: text, lineColor: text,
+      clusterBkg: canvas, clusterBorder: text, edgeLabelBackground: canvas, nodeTextColor: text,
+      noteBkgColor: canvas, noteTextColor: text, noteBorderColor: text,
+      actorBkg: canvas, actorBorder: text, actorTextColor: text, actorLineColor: text, signalColor: text, signalTextColor: text,
+      labelBoxBkgColor: canvas, labelBoxBorderColor: text, loopTextColor: text, activationBkgColor: highlight, activationBorderColor: text,
+      sequenceNumberColor: highlightText, altBackground: canvas,
+    },
+  };
+}
+
 /** A diagram's SVG, drawn off-screen so Mermaid's scratch SVG, which it measures labels in, never lengthens the page.
  *  The page editor's widgets call it too (NS-3A); callers check `skipReason` first. */
 export async function drawMermaid(source: string, dark: boolean, id = `mermaid-${++nextId}`): Promise<string> {
   const { default: mermaid } = await import("mermaid");
   mermaid.initialize({
-    startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "default", maxTextSize: MAX_SOURCE,
+    startOnLoad: false, securityLevel: "strict", ...mermaidTheme(dark, forcedColorsActive() ? systemPalette() : null), maxTextSize: MAX_SOURCE,
     // Natural width inside the scroll box: a wide flowchart scrolls instead of shrinking its labels.
     flowchart: { useMaxWidth: false }, sequence: { useMaxWidth: false }, state: { useMaxWidth: false },
   });
@@ -107,6 +130,7 @@ export function Mermaid({ source }: { source: string }) {
   const root = useRef<HTMLElement | null>(null);
   const mark = (el: HTMLElement | null) => { root.current = el; };
   const [dark, setDark] = useState<boolean | null>(null);
+  const forced = useForcedColors();   // a contrast theme turned on or off draws the diagram again
   useLayoutEffect(() => {
     const sync = () => setDark(documentIsDark(root.current));
     sync();
@@ -115,7 +139,7 @@ export function Mermaid({ source }: { source: string }) {
   const skip = skipReason(source);
   // Each result remembers what it was drawn from, so a changed source never shows the previous picture.
   const [drawn, setDrawn] = useState<{ key: string; svg: string | null }>({ key: "", svg: null });
-  const key = `${dark}:${source}`;
+  const key = `${dark}:${forced}:${source}`;
   useEffect(() => {
     if (skip || dark === null) return;
     let live = true;
