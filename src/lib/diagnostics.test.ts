@@ -77,7 +77,7 @@ describe("reportProblem", () => {
   it("copies the diagnostics first, then opens the issue page with nothing passed from here, and says to paste", async () => {
     await reportProblem();
     expect(order).toEqual(["invoke diagnostics", "copy start", "copy done", "invoke open_issue_page"]);
-    expect(invoke).toHaveBeenLastCalledWith("open_issue_page");
+    expect(invoke).toHaveBeenLastCalledWith("open_issue_page", { withDiagnostics: true });
     expect(writeText).toHaveBeenCalledWith("Hivemind 0.1.0\n");
     expect(toasts()).toEqual([["info", "Diagnostics copied. Paste them into the new issue."]]);
   });
@@ -85,7 +85,7 @@ describe("reportProblem", () => {
   it("still opens the page when the copy fails, and says the copy failed", async () => {
     writeText.mockRejectedValueOnce(new Error("denied"));
     await reportProblem();
-    expect(invoke).toHaveBeenCalledWith("open_issue_page");
+    expect(invoke).toHaveBeenLastCalledWith("open_issue_page", { withDiagnostics: false });
     expect(toasts()).toHaveLength(1);
     expect(toasts()[0][0]).toBe("error");
     expect(toasts()[0][1]).toContain("Could not copy diagnostics (denied)");

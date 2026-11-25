@@ -431,6 +431,33 @@ fn render(info: &AppInfo, settings: &str, log: &str, unavailable: Option<&str>) 
     )
 }
 
+/// `text` with the user's home folder written as `~` wherever a path starts with it, in either slash form. A path that only
+/// begins with the same letters (`/home/ann2`) is left alone. `ignore_case` is for file systems that do not tell
+/// `C:\Users\Ann` from `c:\users\ann` (Windows).
+fn hide_home(text: &str, home: &str, ignore_case: bool) -> String {
+    let home = home.trim_end_matches(['/', '\\']);
+    if home.is_empty() {
+        return text.to_string();
+    }
+    // Both sides with `/` for `\` (and lower case when asked): the same byte length, so offsets are the text's own.
+    let fold = |s: &str| {
+        let s = s.replace('\\', "/");
+        if ignore_case { s.to_ascii_lowercase() } else { s }
+    };
+    let (hay, needle) = (fold(text), fold(home));
+    let mut out = String::with_capacity(text.len());
+    let mut from = 0;
+    while let Some(at) = hay[from..].find(&needle).map(|i| i + from) {
+        let end = at + needle.len();
+        let ends_here = hay[end..].chars().next().is_none_or(|c| !(c.is_alphanumeric() || "_-.".contains(c)));
+        out.push_str(&text[from..at]);
+        out.push_str(if ends_here { "~" } else { &text[at..end] });
+        from = end;
+    }
+    out.push_str(&text[from..]);
+    out
+}
+
 #[tauri::command]
 pub fn app_info(app: AppHandle) -> Result<AppInfo, String> {
     app_info_of(&app)
@@ -443,7 +470,12 @@ pub fn diagnostics(app: AppHandle, state: State<'_, AppState>) -> Result<String,
     log::logger().flush();
     let unavailable = LOG_STATE.get().and_then(|s| s.unavailable.as_deref()).or(LOG_FALLBACK.get().copied());
     let log = if unavailable.is_some() { String::new() } else { tail_lines(&Path::new(&info.log_dir).join(format!("{LOG_NAME}.log")), TAIL_LINES) };
-    Ok(render(&info, &settings_summary(&settings::load(&state.settings_path)), &log, unavailable))
+    let text = render(&info, &settings_summary(&settings::load(&state.settings_path)), &log, unavailable);
+    // The About dialog shows full paths; the block that is pasted into a public issue does not carry the user's name.
+    Ok(match dirs::home_dir() {
+        Some(home) => hide_home(&text, &home.display().to_string(), cfg!(windows)),
+        None => text,
+    })
 }
 
 /// Open the log folder in the file manager. Done here so the webview's opener scope stays as narrow as it is.
@@ -464,21 +496,25 @@ const ISSUE_BODY: &str = "What happened:
 Diagnostics (paste the copied text here):
 ";
 
-/// `ISSUE_PAGE` with `ISSUE_BODY` as the `body` query value, percent-encoded.
-fn issue_url() -> String {
-    let encoded: String = ISSUE_BODY
+/// The same, for when the diagnostics could not be copied: it does not ask to paste what is not on the clipboard.
+const ISSUE_BODY_NO_COPY: &str = "What happened:\n\n\nDiagnostics could not be copied. Use Help > Copy diagnostics and paste them here:\n";
+
+/// `ISSUE_PAGE` with one of the two fixed bodies as the `body` query value, percent-encoded.
+fn issue_url(with_diagnostics: bool) -> String {
+    let body = if with_diagnostics { ISSUE_BODY } else { ISSUE_BODY_NO_COPY };
+    let encoded: String = body
         .bytes()
         .map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
         .collect();
     format!("{ISSUE_PAGE}?body={encoded}")
 }
 
-/// Open the New issue page in the browser. The address is fixed here and the webview passes nothing, so its opener scope
-/// stays as narrow as it is.
+/// Open the New issue page in the browser. The address and both bodies are fixed here: the webview passes only whether the
+/// diagnostics were copied, never text, so its opener scope stays as narrow as it is.
 #[tauri::command]
-pub fn open_issue_page(app: AppHandle) -> Result<(), String> {
+pub fn open_issue_page(app: AppHandle, with_diagnostics: bool) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
-    app.opener().open_url(issue_url(), None::<&str>).map_err(|e| e.to_string())
+    app.opener().open_url(issue_url(with_diagnostics), None::<&str>).map_err(|e| e.to_string())
 }
 
 /// A logger that keeps what the app logs, so a test can look at the records of the code under test.
@@ -536,11 +572,51 @@ mod tests {
 
     #[test]
     fn the_issue_url_is_the_fixed_new_issue_page_with_an_encoded_fixed_body() {
-        let url = issue_url();
+        let url = issue_url(true);
         let body = url.strip_prefix("https://github.com/tyler59simon/agentic-hivemind-app/issues/new?body=").expect("the fixed page and a body");
         assert!(body.chars().all(|c| c.is_ascii_alphanumeric() || "-._~%".contains(c)), "{body}");
         assert!(body.starts_with("What%20happened%3A%0A%0A%0A"), "{body}");
         assert!(body.ends_with("here%29%3A%0A"), "{body}");
+    }
+
+    #[test]
+    fn the_issue_url_without_diagnostics_does_not_ask_to_paste_the_copied_text() {
+        let url = issue_url(false);
+        let body = url.strip_prefix("https://github.com/tyler59simon/agentic-hivemind-app/issues/new?body=").expect("the fixed page and a body");
+        assert!(body.chars().all(|c| c.is_ascii_alphanumeric() || "-._~%".contains(c)), "{body}");
+        assert!(body.starts_with("What%20happened%3A%0A%0A%0A"), "{body}");
+        assert!(body.contains("could%20not%20be%20copied"), "{body}");
+        assert!(!body.contains("copied%20text"), "{body}");
+        assert_ne!(url, issue_url(true));
+    }
+
+    #[test]
+    fn the_home_folder_becomes_a_tilde_in_every_path_and_slash_form() {
+        let home = "C:\\Users\\Ann";
+        let text = "Data: C:\\Users\\Ann\\AppData\\hm\nLog: C:/Users/Ann/AppData/logs\nHome: C:\\Users\\Ann\nOther: C:\\Users\\Ann2\\x and D:\\Users\\Ann\\y";
+        let out = hide_home(text, home, false);
+        assert_eq!(out, "Data: ~\\AppData\\hm\nLog: ~/AppData/logs\nHome: ~\nOther: C:\\Users\\Ann2\\x and D:\\Users\\Ann\\y");
+        // A home written with `/` or a trailing slash matches the same text.
+        assert_eq!(hide_home(text, "C:/Users/Ann/", false), out);
+        // Case matters unless asked to be ignored.
+        assert_eq!(hide_home("c:\\users\\ann\\x", home, false), "c:\\users\\ann\\x");
+        assert_eq!(hide_home("c:\\users\\ann\\x and C:\\USERS\\ANN", home, true), "~\\x and ~");
+        assert_eq!(hide_home("/home/ann/.config and /home/ann2/x", "/home/ann", false), "~/.config and /home/ann2/x");
+        assert_eq!(hide_home("nothing here", "", true), "nothing here");
+    }
+
+    #[test]
+    fn a_diagnostics_block_keeps_no_home_path_but_keeps_the_rest() {
+        let mut i = info();
+        i.data_dir = "C:\\Users\\Ann\\AppData\\Roaming\\hm".into();
+        i.config_dir = "C:\\Users\\Ann\\AppData\\Roaming\\hm-config".into();
+        i.log_dir = "C:\\Users\\Ann\\AppData\\Local\\hm\\logs".into();
+        let text = hide_home(&render(&i, "theme: emerald", "[INFO] wrote C:\\Users\\Ann\\AppData\\x", None), "C:\\Users\\Ann", true);
+        assert!(!text.contains("Ann"), "{text}");
+        assert!(text.contains("Data folder: ~\\AppData\\Roaming\\hm\n"), "{text}");
+        assert!(text.contains("Log folder: ~\\AppData\\Local\\hm\\logs\n"), "{text}");
+        assert!(text.contains("[INFO] wrote ~\\AppData\\x"), "{text}");
+        assert!(text.contains("Hivemind 0.1.0") && text.contains("theme: emerald"));
     }
 
     #[test]

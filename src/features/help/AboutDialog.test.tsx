@@ -72,12 +72,22 @@ describe("the About dialog", () => {
     expect(document.querySelector('[data-announce="polite"]')!.textContent).toBe("Copied");
   });
 
-  it("says so when the copy is refused", async () => {
-    writeText.mockRejectedValueOnce(new Error("denied"));
+  it("says so, in the dialog and to a screen reader, when the copy is refused, and clears an earlier Copied", async () => {
     await act(async () => useAboutDialog.getState().show());
     await settle();
-    await act(async () => document.querySelector<HTMLButtonElement>('button[aria-label="Copy the data folder"]')!.click());
+    const button = document.querySelector<HTMLButtonElement>('button[aria-label="Copy the data folder"]')!;
+    await act(async () => button.click());
+    expect(button.textContent).toBe("Copied");
+    writeText.mockRejectedValueOnce(new Error("denied"));
+    await act(async () => button.click());
     expect(document.querySelector('[data-announce="assertive"]')!.textContent).toBe("Could not copy");
+    expect(button.textContent).toBe("Copy");
+    expect(button.closest(".about-row")!.querySelector(".error")!.textContent).toContain("Could not copy");
+    // The other folders show nothing, and a later success removes the message.
+    expect(document.querySelectorAll(".about-row .error")).toHaveLength(1);
+    await act(async () => button.click());
+    expect(button.textContent).toBe("Copied");
+    expect(document.querySelectorAll(".about-row .error")).toHaveLength(0);
   });
 
   it("shows a loading state, then an error state when app_info fails, without folders", async () => {

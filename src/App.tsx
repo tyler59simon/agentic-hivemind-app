@@ -11,6 +11,7 @@ import { SettingsForm } from "./features/settings/SettingsForm";
 import { SchedulesSection } from "./features/schedules/SchedulesSection";
 import { MaintenanceSection } from "./features/maintenance/MaintenanceSection";
 import { AboutDialog } from "./features/help/AboutDialog";
+import { HelpRow } from "./features/help/HelpRow";
 import { ShortcutsDialog, useShortcutsDialog } from "./features/shortcuts/ShortcutsDialog";
 import { ShortcutsSection } from "./features/shortcuts/ShortcutsSection";
 import { agentSessions } from "./lib/agent";
@@ -309,6 +310,7 @@ export default function App() {
             {outdated && <p className="error">This version of Living Memory is too old: Hivemind needs one with direct writes and unified proposals (<code>alm version</code> lists <code>direct_writes</code> and <code>proposals</code> under capabilities). Update Living Memory, then reconnect.</p>}
             <SettingsForm onSaved={reconnect} />
             <ShortcutsSection />
+            <HelpRow />
             {link.isSuccess && !outdated && <><SchedulesSection /><MaintenanceSection /></>}
             <BeforeUninstall
               onOpenReview={link.isSuccess && !outdated ? (id) => { setSettings(false); openInbox(id); } : undefined}

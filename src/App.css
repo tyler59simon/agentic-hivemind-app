@@ -2160,6 +2160,7 @@ button.owner-chip { cursor: pointer; }
 .shortcut-rows .shortcut-note { flex-basis: 100%; margin: 0; }
 .shortcut-key { min-width: 9rem; }
 .settings h4 { margin: var(--sp-8) 0 var(--sp-5); font-size: .9rem; color: var(--muted); }
+.help-row .actions { justify-content: flex-start; flex-wrap: wrap; }
 .about-list { margin: 0; display: flex; flex-direction: column; }
 .about-list .about-row { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-16); padding: var(--sp-5) 0; border-bottom: 1px solid var(--border); }
 .about-list dt { flex: none; }

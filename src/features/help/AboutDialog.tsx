@@ -37,20 +37,21 @@ export function AboutDialog() {
 }
 
 function FolderRow({ label, path }: { label: string; path: string }) {
-  const [copied, setCopied] = useState(false);
+  const [state, setState] = useState<"copied" | "failed" | null>(null);
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(path);
-      setCopied(true);
+      setState("copied");
       announce("Copied");
     } catch {
+      setState("failed");
       announce("Could not copy", "assertive");
     }
   };
   return (
     <div className="about-row">
       <dt>{label}</dt>
-      <dd><code>{path}</code> <button type="button" className="ghost" aria-label={`Copy the ${label.toLowerCase()}`} onClick={() => void copy()}>{copied ? "Copied" : "Copy"}</button></dd>
+      <dd><code>{path}</code> <button type="button" className="ghost" aria-label={`Copy the ${label.toLowerCase()}`} onClick={() => void copy()}>{state === "copied" ? "Copied" : "Copy"}</button>{state === "failed" && <span className="error small"> Could not copy</span>}</dd>
     </div>
   );
 }

@@ -30,12 +30,13 @@ export async function copyDiagnostics(): Promise<void> {
   else toast(`Could not copy diagnostics: ${failed}`, "error");
 }
 
-/** Copy the diagnostics, then open the repository's New issue page (the address is fixed in Rust). The page opens even when
- *  the copy failed, and the toast says which happened. Nothing is sent. */
+/** Copy the diagnostics, then open the repository's New issue page (the address is fixed in Rust; only whether the copy
+ *  worked is passed, so the page asks to paste only when there is something to paste). The page opens even when the copy
+ *  failed, and the toast says which happened. Nothing is sent. */
 export async function reportProblem(): Promise<void> {
   const failed = await copy();
   try {
-    await invoke("open_issue_page");
+    await invoke("open_issue_page", { withDiagnostics: failed === null });
   } catch (e) {
     toast(failed === null ? `Diagnostics copied, but could not open the issue page: ${why(e)}` : `Could not copy diagnostics (${failed}) or open the issue page: ${why(e)}`, "error");
     return;
