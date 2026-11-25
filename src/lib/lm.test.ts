@@ -36,15 +36,20 @@ describe("run", () => {
     expect(calls[0]).toEqual(["lm", { argv: listArgs({ domain: "demo" }), stdin: null }]);
   });
 
-  it("logs a failed command by name and code, with the message cut, and never the arguments", async () => {
-    fake({ exit_code: 2, result: null, error: { code: "invalid", message: "m".repeat(500) } });
+  it("logs a failed command by name, code and the message's leading word, never the arguments or the rest", async () => {
+    // Living Memory messages can quote note titles and suspected credentials.
+    fake({ exit_code: 2, result: null, error: { code: "invalid", message: 'possible_duplicate: similar to demo:abc "My private title"' } });
     await expect(run(["read", "demo:secret-ref", "--query", "private words"], "note body")).rejects.toBeInstanceOf(LmError);
     expect(logged).toHaveBeenCalledTimes(1);
     const line = logged.mock.calls[0][0] as string;
-    expect(line).toBe(`lm read failed (invalid, exit 2): ${"m".repeat(300)}...`);
-    expect(line).not.toContain("private words");
-    expect(line).not.toContain("secret-ref");
-    expect(line).not.toContain("note body");
+    expect(line).toBe("lm read failed (invalid, exit 2): possible_duplicate");
+    for (const text of ["private words", "secret-ref", "note body", "My private title", "demo:abc"]) expect(line).not.toContain(text);
+  });
+
+  it("logs no leading word for a message that does not start with one", async () => {
+    fake({ exit_code: 1, result: null, error: { code: "invalid", message: '"quoted note text" was refused' } });
+    await expect(run(["capture"])).rejects.toBeInstanceOf(LmError);
+    expect(logged.mock.calls[0][0]).toBe("lm capture failed (invalid, exit 1)");
   });
 
   it("logs nothing for a command that succeeds", async () => {
