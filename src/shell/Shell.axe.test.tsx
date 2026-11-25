@@ -48,11 +48,8 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-/** What axe reports on this page today. Each entry names its cause; remove the entry in the commit that fixes it. */
-const BASELINE = [
-  // The account button is named "Account and settings" but shows the user's name (ui/Menu.tsx:28, Sidebar.tsx:96): WCAG 2.5.3.
-  "review:label-content-name-mismatch @ .menu-button",
-];
+/** What axe reports on this page today: nothing. */
+const BASELINE: string[] = [];
 
 describe("the shell frame with the real Sidebar and Topbar", () => {
   it("draws the sidebar, the top bar and the page", () => {
@@ -62,6 +59,17 @@ describe("the shell frame with the real Sidebar and Topbar", () => {
     expect(document.querySelector(".nav-count")).not.toBeNull();
   });
 
+  it("names the sections with their state in words, the account button by the user's name, and the sidebar as a landmark", () => {
+    const text = (label: string) => [...document.querySelectorAll<HTMLElement>(".nav-item")].find((b) => b.title === label)!.textContent;
+    expect(text("Inbox")).toBe("Inbox2, 2 waiting for you");
+    expect(document.querySelector(".nav-count")!.getAttribute("aria-hidden")).toBe("true");
+    const account = document.querySelector<HTMLElement>(".user-menu .menu-button")!;
+    expect(account.hasAttribute("aria-label")).toBe(false);
+    expect(account.textContent).toContain("Ada");
+    expect(account.textContent).toContain(", account and settings");
+    expect(document.querySelector("aside.sidebar")!.getAttribute("aria-label")).toBe("Sidebar");
+  });
+
   it("has only the violations recorded in the baseline", async () => {
     await expectNoNewAxeViolations(document.body, BASELINE);
   });
@@ -69,6 +77,7 @@ describe("the shell frame with the real Sidebar and Topbar", () => {
   it("has the same ones with the unsaved-edits dot on the Notes section", async () => {
     await act(async () => useWorkspace.setState({ panes: [{ id: "p0", tabs: [{ id: "a", kind: "file", file: { notebook: "nb", path: "A.md" }, mode: "live" }], active: "a" }], dirty: { a: true } }));
     expect(document.querySelector(".nav-dot")).not.toBeNull();
+    expect([...document.querySelectorAll<HTMLElement>(".nav-item")].find((b) => b.title === "Notes")!.textContent).toBe("Notes, A document has unsaved edits");
     await expectNoNewAxeViolations(document.body, BASELINE);
     await act(async () => useWorkspace.setState({ panes: [{ id: "p0", tabs: [], active: null }], dirty: {} }));
   });

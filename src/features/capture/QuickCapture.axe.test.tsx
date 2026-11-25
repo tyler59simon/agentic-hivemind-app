@@ -36,20 +36,33 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-/** What axe reports on both forms today: nothing. The title field and the two text areas are named only by their placeholder
- *  (QuickCapture.tsx:170-172), and axe accepts a placeholder as a name, so this is a gap the check cannot see. */
+/** What axe reports on both forms today: nothing. */
 const BASELINE: string[] = [];
+
+/** Axe accepts a placeholder as a name, so the labels are checked here: every field has a label element, and the label's text is
+ *  part of the placeholder (or the placeholder is part of it) so the visible text is in the name. */
+function expectLabelled() {
+  const fields = [...document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input:not([type=hidden]), textarea")];
+  expect(fields.length).toBeGreaterThanOrEqual(3);
+  for (const f of fields) {
+    const name = [...(f.labels ?? [])].map((l) => l.textContent).join(" ") || f.getAttribute("aria-label") || "";
+    expect(name, `a name for the ${f.placeholder} field`).not.toBe("");
+    if (f.placeholder && f.labels?.length) expect(f.placeholder.toLowerCase()).toContain(name.toLowerCase());
+  }
+}
 
 describe("the quick capture window", () => {
   it("draws the Memory note form, and has only the violations recorded in the baseline", async () => {
     expect(document.querySelector("select[aria-label=Domain]")).not.toBeNull();
     expect(document.querySelectorAll("textarea").length).toBe(2);
+    expectLabelled();
     await expectNoNewAxeViolations(document.body, BASELINE);
   });
 
   it("has only the violations recorded in the baseline in the page form", async () => {
     await click("Today's page");
     expect(document.querySelector("select[aria-label=Notebook]")).not.toBeNull();
+    expectLabelled();
     await expectNoNewAxeViolations(document.body, BASELINE);
   });
 });

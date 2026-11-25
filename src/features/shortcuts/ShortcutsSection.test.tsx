@@ -36,9 +36,12 @@ const { ShortcutsDialog } = await import("./ShortcutsDialog");
 const { useApp } = await import("../../store");
 
 let root: Root | null = null;
-const key = (label: string) => document.querySelector<HTMLButtonElement>(`button.shortcut-key[aria-label^="${label}:"]`)!;
-const reset = (label: string) => document.querySelector<HTMLButtonElement>(`button[aria-label^="Reset ${label} to"]`)!;
-const shownKeys = (label: string) => key(label).textContent;
+const key = (label: string) => [...document.querySelectorAll<HTMLElement>("li.shortcut-row")].find((r) => r.querySelector(".grow")?.textContent === label)!.querySelector<HTMLButtonElement>("button.shortcut-key")!;
+const reset = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("li.shortcut-row button")].find((b) => b.textContent?.startsWith(`Reset ${label} to`))!;
+/** What the button shows: its content without the words only a screen reader gets. */
+const shownKeys = (label: string) => [...key(label).childNodes].filter((n) => !(n as Element).classList?.contains("visually-hidden")).map((n) => n.textContent).join("");
+/** The button's name, which is its content. */
+const nameOf = (label: string) => key(label).textContent;
 const said = () => document.querySelector('[data-announce="polite"]')!.textContent;
 const saidNow = () => document.querySelector('[data-announce="assertive"]')!.textContent;
 const text = () => document.querySelector("#settings-shortcuts")!.textContent!;
@@ -80,7 +83,7 @@ describe("the Settings section", () => {
     expect([...document.querySelectorAll("#settings-shortcuts h4")].map((h) => h.textContent)).toEqual(["Navigation", "Notes", "Tabs and panes", "Window"]);
     expect(shownKeys("Command palette")).toBe("Ctrl+P");
     expect(shownKeys("Zoom in")).toBe("Ctrl+=");
-    for (const fixed of ["Save the file", "Next tab", "Bold", "Paste"]) expect(document.querySelector(`button[aria-label^="${fixed}:"]`), fixed).toBeNull();
+    for (const fixed of ["Save the file", "Next tab", "Bold", "Paste"]) expect([...document.querySelectorAll("li.shortcut-row .grow")].some((r) => r.textContent === fixed), fixed).toBe(false);
     expect(reset("Command palette").disabled).toBe(true);
   });
 
@@ -327,7 +330,7 @@ describe("the Settings section", () => {
     await act(async () => setOverrides({ "palette.commands": "F11" }));
     expect(shownKeys("Command palette")).toBe("F11");
     expect(shownKeys("Full screen")).toBe("Not set, taken by Command palette");
-    expect(key("Full screen").getAttribute("aria-label")).toBe("Full screen: Not set, taken by Command palette. Press Enter to change");
+    expect(nameOf("Full screen")).toBe("Not set, taken by Command palette, Full screen. Press Enter to change");
     expect(reset("Full screen").disabled).toBe(false);
     await act(async () => reset("Full screen").click());
     expect(sets()).toEqual([]);

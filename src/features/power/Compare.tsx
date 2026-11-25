@@ -73,7 +73,7 @@ const ready = (doc: DocState | undefined) => !!doc && doc.status !== "loading" &
 function Name({ file, doc }: { file: FileRef; doc: DocState | undefined }) {
   return (
     <span className="compare-name" title={file.path}>
-      {fileName(file.path)}{isUnsaved(doc) && <span className="dot" aria-label="unsaved"> ●</span>}
+      {fileName(file.path)}{isUnsaved(doc) && <><span className="dot" aria-hidden> ●</span><span className="visually-hidden">, unsaved</span></>}
     </span>
   );
 }

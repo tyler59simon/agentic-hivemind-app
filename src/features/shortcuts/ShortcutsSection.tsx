@@ -99,14 +99,15 @@ function Row({ s }: { s: Shortcut }) {
     <li className="shortcut-row">
       <span className="grow">{s.label}</span>
       <button ref={button} type="button" className="shortcut-key" data-own-zoom-keys aria-describedby={note ? noteId : undefined}
-        aria-label={recording ? `${s.label}: press the new keys, or Escape to cancel` : `${s.label}: ${nowText}. Press Enter to change`}
+        // The button is named by its content: the keys (or the prompt while recording) first, then what they do (WCAG 2.5.3).
         // Safari and WebKit do not focus a button on click: the keys must go to this one.
         onClick={() => { button.current?.focus(); setNote(null); setRecording(true); announce("Press the new keys, or Escape to cancel."); }}
         onKeyDown={onKeyDown} onKeyUp={(e) => { if (held.current === keyId(e.nativeEvent)) held.current = null; }}
         onBlur={() => { setRecording(false); held.current = null; }}>
         {recording ? "Press the new keys…" : taken ? <span>{nowText}</span> : <kbd>{nowText}</kbd>}
+        <span className="visually-hidden">, {s.label}{recording ? "" : ". Press Enter to change"}</span>
       </button>
-      <button type="button" onClick={reset} disabled={!changed} aria-label={`Reset ${s.label} to ${formatCombo(defaultCombo(s.id))}`}>Reset</button>
+      <button type="button" onClick={reset} disabled={!changed}>Reset<span className="visually-hidden"> {s.label} to {formatCombo(defaultCombo(s.id))}</span></button>
       {note && <p id={noteId} className={`${note.kind === "error" ? "error" : "muted"} small shortcut-note`}>{note.text}</p>}
     </li>
   );

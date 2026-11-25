@@ -79,7 +79,7 @@ function Filters({ notebooks, projectName }: { notebooks: { id: string; title: s
   }, [pageTags.data, memTags.data]);
 
   return (
-    <div className="search-filters" aria-label="Filters">
+    <div className="search-filters" role="group" aria-label="Filters">
       {projectName && (
         <button type="button" className={`chip${filters.allProjects ? " on" : ""}`} aria-pressed={filters.allProjects}
           onClick={() => set({ allProjects: !filters.allProjects })}

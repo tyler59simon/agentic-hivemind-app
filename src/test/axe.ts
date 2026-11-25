@@ -24,7 +24,9 @@ export interface AxeViolation {
  *  - region: asks that all content sit in a landmark. Component tests render a part of the page, so the rule would flag the test
  *    harness. The shell test checks the landmarks of the whole frame with the other landmark rules.
  *  - bypass, page-has-heading-one, landmark-one-main: page-level rules for a document, not for a rendered fragment.
- *  - document-title, html-has-lang, html-lang-valid: facts about index.html, not about components. */
+ *  - document-title, html-has-lang, html-lang-valid: facts about index.html, not about components.
+ *  - label-content-name-mismatch (WCAG 2.5.3): axe tells an icon font from text by drawing it on a canvas. jsdom has none, so axe
+ *    reports an error for the first element it meets and checks no other; `labelNotInName` below makes the same check without it. */
 export const JSDOM_DISABLED_RULES = [
   "color-contrast",
   "target-size",
@@ -36,11 +38,32 @@ export const JSDOM_DISABLED_RULES = [
   "document-title",
   "html-has-lang",
   "html-lang-valid",
+  "label-content-name-mismatch",
 ] as const;
 
 export interface AxeOptions {
   /** More rules to switch off for one test, on top of JSDOM_DISABLED_RULES. */
   disable?: string[];
+}
+
+const normal = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+const LABELLED = "button, a[href], summary, [role=button], [role=link], [role=tab], [role=menuitem], [role=option], [role=switch], [role=checkbox], [role=radio], [role=treeitem]";
+
+/** WCAG 2.5.3, Label in Name: a control with an `aria-label` and text on it must have that text in its name. Text that only a
+ *  screen reader gets (`.visually-hidden`) and icons are not on the control. */
+export function labelNotInName(root: Element): AxeViolation[] {
+  const found: AxeViolation[] = [];
+  for (const el of root.querySelectorAll(LABELLED)) {
+    const label = el.getAttribute("aria-label");
+    if (!label) continue;
+    const clone = el.cloneNode(true) as Element;
+    clone.querySelectorAll(".visually-hidden, svg, img").forEach((n) => n.remove());
+    const shown = normal(clone.textContent ?? "");
+    if (shown && !normal(label).includes(shown)) {
+      found.push({ kind: "violation", id: "label-in-name", impact: "serious", target: `${el.localName}${[...el.classList].map((c) => `.${c}`).join("")}[aria-label="${label}"]`, help: `The name "${label}" does not contain the visible text "${shown}" (WCAG 2.5.3)` });
+    }
+  }
+  return found;
 }
 
 /** The violations axe finds in `root`, one entry per failing node. */
@@ -54,7 +77,7 @@ export async function axeViolations(root: Element, options: AxeOptions = {}): Pr
       for (const node of v.nodes) found.push({ kind, id: v.id, impact: v.impact ?? node.impact ?? null, target: node.target.map(String).join(" >> "), help: v.help });
     }
   }
-  return found;
+  return [...found, ...labelNotInName(root)];
 }
 
 /** A baseline entry is `rule-id` (every node of the rule) or `rule-id @ selector` (one node, as axe prints it), with "review:"

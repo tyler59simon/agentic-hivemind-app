@@ -20,7 +20,7 @@ const { useShortcutsDialog } = await import("../features/shortcuts/ShortcutsDial
 const info = { user: "Ada", root: "/lm", script: "lm" } as never;
 
 let root: Root | null = null;
-const trigger = () => document.querySelector<HTMLButtonElement>('button[aria-label="Account and settings"]')!;
+const trigger = () => document.querySelector<HTMLButtonElement>(".user-menu .menu-button")!;
 const items = () => [...document.querySelectorAll<HTMLButtonElement>('[role="menu"] [role="menuitem"]')];
 const names = () => items().map((b) => b.querySelector(".grow")!.textContent);
 const item = (name: string) => items().find((b) => b.querySelector(".grow")!.textContent === name)!;

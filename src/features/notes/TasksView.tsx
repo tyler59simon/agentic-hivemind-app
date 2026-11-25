@@ -43,7 +43,7 @@ export function TasksView() {
         <h1>Tasks</h1>
         <span className="muted small">{loading ? "Reading…" : `${shown.length} of ${items.length}`}</span>
       </header>
-      <div className="views-filters" aria-label="Task filters">
+      <div className="views-filters" role="group" aria-label="Task filters">
         <select aria-label="Notebook" value={notebook} onChange={(e) => setNotebook(e.target.value)}>
           <option value="">All notebooks</option>
           {folders.map((n) => <option key={n.id} value={n.id}>{n.title}</option>)}

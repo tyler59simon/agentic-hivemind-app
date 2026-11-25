@@ -83,8 +83,8 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
             onContextMenu={(e) => { e.preventDefault(); setMenu(p === "home" ? null : { page: p, x: e.clientX, y: e.clientY, from: e.currentTarget }); }}
             onKeyDown={(e) => { if (contextMenuKey(e) && p !== "home") { e.preventDefault(); setMenu({ page: p, ...menuPointFor(e.currentTarget), from: e.currentTarget }); } }}>
             <Icon size="1.35em" aria-hidden /><span className="grow">{label}</span>
-            {p === "inbox" && inboxTotal > 0 && <span className="nav-count" title={`${inboxTotal} waiting for you`} aria-label={`${inboxTotal} waiting for you`}>{inboxTotal}</span>}
-            {mark(p) && <span className={`nav-dot ${p === "agents" && waiting ? "waiting" : p === "agents" && attention === "done" ? "done" : p === "notes" ? "unsaved" : ""}`} title={mark(p)!} aria-label={mark(p)!} />}
+            {p === "inbox" && inboxTotal > 0 && <><span className="nav-count" title={`${inboxTotal} waiting for you`} aria-hidden>{inboxTotal}</span><span className="visually-hidden">, {inboxTotal} waiting for you</span></>}
+            {mark(p) && <><span className={`nav-dot ${p === "agents" && waiting ? "waiting" : p === "agents" && attention === "done" ? "done" : p === "notes" ? "unsaved" : ""}`} title={mark(p)!} aria-hidden /><span className="visually-hidden">, {mark(p)}</span></>}
           </button>
         ))}
         <button className="nav-item" onClick={onSettings}><Settings size="1.35em" aria-hidden /><span className="grow">Settings</span></button>
@@ -100,8 +100,8 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
           <li className="menu-note" role="none">Show it again in Settings</li>
         </ContextMenu>
       )}
-      <Menu className="user-menu" label="Account and settings" up
-        button={<><span className="avatar" aria-hidden>{user.slice(0, 1).toUpperCase()}</span><span className="grow">{user}</span><ChevronDown size="1.1em" aria-hidden /></>}>
+      <Menu className="user-menu" label="Account and settings" buttonLabel={null} up
+        button={<><span className="avatar" aria-hidden>{user.slice(0, 1).toUpperCase()}</span><span className="grow">{user}</span><span className="visually-hidden">, account and settings</span><ChevronDown size="1.1em" aria-hidden /></>}>
         {(close) => (
           <>
             <li role="none"><button role="menuitem" onClick={() => { close(); onSettings(); }}><span className="grow">Settings</span></button></li>

@@ -67,7 +67,7 @@ export function LocalGraphPanel({ focusRef, focusFile }: { focusRef?: string; fo
   return (
     <div className="local-graph">
       <div className="segmented compact">
-        {[1, 2].map((d) => <button key={d} className={depth === d ? "on" : ""} onClick={() => setDepth(d)}>{d} link{d > 1 ? "s" : ""} away</button>)}
+        {[1, 2].map((d) => <button key={d} className={depth === d ? "on" : ""} aria-pressed={depth === d} onClick={() => setDepth(d)}>{d} link{d > 1 ? "s" : ""} away</button>)}
       </div>
       {near && near.nodes.length > 1
         ? <GraphCanvas data={near} focus={focusId} compact onOpen={openGraphNode} />

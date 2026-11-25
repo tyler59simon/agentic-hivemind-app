@@ -19,11 +19,9 @@ async function mount(node: React.ReactNode) {
 }
 afterEach(async () => { await act(async () => root?.unmount()); root = null; document.body.innerHTML = ""; });
 
-/** What axe reports on these today. Each entry names its cause; remove the entry in the commit that fixes it. */
-// The close button shows "×" and is named "Close" (Modal.tsx:49): WCAG 2.5.3 asks that the name contain the visible text.
-const DIALOG = ["review:label-content-name-mismatch @ .ghost"];
-// A menu button whose name ("Account and settings") differs from its visible text, the user's name (Menu.tsx:28, Sidebar.tsx:96).
-const MENU = ["review:label-content-name-mismatch @ .menu-button"];
+/** What axe reports on these today: nothing. */
+const DIALOG: string[] = [];
+const MENU: string[] = [];
 
 describe("Modal and Confirm", () => {
   it("a dialog with a field has only the violations recorded in the baseline", async () => {
@@ -42,7 +40,7 @@ describe("Modal and Confirm", () => {
 describe("Menu", () => {
   it("open, has only the violations recorded in the baseline", async () => {
     await mount(
-      <Menu label="Account and settings" button={<><span aria-hidden>A</span><span className="grow">Ada</span></>}>
+      <Menu label="Account and settings" buttonLabel={null} button={<><span aria-hidden>A</span><span className="grow">Ada</span><span className="visually-hidden">, account and settings</span></>}>
         {(close) => (
           <>
             <li role="none"><button role="menuitem" onClick={close}><span className="grow">Settings</span></button></li>

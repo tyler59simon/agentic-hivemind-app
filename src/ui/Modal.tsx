@@ -35,7 +35,7 @@ export function Modal({ title, children, onClose, wide, locked }: {
     <div className="overlay center-overlay" onMouseDown={() => !locked && onClose()}>
       <div className={`modal ${wide ? "wide" : ""}`} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={box}
         onMouseDown={(e) => e.stopPropagation()}>
-        <header className="modal-head"><h2>{title}</h2><button className="ghost" onClick={onClose} disabled={locked} aria-label="Close">×</button></header>
+        <header className="modal-head"><h2>{title}</h2><button className="ghost" onClick={onClose} disabled={locked}><span aria-hidden>×</span><span className="visually-hidden">Close</span></button></header>
         <div className="modal-body">{children}</div>
       </div>
     </div>,

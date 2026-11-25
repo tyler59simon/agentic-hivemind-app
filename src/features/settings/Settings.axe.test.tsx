@@ -47,8 +47,6 @@ afterEach(async () => {
 const BASELINE = [
   // The card's h1 (App.tsx:308) is followed by the form's first h3, with no h2 between (SettingsForm.tsx:100).
   "heading-order @ form > h3:nth-child(1)",
-  // The key button's name is "<action>: <keys>. Press Enter to change" and may not contain its visible key text (ShortcutsSection.tsx:101-102): WCAG 2.5.3.
-  'review:label-content-name-mismatch @ div[aria-label="Navigation"] > ul > li:nth-child(1) > .shortcut-key[data-own-zoom-keys="true"][type="button"]',
 ];
 
 describe("the Settings card", () => {

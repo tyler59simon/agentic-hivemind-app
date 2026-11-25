@@ -272,7 +272,7 @@ export function NotebookTree({ notebook, onSettings, edits, onEdits }: {
             return (
               <div key={node.path} role="none">
                 <div role="treeitem" aria-expanded={branch ? isOpen : undefined} aria-selected={current === node.path} data-tree-path={node.path}
-                  aria-level={depth + 1} aria-posinset={posinset} aria-setsize={setsize} tabIndex={node.path === tabbable ? 0 : -1}
+                  aria-label={label(node)} aria-level={depth + 1} aria-posinset={posinset} aria-setsize={setsize} tabIndex={node.path === tabbable ? 0 : -1}
                   onFocus={(e) => { if (e.target === e.currentTarget) setFocusPath(node.path); }}
                   onKeyDown={(e) => rowKey(e, at)}
                   className={`tree-row ${current === node.path ? "on" : ""} ${target ? "drop" : ""} ${drag?.path === node.path ? "dragging" : ""}`}
@@ -281,9 +281,10 @@ export function NotebookTree({ notebook, onSettings, edits, onEdits }: {
                   onClick={(e) => { if (!justDragged()) pick(node, e); }}
                   onAuxClick={(e) => { if (e.button === 1 && node.kind !== "dir") openPage({ notebook: notebook.id, path: node.path }, { split: true }); }}
                   onContextMenu={(e) => { e.preventDefault(); setMenu({ node, x: e.clientX, y: e.clientY, from: e.currentTarget }); }}>
-                  <button className="tree-toggle" tabIndex={-1} aria-hidden={!branch} style={{ visibility: branch ? "visible" : "hidden" }}
-                    onClick={(e) => { e.stopPropagation(); toggle(node.path); }}>
-                    {isOpen ? <ChevronDown size="1em" /> : <ChevronRight size="1em" />}
+                  {/* The row is named by `aria-label` above, so the button's own name does not double it in the row's name. */}
+                  <button className="tree-toggle" tabIndex={-1} aria-hidden={branch ? undefined : true} aria-label={branch ? `${isOpen ? "Collapse" : "Expand"} ${label(node)}` : undefined}
+                    style={{ visibility: branch ? "visible" : "hidden" }} onClick={(e) => { e.stopPropagation(); toggle(node.path); }}>
+                    {isOpen ? <ChevronDown size="1em" aria-hidden /> : <ChevronRight size="1em" aria-hidden />}
                   </button>
                   <Icon size="1.05em" aria-hidden className="tree-icon" />
                   {renaming?.path === node.path

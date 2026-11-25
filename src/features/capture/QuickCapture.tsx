@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { classify, type Problem } from "../../lib/errors";
 import { capture, domains, projects, showMain, taxonomy, type CapturePayload, type NoteType } from "../../lib/lm";
 import { notebooksQuery } from "../../lib/notebooks";
@@ -56,6 +56,7 @@ async function openInMain(ref: string) {
 
 /** The always-on-top quick capture window (global hotkey or tray). Ctrl+Enter saves, Esc hides. */
 export function QuickCapture() {
+  const ids = useId();
   const client = useQueryClient();
   const known = useQuery({ queryKey: ["domains"], queryFn: domains });
   const tax = useQuery({ queryKey: ["taxonomy"], queryFn: taxonomy });
@@ -167,9 +168,13 @@ export function QuickCapture() {
           {active.map((p) => <option key={p.slug} value={p.slug}>{p.name}</option>)}
         </select>
       )}
-      <input ref={titleRef} autoFocus className="title-input small-title" value={title} placeholder={toPage ? "Title (optional)" : "Title"} onChange={(e) => setTitle(e.target.value)} />
-      <textarea rows={3} value={summary} placeholder={toPage ? "What to capture" : "Summary: one or two sentences"} onChange={(e) => setSummary(e.target.value)} />
-      <textarea rows={3} value={details} placeholder={toPage ? "Details (optional, one per line)" : "Key details (optional, one per line)"} onChange={(e) => setDetails(e.target.value)} />
+      {/* Labels for the three fields, hidden because the window is small. Each is part of its placeholder, so the visible text is in the name. */}
+      <label className="visually-hidden" htmlFor={`${ids}-title`}>{toPage ? "Title (optional)" : "Title"}</label>
+      <input id={`${ids}-title`} ref={titleRef} autoFocus className="title-input small-title" value={title} placeholder={toPage ? "Title (optional)" : "Title"} onChange={(e) => setTitle(e.target.value)} />
+      <label className="visually-hidden" htmlFor={`${ids}-summary`}>{toPage ? "What to capture" : "Summary"}</label>
+      <textarea id={`${ids}-summary`} rows={3} value={summary} placeholder={toPage ? "What to capture" : "Summary: one or two sentences"} onChange={(e) => setSummary(e.target.value)} />
+      <label className="visually-hidden" htmlFor={`${ids}-details`}>{toPage ? "Details" : "Key details"}</label>
+      <textarea id={`${ids}-details`} rows={3} value={details} placeholder={toPage ? "Details (optional, one per line)" : "Key details (optional, one per line)"} onChange={(e) => setDetails(e.target.value)} />
       {!toPage && <TagPicker tags={tags} taxonomy={tax.data?.tags ?? []} onChange={(t) => { setTagsTouched(true); setTags(t); }} />}
       {!toPage && problem?.kind === "similar" ? (
         <div className="banner warn">

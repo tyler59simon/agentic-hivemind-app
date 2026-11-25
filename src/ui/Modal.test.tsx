@@ -29,6 +29,14 @@ describe("Modal", () => {
     expect(dialog().closest(".overlay")!.parentElement).toBe(document.body);
   });
 
+  it("names its close button Close in text, with the × hidden, so the name holds what is shown", async () => {
+    await mount(<Modal title="Delete page" onClose={() => {}}><p>Sure?</p></Modal>);
+    const close = dialog().querySelector<HTMLButtonElement>(".modal-head button")!;
+    expect(close.hasAttribute("aria-label")).toBe(false);
+    expect(close.querySelector("[aria-hidden]")!.textContent).toBe("×");
+    expect(close.querySelector(".visually-hidden")!.textContent).toBe("Close");
+  });
+
   it("closes on Escape and on the backdrop, and not while locked", async () => {
     const onClose = vi.fn();
     await mount(<Modal title="T" onClose={onClose}>x</Modal>);
@@ -38,13 +46,13 @@ describe("Modal", () => {
     expect(onClose).toHaveBeenCalledTimes(1); // a click inside the dialog does not close it
     await act(async () => { dialog().closest(".overlay")!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); });
     expect(onClose).toHaveBeenCalledTimes(2);
-    await act(async () => { dialog().querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click(); });
+    await act(async () => { dialog().querySelector<HTMLButtonElement>(".modal-head button")!.click(); });
     expect(onClose).toHaveBeenCalledTimes(3);
     await act(async () => root!.render(<Modal title="T" onClose={onClose} locked>x</Modal>));
     await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
     await act(async () => { dialog().closest(".overlay")!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); });
     expect(onClose).toHaveBeenCalledTimes(3);
-    expect(dialog().querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.disabled).toBe(true);
+    expect(dialog().querySelector<HTMLButtonElement>(".modal-head button")!.disabled).toBe(true);
   });
 
   it("is removed from the body when it closes", async () => {

@@ -6,8 +6,11 @@ import { useLayer } from "./layers";
  *  The menu takes the focus when it opens, the arrow keys, Home, End and the first letter of an item move in it, and
  *  closing it puts focus back on the button (DESK-5), before the item's action runs, so a dialog the action opens returns
  *  focus there too. */
-export function Menu({ button, className = "", align = "left", up, label, children }: {
+export function Menu({ button, className = "", align = "left", up, label, buttonLabel, children }: {
   button: ReactNode; className?: string; align?: "left" | "right"; up?: boolean; label: string;
+  /** The button's own name. Defaults to `label`, which also names the menu. A button that shows text has no `aria-label` of its own
+   *  (null): its content names it, so the name always contains the visible text (WCAG 2.5.3). */
+  buttonLabel?: string | null;
   children: (close: () => void) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -25,7 +28,7 @@ export function Menu({ button, className = "", align = "left", up, label, childr
   useLayoutEffect(() => { if (open && list.current) menuItems(list.current)[0]?.focus(); }, [open]);
   return (
     <div className={`menu ${className}`} ref={box}>
-      <button ref={trigger} className="menu-button" aria-haspopup="menu" aria-expanded={open} aria-label={label}
+      <button ref={trigger} className="menu-button" aria-haspopup="menu" aria-expanded={open} aria-label={buttonLabel === null ? undefined : buttonLabel ?? label}
         onClick={() => setOpen(!open)}
         onKeyDown={(e) => { if (!open && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault(); setOpen(true); } }}>{button}</button>
       {open && (

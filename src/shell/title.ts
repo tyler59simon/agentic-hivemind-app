@@ -1,12 +1,12 @@
 // The window title (DESK-9): what the window shows, most specific first, so the taskbar, Alt+Tab and screen readers name
-// the open page. A dot marks unsaved edits in the open tab.
+// the open page. A dot marks unsaved edits in the open tab, and the words "(unsaved)" say it for a screen reader.
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect } from "react";
 import { inTauri } from "../lib/native";
 
 export const APP_NAME = "Hivemind";
 
-/** "● Plan - Notebook - Notes - PayStream - Hivemind" from the breadcrumb labels, root first. */
+/** "● Plan (unsaved) - Notebook - Notes - PayStream - Hivemind" from the breadcrumb labels, root first. */
 export function windowTitle(labels: string[], unsaved: boolean): string {
   const parts: string[] = [];
   for (const label of [...labels].reverse()) {
@@ -14,6 +14,7 @@ export function windowTitle(labels: string[], unsaved: boolean): string {
     if (text && text !== "Projects" && !parts.includes(text)) parts.push(text);
   }
   parts.push(APP_NAME);
+  if (unsaved) parts[0] += " (unsaved)";
   return `${unsaved ? "● " : ""}${parts.join(" - ")}`;
 }
 

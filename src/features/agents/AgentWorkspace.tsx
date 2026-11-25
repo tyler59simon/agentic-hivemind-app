@@ -52,7 +52,7 @@ function Entry({ item, index, chat }: { item: Item; index: number; chat?: Chat }
       return (
         <div className={`tool-call ${failed ? "failed" : ""}`}>
           <button className="tool-call-head" aria-expanded={open} onClick={() => setOpen(!open)}>
-            {!item.result ? <LoaderCircle className="spin" size="1.3em" aria-label="Running" /> : failed ? <CircleX size="1.3em" aria-label="Failed" /> : <CircleCheck size="1.3em" aria-label="Done" />}
+            {!item.result ? <LoaderCircle className="spin" size="1.3em" role="img" aria-label="Running" /> : failed ? <CircleX size="1.3em" role="img" aria-label="Failed" /> : <CircleCheck size="1.3em" role="img" aria-label="Done" />}
             <span className="tool-name">{item.name}</span><code>{item.summary}</code>
             <ChevronDown size="1.1em" aria-hidden />
           </button>
@@ -485,8 +485,8 @@ export function AgentWorkspace() {
                     <button key={s.id} className={`session-item ${s.id === current ? "on" : ""}`} aria-current={s.id === current} onClick={() => openSession(s.id)} title={s.error ?? s.title}>
                       {s.interface === "terminal" ? <SquareTerminal size="1.3em" aria-hidden /> : <MessageSquare size="1.3em" aria-hidden />}
                       <span className="grow">{s.title}{s.interface === "terminal" && waitingForReview(s) && <><br /><span className="status-chip waiting">Waiting for review</span></>}</span>
-                      {s.status === "running" && <span className="nav-dot" aria-label="Running" />}
-                      {s.status === "waiting" && <span className="nav-dot waiting" aria-label="Waiting for you" />}
+                      {s.status === "running" && <><span className="nav-dot" aria-hidden /><span className="visually-hidden">, running</span></>}
+                      {s.status === "waiting" && <><span className="nav-dot waiting" aria-hidden /><span className="visually-hidden">, waiting for you</span></>}
                     </button>
                   ))}
                 </div>

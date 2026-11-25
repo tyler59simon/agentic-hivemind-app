@@ -112,12 +112,12 @@ function Board({ spec, rows, write }: { spec: QuerySpec; rows: QueryRow[]; write
   return (
     <div className="query-board">
       {names.map((column) => (
-        <div key={column || "none"} className={`board-column${over === column ? " over" : ""}`} aria-label={column || `No ${group}`}
+        <div key={column || "none"} className={`board-column${over === column ? " over" : ""}`} role="group" aria-label={column || `No ${group}`}
           onDragOver={(e) => { e.preventDefault(); setOver(column); }} onDragLeave={() => setOver((o) => (o === column ? null : o))}
           onDrop={(e) => { e.preventDefault(); void drop(column, e.dataTransfer.getData("text/plain")); }}>
           <h3>{column || `No ${group}`} <span className="muted small">{rows.filter((r) => columnOf(r) === column).length}</span></h3>
           {rows.filter((r) => columnOf(r) === column).map((r) => (
-            <div key={keyOfRow(r)} className="board-card" draggable aria-label={`Card ${r.title || pageTitle(r.path)}`} onDragStart={(e) => { e.dataTransfer.setData("text/plain", keyOfRow(r)); e.dataTransfer.effectAllowed = "move"; }}>
+            <div key={keyOfRow(r)} className="board-card" draggable role="group" aria-label={`Card ${r.title || pageTitle(r.path)}`} onDragStart={(e) => { e.dataTransfer.setData("text/plain", keyOfRow(r)); e.dataTransfer.effectAllowed = "move"; }}>
               <button type="button" className="link" onClick={() => openPage({ notebook: r.notebook, path: r.path })}>{r.title || pageTitle(r.path)}</button>
               {fields.map((f) => shown(r, f) && <div key={f} className="small"><span className="muted">{f}</span> {shown(r, f)}</div>)}
             </div>

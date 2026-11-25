@@ -72,15 +72,9 @@ afterEach(async () => {
 
 /** What axe reports on this page today. Each entry names its cause; remove the entry in the commit that fixes it. */
 const BASELINE = [
-  // The tree's expand button has an icon and no name (NotebookTree.tsx:284).
-  'button-name @ button[aria-hidden="false"]',
   // The rail panels put an h4 under the Section h2 (ui/Page.tsx:55) and skip h3 (links/LinksPanel.tsx:36, RelatedPanel.tsx:32).
   "heading-order @ .section:nth-child(2) > .links-panel > .links-section:nth-child(1) > h4",
   "heading-order @ .section:nth-child(4) > .links-panel > .links-section:nth-child(1) > h4",
-  // aria-label on a div without a role is not exposed (NotesPage.tsx:110).
-  "review:aria-prohibited-attr @ .notes-views",
-  // The account button is named "Account and settings" but shows the user's name (ui/Menu.tsx:28, Sidebar.tsx:96): WCAG 2.5.3.
-  'review:label-content-name-mismatch @ button[aria-label="Account and settings"]',
 ];
 
 describe("the Notes page: tree, two panes with tabs, and the context rail", () => {

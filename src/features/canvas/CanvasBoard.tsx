@@ -376,7 +376,7 @@ export function CanvasBoard(props: CanvasBoardProps) {
           </>
         )}
         <button type="button" onClick={() => zoomBy(1 / STEP)} title="Zoom out" aria-label="Zoom out">−</button>
-        <span className="canvas-zoom" aria-live="polite" aria-label="Zoom level">{percent}</span>
+        <span className="canvas-zoom" role="status" aria-label="Zoom level">{percent}</span>
         <button type="button" onClick={() => zoomBy(STEP)} title="Zoom in" aria-label="Zoom in">+</button>
         <button type="button" onClick={fit} title="Fit every card in the pane">Fit</button>
         {!readOnly && hasSelection && (

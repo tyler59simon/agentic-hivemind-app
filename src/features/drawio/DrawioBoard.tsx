@@ -373,15 +373,15 @@ export function DrawioBoard(props: DrawioBoardProps) {
               <button type="button" onClick={() => insertPreset("ellipse")}>+ Ellipse</button>
               <button type="button" onClick={() => insertPreset("text")}>+ Text</button>
               <span className="canvas-sep" aria-hidden />
-              <button type="button" disabled={!props.canUndo} onClick={props.onUndo} title="Undo (Ctrl+Z)"><Undo2 size="1em" aria-hidden /></button>
-              <button type="button" disabled={!props.canRedo} onClick={props.onRedo} title="Redo (Ctrl+Y)"><Redo2 size="1em" aria-hidden /></button>
+              <button type="button" disabled={!props.canUndo} onClick={props.onUndo} title="Undo (Ctrl+Z)" aria-label="Undo"><Undo2 size="1em" aria-hidden /></button>
+              <button type="button" disabled={!props.canRedo} onClick={props.onRedo} title="Redo (Ctrl+Y)" aria-label="Redo"><Redo2 size="1em" aria-hidden /></button>
               <span className="canvas-sep" aria-hidden />
             </>
           )}
-          <button type="button" title="Zoom out" onClick={() => zoomAt(1 / STEP)}><Minus size="1em" aria-hidden /></button>
+          <button type="button" title="Zoom out" aria-label="Zoom out" onClick={() => zoomAt(1 / STEP)}><Minus size="1em" aria-hidden /></button>
           <span className="canvas-zoom">{Math.round(view.k * 100)}%</span>
-          <button type="button" title="Zoom in" onClick={() => zoomAt(STEP)}><Plus size="1em" aria-hidden /></button>
-          <button type="button" title="Fit to view" onClick={doFit}><Maximize2 size="1em" aria-hidden /></button>
+          <button type="button" title="Zoom in" aria-label="Zoom in" onClick={() => zoomAt(STEP)}><Plus size="1em" aria-hidden /></button>
+          <button type="button" title="Fit to view" aria-label="Fit to view" onClick={doFit}><Maximize2 size="1em" aria-hidden /></button>
           <span className="canvas-sep" aria-hidden />
           <button
             type="button"
@@ -416,9 +416,9 @@ export function DrawioBoard(props: DrawioBoardProps) {
                 {singleStyle?.endArrow === "none" ? "Arrow: Off" : "Arrow: On"}
               </button>
             )}
-            <button type="button" title="Bring to front" onClick={() => commit(reorderCells(doc, safeIndex, selectedSet, "front"))}><ArrowUpToLine size="1em" aria-hidden /></button>
-            <button type="button" title="Send to back" onClick={() => commit(reorderCells(doc, safeIndex, selectedSet, "back"))}><ArrowDownToLine size="1em" aria-hidden /></button>
-            <button type="button" className="danger-text" title="Delete selected" onClick={() => { commit(deleteCells(doc, safeIndex, selectedSet)); setSelected([]); }}>
+            <button type="button" title="Bring to front" aria-label="Bring to front" onClick={() => commit(reorderCells(doc, safeIndex, selectedSet, "front"))}><ArrowUpToLine size="1em" aria-hidden /></button>
+            <button type="button" title="Send to back" aria-label="Send to back" onClick={() => commit(reorderCells(doc, safeIndex, selectedSet, "back"))}><ArrowDownToLine size="1em" aria-hidden /></button>
+            <button type="button" className="danger-text" title="Delete selected" aria-label="Delete selected" onClick={() => { commit(deleteCells(doc, safeIndex, selectedSet)); setSelected([]); }}>
               <Trash2 size="1em" aria-hidden />
             </button>
           </div>

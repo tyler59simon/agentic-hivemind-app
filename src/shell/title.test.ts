@@ -5,8 +5,9 @@ describe("windowTitle", () => {
   it("names the most specific place first and ends with the app", () => {
     expect(windowTitle(["PayStream", "Notes", "Runbooks", "Deploy"], false)).toBe("Deploy - Runbooks - Notes - PayStream - Hivemind");
   });
-  it("marks unsaved edits with a dot", () => {
-    expect(windowTitle(["PayStream", "Notes", "Deploy"], true)).toBe("● Deploy - Notes - PayStream - Hivemind");
+  it("marks unsaved edits with a dot and says so in words", () => {
+    expect(windowTitle(["PayStream", "Notes", "Deploy"], true)).toBe("● Deploy (unsaved) - Notes - PayStream - Hivemind");
+    expect(windowTitle([], true)).toBe("● Hivemind (unsaved)");
   });
   it("drops the Projects crumb, blanks and repeats", () => {
     expect(windowTitle(["Projects", "PayStream"], false)).toBe("PayStream - Hivemind");

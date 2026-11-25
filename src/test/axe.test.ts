@@ -34,4 +34,17 @@ describe("the axe helper", () => {
     document.body.innerHTML = '<div><button style="width:1px;height:1px">x</button></div>';
     expect(await axeViolations(document.body)).toEqual([]);
   });
+
+  it("checks Label in Name without axe's rule, which needs a canvas: the name must hold the visible text", async () => {
+    document.body.innerHTML = `<main>
+      <button class="a" aria-label="Close tab">x</button>
+      <button class="b" aria-label="Ada, account and settings">Ada</button>
+      <button class="c" aria-label="Close"><span aria-hidden="true">×</span><span class="visually-hidden">Close</span></button>
+      <button class="d" aria-label="Zoom out"><svg aria-hidden="true"></svg></button>
+    </main>`;
+    const found = await axeViolations(document.body);
+    expect(found.map((v) => v.id)).toEqual(["label-in-name"]);
+    expect(found[0].target).toBe('button.a[aria-label="Close tab"]');
+    expect(found[0].help).toContain('The name "Close tab" does not contain the visible text "x"');
+  });
 });

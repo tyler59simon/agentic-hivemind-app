@@ -107,7 +107,7 @@ export function NotesPage() {
   return (
     <div className="notes-page" style={{ "--tree-w": `${budget.tree}rem` } as CSSProperties}>
       <nav className="notebooks" id="notes-tree" aria-label="Notes and notebooks">
-        <div className="notes-views" aria-label="Lists of notes and pages">
+        <div className="notes-views" role="group" aria-label="Lists of notes and pages">
           <button type="button" className={`link-row${route.page === "notes" && route.view === "tasks" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "tasks" })}><ListChecks size="1em" aria-hidden /> Tasks</button>
           <button type="button" className={`link-row${route.page === "notes" && route.view === "views" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "views" })}><Kanban size="1em" aria-hidden /> Views</button>
           <button type="button" className={`link-row${route.page === "notes" && route.view === "tags" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "tags" })}><Hash size="1em" aria-hidden /> Tags</button>
