@@ -24,6 +24,8 @@ const REQUIRED: [&str; 4] = ["serve", "search", "domains", "version"];
 pub const SERVE_LIMIT: usize = 2 * 1024 * 1024;
 /// How much of the server's stderr is kept to explain why it exited.
 const STDERR_TAIL: usize = 4096;
+/// How much of that tail goes to the log.
+const LOG_STDERR: usize = 2048;
 
 /// What a request that gets no reply in time fails with. The process was ended, so trying again starts a new one.
 pub const NO_ANSWER: &str = "Living Memory isn't answering, so Hivemind restarted it. Try again.";
@@ -110,6 +112,15 @@ struct Proc {
     drain: JoinHandle<()>,
 }
 
+/// The end of `tail`, at most LOG_STDERR bytes, for the log.
+fn capped_tail(tail: &str) -> &str {
+    let mut start = tail.len().saturating_sub(LOG_STDERR);
+    while !tail.is_char_boundary(start) {
+        start += 1;
+    }
+    &tail[start..]
+}
+
 impl Proc {
     /// `error`, plus the exit code and the server's last stderr output once its stderr has closed (waiting up to a second),
     /// and then the exit code once the process has been reaped (up to another second: the pipes close a moment before the
@@ -135,6 +146,7 @@ impl Proc {
             std::thread::sleep(Duration::from_millis(10));
         }
         let tail = String::from_utf8_lossy(&self.stderr.lock().unwrap()).trim().to_string();
+        log::error!("Living Memory stopped: {text}; stderr tail: {}", capped_tail(&tail));
         if tail.is_empty() {
             text.push_str(hint);
         } else {
@@ -442,6 +454,14 @@ mod tests {
 
     fn reply(result: Value) -> Reply {
         Reply { exit_code: 0, result, error: Value::Null }
+    }
+
+    #[test]
+    fn the_logged_stderr_is_the_end_of_it_on_a_character_boundary() {
+        assert_eq!(capped_tail("short"), "short");
+        let long = format!("start{}end", "é".repeat(LOG_STDERR));
+        let kept = capped_tail(&long);
+        assert!(kept.len() <= LOG_STDERR && kept.ends_with("end"));
     }
 
     /// Codex re-review of 75ce884, R2-D1: a request made for the bridge before Settings pointed it at another store is

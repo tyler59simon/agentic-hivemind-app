@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow};
 /// Zoom one window. A window that is already gone is not an error.
 pub fn apply_to<R: Runtime>(window: &WebviewWindow<R>, zoom: f64) {
     if let Err(e) = window.set_zoom(settings::clamp_zoom(zoom)) {
-        eprintln!("Hivemind: could not zoom {} ({e})", window.label());
+        log::warn!("Hivemind: could not zoom {} ({e})", window.label());
     }
 }
 

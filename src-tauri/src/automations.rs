@@ -415,7 +415,7 @@ fn load(path: &std::path::Path) -> (Vec<Automation>, Option<String>) {
         let aside = path.with_file_name(format!("automations.json.bak-{}", now_ms()));
         if let Err(e) = std::fs::copy(path, &aside) {
             let why = format!("Hivemind could not keep a copy of {} before dropping {dropped} unreadable automation(s): {e}. Automations are not saved until it can.", path.display());
-            eprintln!("{why}");
+            log::error!("{why}");
             return (list, Some(why));
         }
     }

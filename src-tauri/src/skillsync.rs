@@ -419,7 +419,7 @@ pub fn sync(s: &Skills, notes: &dyn NoteStore, scope: &Scope) -> usize {
         match pass(s, notes, &meta.name) {
             Ok(true) => changed += 1,
             Ok(false) => {}
-            Err(e) => eprintln!("skill sync: {}: {e}", meta.name),
+            Err(e) => log::warn!("skill sync: {}: {e}", meta.name),
         }
     }
     changed

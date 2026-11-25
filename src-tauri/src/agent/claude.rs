@@ -407,7 +407,7 @@ fn check_version(program: &str, probe: impl Fn(&str) -> Option<String>, checked:
             ));
         }
         Some(_) => {}
-        None => eprintln!("Hivemind could not read a version from `{program} --version` ({:?}); starting it anyway", output.trim()),
+        None => log::warn!("Hivemind could not read a version from `{program} --version` ({:?}); starting it anyway", output.trim()),
     }
     checked.lock().unwrap().push(program.to_string());
     Ok(())

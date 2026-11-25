@@ -214,11 +214,11 @@ pub fn rewatch(app: &AppHandle) {
     }) {
         Ok((debouncer, failed)) => {
             for why in failed {
-                eprintln!("Hivemind: {why}");
+                log::warn!("Hivemind: {why}");
             }
             *slot = Some(debouncer);
         }
-        Err(e) => eprintln!("Hivemind: cannot watch notebooks ({e})"),
+        Err(e) => log::error!("Hivemind: cannot watch notebooks ({e})"),
     }
 }
 
@@ -430,7 +430,7 @@ pub(crate) fn save_kept(history: &Path, full: &Path, change: &Change) -> Result<
         if change.source != "you" {
             return Err(format!("The version before this change could not be kept, so nothing was written: {e}"));
         }
-        eprintln!("Hivemind: could not keep the first version of {}: {e}", full.display());
+        log::error!("Hivemind: could not keep the first version of {}: {e}", full.display());
     }
     let outcome = files::save(full, change.text, change.pre, change.format, change.convert)?;
     if let SaveOutcome::Saved(stamp) = &outcome
@@ -438,7 +438,7 @@ pub(crate) fn save_kept(history: &Path, full: &Path, change: &Change) -> Result<
         && files::sha256(&bytes) == stamp.sha256
         && let Err(e) = history::snapshot(history, full, &bytes, change.source, history::now_ms())
     {
-        eprintln!("Hivemind: could not keep a version of {}: {e}", full.display());
+        log::error!("Hivemind: could not keep a version of {}: {e}", full.display());
     }
     Ok(outcome)
 }
@@ -459,13 +459,13 @@ pub(crate) fn save_bytes_kept(history: &Path, full: &Path, bytes: &[u8], pre: &S
         if source != "you" {
             return Err(format!("The current version could not be kept in History, so nothing was written: {e}"));
         }
-        eprintln!("Hivemind: could not keep the previous version of {}: {e}", full.display());
+        log::error!("Hivemind: could not keep the previous version of {}: {e}", full.display());
     }
     let outcome = files::save_bytes(full, bytes, pre)?;
     if matches!(&outcome, SaveOutcome::Saved(_))
         && let Err(e) = history::snapshot(history, full, bytes, source, history::now_ms())
     {
-        eprintln!("Hivemind: could not keep a version of {}: {e}", full.display());
+        log::error!("Hivemind: could not keep a version of {}: {e}", full.display());
     }
     Ok(outcome)
 }
@@ -515,7 +515,7 @@ pub async fn file_save(
 pub(crate) fn create_kept(history: &Path, full: &Path, text: &str) -> Result<Stamp, String> {
     let stamp = files::create(full, text)?;
     if let Err(e) = history::snapshot(history, full, text.as_bytes(), "you", history::now_ms()) {
-        eprintln!("Hivemind: could not keep a version of {}: {e}", full.display());
+        log::error!("Hivemind: could not keep a version of {}: {e}", full.display());
     }
     Ok(stamp)
 }
@@ -565,7 +565,7 @@ pub async fn file_rename(state: State<'_, AppState>, notebook: String, from: Str
 fn rename_kept(root: &Path, protected: &Protected, drafts_dir: &Path, history: &Path, notebook: &str, from: &str, to: &str) -> Result<(), String> {
     let (source, dest, was_dir) = rename_in(root, protected, drafts_dir, notebook, from, to)?;
     if let Err(e) = history::moved(history, &source, &dest, was_dir) {
-        eprintln!("Hivemind: the history of {from} did not follow it to {to}: {e}");
+        log::warn!("Hivemind: the history of {from} did not follow it to {to}: {e}");
     }
     Ok(())
 }
