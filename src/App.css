@@ -2062,6 +2062,8 @@ button.owner-chip { cursor: pointer; }
 .pdf-form-check { padding: 0; cursor: pointer; }
 .pdf-page-badge { position: absolute; right: .4rem; bottom: .3rem; font-size: .8rem; color: #64748b; background: rgba(255, 255, 255, .85); padding: .05rem .3rem; border-radius: .25rem; pointer-events: none; }
 .pdf-sig-canvas { width: 100%; height: 180px; border: 1px solid var(--border-strong); border-radius: .4rem; background: #ffffff; cursor: crosshair; touch-action: none; }
+.pdf-sig-canvas.typed { cursor: default; }
+.pdf-sig-ways { display: flex; gap: var(--sp-16); margin-bottom: var(--sp-8); }
 
 /* ---- Error boundary fallback (DESK-1) ---- */
 .error-boundary { max-width: 40rem; margin: var(--sp-40) auto; padding: var(--sp-26); border: 1px solid var(--border-strong); border-radius: .6rem; background: var(--bg-alt); display: flex; flex-direction: column; gap: var(--sp-12); }
@@ -2147,7 +2149,7 @@ button.owner-chip { cursor: pointer; }
 .modal:focus { outline: none; }
 .tree-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 /* The boards and the PDF viewer are tab stops of their own (outline: none above, for when a script moves the focus into them). */
-.canvas-board:focus-visible, .drawio-shell:focus-visible, .pdf-shell:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.canvas-board:focus-visible, .drawio-shell:focus-visible, .pdf-shell:focus-visible, .panzoom-viewport:focus-visible, .canvas-view:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .tab-main:focus { outline: none; }
 .note-tab-pill:has(> .tab-main:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
 .canvas-node:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
@@ -2211,7 +2213,7 @@ button.owner-chip { cursor: pointer; }
   .canvas-node:focus-visible, .drawio-node:focus-visible, .switch input:focus-visible + span, .note-tab-pill:has(> .tab-main:focus-visible),
   .top-search:focus-within, .composer-box:focus-within, .term-box:focus-within, .wiki-search:focus-within, .tag-picker:focus-within { outline-color: Highlight; }
   .top-search:focus-within, .composer-box:focus-within, .term-box:focus-within, .wiki-search:focus-within, .tag-picker:focus-within { outline-style: solid; outline-width: 2px; outline-offset: -1px; }
-  .palette input:focus, .title-input:focus, .canvas-board:focus-visible, .drawio-shell:focus-visible, .pdf-shell:focus-visible { outline: 2px solid Highlight; outline-offset: -2px; }
+  .palette input:focus, .title-input:focus, .canvas-board:focus-visible, .drawio-shell:focus-visible, .pdf-shell:focus-visible, .panzoom-viewport:focus-visible, .canvas-view:focus-visible { outline: 2px solid Highlight; outline-offset: -2px; }
   /* Architecture and canvas boards: lines and text in the text colour, surfaces in the page colour, the chosen one in Highlight. */
   .canvas-boundary { fill: Canvas; stroke: CanvasText; }
   .canvas-boundary-name { fill: CanvasText; }

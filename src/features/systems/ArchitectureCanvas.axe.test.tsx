@@ -7,6 +7,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ArchModel } from "../../lib/architecture";
 import { expectNoNewAxeViolations } from "../../test/axe";
+import { PAN_HINT, PAN_STEP, PAN_STEP_FAR } from "../../ui/panKeys";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
@@ -66,6 +67,36 @@ describe("the architecture canvas", () => {
     expect(relations()!.id).toBe(toggle().getAttribute("aria-controls"));
     await act(async () => toggle().click());
     expect(relations()).toBeNull();
+  });
+
+  describe("panning from the keyboard (DESKA3-PAN)", () => {
+    const view = () => el.querySelector<HTMLElement>(".canvas-view")!;
+    const offset = () => /translate\((-?[\d.]+),(-?[\d.]+)\)/.exec(el.querySelector("svg.canvas-svg > g")!.getAttribute("transform")!)!.slice(1).map(Number);
+    const key = async (target: Element, k: string, init: KeyboardEventInit = {}) => {
+      const e = new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...init });
+      await act(async () => { target.dispatchEvent(e); });
+      return e;
+    };
+
+    it("is a tab stop with a name and a description that says how to pan", () => {
+      expect(view().tabIndex).toBe(0);
+      expect(view().getAttribute("aria-label")).toBe("Diagram view");
+      expect(document.getElementById(view().getAttribute("aria-describedby")!)!.textContent).toBe(PAN_HINT);
+    });
+
+    it("pans by a step with an arrow key and by a larger one with Shift", async () => {
+      const [x, y] = offset();
+      expect((await key(view(), "ArrowDown")).defaultPrevented).toBe(true);
+      expect(offset()).toEqual([x, y - PAN_STEP]);
+      await key(view(), "ArrowLeft", { shiftKey: true });
+      expect(offset()).toEqual([x + PAN_STEP_FAR, y - PAN_STEP]);
+    });
+
+    it("leaves a key pressed on a box alone", async () => {
+      const before = offset();
+      expect((await key(el.querySelector("button.canvas-node")!, "ArrowDown")).defaultPrevented).toBe(false);
+      expect(offset()).toEqual(before);
+    });
   });
 
   it("has no axe violations, with the list shown or not", async () => {

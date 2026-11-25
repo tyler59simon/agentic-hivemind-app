@@ -1,7 +1,8 @@
 // Shared pan/zoom viewport for SVG and Mermaid previews (no iframes).
-// Drag background to pan, Ctrl+wheel to zoom toward the pointer, wheel alone to pan.
+// Drag background to pan, Ctrl+wheel to zoom toward the pointer, wheel alone to pan, arrow keys to pan when it has the focus.
 import { Maximize2, Minus, Plus, RotateCcw } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { PAN_HINT, panDelta } from "./panKeys";
 
 export type Backdrop = "checker" | "light" | "dark";
 
@@ -17,6 +18,8 @@ export interface PanZoomViewportProps {
   /** Changing this key re-fits the content to the viewport. */
   fitKey?: string | number;
   className?: string;
+  /** The viewport's name for a screen reader, which also says the arrow keys pan it. */
+  label?: string;
 }
 
 const MIN_K = 0.1;
@@ -32,7 +35,9 @@ export function PanZoomViewport({
   actions,
   fitKey,
   className = "",
+  label = "Preview",
 }: PanZoomViewportProps) {
+  const hint = useId();
   const root = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ x: 0, y: 0, k: 1 });
@@ -120,6 +125,13 @@ export function PanZoomViewport({
     <div
       ref={root}
       className={`panzoom-viewport ${showBackdropToggle ? `panzoom-bg-${backdrop}` : ""} ${className}`.trim()}
+      role="group" aria-label={label} aria-describedby={hint} tabIndex={0}
+      onKeyDown={(e) => {
+        const move = panDelta(e);
+        if (!move) return;
+        e.preventDefault();
+        setView((v) => ({ ...v, x: v.x + move.dx, y: v.y + move.dy }));
+      }}
       onPointerDown={(e) => {
         if (e.button !== 0) return;
         if ((e.target as HTMLElement).closest(".panzoom-tools, a, button")) return;
@@ -155,6 +167,7 @@ export function PanZoomViewport({
           </>
         )}
       </div>
+      <span id={hint} className="visually-hidden">{PAN_HINT}</span>
       <div className="panzoom-world" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})` }}>
         <div ref={content} className="panzoom-content">{children}</div>
       </div>

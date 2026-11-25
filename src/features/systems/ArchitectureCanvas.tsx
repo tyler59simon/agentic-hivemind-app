@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useLayer } from "../../ui/layers";
+import { PAN_HINT, panDelta } from "../../ui/panKeys";
 import { Bell, Box, Database, Maximize, Minimize, Minus, Plus, User } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { systemDiagramSource, type ArchModel } from "../../lib/architecture";
@@ -126,6 +127,9 @@ export function ArchitectureCanvas({ slug, model, diagrams, version, caption, se
   const picture = level === "deployment" ? deployment : undefined;
   // The suite's picture of the level shown, for its Mermaid source.
   const levelEntry = picture ?? diagrams.find((d) => (level === "context" ? /context/i : /container/i).test(d.level));
+  // The drawing itself is on screen (not a notice, the Mermaid source or the suite's picture), so it takes the arrow keys.
+  const pannable = !notice && !(source && levelEntry) && !picture && !!laid;
+  const panHint = useId();
 
   const fit = useCallback(() => {
     const el = host.current;
@@ -180,6 +184,13 @@ export function ArchitectureCanvas({ slug, model, diagrams, version, caption, se
       {diff && !notice && <Legend result={diff.result} label={diff.label} />}
       <div className="canvas-body">
       <div className="canvas-view" data-own-zoom ref={host}
+        {...(pannable ? { role: "group", "aria-label": "Diagram view", "aria-describedby": panHint, tabIndex: 0 } : {})}
+        onKeyDown={(e) => {
+          const move = pannable ? panDelta(e) : null;
+          if (!move) return;
+          e.preventDefault();
+          setView((v) => ({ ...v, x: v.x + move.dx, y: v.y + move.dy }));
+        }}
         onWheel={(e) => { if (!laid || source) return; const r = e.currentTarget.getBoundingClientRect(); zoom(e.deltaY < 0 ? ZOOM.step : 1 / ZOOM.step, { x: e.clientX - r.left, y: e.clientY - r.top }); }}
         onPointerDown={(e) => { if (!laid || source || e.button !== 0) return; drag.current = { x: e.clientX, y: e.clientY, moved: false }; e.currentTarget.setPointerCapture(e.pointerId); }}
         onPointerMove={(e) => {
@@ -191,6 +202,7 @@ export function ArchitectureCanvas({ slug, model, diagrams, version, caption, se
           setView((v) => ({ ...v, x: v.x + dx, y: v.y + dy }));
         }}
         onPointerUp={() => { const d = drag.current; drag.current = null; if (d && !d.moved) onSelect(null); }}>
+        {pannable && <span id={panHint} className="visually-hidden">{PAN_HINT}</span>}
         {notice ? notice : source && levelEntry ? <Source slug={slug} entry={levelEntry} version={version} />
           : picture ? <Picture slug={slug} entry={picture} version={version} />
           : level === "deployment" ? <p className="muted pad">No deployment diagram was generated for this system.</p>

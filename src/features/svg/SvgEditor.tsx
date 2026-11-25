@@ -91,6 +91,7 @@ export default function SvgEditor(props: SvgEditorProps) {
     <div className="diagram-preview-pane">
       {!inspected.ok && <div className="banner warn note-banner">Invalid SVG XML: {inspected.error}</div>}
       <PanZoomViewport
+        label="SVG preview"
         showBackdropToggle
         defaultBackdrop="checker"
         info={dims}

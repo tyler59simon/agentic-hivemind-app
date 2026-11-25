@@ -24,6 +24,9 @@ export interface CanvasEditorProps {
 
 /** How many steps of undo a board keeps. */
 const DEPTH = 200;
+// The history keeps the text before each step and no name for the step, so the messages do not name it.
+const UNDID = "Undid last change";
+const REDID = "Redid last change";
 
 export default function CanvasEditor(props: CanvasEditorProps) {
   // The cards the new text has in common with the last are kept as the same objects, so a change draws only what it changed.
@@ -44,6 +47,9 @@ export default function CanvasEditor(props: CanvasEditorProps) {
   /** The last commit when it was a keyboard move or resize (see `joinsRun`). */
   const run = useRef<Run>(null);
   const [, bump] = useState(0);
+  // What the status region says after an undo or redo (WCAG 4.1.3). Each message is a new child, so the same words twice are read twice.
+  const [said, setSaid] = useState({ text: "", n: 0 });
+  const say = (text: string) => setSaid((s) => ({ text, n: s.n + 1 }));
 
   useEffect(() => {
     if (props.text === known.current) return;
@@ -74,6 +80,7 @@ export default function CanvasEditor(props: CanvasEditorProps) {
     if (back === undefined) return;
     future.current.push(latest.current.text);
     give(back);
+    say(UNDID);
   };
   const redo = () => {
     run.current = null;
@@ -81,6 +88,7 @@ export default function CanvasEditor(props: CanvasEditorProps) {
     if (again === undefined) return;
     past.current.push(latest.current.text);
     give(again);
+    say(REDID);
   };
   const synced = props.text === known.current;
   return (
@@ -88,6 +96,7 @@ export default function CanvasEditor(props: CanvasEditorProps) {
       <CanvasBoard canvas={parsed.canvas} readOnly={props.readOnly} ctx={props.ctx} pictures={props.pictures} notebook={props.notebook}
         onCommit={commit} onUndo={undo} onRedo={redo} canUndo={synced && past.current.length > 0} canRedo={synced && future.current.length > 0}
         onOpenFile={props.onOpenFile} />
+      <div className="visually-hidden" role="status"><span key={said.n}>{said.text}</span></div>
     </div>
   );
 }

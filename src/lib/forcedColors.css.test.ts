@@ -86,7 +86,7 @@ describe("forced colours: focus", () => {
       expect(known, `${selector} removes the focus ring: give it a replacement here, or say why none is needed`).toBeDefined();
       if (REPLACED[selector] && REPLACED[selector] !== selector) expect(hasRule(REPLACED[selector]), `${selector} is replaced by ${REPLACED[selector]}`).toBe(true);
     }
-    for (const selector of [".title-input:focus", ".palette input:focus", ".canvas-board:focus-visible", ".drawio-shell:focus-visible", ".pdf-shell:focus-visible"]) {
+    for (const selector of [".title-input:focus", ".palette input:focus", ".canvas-board:focus-visible", ".drawio-shell:focus-visible", ".pdf-shell:focus-visible", ".panzoom-viewport:focus-visible", ".canvas-view:focus-visible"]) {
       expect(forcedDecls(selector).get("outline"), selector).toContain("Highlight");
     }
   });

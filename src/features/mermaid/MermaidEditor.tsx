@@ -128,6 +128,7 @@ export default function MermaidEditor(props: MermaidEditorProps) {
     <div className="diagram-preview-pane">
       {result.error && <div className="banner warn note-banner">Mermaid syntax error: {result.error}</div>}
       <PanZoomViewport
+        label="Diagram preview"
         fitKey={`${props.docVersion}:${currentSvg ? 1 : 0}`}
         actions={
           <>
