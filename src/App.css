@@ -764,6 +764,10 @@ input[type="checkbox"] { accent-color: var(--success); }
 .graph-canvas { position: relative; flex: 1; min-height: 0; }
 .graph-canvas.compact { height: 20rem; flex: none; border: 1px solid var(--border); border-radius: .5rem; background: var(--bg); }
 .graph-host { position: absolute; inset: 0; }
+.graph-list { flex: 1; min-height: 0; overflow: auto; list-style: none; margin: 0; padding: var(--sp-8) 0; }
+.graph-list > li { padding: var(--sp-4) 0; }
+.graph-list .link-row { display: inline-block; width: auto; max-width: 100%; vertical-align: middle; }
+.graph-list ul { list-style: none; margin: 0; padding: 0 0 0 var(--sp-16); }
 .links-section h3 { margin: var(--sp-12) 0 var(--sp-5); font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .links-section:first-child h3 { margin-top: 0; }
 .links-section .hover-anchor { display: block; }

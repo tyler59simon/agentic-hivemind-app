@@ -56,7 +56,9 @@ export function LinksPanel({ tab }: { tab: Tab }) {
   );
 }
 
-/** The notes and folder pages around this note or page, one or two links away (CON-12). */
+/** The notes and folder pages around this note or page, one or two links away (CON-12). The drawing is named by its summary
+ *  (GraphCanvas). It has no list alternative: the rail shows the same links as text above it (Connections for a note,
+ *  Backlinks and Outgoing links for a page). */
 export function LocalGraphPanel({ focusRef, focusFile }: { focusRef?: string; focusFile?: FileRef }) {
   const [depth, setDepth] = useState(1);
   const { graph, linksSupported, isLoading } = useUnifiedGraph();

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { LinkGraph } from "../../lib/lm";
 import type { IndexGraph } from "../../lib/noteindex";
-import { buildUnifiedGraph, filterGraph, neighborhood, PAGE_COLOR, pageNodeId, toGraphology, typeColor } from "./graphData";
+import { buildUnifiedGraph, filterGraph, graphList, graphSummary, neighborhood, PAGE_COLOR, pageNodeId, toGraphology, typeColor } from "./graphData";
 
 const note = (ref: string, extra: Partial<LinkGraph["nodes"][0]> = {}) =>
   ({ ref, id: ref.split(":")[1], domain: ref.split(":")[0], title: ref, type: "knowledge", status: "active", tags: [], ...extra }) as LinkGraph["nodes"][0];
@@ -123,5 +123,24 @@ describe("unified graph data", () => {
     expect(typeColor("constructor")).toBe("#999");
     const g = buildUnifiedGraph({ memory: { domains: ["d"], nodes: [note("d:k", { type: "constructor" })], edges: [], unresolved: [] } });
     expect(toGraphology(g).getNodeAttribute("d:k", "color")).toBe("#999");
+  });
+});
+
+describe("graphSummary and graphList", () => {
+  const g = buildUnifiedGraph({ memory, pages, notebooks: [{ id: "nb1", title: "One" }, { id: "nb2", title: "Two" }] });
+
+  it("counts notes, pages and links, leaving pages out when there are none", () => {
+    expect(graphSummary({ nodes: g.nodes.slice(0, 1), edges: [] })).toBe("Graph of 1 note and 0 links");
+    expect(graphSummary(g, "Local graph")).toBe(`Local graph of 6 notes, 3 pages and ${g.edges.length} links`);
+  });
+
+  it("lists nodes by title with their link count and each neighbour once", () => {
+    const list = graphList(g);
+    expect(list.map((i) => i.node.title)).toEqual([...g.nodes.map((n) => n.title)].sort((a, b) => a.localeCompare(b)));
+    const sqlite = list.find((i) => i.node.id === "d:a")!;
+    expect(sqlite.links).toBe(sqlite.neighbours.length);
+    expect(sqlite.neighbours.map((n) => n.title)).toEqual([...sqlite.neighbours.map((n) => n.title)].sort((a, b) => a.localeCompare(b)));
+    expect(sqlite.neighbours.map((n) => n.id)).toContain("d:b");
+    expect(list.find((i) => i.node.id === "d:lone")).toMatchObject({ links: 0, neighbours: [] });
   });
 });

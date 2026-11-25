@@ -5,6 +5,7 @@ import { taxonomy, type NoteType } from "../../lib/lm";
 import { tagsQuery } from "../../lib/noteindex";
 import { useNoteTypes } from "../../lib/noteTypes";
 import { GraphCanvas } from "./GraphCanvas";
+import { GraphList } from "./GraphList";
 import { filterGraph, PAGE_COLOR, typeColor } from "./graphData";
 import { openGraphNode, useUnifiedGraph } from "./useUnifiedGraph";
 
@@ -23,6 +24,7 @@ export function GraphView({ projectTag, projectName }: { projectTag?: string; pr
   const [types, setTypes] = useState<NoteType[]>([]);
   const [tag, setTag] = useState("");
   const [retired, setRetired] = useState(false);
+  const [asList, setAsList] = useState(false);
 
   const mergedTags = useMemo(() => {
     const map = new Map<string, number | null>();
@@ -84,6 +86,10 @@ export function GraphView({ projectTag, projectName }: { projectTag?: string; pr
             ))}
           </div>
         )}
+        {/* The list replaces the drawing (it is the text alternative to it), so the drawing is not kept running behind it.
+            Like the filters, the choice is not stored. */}
+        <button type="button" className={`chip${asList ? " on" : ""}`} aria-pressed={asList}
+          onClick={() => setAsList((v) => !v)}>Show as list</button>
         <span className="muted small">
           {noteCount} {noteCount === 1 ? "note" : "notes"} · {pageCount} {pageCount === 1 ? "page" : "pages"} · {shown.edges.length} {shown.edges.length === 1 ? "link" : "links"}
         </span>
@@ -93,7 +99,7 @@ export function GraphView({ projectTag, projectName }: { projectTag?: string; pr
       {pagesError && <p className="error pad">{String(pagesError)}</p>}
       {isLoading && !shown.nodes.length && <p className="muted pad">Loading the graph…</p>}
       {(!isLoading || shown.nodes.length > 0) && (shown.nodes.length
-        ? <GraphCanvas data={shown} onOpen={openGraphNode} />
+        ? (asList ? <GraphList data={shown} onOpen={openGraphNode} /> : <GraphCanvas data={shown} onOpen={openGraphNode} />)
         : <p className="muted pad">No notes or pages match these filters.</p>)}
     </div>
   );

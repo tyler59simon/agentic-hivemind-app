@@ -164,6 +164,36 @@ export function filterGraph(g: UnifiedGraph, f: GraphFilter): UnifiedGraph {
   return { nodes, edges: g.edges.filter((e) => keep.has(e.from) && keep.has(e.to)) };
 }
 
+const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/** The text alternative for a drawn graph, for example "Graph of 42 notes, 3 pages and 57 links". */
+export function graphSummary(g: UnifiedGraph, prefix = "Graph"): string {
+  const notes = g.nodes.filter((n) => n.kind === "note").length;
+  const parts = [count(notes, "note")];
+  if (g.nodes.length > notes) parts.push(count(g.nodes.length - notes, "page"));
+  parts.push(count(g.edges.length, "link"));
+  return `${prefix} of ${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
+export interface GraphListItem { node: UnifiedNode; links: number; neighbours: UnifiedNode[] }
+
+/** The shown nodes as a list for the text alternative of the graph: sorted by title, each with the nodes it is linked to or
+ *  from (each once, sorted by title). `links` is how many nodes that is, so the count and the list agree. */
+export function graphList(g: UnifiedGraph): GraphListItem[] {
+  const byId = new Map(g.nodes.map((n) => [n.id, n]));
+  const near = new Map<string, Set<string>>();
+  const add = (a: string, b: string) => {
+    if (!near.has(a)) near.set(a, new Set());
+    near.get(a)!.add(b);
+  };
+  for (const e of g.edges) { add(e.from, e.to); add(e.to, e.from); }
+  const byTitle = (a: UnifiedNode, b: UnifiedNode) => a.title.localeCompare(b.title);
+  return [...g.nodes].sort(byTitle).map((node) => {
+    const neighbours = [...(near.get(node.id) ?? [])].map((id) => byId.get(id)).filter((n): n is UnifiedNode => !!n).sort(byTitle);
+    return { node, links: neighbours.length, neighbours };
+  });
+}
+
 /** Nodes within `depth` links of `focus`, in either direction. */
 export function neighborhood(g: UnifiedGraph, focus: string, depth: number): UnifiedGraph {
   const near = new Set([focus]);

@@ -23,6 +23,38 @@ export function skipReason(source: string): string | null {
   return null;
 }
 
+const DIAGRAM_NAMES: Record<string, string> = {
+  flowchart: "Flowchart diagram", graph: "Flowchart diagram", sequencediagram: "Sequence diagram", classdiagram: "Class diagram",
+  statediagram: "State diagram", erdiagram: "Entity relationship diagram", gantt: "Gantt chart", pie: "Pie chart",
+  journey: "User journey diagram", gitgraph: "Git graph", mindmap: "Mind map", timeline: "Timeline",
+  requirementdiagram: "Requirement diagram", c4context: "C4 context diagram",
+};
+
+/** The kind of diagram, from the first keyword of its source (after front matter and comments): "Flowchart diagram",
+ *  "Sequence diagram", and so on. Mermaid's own `%%{init}%%` directives start with %% and are skipped like comments. */
+export function diagramName(source: string): string {
+  const body = source.replace(/^\s*---\r?\n[\s\S]*?\r?\n---/, "");
+  const line = body.split(/\r?\n/).map((l) => l.trim()).find((l) => l && !l.startsWith("%%"));
+  const word = line?.match(/^[A-Za-z0-9]+/)?.[0];
+  if (!word) return "Diagram";
+  const known = DIAGRAM_NAMES[word.toLowerCase()];
+  if (known) return known;
+  const own = word.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
+  return `${own[0].toUpperCase()}${own.slice(1)} diagram`;
+}
+
+/** Gives Mermaid's SVG the role and name a screen reader needs: one image. Mermaid names it itself, with aria-labelledby on a
+ *  `<title>`, when the source has `accTitle` (and aria-describedby on a `<desc>` for `accDescr`); that name is kept. Without
+ *  one the name is the kind of diagram. Mermaid's own role and aria-roledescription ("flowchart-v2") are replaced. */
+export function labelDiagram(svg: string, source: string): string {
+  const open = svg.match(/^\s*<svg\b[^>]*>/);
+  if (!open) return svg;
+  let tag = open[0].replace(/\s(?:role|aria-roledescription)="[^"]*"/g, "");
+  const named = /\saria-labelledby="/.test(tag);
+  tag = tag.replace(/<svg\b/, `<svg role="img"${named ? "" : ` aria-label="${diagramName(source)}"`}`);
+  return tag + svg.slice(open[0].length);
+}
+
 let nextId = 0;
 
 /** A diagram's SVG, drawn off-screen so Mermaid's scratch SVG, which it measures labels in, never lengthens the page.
@@ -38,7 +70,7 @@ export async function drawMermaid(source: string, dark: boolean, id = `mermaid-$
   // A real width: Gantt charts lay out their timeline from the container's offsetWidth.
   box.style.cssText = "position:fixed;left:-10000px;top:0;width:100vw;visibility:hidden";
   document.body.appendChild(box);
-  try { return (await mermaid.render(id, source, box)).svg; } finally { box.remove(); }
+  try { return labelDiagram((await mermaid.render(id, source, box)).svg, source); } finally { box.remove(); }
 }
 
 /** Render Mermaid source to SVG, returning the syntax error message on failure (for standalone `.mmd` editing). */

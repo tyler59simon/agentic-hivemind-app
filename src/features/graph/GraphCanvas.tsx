@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import Sigma from "sigma";
 import { useTheme } from "../../lib/theme";
 import { PagePreviewCard, PreviewCard } from "../preview/HoverPreview";
-import { toGraphology, type UnifiedGraph, type UnifiedNode } from "./graphData";
+import { graphSummary, toGraphology, type UnifiedGraph, type UnifiedNode } from "./graphData";
 
 const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#888";
 
@@ -74,7 +74,9 @@ export function GraphCanvas({ data, focus, onOpen, compact, dim }: {
 
   return (
     <div className={`graph-canvas ${compact ? "compact" : ""}`}>
-      <div className="graph-host" ref={host} />
+      {/* The drawing is a picture to a screen reader. The summary is its name; the shown nodes and their links are in the
+          list the graph view offers ("Show as list"), and the local graph in the rail sits under a Connections list. */}
+      <div className="graph-host" ref={host} role="img" aria-label={graphSummary(data, compact ? "Local graph" : "Graph")} />
       {preview && (preview.node.kind === "note"
         ? <PreviewCard refId={preview.node.ref} x={preview.x} y={preview.y} />
         : <PagePreviewCard node={preview.node} x={preview.x} y={preview.y} />)}
