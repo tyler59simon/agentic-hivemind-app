@@ -21,7 +21,8 @@ import { quotePaths, type PasteTarget } from "./paths";
 import { pasteAction } from "./paste";
 import { isShellId, type ShellTab } from "./shells";
 import { setTerminalDrops } from "../notes/drops";
-import { fontPx, xtermTheme } from "./theme";
+import { FORCED_CONTRAST, fontPx, xtermTheme } from "./theme";
+import { forcedColorsActive, systemPalette } from "../../lib/forcedColors";
 import { makeWriter } from "./writer";
 import { prefersReducedMotion } from "../../lib/motion";
 
@@ -75,11 +76,18 @@ export const FIND_DECORATIONS = {
 
 const notify = () => { version++; listeners.forEach((l) => l()); };
 const read = (token: string) => getComputedStyle(document.documentElement).getPropertyValue(token).trim();
-// A theme change recolours every open terminal, shown or not.
-onThemeChange(() => {
-  const theme = xtermTheme(read);
-  lives.forEach((live) => { live.term.options.theme = theme; });
-});
+/** The terminal's colours now: the app's tokens, or the system colours while a Windows contrast theme is on (DESK-A11Y A6). */
+const look = () => {
+  const forced = forcedColorsActive();
+  return { theme: xtermTheme(read, forced ? systemPalette() : null), contrast: forced ? FORCED_CONTRAST : 1 };
+};
+// A theme change, or a contrast theme turned on or off, recolours every open terminal, shown or not.
+const recolour = () => {
+  const { theme, contrast } = look();
+  lives.forEach((live) => { live.term.options.theme = theme; live.term.options.minimumContrastRatio = contrast; });
+};
+onThemeChange(recolour);
+if (typeof matchMedia === "function") matchMedia("(forced-colors: active)").addEventListener("change", recolour);
 // A new code font (Settings) reaches every open terminal through `refit`, which sets the font only where the cell can be
 // measured: a terminal that is detached or hidden keeps its old font until it is shown again (`mount` and the host's
 // resize call `refit`), because xterm measures zero there and would keep the old cell size.
@@ -221,8 +229,9 @@ export function ensure(id: string, opts: { sessionId: string | null; engine: Eng
   watchExits();
   const box = document.createElement("div");
   box.className = "term-box-inner";
+  const { theme, contrast } = look();
   const term = new Terminal({
-    fontFamily: read("--font-mono"), fontSize: fontPx(rootPx()), theme: xtermTheme(read),
+    fontFamily: read("--font-mono"), fontSize: fontPx(rootPx()), theme, minimumContrastRatio: contrast,
     cursorBlink: !prefersReducedMotion(), scrollback: 10000, allowProposedApi: true,
     linkHandler: { activate: openLink },
   });

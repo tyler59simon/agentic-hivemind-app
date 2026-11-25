@@ -537,6 +537,8 @@ export function DrawioBoard(props: DrawioBoardProps) {
           Arrow keys move between shapes in reading order. Enter or F2 edits the label. Ctrl or Cmd with an arrow key moves the shape,
           and with Shift as well resizes it. Delete removes it.
         </p>
+        {/* The toolbar and the style bar stack in this box, so the style bar sits below however many rows the toolbar wraps to. */}
+        <div className="drawio-tools">
         <div className="canvas-tools" role="toolbar" aria-label="Draw.io toolbar">
           {!readOnly && (
             <>
@@ -601,6 +603,7 @@ export function DrawioBoard(props: DrawioBoardProps) {
             </button>
           </div>
         )}
+        </div>
 
         {panel && (
           <div id={panelId} className="canvas-panel-host">

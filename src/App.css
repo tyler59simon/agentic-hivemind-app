@@ -1987,7 +1987,9 @@ button.owner-chip { cursor: pointer; }
 .drawio-editor { flex-direction: column; }
 .drawio-shell { flex: 1; display: flex; flex-direction: column; min-height: 0; outline: none; }
 .drawio-board { background: #fafafa; }
-.drawio-inspector { top: 3.1rem; }
+/* The toolbar and the style bar (Fill, Stroke) stack in one box, so the style bar is below the toolbar however many rows it wraps to in a narrow pane. */
+.drawio-tools { position: absolute; left: .6rem; top: .6rem; z-index: 5; display: flex; flex-direction: column; align-items: flex-start; gap: .15rem; max-width: calc(100% - 1.2rem); pointer-events: none; }
+.drawio-tools > .canvas-tools { position: static; max-width: 100%; pointer-events: auto; }
 .drawio-node { position: absolute; box-sizing: border-box; cursor: move; }
 .drawio-node.on { outline: 2px solid var(--selected); }
 .drawio-node:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
