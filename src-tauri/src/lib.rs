@@ -1953,7 +1953,7 @@ pub fn run() {
     let finder_queue = open_queue.clone();
     tauri::Builder::default()
         // First, so every later plugin and the setup below can log.
-        .plugin(diagnostics::log_plugin(&log_plan))
+        .plugin(diagnostics::log_plugin(log_plan))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         // Size, position and maximised state come back at the next start (DESK-WIN). Never visibility: the window may

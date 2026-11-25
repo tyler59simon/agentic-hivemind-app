@@ -49,28 +49,40 @@ function frame(url: unknown, line: unknown, column: unknown): ClientFrame | unde
   return file !== undefined && l !== undefined && c !== undefined ? { file, line: l, column: c } : undefined;
 }
 
-/** The source locations in a stack string: only the `url:line:column` of each line, and only for this app's own files.
- *  The header and function names are never read. */
-export function framesOf(stack: unknown): ClientFrame[] {
+/** `    at fn (url:line:col)` or `    at url:line:col` (V8: Chromium, WebView2). */
+const V8_FRAME = /^ +at (?:.+? \()?([^\s()]+):(\d+):(\d+)\)?$/;
+/** `name@url:line:col` (WebKit). */
+const WEBKIT_FRAME = /^[^\s@()]*@([^\s()]+):(\d+):(\d+)$/;
+
+/** The source locations in a stack string: only the `url:line:column` of lines that have the shape of a stack frame, and
+ *  only for this app's own files. A V8 stack starts with the error's own text (`Name: message`, which can run over several
+ *  lines and end in anything), so `header` is that text and is cut off first; a stack that does not start with it yields
+ *  nothing. A WebKit stack has no such text. */
+export function framesOf(stack: unknown, header = ""): ClientFrame[] {
   if (typeof stack !== "string") return [];
+  const v8 = header !== "" && stack.startsWith(header);
+  const rows = (v8 ? stack.slice(header.length) : stack).split(/\r?\n/);
+  const webkit = !v8 && WEBKIT_FRAME.test(rows[0]);
+  if (!v8 && !webkit) return [];
   const frames: ClientFrame[] = [];
-  for (const row of stack.split("\n")) {
+  for (const row of rows) {
     if (frames.length >= MAX_FRAMES) break;
-    const m = /([^\s()@]+?):(\d+):(\d+)\)?\s*$/.exec(row);
+    const m = (webkit ? WEBKIT_FRAME : V8_FRAME).exec(row);
     const found = m && frame(m[1], Number(m[2]), Number(m[3]));
     if (found) frames.push(found);
   }
   return frames;
 }
 
-/** The component names in React's component stack (`at Name (url)`), when they are identifiers. */
+/** The component names in React's component stack (`at Name (url)`), when they are identifiers of at most 40 characters:
+ *  they are names in this app's own code (or DOM tags), never user text. */
 export function componentsOf(stack: unknown): string[] {
   if (typeof stack !== "string") return [];
   const names: string[] = [];
   for (const row of stack.split("\n")) {
     if (names.length >= MAX_COMPONENTS) break;
     // `at Name (url)` (V8) or `Name@url` (WebKit).
-    const m = /^\s*(?:at\s+([A-Za-z][A-Za-z0-9_]{0,40})(?=[\s(]|$)|([A-Za-z][A-Za-z0-9_]{0,40})(?=@))/.exec(row);
+    const m = /^\s*(?:at\s+([A-Za-z][A-Za-z0-9_]{0,39})(?=[\s(]|$)|([A-Za-z][A-Za-z0-9_]{0,39})(?=@))/.exec(row);
     if (m) names.push(m[1] ?? m[2]);
   }
   return names;
@@ -80,7 +92,11 @@ export function componentsOf(stack: unknown): string[] {
  *  nothing: a string or an object may be anything. */
 function errorFields(value: unknown): Pick<ClientEvent, "name" | "frames"> {
   try {
-    if (value instanceof Error) return { name: ident(value.name) ?? "other", frames: framesOf(value.stack) };
+    if (value instanceof Error) {
+      const [name, message] = [String(value.name), String(value.message)];
+      // V8 starts the stack with `name: message` (or only one of them when the other is empty).
+      return { name: ident(name) ?? "other", frames: framesOf(value.stack, name && message ? `${name}: ${message}` : name || message) };
+    }
   } catch { /* a getter that throws: nothing is said */ }
   return {};
 }

@@ -15,14 +15,37 @@ interface Props {
   children: ReactNode;
 }
 
-interface State { error: Error | null; stack: string; copied: boolean; key: unknown }
+/** What a boundary kept of the thrown value. It is an object whatever was thrown, so null, undefined and false still show
+ *  the fallback. `text` is the line the fallback shows, `detail` what Copy details copies. */
+interface Failure { failed: true; text: string; detail: string }
+interface State { error: Failure | null; stack: string; copied: boolean; key: unknown }
+
+const UNSHOWN = "An error that cannot be shown";
+
+/** `String(value)` for anything, including a value with no toString or one whose toString throws. */
+function safeText(value: unknown): string {
+  try { return String(value); } catch { return UNSHOWN; }
+}
+
+function failureOf(value: unknown): Failure {
+  try {
+    if (value instanceof Error) {
+      const message = safeText(value.message);
+      return { failed: true, text: message || safeText(value), detail: [`${safeText(value.name)}: ${message}`, safeText(value.stack ?? "")].filter(Boolean).join("\n\n") };
+    }
+    const text = safeText(value);
+    return { failed: true, text, detail: text };
+  } catch {
+    return { failed: true, text: UNSHOWN, detail: UNSHOWN };
+  }
+}
 
 /** Catches a render error below it, so one broken view shows a message instead of blanking the window (DESK-1). */
 export class ErrorBoundary extends Component<Props, State> {
   state: State = { error: null, stack: "", copied: false, key: this.props.resetKey };
 
-  static getDerivedStateFromError(error: Error): Partial<State> {
-    return { error, copied: false };
+  static getDerivedStateFromError(error: unknown): Partial<State> {
+    return { error: failureOf(error), copied: false };
   }
 
   static getDerivedStateFromProps(props: Props, state: State): Partial<State> | null {
@@ -32,15 +55,14 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     this.setState({ stack: info.componentStack ?? "" });
-    console.error(error);
+    try { console.error(error); } catch { /* the rest still runs */ }
     try { this.props.onError?.(error); } catch { /* the fallback still shows */ }
     // After the recovery callback, so a failure to log can never hold it back. Only names and source locations are sent.
     try { logRenderError(error, info.componentStack); } catch { /* nothing is logged */ }
   }
 
   private details(): string {
-    const e = this.state.error;
-    return [`${e?.name ?? "Error"}: ${e?.message ?? ""}`, e?.stack ?? "", this.state.stack.trim()].filter(Boolean).join("\n\n");
+    return [this.state.error?.detail ?? "", this.state.stack.trim()].filter(Boolean).join("\n\n");
   }
 
   private copy = () => {
@@ -55,7 +77,7 @@ export class ErrorBoundary extends Component<Props, State> {
       <div className="error-boundary" role="alert">
         <h2>{this.props.label} stopped working</h2>
         <p className="muted">{this.props.hint ?? "Your unsaved edits are kept as drafts, and the rest of Hivemind keeps working."}</p>
-        <p className="error">{error.message || String(error)}</p>
+        <p className="error">{error.text}</p>
         <div className="actions">
           <button onClick={this.copy}>{copied ? "Copied" : "Copy details"}</button>
           <button className="primary" onClick={retry.run}>{retry.label}</button>

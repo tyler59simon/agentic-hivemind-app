@@ -43,25 +43,49 @@ describe("ident", () => {
 
 describe("source locations and component names", () => {
   it("keeps only the path, line and column of this app's own files", () => {
-    expect(framesOf(marked().stack)).toEqual([
+    expect(framesOf(marked().stack, `Error: ${MARKER} in a page about private things`)).toEqual([
       { file: "/assets/index-abc123.js", line: 10, column: 20 },
       { file: "/assets/vendor.js", line: 30, column: 40 },
-      { file: "/assets/index-abc123.js", line: 7, column: 8 },
     ]);
   });
 
   it("keeps at most eight frames and no text from a stack that is not one", () => {
     const stack = Array.from({ length: 20 }, (_, i) => `    at f (http://tauri.localhost/assets/a.js:${i + 1}:1)`).join("\n");
-    expect(framesOf(stack)).toHaveLength(8);
+    expect(framesOf(stack)).toEqual([]);
+    expect(framesOf(`Error: x\n${stack}`, "Error: x")).toHaveLength(8);
     expect(framesOf(MARKER)).toEqual([]);
     expect(framesOf(undefined)).toEqual([]);
     expect(framesOf({ stack: MARKER })).toEqual([]);
+  });
+
+  it("takes no frame from the error's own text, even when it ends like a frame or runs over several lines", () => {
+    const url = `http://tauri.localhost/assets/${MARKER}.js:1:1`;
+    const real = "    at f (http://tauri.localhost/assets/a.js:2:3)";
+    for (const message of [`boom at ${url}`, `boom\n    at ${url}`, `boom\n    at g (${url})`, `x@${url}`]) {
+      const header = `Error: ${message}`;
+      expect(framesOf(`${header}\n${real}`, header), message).toEqual([{ file: "/assets/a.js", line: 2, column: 3 }]);
+    }
+    // The first line is never a frame: a stack that is only a header, or whose header is not the one given.
+    expect(framesOf(`Error: boom at ${url}`, `Error: boom at ${url}`)).toEqual([]);
+    expect(framesOf(`Error: boom\n${real}`, "Error: something else")).toEqual([]);
+    expect(framesOf(`Error: boom\n${real}`)).toEqual([]);
+  });
+
+  it("takes frames only from lines shaped like frames", () => {
+    const stack = "Error: m\n    at f (http://tauri.localhost/assets/a.js:1:2)\n    at http://tauri.localhost/assets/b.js:3:4\nnot a frame http://tauri.localhost/assets/c.js:5:6\n  see http://tauri.localhost/assets/d.js:7:8";
+    expect(framesOf(stack, "Error: m")).toEqual([{ file: "/assets/a.js", line: 1, column: 2 }, { file: "/assets/b.js", line: 3, column: 4 }]);
+    // WebKit is `name@url:line:column` with no header; a line of another shape is skipped.
+    expect(framesOf("render@tauri://localhost/assets/a.js:1:2\n@tauri://localhost/assets/b.js:3:4\nsome text tauri://localhost/assets/c.js:5:6")).toEqual([
+      { file: "/assets/a.js", line: 1, column: 2 }, { file: "/assets/b.js", line: 3, column: 4 },
+    ]);
   });
 
   it("reduces a component stack to component names", () => {
     const stack = `\n    at Bomb (http://tauri.localhost/assets/a.js:1:1)\n    at ErrorBoundary (http://x/y.js:2:2)\n    at ${MARKER} here\n    at div\nBomb2@http://x/y.js:3:3`;
     expect(componentsOf(stack)).toEqual(["Bomb", "ErrorBoundary", "div", "Bomb2"]);
     expect(componentsOf(Array.from({ length: 30 }, (_, i) => `    at C${i} (x)`).join("\n"))).toHaveLength(12);
+    // A name is at most 40 characters.
+    expect(componentsOf(`    at ${"A".repeat(40)} (x)\n    at ${"B".repeat(41)} (x)`)).toEqual(["A".repeat(40)]);
   });
 });
 
@@ -72,7 +96,7 @@ describe("events", () => {
     logRenderError(marked(), `\n    at Bomb (http://tauri.localhost/assets/a.js:1:1)\n    at ErrorBoundary (http://x/y.js:2:2)`);
     expect(sent()).toEqual([{
       kind: "render_error", name: "Error", component: ["Bomb", "ErrorBoundary"],
-      frames: [{ file: "/assets/index-abc123.js", line: 10, column: 20 }, { file: "/assets/vendor.js", line: 30, column: 40 }, { file: "/assets/index-abc123.js", line: 7, column: 8 }],
+      frames: [{ file: "/assets/index-abc123.js", line: 10, column: 20 }, { file: "/assets/vendor.js", line: 30, column: 40 }],
     }]);
     expect(JSON.stringify(sent())).not.toContain(MARKER);
   });
@@ -91,7 +115,7 @@ describe("events", () => {
     const e = new Error("x");
     e.name = `${MARKER} is my name`;
     logRejection(e);
-    expect(sent()).toEqual([{ kind: "unhandled_rejection", name: "other", frames: framesOf(e.stack) }]);
+    expect(sent()).toEqual([{ kind: "unhandled_rejection", name: "other", frames: framesOf(e.stack, `${e.name}: ${e.message}`) }]);
   });
 
   it("sends a failed command's name, code and exit status", () => {

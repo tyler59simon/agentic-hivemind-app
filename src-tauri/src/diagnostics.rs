@@ -58,7 +58,7 @@ fn ours(target: &str) -> bool {
 }
 
 /// Where the log goes, and why it cannot go to a file when it cannot.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct LogPlan {
     pub file: bool,
     pub stdout: bool,
@@ -109,8 +109,30 @@ fn log_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     }
 }
 
-/// The log plugin. It must be the first plugin, so everything after it can log from its setup.
-pub fn log_plugin<R: Runtime>(plan: &LogPlan) -> TauriPlugin<R> {
+/// Why the log file is not in use when the plugin's own setup failed after the folder probe passed.
+const SETUP_FAILED: &str = "setup failed";
+static LOG_FALLBACK: OnceLock<&str> = OnceLock::new();
+
+/// The plan for a second try after the first one's setup failed: the same plan without the file. None when the failed plan
+/// had no file (nothing left to give up) or nothing failed.
+pub fn retry_plan(plan: &LogPlan, setup_failed: bool) -> Option<LogPlan> {
+    (setup_failed && plan.file).then(|| LogPlan { file: false, stdout: true, unavailable: Some(SETUP_FAILED.into()) })
+}
+
+/// Run `setup` for `plan`; if it fails and the plan had the file, run it once more for the plan without the file. The plan
+/// that worked is returned with the result, and a second failure is returned as it is.
+fn setup_with_retry<T, E>(plan: &LogPlan, mut setup: impl FnMut(&LogPlan) -> Result<T, E>) -> Result<(T, LogPlan), E> {
+    match setup(plan) {
+        Ok(done) => Ok((done, plan.clone())),
+        Err(error) => match retry_plan(plan, true) {
+            Some(next) => setup(&next).map(|done| (done, next)),
+            None => Err(error),
+        },
+    }
+}
+
+/// The logger for a plan: the file (this app's own records only), and standard output when the plan has it.
+fn log_builder(plan: &LogPlan) -> tauri_plugin_log::Builder {
     let mut builder = tauri_plugin_log::Builder::new()
         .clear_targets()
         .max_file_size(LOG_MAX_BYTES)
@@ -125,7 +147,25 @@ pub fn log_plugin<R: Runtime>(plan: &LogPlan) -> TauriPlugin<R> {
     if plan.stdout {
         builder = builder.target(Target::new(TargetKind::Stdout));
     }
-    builder.build()
+    builder
+}
+
+/// The logging plugin. It must be the first plugin, so everything after it can log from its setup. The log plugin's own
+/// setup (pruning and rotating the archives) can still fail after the folder probe passed, so this plugin sets the logger up
+/// itself with `Builder::split`: on a failure it tries again without the file, and only a second failure stops the start.
+/// The log plugin's own command is not registered, so the webview has no way to write text into the log.
+pub fn log_plugin<R: Runtime>(plan: LogPlan) -> TauriPlugin<R> {
+    tauri::plugin::Builder::new("hivemind-log")
+        .setup(move |app, _api| {
+            let ((level, logger), used) = setup_with_retry(&plan, |p| log_builder(p).split(app).map(|(_unused_plugin, level, logger)| (level, logger)))?;
+            tauri_plugin_log::attach_logger(level, logger)?;
+            if used.unavailable.as_deref() == Some(SETUP_FAILED) {
+                let _ = LOG_FALLBACK.set(SETUP_FAILED);
+                log::warn!("log file: setup failed, logging to standard output only");
+            }
+            Ok(())
+        })
+        .build()
 }
 
 /// A source file of a panic, without the part of its path that names a user or a machine: a path in this crate stays as
@@ -140,13 +180,18 @@ fn safe_location(file: &str) -> String {
     tail.chars().filter(|c| c.is_ascii_alphanumeric() || "_./-".contains(*c)).take(120).collect()
 }
 
-/// One log record for a panic: the thread, the place and the backtrace. The panic's own message is left out on purpose:
-/// `str` slicing and `unwrap` messages quote the text they failed on.
-pub fn format_panic(thread: Option<&str>, location: Option<(&str, u32, u32)>, backtrace: &str) -> String {
+/// One log record for a panic: the thread and the place, and in a debug build the backtrace too. The panic's own message is
+/// left out on purpose: `str` slicing and `unwrap` messages quote the text they failed on. A release build is stripped, so
+/// its frames would be addresses, and the symbol and source paths a debug build shows name the developer's machine.
+pub fn format_panic(thread: Option<&str>, location: Option<(&str, u32, u32)>, backtrace: &str, debug: bool) -> String {
     let thread = thread.filter(|t| t.len() <= 41 && t.starts_with(|c: char| c.is_ascii_alphabetic()) && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')).unwrap_or("other");
     let place = location.map_or("an unknown place".to_string(), |(file, line, column)| format!("{}:{line}:{column}", safe_location(file)));
+    let head = format!("panic (message withheld) in thread '{thread}' at {place}");
+    if !debug {
+        return head;
+    }
     let backtrace: String = backtrace.chars().take(BACKTRACE_MAX).collect();
-    format!("panic (message withheld) in thread '{thread}' at {place}\n{backtrace}")
+    format!("{head}\n{backtrace}")
 }
 
 /// Log every panic (including the ones `catch_unwind` takes), then run the hook that was there before. A release build
@@ -156,8 +201,9 @@ pub fn install_panic_hook() {
     std::panic::set_hook(Box::new(move |info| {
         let thread = std::thread::current();
         let location = info.location().map(|l| (l.file(), l.line(), l.column()));
-        let backtrace = std::backtrace::Backtrace::force_capture().to_string();
-        log::error!("{}", format_panic(thread.name(), location, &backtrace));
+        let debug = cfg!(debug_assertions);
+        let backtrace = if debug { std::backtrace::Backtrace::force_capture().to_string() } else { String::new() };
+        log::error!("{}", format_panic(thread.name(), location, &backtrace, debug));
         log::logger().flush();
         previous(info);
     }));
@@ -170,6 +216,14 @@ const ERROR_NAMES: [&str; 16] = [
     "Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError", "URIError", "EvalError", "AggregateError",
     "DOMException", "AbortError", "NotAllowedError", "NotFoundError", "SecurityError", "QuotaExceededError",
     "InvalidStateError", "LmError",
+];
+
+/// The Living Memory commands `src/lib/lm.ts` sends (the first item of an argv), with `-` written as `_` as the webview
+/// writes them. A failed command's name is kept only when it is one of these.
+const LM_COMMANDS: [&str; 36] = [
+    "apply", "archive", "capture", "check", "confirm", "delete_plan", "diff", "doc", "domains", "history", "inspect_plan", "maintenance",
+    "merge_plan", "open", "project", "projects", "proposals", "read", "recap", "reopen", "resolve", "restore", "retag_plan", "review",
+    "search", "supersede", "system", "systems", "taxonomy", "timeline", "type", "types", "undo", "update", "views", "wiki",
 ];
 
 /// `/assets/index-abc.js` or `/src/main.tsx`: a file of this app's own bundle (or of its dev server), by path only.
@@ -186,11 +240,10 @@ pub fn format_client_event(event: &Value) -> (log::Level, String) {
     let mut text = format!("webview {kind}");
     for field in ["name", "code"] {
         if event.get(field).is_some_and(|v| !v.is_null()) {
-            // An identifier can still be a word taken from a note, so codes and error names must be known ones. An lm
-            // command name comes from Hivemind's own code, so the identifier check is enough there.
+            // An identifier can still be a word taken from a note, so codes, error names and command names must be known ones.
             let known = |v: &&str| match field {
                 "code" => LM_CODES.contains(v),
-                _ if kind == "lm_failure" => true,
+                _ if kind == "lm_failure" => LM_COMMANDS.contains(v),
                 _ => ERROR_NAMES.contains(v),
             };
             text.push_str(&format!(" {field}={}", event[field].as_str().and_then(identifier).filter(known).unwrap_or("other")));
@@ -213,7 +266,8 @@ pub fn format_client_event(event: &Value) -> (log::Level, String) {
     if !frames.is_empty() {
         text.push_str(&format!(" at {}", frames.join(" ")));
     }
-    let components: Vec<&str> = event["component"].as_array().into_iter().flatten().filter_map(|c| identifier(c.as_str()?)).take(CLIENT_COMPONENTS).collect();
+    // Component names are identifiers of this app's own code (or DOM tags), at most 40 characters each.
+    let components: Vec<&str> = event["component"].as_array().into_iter().flatten().filter_map(|c| identifier(c.as_str()?).filter(|n| n.len() <= 40)).take(CLIENT_COMPONENTS).collect();
     if !components.is_empty() {
         text.push_str(&format!(" in {}", components.join(">")));
     }
@@ -236,20 +290,28 @@ fn tail_of(path: &Path, lines: usize, window: u64) -> std::io::Result<String> {
         Err(_) => std::fs::File::open(path)?,
     };
     let start = file.metadata()?.len().saturating_sub(window);
-    // One byte before the window, to know whether the window begins on a line.
+    // One byte before the window, to know whether the window begins on a line. No more than the window and that byte is
+    // read, whatever the file grew to meanwhile.
     file.seek(SeekFrom::Start(start.saturating_sub(1)))?;
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
-    let aligned = start == 0 || bytes.first() == Some(&b'\n');
-    if start > 0 {
+    file.take(window + 1).read_to_end(&mut bytes)?;
+    Ok(tail_of_bytes(bytes, start > 0, lines))
+}
+
+/// The tail of what was read. `behind` is whether the first byte is the one just before the window (the file went on above
+/// it): it only says whether the window begins on a line, and is not part of the text. A read that came back short, or
+/// empty, because the file shrank since its size was asked, is taken as it is.
+fn tail_of_bytes(mut bytes: Vec<u8>, behind: bool, lines: usize) -> String {
+    let aligned = !behind || bytes.first() == Some(&b'\n');
+    if behind && !bytes.is_empty() {
         bytes.remove(0);
     }
     // A window that begins inside a multibyte character skips the rest of it.
     let skip = bytes.iter().take_while(|b| (**b & 0xC0) == 0x80).count();
     let text = String::from_utf8_lossy(&bytes[skip..]).into_owned();
     let mut all: Vec<&str> = text.lines().collect();
-    let mut cut = start > 0;
-    if start > 0 && !aligned && all.len() > 1 {
+    let mut cut = behind;
+    if behind && !aligned && all.len() > 1 {
         all.remove(0);
     }
     if all.len() > lines {
@@ -257,7 +319,7 @@ fn tail_of(path: &Path, lines: usize, window: u64) -> std::io::Result<String> {
         cut = true;
     }
     let body = all.join("\n");
-    Ok(if cut { format!("{CUT_MARK}\n{body}") } else { body })
+    if cut && !body.is_empty() { format!("{CUT_MARK}\n{body}") } else { body }
 }
 
 /// `tail_of` for the log file, with a fixed line when it cannot be read.
@@ -378,7 +440,7 @@ pub fn app_info(app: AppHandle) -> Result<AppInfo, String> {
 pub fn diagnostics(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
     let info = app_info_of(&app)?;
     log::logger().flush();
-    let unavailable = LOG_STATE.get().and_then(|s| s.unavailable.as_deref());
+    let unavailable = LOG_STATE.get().and_then(|s| s.unavailable.as_deref()).or(LOG_FALLBACK.get().copied());
     let log = if unavailable.is_some() { String::new() } else { tail_lines(&Path::new(&info.log_dir).join(format!("{LOG_NAME}.log")), TAIL_LINES) };
     Ok(render(&info, &settings_summary(&settings::load(&state.settings_path)), &log, unavailable))
 }
@@ -480,10 +542,43 @@ mod tests {
 
     #[test]
     fn a_panic_record_has_the_thread_place_and_backtrace_and_no_message() {
-        let text = format_panic(Some("main"), Some(("src/lib.rs", 10, 5)), "0: frame");
+        let text = format_panic(Some("main"), Some(("src/lib.rs", 10, 5)), "0: frame", true);
         assert_eq!(text, "panic (message withheld) in thread 'main' at src/lib.rs:10:5\n0: frame");
-        assert!(format_panic(None, None, "").contains("thread 'other' at an unknown place"));
-        assert!(format_panic(Some(&format!("t {MARKER}")), None, "").contains("thread 'other'"));
+        assert!(format_panic(None, None, "", true).contains("thread 'other' at an unknown place"));
+        assert!(format_panic(Some(&format!("t {MARKER}")), None, "", true).contains("thread 'other'"));
+    }
+
+    #[test]
+    fn a_release_panic_record_has_no_backtrace() {
+        // A release build is stripped: its frames are addresses, and a debug build's name the developer's machine.
+        let release = format_panic(Some("main"), Some(("src\\lib.rs", 10, 5)), "0: frame at C:\\Users\\someone\\x.rs", false);
+        assert_eq!(release, "panic (message withheld) in thread 'main' at src/lib.rs:10:5");
+        let debug = format_panic(Some("main"), Some(("src\\lib.rs", 10, 5)), "0: frame", true);
+        assert!(debug.starts_with(&release) && debug.ends_with("\n0: frame"), "{debug}");
+    }
+
+    #[test]
+    fn a_failed_file_setup_is_tried_again_without_the_file_and_only_that_once() {
+        let file = LogPlan { file: true, stdout: false, unavailable: None };
+        let retry = retry_plan(&file, true).unwrap();
+        assert_eq!(retry, LogPlan { file: false, stdout: true, unavailable: Some("setup failed".into()) });
+        assert_eq!(retry_plan(&file, false), None, "nothing failed");
+        assert_eq!(retry_plan(&retry, true), None, "a plan without the file has nothing to give up");
+        // The first setup fails for the plan with the file, the second works.
+        let mut plans = vec![];
+        let done = setup_with_retry(&file, |p| { plans.push(p.clone()); if p.file { Err("no rotate") } else { Ok(7) } });
+        assert_eq!(done, Ok((7, retry.clone())));
+        assert_eq!(plans, vec![file.clone(), retry.clone()]);
+        // Both fail: the second failure is the answer, and there is no third try.
+        let mut tries = 0;
+        let failed: Result<((), LogPlan), &str> = setup_with_retry(&file, |_| { tries += 1; Err("still no") });
+        assert_eq!((failed, tries), (Err("still no"), 2));
+        // A plan that never had the file is not tried again.
+        let mut tries = 0;
+        let failed: Result<((), LogPlan), &str> = setup_with_retry(&retry, |_| { tries += 1; Err("no") });
+        assert_eq!((failed, tries), (Err("no"), 1));
+        // A setup that works the first time is used as it is.
+        assert_eq!(setup_with_retry(&file, |_| Ok::<_, &str>(1)), Ok((1, file)));
     }
 
     #[test]
@@ -503,6 +598,44 @@ mod tests {
         });
         assert_eq!(format_client_event(&event), (log::Level::Error, "webview render_error name=TypeError code=invalid exit=2 at /assets/index-abc.js:10:20 /src/main.tsx:1:2 in Bomb>ErrorBoundary>div".into()));
         assert_eq!(format_client_event(&json!({ "kind": "lm_failure", "name": "read", "code": "stale", "exit": 6 })), (log::Level::Warn, "webview lm_failure name=read code=stale exit=6".into()));
+    }
+
+    #[test]
+    fn a_failed_command_is_named_only_when_lm_ts_sends_it() {
+        for known in ["read", "delete_plan", "doc", "search"] {
+            assert_eq!(format_client_event(&json!({ "kind": "lm_failure", "name": known })).1, format!("webview lm_failure name={known}"));
+        }
+        // An identifier that is not a command (a word from a note), and an error name sent as a command.
+        for other in ["Quarterly_budget", "list", "TypeError", "delete-plan", MARKER] {
+            assert_eq!(format_client_event(&json!({ "kind": "lm_failure", "name": other })).1, "webview lm_failure name=other", "{other}");
+        }
+        // A command is not an error name.
+        assert_eq!(format_client_event(&json!({ "kind": "window_error", "name": "read" })).1, "webview window_error name=other");
+    }
+
+    /// Every command `src/lib/lm.ts` puts first in an argv is in LM_COMMANDS: the first item of `view([...])`, `direct([...])`,
+    /// `run<T>([...])`, `runBody<T>([...])` and `scopeArgs("...")`, and the literal `const argv = ["..."]` of the builders.
+    #[test]
+    fn the_command_list_has_every_command_lm_ts_sends() {
+        let source = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/lib/lm.ts")).unwrap();
+        let re = regex::Regex::new(r#"(?:view\(\[|direct\(\[|run(?:Body)?<[^()]*>\(\[|scopeArgs\(|argv = \[|return \[)"([a-z-]+)""#).unwrap();
+        let mut found: Vec<String> = re.captures_iter(&source).map(|c| c[1].replace('-', "_")).collect();
+        found.sort();
+        found.dedup();
+        assert!(found.len() > 25, "the pattern found only {found:?}");
+        for name in &found {
+            assert!(LM_COMMANDS.contains(&name.as_str()), "{name} is sent by lm.ts but is not in LM_COMMANDS");
+        }
+        // And the list has nothing that lm.ts never writes down, so a removed command leaves it.
+        for name in LM_COMMANDS {
+            assert!(source.contains(&format!("\"{}\"", name.replace('_', "-"))), "{name} is in LM_COMMANDS but lm.ts does not mention it");
+        }
+    }
+
+    #[test]
+    fn a_component_name_is_kept_up_to_forty_characters() {
+        let (long, ok) = ("A".repeat(41), "B".repeat(40));
+        assert_eq!(format_client_event(&json!({ "kind": "render_error", "component": [long, ok] })).1, format!("webview render_error in {ok}"));
     }
 
     #[test]
@@ -614,6 +747,16 @@ mod tests {
         std::fs::write(&file, format!("{}END", "x".repeat(100))).unwrap();
         assert_eq!(tail_of(&file, 10, 20).unwrap(), format!("[earlier lines cut]\n{}END", "x".repeat(17)));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_read_that_came_back_short_or_empty_is_taken_as_it_is() {
+        // The file shrank after its size was asked: nothing came back, or less than the window and its look-behind byte.
+        assert_eq!(tail_of_bytes(vec![], true, 10), "");
+        assert_eq!(tail_of_bytes(vec![], false, 10), "");
+        assert_eq!(tail_of_bytes(b"\nonly\n".to_vec(), true, 10), "[earlier lines cut]\nonly");
+        assert_eq!(tail_of_bytes(b"x".to_vec(), true, 10), "");
+        assert_eq!(tail_of_bytes(b"xpartial\nwhole\n".to_vec(), true, 10), "[earlier lines cut]\nwhole");
     }
 
     #[test]

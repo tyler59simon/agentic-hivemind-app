@@ -51,22 +51,26 @@ describe("ErrorBoundary", () => {
 
   it("runs onError and shows the fallback whatever is thrown, and when logging fails", async () => {
     core.invoke.mockImplementation(() => { throw new Error("no ipc"); });
-    for (const value of [MARKER, Symbol(MARKER)]) {
+    const odd: [string, unknown, string][] = [
+      ["null", null, "null"], ["undefined", undefined, "undefined"], ["false", false, "false"], ["a string", MARKER, MARKER],
+      ["a symbol", Symbol("sym"), "Symbol(sym)"], ["an object without toString", Object.create(null), "An error that cannot be shown"],
+      ["an object whose toString throws", { toString() { throw new Error("no"); } }, "An error that cannot be shown"],
+    ];
+    for (const [label, value, text] of odd) {
       const onError = vi.fn();
       function Throws(): never { throw value; }
       await mount(<ErrorBoundary label="This tab" onError={onError}><Throws /></ErrorBoundary>);
-      expect(onError).toHaveBeenCalledTimes(1);
-      expect(host.querySelector('[role="alert"]')).not.toBeNull();
+      expect(onError, label).toHaveBeenCalledTimes(1);
+      expect(host.querySelector('[role="alert"] h2')!.textContent, label).toBe("This tab stopped working");
+      expect(host.querySelector(".error")!.textContent, label).toBe(text);
+      // Copy details copies the same text.
+      const writeText = vi.fn(async (_text: string) => {});
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      await act(async () => button("Copy details").click());
+      expect(writeText.mock.calls[0][0], label).toContain(text);
       await act(async () => root?.unmount());
       root = null;
       host.remove();
-    }
-    // Values that cannot even be shown are not mounted (the fallback prints the error); the catch itself must cope.
-    for (const value of [null, undefined, Object.create(null), { toString() { throw new Error("no"); } }]) {
-      const onError = vi.fn();
-      const boundary = new ErrorBoundary({ label: "This tab", onError, children: null });
-      expect(() => boundary.componentDidCatch(value as Error, { componentStack: value as unknown as string })).not.toThrow();
-      expect(onError).toHaveBeenCalledTimes(1);
     }
   });
 
