@@ -110,6 +110,8 @@ npx tsc --noEmit        # type-check
 cd src-tauri && cargo test
 ```
 
+To install or update Hivemind from source on Windows or macOS, run `node scripts/install-local.mjs` on a clean `main`. It pulls, builds and installs the app, then adds a desktop shortcut if there isn't one. On Windows it runs the NSIS installer silently (per user, in `%LOCALAPPDATA%\Hivemind`). On macOS it copies `Hivemind.app` to `/Applications` and links it from `~/Desktop`. App data is kept.
+
 `cargo test` includes end-to-end bridge tests against a temporary store. They run only when `HIVEMIND_TEST_LM_SCRIPT` points at a `living_memory.py` that has `serve`. Set `HIVEMIND_TEST_PYTHON` to choose the interpreter.
 
 `src/lib/note.ts` mirrors Living Memory's note layout rules, and `scripts/gen_note_fixtures.py PATH/TO/agentic-living-memory` regenerates the fixtures that keep the two in step.
