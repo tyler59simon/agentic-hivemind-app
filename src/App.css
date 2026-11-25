@@ -701,8 +701,8 @@ input[type="checkbox"] { accent-color: var(--success); }
 .md-editor .cm-rich-table input { font: inherit; color: inherit; text-align: inherit; background: transparent; border: none; padding: .25rem .5rem; min-width: 6rem; width: 100%; }
 .md-editor .cm-rich-table th input { font-weight: 700; }
 .md-editor .cm-rich-table input:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
-.md-editor .cm-rich-table .cm-rich-table-gutter { border: none; background: none; width: 1.4rem; }
-.md-editor .cm-rich-table-menu { position: absolute; top: 0; right: 0; width: 1.3rem; padding: 0; border: none; background: transparent; color: var(--muted); font-size: .8rem; opacity: 0; cursor: pointer; }
+.md-editor .cm-rich-table .cm-rich-table-gutter { border: none; background: none; width: 1.5rem; }
+.md-editor .cm-rich-table-menu { position: absolute; top: 0; right: 0; width: 1.5rem; min-height: 24px; padding: 0; border: none; background: transparent; color: var(--muted); font-size: .8rem; opacity: 0; cursor: pointer; }
 .md-editor .cm-rich-table-gutter .cm-rich-table-menu { position: static; }
 .md-editor .cm-rich-table th:hover .cm-rich-table-menu, .md-editor .cm-rich-table tr:hover .cm-rich-table-menu, .md-editor .cm-rich-table-menu:focus { opacity: 1; }
 .md-editor .cm-callout { --callout: var(--accent); border-left: 3px solid var(--callout); background: color-mix(in srgb, var(--callout) 10%, transparent); padding-left: .8rem !important; }
@@ -1248,7 +1248,7 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .start-more .field, .start-more p { margin: 0 0 var(--sp-10) var(--sp-12); }
 .briefing-notes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-11); }
 .briefing-notes label { display: flex; align-items: flex-start; gap: var(--sp-16); cursor: pointer; }
-.briefing-notes input { flex: none; width: 1.2rem; height: 1.2rem; margin-top: var(--sp-3); }
+.briefing-notes input { flex: none; width: 1.5rem; height: 1.5rem; margin-top: 0; }
 .start-footer { flex: none; display: flex; align-items: center; gap: var(--sp-20); padding-top: var(--sp-20); border-top: 1px solid var(--border); }
 
 /* ---- Review ---- */
@@ -2154,6 +2154,29 @@ button.owner-chip { cursor: pointer; }
 .canvas-node:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
 /* A card's handles show while the card has the keyboard focus, not only under the mouse. */
 .canvas-node:focus-within .canvas-handle { opacity: 1; }
+
+/* ---- Target size (DESK-A11Y A4, WCAG 2.5.8): a pointer target is at least 24 by 24 CSS px at both densities. ----
+   A glyph control keeps the size it is drawn at and gets a transparent 24 px box centred on it (the ::before rule below), so the
+   layout does not move. A control with a drawn border grows to 24 px instead (min-width and min-height), which only changes the
+   ones that were smaller. src/shell/target.css.test.ts keeps the list in step. */
+.tab-close, .tag-x, .tree-toggle, .drawio-page-del, .canvas-swatch, .status-menu .menu-button, .split-divider, .hm-frame-remove { position: relative; }
+.tab-close::before, .tag-x::before, .tree-toggle::before, .drawio-page-del::before, .canvas-swatch::before, .status-menu .menu-button::before,
+.pdf-ann-del::before, .hm-toggle-caret::before, .hm-frame-remove::before, .rich-grip::before, .md-editor .cm-rich-resize::before { content: ""; position: absolute; left: 50%; top: 50%; width: max(100%, 24px); height: max(100%, 24px); transform: translate(-50%, -50%); }
+/* The divider between source and preview is 5 px wide; its box lies over both sides and takes no layout width (as .splitter does). */
+.split-divider::before { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 24px; transform: translateX(-50%); }
+/* The board handles are drawn at 12 and 10 screen px whatever the zoom (--k scales the board); the box is 24 screen px. */
+.canvas-handle::before, .canvas-corner::before { content: ""; position: absolute; left: 50%; top: 50%; width: calc(24px / var(--k, 1)); height: calc(24px / var(--k, 1)); transform: translate(-50%, -50%); }
+/* The frame's corner grip lies at the frame's corner; its box reaches inwards. */
+.hm-frame-corner::before { content: ""; position: absolute; right: 0; bottom: 0; width: 24px; height: 24px; }
+/* The frame's move strip is 1.2 rem high; its box is 24 px over it. The remove button inside is positioned too, so it stays above the box. */
+.hm-frame-handle { position: relative; }
+.hm-frame-handle::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 24px; transform: translateY(-50%); }
+.canvas-tools button:not(.canvas-swatch), .panzoom-tools button, .pdf-toolbar button:not(.canvas-swatch), .docx-preview-bar button, .pdf-thumb-ops button, .icon-menu .menu-button { min-width: 24px; min-height: 24px; }
+/* The table menus of Live mode (.cm-rich-table-menu, above) are native selects, which cannot have a pseudo-element: they are 1.5 rem by 24 px. */
+/* The track of a switch is 20 px high; the label around it is the target. */
+.switch { min-height: 24px; }
+/* Left alone on purpose, under the 2.5.8 exceptions: a native checkbox, radio button or range keeps the size the browser gives it (user
+   agent control, as does the file picker), and a link inside a sentence is inline. */
 
 /* ---- Reduced motion (DESK-OS): no spinning, sliding or smooth scrolling. The banner fade stays: it ends hidden. ---- */
 @media (prefers-reduced-motion: reduce) {
