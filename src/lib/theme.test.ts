@@ -91,9 +91,9 @@ describe("themes", () => {
     expect(css).toMatch(/\.switch span \{[^}]*box-shadow: inset 0 0 0 1px var\(--control-border\)/);
   });
 
-  it("has no text under .8rem, except the tab dot glyph and the compact sidebar count", () => {
+  it("has no text under .8rem, except the tab dot glyph and the compact sidebar count (narrow and collapsed)", () => {
     const small = css.split("\n").filter((l) => /font-size: ?\.[0-7]\d*rem/.test(l));
-    expect(small.map((l) => l.trim().split(" {")[0].trim())).toEqual([".note-tab-pill .dot", ".nav-item .nav-count"]);
+    expect(small.map((l) => l.trim().split(" {")[0].trim())).toEqual([".note-tab-pill .dot", ".nav-item .nav-count", ".shell.collapsed .nav-item .nav-count"]);
   });
 
   it("darkens the note-type colours for the light theme", () => {

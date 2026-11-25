@@ -21,6 +21,7 @@ import { refreshStore } from "../../lib/refresh";
 import { fuzzy } from "../../lib/text";
 import { classify } from "../../lib/errors";
 import { useHidden } from "../../shell/hidden";
+import { toggleFocusMode, toggleFullscreen, toggleSidebar, useLayout } from "../../shell/layout";
 import { toast } from "../../ui/toast";
 import { openProject, openSettings, openSystem, useApp, type Page, type Route } from "../../store";
 import { activeTab, railShown, useWorkspace } from "../../workspace/store";
@@ -63,6 +64,8 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
   const trees = useQueries({ queries: (notebooks.data ?? []).map((nb) => ({ ...treeQuery(nb.id), enabled: app.palette === "notes" && indexed.isError })) });
   const recent = useQuery({ ...recentQuery(), enabled: app.palette === "notes" });
   const addNotebook = useAddNotebook();
+  const collapsed = useLayout((s) => s.sidebarCollapsed);
+  const focusMode = useLayout((s) => s.focusMode);
   const keys = useShortcutVersion(); // the entries show the keys as they are now
   useEffect(() => { setQuery(""); setIndex(0); }, [app.palette]);
   // What had the focus before the palette opened, for the sheet it may open: the palette's own controls are gone by then.
@@ -121,6 +124,9 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "zoom-in", label: "Zoom in", detail: format("zoom.in"), run: () => { close(); void zoomBy("in"); } },
       { key: "zoom-out", label: "Zoom out", detail: format("zoom.out"), run: () => { close(); void zoomBy("out"); } },
       { key: "zoom-reset", label: "Reset zoom", detail: format("zoom.reset"), run: () => { close(); void zoomBy("reset"); } },
+      { key: "sidebar", label: collapsed ? "Expand the sidebar" : "Collapse the sidebar", detail: format("sidebar.toggle"), run: () => { close(); toggleSidebar(); } },
+      { key: "focus", label: focusMode ? "Exit focus mode" : "Focus mode", detail: format("focus.toggle"), run: () => { close(); toggleFocusMode(); } },
+      { key: "fullscreen", label: "Full screen", detail: format("fullscreen.toggle"), run: () => { close(); void toggleFullscreen(); } },
       ...power,
       { key: "home", label: "Home", run: page({ page: "home" }) },
       { key: "notes", label: "Notes", section: "notes" as Page, run: page({ page: "notes" }) },
@@ -176,7 +182,7 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       })),
     ];
     return all.filter((e) => !e.section || !hidden.includes(e.section));
-  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, wikiOn, maintenanceOn, hidden, client, onSettings, onReconnect, notebooks.data, trees, indexed.data, addNotebook, recent.data, keys]);
+  }, [app, ws, notes.data, known.data, registry.data, projectsOn, systems.data, systemsOn, wikiOn, maintenanceOn, hidden, client, onSettings, onReconnect, notebooks.data, trees, indexed.data, addNotebook, recent.data, keys, collapsed, focusMode]);
 
   const shown = useMemo(() => {
     const best = entries

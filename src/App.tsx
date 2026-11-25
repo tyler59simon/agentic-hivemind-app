@@ -27,6 +27,7 @@ import { invalidateWiki } from "./features/wiki/useWiki";
 import { needsLmUpdate, useConnection } from "./lib/connection";
 import { refreshStore } from "./lib/refresh";
 import { skillsSyncNow } from "./lib/skills";
+import { toggleFocusMode, toggleFullscreen, toggleSidebar } from "./shell/layout";
 import { Shell } from "./shell/Shell";
 import { closeSettings, openInbox, openSession, openSettings, useApp } from "./store";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
@@ -69,6 +70,9 @@ export function useShortcuts() {
       }
       else if (matches(e, "graph.open")) { e.preventDefault(); go({ page: "notes", view: "graph" }); }
       else if (matches(e, "tab.close")) e.preventDefault(); // closes a note tab when notes are shown; never the window
+      else if (matches(e, "sidebar.toggle")) { e.preventDefault(); toggleSidebar(); }
+      else if (matches(e, "focus.toggle")) { e.preventDefault(); toggleFocusMode(); }
+      else if (matches(e, "fullscreen.toggle")) { e.preventDefault(); void toggleFullscreen(); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

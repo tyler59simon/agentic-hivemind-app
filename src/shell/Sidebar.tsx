@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ContextMenu } from "../ui/ContextMenu";
 import { contextMenuKey, menuPointFor } from "../ui/focus";
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, House, NotebookPen, Settings, SquareCheck, Terminal, type LucideIcon } from "lucide-react";
+import { ChevronDown, House, NotebookPen, PanelLeftClose, PanelLeftOpen, Settings, SquareCheck, Terminal, type LucideIcon } from "lucide-react";
 import logo from "../assets/logo.png";
 import { ProjectSwitcher } from "../features/projects/ProjectSwitcher";
 import { useInboxItems } from "../features/review/useInboxItems";
@@ -16,6 +16,7 @@ import { useApp, type Page } from "../store";
 import { Menu } from "../ui/Menu";
 import { useWorkspace } from "../workspace/store";
 import { useHidden } from "./hidden";
+import { useLayout } from "./layout";
 
 /** The sections, in the order the sidebar lists them; Settings follows them (CON-22). Skills is in Notes and Maintenance in Settings. */
 export const SECTIONS: { page: Page; label: string; icon: LucideIcon }[] = [
@@ -33,6 +34,9 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
   const go = useApp((s) => s.go);
   const setPalette = useApp((s) => s.setPalette);
   const paletteKeys = useFormat("palette.commands");
+  const toggleKeys = useFormat("sidebar.toggle");
+  const collapsed = useLayout((s) => s.sidebarCollapsed);
+  const setCollapsed = useLayout((s) => s.setSidebarCollapsed);
   const client = useQueryClient();
   const systemsOn = useSystemsEnabled();
   const available = useAvailableSections();
@@ -97,6 +101,10 @@ export function Sidebar({ info, onSettings, onReconnect }: { info: ConnectInfo; 
           </>
         )}
       </Menu>
+      {/* Under 960 px the sidebar is icons only whatever this says, so the button is hidden there (App.css). */}
+      <button type="button" className="nav-item sidebar-toggle" aria-expanded={!collapsed} title={`${collapsed ? "Expand" : "Collapse"} the sidebar (${toggleKeys})`} onClick={() => setCollapsed(!collapsed)}>
+        {collapsed ? <PanelLeftOpen size="1.35em" aria-hidden /> : <PanelLeftClose size="1.35em" aria-hidden />}<span className="grow">Sidebar</span>
+      </button>
     </aside>
   );
 }

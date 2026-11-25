@@ -281,6 +281,20 @@ describe("conflicts", () => {
     expect(S.conflicts("Mod+S", "note.new")).toEqual([{ kind: "app", with: "Save the file", refuse: true }]);
   });
 
+  // DESK-LAYOUT: the sidebar, focus mode and full screen keys clash with nothing (Ctrl+B is the editor's bold, so not that).
+  it("has no clash for the layout keys, which are remappable app shortcuts", () => {
+    const layout = { "sidebar.toggle": "Mod+Shift+B", "focus.toggle": "Mod+Shift+M", "fullscreen.toggle": "F11" };
+    for (const [id, combo] of Object.entries(layout)) {
+      expect(S.defaultCombo(id), id).toBe(combo);
+      expect(S.shortcut(id)).toMatchObject({ scope: "app", remappable: true });
+      expect(S.conflicts(combo, id), id).toEqual([]);
+      expect(S.matches(key(combo.split("+").pop()!, { ctrlKey: combo.startsWith("Mod"), shiftKey: combo.includes("Shift") }), id), id).toBe(true);
+    }
+    expect(S.format("fullscreen.toggle")).toBe("F11");
+    expect(S.matches(key("F11", { ctrlKey: true }), "fullscreen.toggle")).toBe(false);
+    expect(S.matches(key("F5"), "fullscreen.toggle")).toBe(false);
+  });
+
   it("only warns about an editor or terminal key", () => {
     expect(S.conflicts("Mod+B", "note.new")).toEqual([{ kind: "editor", with: "Bold", refuse: false }]);
     expect(S.conflicts("Mod+Shift+L", "note.new")).toEqual([{ kind: "editor", with: "Select every occurrence", refuse: false }]);

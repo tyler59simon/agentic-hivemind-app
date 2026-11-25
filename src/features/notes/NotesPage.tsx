@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookOpen, GitFork, Hash, Kanban, ListChecks, NotebookPen, Plus, Sparkles, Users } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { useFolderProposalsEnabled, useWikiEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { allProposalsQuery } from "../../lib/lm";
@@ -9,6 +9,8 @@ import { openInbox, useApp } from "../../store";
 import { toast } from "../../ui/toast";
 import { ContextRail } from "../../workspace/RightSidebar";
 import { useNarrow } from "../../lib/narrow";
+import { useLayout } from "../../shell/layout";
+import { RailSplitter, TreeSplitter } from "../../shell/RegionSplitters";
 import { hasTabs, railShown, useWorkspace } from "../../workspace/store";
 import { statusQuery } from "../../lib/noteindex";
 import { GraphView } from "../graph/GraphView";
@@ -80,6 +82,8 @@ export function NotesPage() {
   const open = useWorkspace(hasTabs);
   const narrow = useNarrow();
   const rail = useWorkspace((s) => railShown(s, narrow));
+  const treeWidth = useLayout((s) => s.treeWidth);
+  const railWidth = useLayout((s) => s.railWidth);
   const add = useAddNotebook();
   const [settings, setSettings] = useState<Notebook | null>(null);
 
@@ -102,7 +106,7 @@ export function NotesPage() {
   const list = notebooks.data ?? [];
   const empty = !list.length && !memory.groups.length && !notebooks.isLoading && !memory.loading;
   return (
-    <div className="notes-page">
+    <div className="notes-page" style={{ "--tree-w": `${treeWidth}rem` } as CSSProperties}>
       <nav className="notebooks" aria-label="Notes and notebooks">
         <div className="notes-views" aria-label="Lists of notes and pages">
           <button type="button" className={`link-row${route.page === "notes" && route.view === "tasks" ? " on" : ""}`} onClick={() => go({ page: "notes", view: "tasks" })}><ListChecks size="1em" aria-hidden /> Tasks</button>
@@ -120,6 +124,7 @@ export function NotesPage() {
         <IndexLine />
         <button className="ghost add-notebook" onClick={add}><Plus size="1.1em" aria-hidden />Add a notebook</button>
       </nav>
+      <TreeSplitter />
       {route.page === "notes" && route.view
         ? (
           <div className={`notes-lists${route.view === "graph" ? " notes-graph" : route.view === "skills" ? " notes-skills" : route.view === "people" ? " notes-people" : ""}`}>
@@ -134,7 +139,9 @@ export function NotesPage() {
           </div>
         )
         : open
-        ? <div className={`notes-area${narrow ? " narrow" : ""}`}><Workspace />{rail && <ContextRail />}</div>
+        ? <div className={`notes-area${narrow ? " narrow" : ""}`} style={railWidth === null ? undefined : { "--rail-w": `${railWidth}rem` } as CSSProperties}>
+          <Workspace />{rail && <>{!narrow && <RailSplitter />}<ContextRail /></>}
+        </div>
         : empty ? <Empty onAdd={add} />
         : (
           <div className="center muted">
