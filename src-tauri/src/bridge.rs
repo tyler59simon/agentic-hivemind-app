@@ -24,8 +24,6 @@ const REQUIRED: [&str; 4] = ["serve", "search", "domains", "version"];
 pub const SERVE_LIMIT: usize = 2 * 1024 * 1024;
 /// How much of the server's stderr is kept to explain why it exited.
 const STDERR_TAIL: usize = 4096;
-/// How much of that tail goes to the log.
-const LOG_STDERR: usize = 2048;
 
 /// What a request that gets no reply in time fails with. The process was ended, so trying again starts a new one.
 pub const NO_ANSWER: &str = "Living Memory isn't answering, so Hivemind restarted it. Try again.";
@@ -112,31 +110,31 @@ struct Proc {
     drain: JoinHandle<()>,
 }
 
-/// The end of `tail`, at most LOG_STDERR bytes, for the log.
-fn capped_tail(tail: &str) -> &str {
-    let mut start = tail.len().saturating_sub(LOG_STDERR);
-    while !tail.is_char_boundary(start) {
-        start += 1;
-    }
-    &tail[start..]
+/// The log record for a server that stopped: a fixed kind, the exit code when known, and whether stderr had output and how
+/// many bytes. Never the output itself: it is the child's text, and the log goes into Copy diagnostics.
+fn stop_record(kind: &str, exit: Option<i32>, stderr_bytes: usize) -> String {
+    let exit = exit.map_or("unknown".to_string(), |code| code.to_string());
+    format!("Living Memory stopped: kind={kind} exit={exit} stderr_bytes={stderr_bytes}")
 }
 
 impl Proc {
     /// `error`, plus the exit code and the server's last stderr output once its stderr has closed (waiting up to a second),
     /// and then the exit code once the process has been reaped (up to another second: the pipes close a moment before the
     /// system reports the exit). The output is what it wrote last, which is not always why it stopped. `hint` is added
-    /// only when there was no output.
-    fn stopped(&mut self, error: &str, hint: &str) -> String {
+    /// only when there was no output. `kind` is a fixed word for the log.
+    fn stopped(&mut self, kind: &str, error: &str, hint: &str) -> String {
         let deadline = Instant::now() + Duration::from_secs(1);
         while !self.drain.is_finished() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
         }
         let mut text = error.to_string();
+        let mut exit = None;
         // A server whose stderr is still open has not stopped, so it is asked once and not waited for.
         let reaped = Instant::now() + if self.drain.is_finished() { Duration::from_secs(1) } else { Duration::ZERO };
         loop {
             match self.handle.child.lock().unwrap().try_wait() {
                 Ok(Some(status)) => {
+                    exit = status.code();
                     text.push_str(&format!(" ({status})"));
                     break;
                 }
@@ -146,7 +144,7 @@ impl Proc {
             std::thread::sleep(Duration::from_millis(10));
         }
         let tail = String::from_utf8_lossy(&self.stderr.lock().unwrap()).trim().to_string();
-        log::error!("Living Memory stopped: {text}; stderr tail: {}", capped_tail(&tail));
+        log::error!("{}", stop_record(kind, exit, tail.len()));
         if tail.is_empty() {
             text.push_str(hint);
         } else {
@@ -323,19 +321,21 @@ impl Bridge {
         let mut line = serde_json::to_string(&request).map_err(|e| e.to_string())?;
         line.push('\n');
         if proc.requests.send(line).is_err() {
-            return Err(proc.stopped("Living Memory stopped", ""));
+            return Err(proc.stopped("request_not_sent", "Living Memory stopped", ""));
         }
         let answer = match proc.replies.recv_timeout(limit) {
             Ok(Heard::Line(answer)) => answer,
-            Ok(Heard::Closed(Some(e))) => return Err(proc.stopped(&format!("Living Memory stopped: {e}"), "")),
+            Ok(Heard::Closed(Some(e))) => return Err(proc.stopped("pipe_error", &format!("Living Memory stopped: {e}"), "")),
             Ok(Heard::Closed(None)) | Err(RecvTimeoutError::Disconnected) => {
-                return Err(proc.stopped("Living Memory exited", ". If it is older than the app bridge, update it (needs `serve --stdio`)"));
+                return Err(proc.stopped("exited", "Living Memory exited", ". If it is older than the app bridge, update it (needs `serve --stdio`)"));
             }
             Ok(Heard::TooLong) => {
+                log::error!("{}", stop_record("reply_too_large", None, 0));
                 proc.handle.kill();
                 return Err("Living Memory sent a reply that is too large to read, so Hivemind restarted it. Try again.".into());
             }
             Err(RecvTimeoutError::Timeout) => {
+                log::error!("{}", stop_record("no_answer", None, 0));
                 proc.handle.kill();
                 return Err(NO_ANSWER.into());
             }
@@ -457,11 +457,9 @@ mod tests {
     }
 
     #[test]
-    fn the_logged_stderr_is_the_end_of_it_on_a_character_boundary() {
-        assert_eq!(capped_tail("short"), "short");
-        let long = format!("start{}end", "é".repeat(LOG_STDERR));
-        let kept = capped_tail(&long);
-        assert!(kept.len() <= LOG_STDERR && kept.ends_with("end"));
+    fn a_stop_is_logged_as_a_kind_an_exit_status_and_a_byte_count() {
+        assert_eq!(stop_record("exited", Some(1), 120), "Living Memory stopped: kind=exited exit=1 stderr_bytes=120");
+        assert_eq!(stop_record("no_answer", None, 0), "Living Memory stopped: kind=no_answer exit=unknown stderr_bytes=0");
     }
 
     /// Codex re-review of 75ce884, R2-D1: a request made for the bridge before Settings pointed it at another store is
@@ -547,12 +545,17 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hivemind-bridge-fail-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("living_memory.py");
-        std::fs::write(&script, "import sys\nsys.stderr.write('x' * 9000)\nraise SystemExit('boom: no module named core')\n").unwrap();
+        std::fs::write(&script, "import sys\nsys.stderr.write('x' * 9000)\nraise SystemExit('boom: no module named core SECRET-MARKER-1')\n").unwrap();
+        crate::diagnostics::capture::install();
         let bridge = Bridge::new(Launch { program, args, script, root: None });
         let error = bridge.call(&["search".into()], None).unwrap_err();
         assert!(error.starts_with("Living Memory exited (") && error.contains("1). Its last error output:\n"), "{error}");
-        assert!(error.ends_with("boom: no module named core"), "{error}");
+        assert!(error.ends_with("boom: no module named core SECRET-MARKER-1"), "{error}");
         assert!(!error.contains("update it"), "{error}");
+        // The error that goes to the screen has the child's text; the log record has only a kind, a status and a count.
+        let records = crate::diagnostics::capture::records();
+        assert!(records.iter().any(|r| r.contains("Living Memory stopped: kind=exited exit=1 stderr_bytes=")), "{records:?}");
+        assert!(records.iter().all(|r| !r.contains("SECRET-MARKER-1") && !r.contains("boom") && !r.contains("xxxx")), "{records:?}");
         assert!(error.len() <= 100 + STDERR_TAIL, "only the tail is kept");
         drop(bridge);
         std::fs::remove_dir_all(dir).ok();

@@ -419,7 +419,7 @@ pub fn sync(s: &Skills, notes: &dyn NoteStore, scope: &Scope) -> usize {
         match pass(s, notes, &meta.name) {
             Ok(true) => changed += 1,
             Ok(false) => {}
-            Err(e) => log::warn!("skill sync: {}: {e}", meta.name),
+            Err(_) => log::warn!("skill sync: a skill pass failed"),
         }
     }
     changed
@@ -1169,5 +1169,26 @@ y
         assert_eq!(at(targets[0].join("ingest").join("sub").join("SKILL.md")), None);
         assert_eq!(at(targets[0].join("SKILL.md")), None);
         assert_eq!(at(PathBuf::from("home").join(".claude").join("history.jsonl")), None);
+    }
+
+    /// A Living Memory that answers every read with an error that quotes note text.
+    struct Quoting;
+    impl NoteStore for Quoting {
+        fn read(&self, _note: &str) -> Result<Option<NoteRead>, String> {
+            Err("Cannot read: SECRET-MARKER-1 \"a private title\"".into())
+        }
+        fn update(&self, _note: &str, _update: &Update, _expected_revision: &str) -> Result<Written, String> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn a_failed_pass_is_logged_without_the_skill_name_or_the_error() {
+        crate::diagnostics::capture::install();
+        let (_guard, skills, _targets, _fake) = linked("log");
+        assert_eq!(sync(&skills, &Quoting, &Scope::All), 0);
+        let records = crate::diagnostics::capture::records();
+        assert!(records.iter().any(|r| r.contains("skill sync: a skill pass failed")), "{records:?}");
+        assert!(records.iter().all(|r| !r.contains("SECRET-MARKER-1") && !r.contains("ingest") && !r.contains("private title")), "{records:?}");
     }
 }

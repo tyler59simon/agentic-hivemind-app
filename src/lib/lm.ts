@@ -1,7 +1,7 @@
 // Typed wrappers over the Living Memory CLI, reached through the Rust bridge (`serve --stdio`).
 // Reads run as the viewer actor: read-only, and they leave no usage-diary events.
 import { invoke } from "@tauri-apps/api/core";
-import { logWarnLine } from "./log";
+import { logLmFailure } from "./log";
 
 /** Living Memory's own note types. A store can define more (`types`), so a note's type is any string. */
 export const BUILTIN_TYPES = [
@@ -49,10 +49,9 @@ const bound = (argv: string[], at?: number) => {
  *  note text and search terms. */
 function failure(argv: string[], reply: Reply): LmError {
   const error = reply.error ?? { code: "invalid", message: `Exit code ${reply.exit_code}` };
-  // Only the message's leading word (stale_revision, possible_duplicate, ...): the rest can quote note titles, note text or
-  // a suspected credential, and the log goes into Copy diagnostics.
-  const head = /^[A-Za-z_]{1,40}/.exec(error.message)?.[0] ?? "";
-  logWarnLine(`lm ${argv[0]} failed (${error.code}, exit ${reply.exit_code})${head ? `: ${head}` : ""}`);
+  // The command, its code and its exit status, nothing of the message: it can quote note titles, note text or a suspected
+  // credential, and the log goes into Copy diagnostics.
+  logLmFailure(argv[0], error.code, reply.exit_code);
   return new LmError(error.code, error.message, reply.exit_code);
 }
 

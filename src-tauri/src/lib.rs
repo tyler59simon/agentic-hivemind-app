@@ -226,7 +226,7 @@ async fn connect(app: AppHandle, state: State<'_, AppState>) -> Result<ConnectIn
     // An edit to a linked skill's SKILL.md syncs it to its note; a watcher that fails to start costs only that trigger.
     let folders = app.clone();
     *state.skill_watcher.lock().unwrap() = skillsync::watch_targets(state.skills.targets(), move |names| kick_skill_sync(&folders, skillsync::Scope::Names(names)))
-        .map_err(|e| log::warn!("skill folders are not watched: {e}"))
+        .map_err(|_| log::warn!("skill folder watcher: could not start"))
         .ok();
     kick_skill_sync(&app, skillsync::Scope::All);
     *state.store_root.lock().unwrap() = Some(PathBuf::from(&root));
@@ -1910,6 +1910,8 @@ pub fn run() {
     // Before any thread: a macOS app launched from Finder has launchd's short PATH and no LANG.
     shell_env::hydrate();
     let context = tauri::generate_context!();
+    // Before the builder: a log folder that cannot be written must not stop the start.
+    let log_plan = diagnostics::prepare_log(&context.config().identifier);
     // Before any window or writer: a second copy would overwrite this one's records (EXEC-7, EXEC-12). A launch that finds
     // the data folder taken brings the running copy to the front and exits.
     let data_dir = dirs::data_dir().unwrap_or_default().join(&context.config().identifier);
@@ -1951,7 +1953,7 @@ pub fn run() {
     let finder_queue = open_queue.clone();
     tauri::Builder::default()
         // First, so every later plugin and the setup below can log.
-        .plugin(diagnostics::log_plugin())
+        .plugin(diagnostics::log_plugin(&log_plan))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         // Size, position and maximised state come back at the next start (DESK-WIN). Never visibility: the window may
@@ -2013,8 +2015,8 @@ pub fn run() {
             let launch = settings::resolve(&saved, |k| std::env::var(k).ok());
             // A taken or invalid hotkey must not stop the app; the settings screen shows why.
             let shortcut_error = capture::apply_shortcut(app.handle(), saved.capture_shortcut().as_deref()).err();
-            if let Err(e) = capture::tray(app.handle()) {
-                log::warn!("no tray icon ({e})");
+            if capture::tray(app.handle()).is_err() {
+                log::warn!("tray icon: could not be created");
             }
             let events = app.handle().clone();
             let exits = app.handle().clone();
@@ -2160,7 +2162,7 @@ pub fn run() {
             exec_agent_start,
             exec_session_capture,
             exec_export,
-            diagnostics::app_info, diagnostics::diagnostics, diagnostics::open_logs_folder,
+            diagnostics::app_info, diagnostics::diagnostics, diagnostics::open_logs_folder, diagnostics::log_client,
             lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, ui_zoom, ui_zoom_set, appearance_get, appearance_set, appearance_init, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_roles, learning_status, learning_review, skills_list, skill_proposals, skill_decide, skill_action, skill_version, skill_history,
             skills_upkeep, skill_from_note, skills_sync, skill_link, skill_unlink, skill_resolve, uninstall_skills, uninstall_remove_skills,

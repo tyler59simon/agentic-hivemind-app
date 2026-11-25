@@ -1,33 +1,132 @@
-// Webview logging into the app's log file (DESK-LOGS). Outside the Tauri app (tests, a plain browser) every call does
-// nothing, and none of them throws. Log names, codes, counts and stacks, never note text or command arguments.
-import { error as logError, warn as logWarn } from "@tauri-apps/plugin-log";
+// What the webview tells the app's log (DESK-LOGS). The log goes into Copy diagnostics, so an event carries only fixed
+// kinds, names that pass an identifier check, numbers and source locations of this app's own bundle. Never a message, a
+// reason, a stack header or any text of a note, a page or a file. Rust checks every field again (`log_client`).
+// Outside the Tauri app (tests, a plain browser) nothing is looked at or sent, and nothing here throws.
+import { invoke } from "@tauri-apps/api/core";
 import { inTauri } from "./native";
 
-const send = (write: (message: string) => Promise<void>, message: string): void => {
+export type ClientKind = "render_error" | "window_error" | "unhandled_rejection" | "lm_failure";
+export interface ClientFrame { file: string; line: number; column: number }
+export interface ClientEvent {
+  kind: ClientKind;
+  name?: string;
+  code?: string;
+  exit?: number;
+  frames?: ClientFrame[];
+  component?: string[];
+}
+
+const IDENT = /^[A-Za-z][A-Za-z0-9_]{0,40}$/;
+/** The text if it is a plain identifier, else nothing. */
+export const ident = (value: unknown): string | undefined => (typeof value === "string" && IDENT.test(value) ? value : undefined);
+
+const MAX_FRAMES = 8;
+const MAX_COMPONENTS = 12;
+const MAX_POSITION = 10_000_000;
+/** A file of this app's own bundle (`/assets/index-abc.js`) or of its dev server (`/src/main.tsx`). */
+const BUNDLE = /^\/(assets|src)\/[A-Za-z0-9_./-]{1,100}$/;
+
+/** Where this app's pages and scripts come from: the packaged app (`tauri.localhost`, `tauri://localhost`) and its dev server. */
+const OWN_HOSTS = ["tauri.localhost", "localhost", "127.0.0.1"];
+
+/** The path of a script URL when it is one of this app's own files, without origin, query or hash. */
+function ownPath(url: unknown): string | undefined {
+  if (typeof url !== "string") return undefined;
+  try {
+    const u = new URL(url);
+    if (!["http:", "https:", "tauri:"].includes(u.protocol) || !OWN_HOSTS.includes(u.hostname)) return undefined;
+    return BUNDLE.test(u.pathname) && !u.pathname.includes("..") ? u.pathname : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const position = (value: unknown): number | undefined => (Number.isInteger(value) && (value as number) >= 0 && (value as number) <= MAX_POSITION ? (value as number) : undefined);
+
+function frame(url: unknown, line: unknown, column: unknown): ClientFrame | undefined {
+  const file = ownPath(url);
+  const [l, c] = [position(line), position(column)];
+  return file !== undefined && l !== undefined && c !== undefined ? { file, line: l, column: c } : undefined;
+}
+
+/** The source locations in a stack string: only the `url:line:column` of each line, and only for this app's own files.
+ *  The header and function names are never read. */
+export function framesOf(stack: unknown): ClientFrame[] {
+  if (typeof stack !== "string") return [];
+  const frames: ClientFrame[] = [];
+  for (const row of stack.split("\n")) {
+    if (frames.length >= MAX_FRAMES) break;
+    const m = /([^\s()@]+?):(\d+):(\d+)\)?\s*$/.exec(row);
+    const found = m && frame(m[1], Number(m[2]), Number(m[3]));
+    if (found) frames.push(found);
+  }
+  return frames;
+}
+
+/** The component names in React's component stack (`at Name (url)`), when they are identifiers. */
+export function componentsOf(stack: unknown): string[] {
+  if (typeof stack !== "string") return [];
+  const names: string[] = [];
+  for (const row of stack.split("\n")) {
+    if (names.length >= MAX_COMPONENTS) break;
+    // `at Name (url)` (V8) or `Name@url` (WebKit).
+    const m = /^\s*(?:at\s+([A-Za-z][A-Za-z0-9_]{0,40})(?=[\s(]|$)|([A-Za-z][A-Za-z0-9_]{0,40})(?=@))/.exec(row);
+    if (m) names.push(m[1] ?? m[2]);
+  }
+  return names;
+}
+
+/** What may be said about a thrown value: its error name and its source locations. A value that is not an Error says
+ *  nothing: a string or an object may be anything. */
+function errorFields(value: unknown): Pick<ClientEvent, "name" | "frames"> {
+  try {
+    if (value instanceof Error) return { name: ident(value.name) ?? "other", frames: framesOf(value.stack) };
+  } catch { /* a getter that throws: nothing is said */ }
+  return {};
+}
+
+export function sendClientEvent(event: ClientEvent): void {
   if (!inTauri()) return;
-  try { write(message).catch(() => undefined); } catch { /* logging must never break the caller */ }
-};
+  try { invoke("log_client", { event }).catch(() => undefined); } catch { /* logging must never break the caller */ }
+}
 
-export const logErrorLine = (message: string): void => send(logError, message);
-export const logWarnLine = (message: string): void => send(logWarn, message);
+/** Run `build` and send what it makes, only inside the app, and never let either throw. */
+function report(build: () => ClientEvent): void {
+  if (!inTauri()) return;
+  try { sendClientEvent(build()); } catch { /* nothing is logged */ }
+}
 
-/** `text` cut to `max` characters, with a mark when it was cut. */
-export const cap = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max)}...` : text);
+/** A render error caught by an ErrorBoundary. */
+export function logRenderError(error: unknown, componentStack: unknown): void {
+  report(() => ({ kind: "render_error", ...errorFields(error), component: componentsOf(componentStack) }));
+}
 
-const MESSAGE_MAX = 300;
+/** An uncaught error of the window. */
+export function logWindowError(e: ErrorEvent): void {
+  report(() => {
+    const fields = errorFields(e.error);
+    const own = frame(e.filename, e.lineno, e.colno);
+    return { kind: "window_error", ...fields, frames: fields.frames?.length ? fields.frames : own ? [own] : [] };
+  });
+}
 
-/** An error as one line: name, message, then the stack when it has one. */
-export function describeError(e: unknown): string {
-  if (e instanceof Error) return [`${e.name}: ${cap(e.message, MESSAGE_MAX)}`, e.stack].filter(Boolean).join("\n");
-  return cap(String(e), MESSAGE_MAX);
+/** A promise nobody handled. */
+export function logRejection(reason: unknown): void {
+  report(() => ({ kind: "unhandled_rejection", ...errorFields(reason) }));
+}
+
+/** A Living Memory command that failed: its name (a command of lm.ts, a literal), its code and its exit status. */
+export function logLmFailure(command: unknown, code: unknown, exit: unknown): void {
+  report(() => ({
+    kind: "lm_failure",
+    name: ident(typeof command === "string" ? command.replace(/-/g, "_") : undefined) ?? "other",
+    code: ident(code) ?? "other",
+    ...(position(exit) !== undefined ? { exit: exit as number } : {}),
+  }));
 }
 
 /** Log what the window did not catch: a script error and a promise nobody handled. */
 export function installGlobalLogging(): void {
-  window.addEventListener("error", (e) => {
-    logErrorLine([`Uncaught error: ${cap(e.message, MESSAGE_MAX)} (${e.filename}:${e.lineno})`, e.error instanceof Error ? e.error.stack : ""].filter(Boolean).join("\n"));
-  });
-  window.addEventListener("unhandledrejection", (e) => {
-    logErrorLine(`Unhandled promise rejection: ${describeError(e.reason)}`);
-  });
+  window.addEventListener("error", logWindowError);
+  window.addEventListener("unhandledrejection", (e) => logRejection(e.reason));
 }

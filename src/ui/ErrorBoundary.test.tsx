@@ -5,8 +5,11 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorBoundary } from "./ErrorBoundary";
 
-const logged = vi.hoisted(() => vi.fn());
-vi.mock("../lib/log", async (original) => ({ ...(await original<typeof import("../lib/log")>()), logErrorLine: logged }));
+const core = vi.hoisted(() => ({ invoke: vi.fn(async (_cmd: string, _args?: unknown): Promise<unknown> => undefined) }));
+vi.mock("@tauri-apps/api/core", () => core);
+const MARKER = "SECRET-MARKER-1";
+/** The events sent to `log_client`. */
+const sent = () => core.invoke.mock.calls.filter((c) => c[0] === "log_client").map((c) => (c[1] as { event: Record<string, unknown> }).event);
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -15,8 +18,8 @@ let host: HTMLElement;
 let broken = true;
 function Bomb() { if (broken) throw new Error("boom"); return <p>fine</p>; }
 
-beforeEach(() => { logged.mockClear(); broken = true; vi.spyOn(console, "error").mockImplementation(() => {}); });
-afterEach(async () => { await act(async () => root?.unmount()); root = null; document.body.innerHTML = ""; vi.restoreAllMocks(); });
+beforeEach(() => { core.invoke.mockReset(); core.invoke.mockImplementation(async () => undefined); (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}; broken = true; vi.spyOn(console, "error").mockImplementation(() => {}); });
+afterEach(async () => { delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__; await act(async () => root?.unmount()); root = null; document.body.innerHTML = ""; vi.restoreAllMocks(); });
 
 async function mount(node: React.ReactNode) {
   host = document.createElement("div");
@@ -36,13 +39,40 @@ describe("ErrorBoundary", () => {
     expect(onError).toHaveBeenCalledTimes(1);
   });
 
-  it("logs the error with its name, message, stack and component stack", async () => {
-    await mount(<ErrorBoundary label="This tab"><Bomb /></ErrorBoundary>);
-    expect(logged).toHaveBeenCalledTimes(1);
-    const line = logged.mock.calls[0][0] as string;
-    expect(line).toContain("This tab stopped: Error: boom");
-    expect(line).toContain("at Bomb");
-    expect(line).toContain("Component stack:");
+  it("logs a render error as its name, source locations and component names, and none of its text", async () => {
+    function Marked(): never { throw new Error(`${MARKER} in a page about private things`); }
+    await mount(<ErrorBoundary label="This tab"><Marked /></ErrorBoundary>);
+    const events = sent();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ kind: "render_error", name: "Error" });
+    expect(events[0].component).toContain("Marked");
+    expect(JSON.stringify(events)).not.toMatch(/SECRET-MARKER-1|private things|This tab/);
+  });
+
+  it("runs onError and shows the fallback whatever is thrown, and when logging fails", async () => {
+    core.invoke.mockImplementation(() => { throw new Error("no ipc"); });
+    for (const value of [MARKER, Symbol(MARKER)]) {
+      const onError = vi.fn();
+      function Throws(): never { throw value; }
+      await mount(<ErrorBoundary label="This tab" onError={onError}><Throws /></ErrorBoundary>);
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(host.querySelector('[role="alert"]')).not.toBeNull();
+      await act(async () => root?.unmount());
+      root = null;
+      host.remove();
+    }
+    // Values that cannot even be shown are not mounted (the fallback prints the error); the catch itself must cope.
+    for (const value of [null, undefined, Object.create(null), { toString() { throw new Error("no"); } }]) {
+      const onError = vi.fn();
+      const boundary = new ErrorBoundary({ label: "This tab", onError, children: null });
+      expect(() => boundary.componentDidCatch(value as Error, { componentStack: value as unknown as string })).not.toThrow();
+      expect(onError).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("an onError that throws does not stop the log, and the log does not wait for it", async () => {
+    await mount(<ErrorBoundary label="This tab" onError={() => { throw new Error("recovery failed"); }}><Bomb /></ErrorBoundary>);
+    expect(sent()).toHaveLength(1);
   });
 
   it("Try again draws the children again", async () => {

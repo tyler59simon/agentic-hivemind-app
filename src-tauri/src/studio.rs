@@ -213,12 +213,12 @@ pub fn rewatch(app: &AppHandle) {
         let _ = emitter.emit("files-changed", changed);
     }) {
         Ok((debouncer, failed)) => {
-            for why in failed {
-                log::warn!("Hivemind: {why}");
+            if !failed.is_empty() {
+                log::warn!("notebook watcher: {} folder(s) are not watched", failed.len());
             }
             *slot = Some(debouncer);
         }
-        Err(e) => log::error!("Hivemind: cannot watch notebooks ({e})"),
+        Err(_) => log::error!("notebook watcher: could not start"),
     }
 }
 
@@ -430,15 +430,15 @@ pub(crate) fn save_kept(history: &Path, full: &Path, change: &Change) -> Result<
         if change.source != "you" {
             return Err(format!("The version before this change could not be kept, so nothing was written: {e}"));
         }
-        log::error!("Hivemind: could not keep the first version of {}: {e}", full.display());
+        log::error!("history: the first version of a page was not kept");
     }
     let outcome = files::save(full, change.text, change.pre, change.format, change.convert)?;
     if let SaveOutcome::Saved(stamp) = &outcome
         && let Ok(bytes) = files::encode(change.text, change.format)
         && files::sha256(&bytes) == stamp.sha256
-        && let Err(e) = history::snapshot(history, full, &bytes, change.source, history::now_ms())
+        && history::snapshot(history, full, &bytes, change.source, history::now_ms()).is_err()
     {
-        log::error!("Hivemind: could not keep a version of {}: {e}", full.display());
+        log::error!("history: a version of a page was not kept after saving it");
     }
     Ok(outcome)
 }
@@ -459,13 +459,13 @@ pub(crate) fn save_bytes_kept(history: &Path, full: &Path, bytes: &[u8], pre: &S
         if source != "you" {
             return Err(format!("The current version could not be kept in History, so nothing was written: {e}"));
         }
-        log::error!("Hivemind: could not keep the previous version of {}: {e}", full.display());
+        log::error!("history: the previous version of a file was not kept");
     }
     let outcome = files::save_bytes(full, bytes, pre)?;
     if matches!(&outcome, SaveOutcome::Saved(_))
-        && let Err(e) = history::snapshot(history, full, bytes, source, history::now_ms())
+        && history::snapshot(history, full, bytes, source, history::now_ms()).is_err()
     {
-        log::error!("Hivemind: could not keep a version of {}: {e}", full.display());
+        log::error!("history: a version of a file was not kept after saving it");
     }
     Ok(outcome)
 }
@@ -514,8 +514,8 @@ pub async fn file_save(
 /// Create a file and keep its first version (NS-5).
 pub(crate) fn create_kept(history: &Path, full: &Path, text: &str) -> Result<Stamp, String> {
     let stamp = files::create(full, text)?;
-    if let Err(e) = history::snapshot(history, full, text.as_bytes(), "you", history::now_ms()) {
-        log::error!("Hivemind: could not keep a version of {}: {e}", full.display());
+    if history::snapshot(history, full, text.as_bytes(), "you", history::now_ms()).is_err() {
+        log::error!("history: the first version of a new file was not kept");
     }
     Ok(stamp)
 }
@@ -564,8 +564,8 @@ pub async fn file_rename(state: State<'_, AppState>, notebook: String, from: Str
 /// follow it. The move stands if they cannot.
 fn rename_kept(root: &Path, protected: &Protected, drafts_dir: &Path, history: &Path, notebook: &str, from: &str, to: &str) -> Result<(), String> {
     let (source, dest, was_dir) = rename_in(root, protected, drafts_dir, notebook, from, to)?;
-    if let Err(e) = history::moved(history, &source, &dest, was_dir) {
-        log::warn!("Hivemind: the history of {from} did not follow it to {to}: {e}");
+    if history::moved(history, &source, &dest, was_dir).is_err() {
+        log::warn!("history: the versions of a page did not follow it to its new name");
     }
     Ok(())
 }
@@ -1456,6 +1456,21 @@ mod tests {
         assert_eq!(history::read(&hist, &full, 1).unwrap(), b"fresh\n");
         assert!(create_kept(&hist, &full, "again").is_err(), "an existing file is not replaced, and keeps no new version");
         assert_eq!(history::list(&hist, &full).len(), 1);
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_version_that_could_not_be_kept_is_logged_without_the_page_path() {
+        crate::diagnostics::capture::install();
+        let (base, root, _) = kept_rig("x");
+        // A history folder that is a file, so no version can be kept.
+        let blocked = base.join("blocked");
+        std::fs::write(&blocked, "x").unwrap();
+        let full = root.join("SECRET-MARKER-1 private page.md");
+        create_kept(&blocked, &full, "fresh\n").unwrap();
+        let records = crate::diagnostics::capture::records();
+        assert!(records.iter().any(|r| r.contains("history: the first version of a new file was not kept")), "{records:?}");
+        assert!(records.iter().all(|r| !r.contains("SECRET-MARKER-1") && !r.contains("private page") && !r.contains("hm-studio")), "{records:?}");
         std::fs::remove_dir_all(&base).unwrap();
     }
 }

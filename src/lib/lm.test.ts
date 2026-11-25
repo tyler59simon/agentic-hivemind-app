@@ -1,11 +1,19 @@
+// @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { LmError, addAction, archiveNote, isPlan, supersedeNote, taxonomyAdd, undo, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, ruleAllowed, setPin, setRule, list, listArgs, openArgs, writeProject, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setTransport, writeSystem, systemsArgs, update, setBridgeGeneration, noteTypes, typeWrite, timelineArgs, links, deletePlan, wikiModel, agentWikiModel, type Invoke } from "./lm";
 
-const logged = vi.hoisted(() => vi.fn());
-vi.mock("./log", async (original) => ({ ...(await original<typeof import("./log")>()), logWarnLine: logged }));
+const core = vi.hoisted(() => ({ invoke: vi.fn(async (_cmd: string, _args?: unknown): Promise<unknown> => undefined) }));
+vi.mock("@tauri-apps/api/core", () => core);
 
-afterEach(() => { setTransport(invoke as Invoke); logged.mockClear(); });
+/** The events a failed command sent to the log, as the app would have sent them. */
+const sent = () => core.invoke.mock.calls.filter((c) => c[0] === "log_client").map((c) => (c[1] as { event: unknown }).event);
+const inApp = (on: boolean) => {
+  if (on) (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  else delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+};
+
+afterEach(() => { setTransport(invoke as Invoke); core.invoke.mockClear(); inApp(false); });
 
 function fake(reply: unknown) {
   const calls: unknown[] = [];
@@ -36,26 +44,30 @@ describe("run", () => {
     expect(calls[0]).toEqual(["lm", { argv: listArgs({ domain: "demo" }), stdin: null }]);
   });
 
-  it("logs a failed command by name, code and the message's leading word, never the arguments or the rest", async () => {
+  it("logs a failed command as its name, code and exit status, and nothing of its arguments or its message", async () => {
+    inApp(true);
     // Living Memory messages can quote note titles and suspected credentials.
-    fake({ exit_code: 2, result: null, error: { code: "invalid", message: 'possible_duplicate: similar to demo:abc "My private title"' } });
+    fake({ exit_code: 2, result: null, error: { code: "invalid", message: 'possible_duplicate: similar to demo:abc "SECRET-MARKER-1 My private title"' } });
     await expect(run(["read", "demo:secret-ref", "--query", "private words"], "note body")).rejects.toBeInstanceOf(LmError);
-    expect(logged).toHaveBeenCalledTimes(1);
-    const line = logged.mock.calls[0][0] as string;
-    expect(line).toBe("lm read failed (invalid, exit 2): possible_duplicate");
-    for (const text of ["private words", "secret-ref", "note body", "My private title", "demo:abc"]) expect(line).not.toContain(text);
+    expect(sent()).toEqual([{ kind: "lm_failure", name: "read", code: "invalid", exit: 2 }]);
+    expect(JSON.stringify(sent())).not.toMatch(/SECRET-MARKER-1|private|secret-ref|note body|demo:abc|possible_duplicate/);
   });
 
-  it("logs no leading word for a message that does not start with one", async () => {
-    fake({ exit_code: 1, result: null, error: { code: "invalid", message: '"quoted note text" was refused' } });
-    await expect(run(["capture"])).rejects.toBeInstanceOf(LmError);
-    expect(logged.mock.calls[0][0]).toBe("lm capture failed (invalid, exit 1)");
+  it("logs a command name with a hyphen as an identifier, and a code that is not one as other", async () => {
+    inApp(true);
+    fake({ exit_code: 1, result: null, error: { code: 'quoted "note text"', message: "x" } });
+    await expect(run(["retag-plan"])).rejects.toBeInstanceOf(LmError);
+    expect(sent()).toEqual([{ kind: "lm_failure", name: "retag_plan", code: "other", exit: 1 }]);
   });
 
-  it("logs nothing for a command that succeeds", async () => {
+  it("logs nothing for a command that succeeds, or outside the app", async () => {
+    inApp(true);
     fake({ exit_code: 0, result: {}, error: null });
     await run(["domains"]);
-    expect(logged).not.toHaveBeenCalled();
+    fake({ exit_code: 1, result: null, error: { code: "invalid", message: "x" } });
+    inApp(false);
+    await expect(run(["domains"])).rejects.toBeInstanceOf(LmError);
+    expect(sent()).toEqual([]);
   });
 
   it("read asks for the most text and stays read-only", async () => {

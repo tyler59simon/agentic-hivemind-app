@@ -1,5 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
-import { cap, logErrorLine } from "../lib/log";
+import { logRenderError } from "../lib/log";
 
 interface Props {
   /** What failed, for the message: "This page", "This tab", "Hivemind". */
@@ -33,8 +33,9 @@ export class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, info: ErrorInfo): void {
     this.setState({ stack: info.componentStack ?? "" });
     console.error(error);
-    logErrorLine([`${this.props.label} stopped: ${error.name}: ${cap(error.message, 300)}`, error.stack ?? "", `Component stack:${info.componentStack ?? ""}`].filter(Boolean).join("\n"));
     try { this.props.onError?.(error); } catch { /* the fallback still shows */ }
+    // After the recovery callback, so a failure to log can never hold it back. Only names and source locations are sent.
+    try { logRenderError(error, info.componentStack); } catch { /* nothing is logged */ }
   }
 
   private details(): string {
