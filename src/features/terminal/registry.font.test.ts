@@ -84,4 +84,14 @@ describe("a terminal and a new code font", () => {
     expect(xterm.terms[0].options.fontFamily).toMatch(/^"Cascadia Code"/);
     expect(xterm.fits.map((f) => f.fontFamily)).toEqual([xterm.terms[0].options.fontFamily]);
   });
+
+  it("does not fit again when another setting changes and the code font stays", async () => {   // Codex re-review of 2abc495
+    await mounted();
+    applyType("mono_font", "consolas", false);
+    xterm.fits.length = 0;
+    applyType("density", "compact", false);
+    applyType("mono_font", "consolas", false);
+    expect(xterm.fits).toEqual([]);
+    applyType("density", "comfortable", false);
+  });
 });

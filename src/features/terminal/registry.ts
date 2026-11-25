@@ -83,7 +83,12 @@ onThemeChange(() => {
 // A new code font (Settings) reaches every open terminal through `refit`, which sets the font only where the cell can be
 // measured: a terminal that is detached or hidden keeps its old font until it is shown again (`mount` and the host's
 // resize call `refit`), because xterm measures zero there and would keep the old cell size.
-onTypeChange(() => { lives.forEach((_live, id) => refit(id)); });
+// Only terminals whose font differs: an appearance event repeats every value, and a fit with nothing changed can still
+// move the column count by one and resize the PTY.
+onTypeChange(() => {
+  const family = read("--font-mono");
+  lives.forEach((live, id) => { if (family && live.term.options.fontFamily !== family) refit(id); });
+});
 const rootPx = () => parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
 const openLink = (_e: MouseEvent, uri: string) => { if (/^https?:/i.test(uri)) openUrl(uri).catch(() => undefined); };
 

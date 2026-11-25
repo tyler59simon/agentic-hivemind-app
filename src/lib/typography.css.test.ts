@@ -45,7 +45,7 @@ describe("the typography tokens (DESK-TYPE)", () => {
     const defined = new Set([...root.matchAll(/^\s*--(sp-\d+):/gm)].map((m) => m[1]));
     expect([...used].filter((u) => !defined.has(u))).toEqual([]);
     expect(used.size).toBeGreaterThan(10);
-    for (const selector of [".markdown", ".md-editor", ".canvas-text"]) {
+    for (const selector of [".markdown", ".md-editor", ".canvas-text", ".canvas-edit"]) {
       const own = css.split("\n").filter((l) => l.startsWith(`${selector} `) || l.startsWith(`${selector},`));
       expect(own.length, selector).toBeGreaterThan(0);
       expect(own.filter((l) => l.includes("var(--sp-")), selector).toEqual([]);

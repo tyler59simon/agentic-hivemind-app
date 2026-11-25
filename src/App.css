@@ -1923,7 +1923,7 @@ button.owner-chip { cursor: pointer; }
 .canvas-memory p { margin: 0; font-size: .85rem; }
 .canvas-picture { display: block; width: 100%; height: 100%; object-fit: contain; }
 .canvas-group-label { padding: var(--sp-6) var(--sp-12); font-weight: 600; color: var(--canvas-c, var(--muted)); }
-.canvas-edit { display: block; width: 100%; height: 100%; resize: none; border: none; background: transparent; color: inherit; font: inherit; padding: var(--sp-10) var(--sp-14); }
+.canvas-edit { display: block; width: 100%; height: 100%; resize: none; border: none; background: transparent; color: inherit; font: inherit; padding: .5rem .7rem; }
 .canvas-edit-line { width: 100%; box-sizing: border-box; font-size: .9rem; }
 .canvas-handle, .canvas-corner { position: absolute; z-index: 2; transform: translate(-50%, -50%); box-sizing: border-box; }
 .canvas-handle { width: calc(12px / var(--k, 1)); height: calc(12px / var(--k, 1)); border-radius: 50%; background: var(--accent); border: calc(2px / var(--k, 1)) solid var(--bg); opacity: 0; cursor: crosshair; }
