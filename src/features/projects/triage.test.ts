@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { LmError } from "../../lib/lm";
 import type { DomainInfo, LinkGraph, NoteRow, Project } from "../../lib/lm";
-import { assignToProject, dismiss, dismissed, isUnder, resolveNoteFile, suggestTriage, withProjectTag } from "./triage";
+import { assignToProject, dismiss, dismissed, isUnder, resolveNoteFile, suggestTriage, withProjectTag, canAssign, choicesAfter } from "./triage";
 
 const SB = "C:/Users/tyler/Documents/Sandbox";
 const domains: DomainInfo[] = [
@@ -145,6 +145,21 @@ describe("assignToProject", () => {
     expect(calls).toBe(2);
     expect(res[0]).toEqual({ ref: "d:1", ok: false, error: "Unknown tags require an approved taxonomy plan: project/x" });
     expect(res[1]).toEqual({ ref: "d:2", ok: true, operation_id: undefined });
+  });
+});
+
+// Codex re-review, N05: Assign only runs over rows the dialog shows, and the user's own choices survive an assign.
+describe("after an assign", () => {
+  it("keeps the user's choices and unchecks a note that changed", () => {
+    const picked = { "d:b": false, "d:c": true };
+    const results = [{ ref: "d:a", ok: true as const }, { ref: "d:c", ok: false as const, error: "changed", stale: true as const }];
+    expect(choicesAfter(picked, results)).toEqual({ "d:b": false, "d:c": false });
+  });
+  it("assigns only from rows that loaded", () => {
+    expect(canAssign(false, 2, false)).toBe(false);
+    expect(canAssign(true, 0, false)).toBe(false);
+    expect(canAssign(true, 2, true)).toBe(false);
+    expect(canAssign(true, 2, false)).toBe(true);
   });
 });
 

@@ -4,30 +4,53 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { toast } from "../ui/toast";
 import { classify } from "./errors";
+import { meta } from "./lm";
 import { refreshStore } from "./refresh";
 
 export const STALE_MESSAGE = "This note changed; reloaded.";
 /** A stale write whose note could not be read again: what is on screen is still the old note (Codex review of e30902f, S4). */
 export const STALE_UNREAD = "This note changed, and Hivemind could not read it again. Reload, then try again.";
 
-/** The queries that hold notes. Without a `reread`, the reload counts as done only when none of them failed. */
-const NOTE_KEYS = ["note", "meta"];
+/** The queries that show notes and the rows writes are made from. Without a `reread`, the reload counts as done only when
+ *  none of them failed. */
+const NOTE_KEYS = ["note", "meta", "review", "list"];
+
+/** How long a reload may take before it counts as failed: a paused query (the webview offline) must not hold a form. */
+export const RELOAD_LIMIT = 15_000;
+
+/** Whether `work` finished within RELOAD_LIMIT without an error. */
+const within = (work: Promise<unknown>) => Promise.race([
+  work.then(() => true, () => false),
+  new Promise<boolean>((done) => setTimeout(() => done(false), RELOAD_LIMIT)),
+]);
 
 /** Read the store again after a stale refusal. `reread` reads the notes the write named (and may keep what it read for the
- *  next try). False when the reading failed: a query refetch swallows its error, so the queries are checked here. */
+ *  next try): the answer is whether it worked, and the rest of the store refreshes on its own. Without one, the whole
+ *  refresh is waited for and the note queries are checked, since a query refetch swallows its error (Codex re-review, N04). */
 export async function reloadAfterStale(client: QueryClient, reread?: () => Promise<unknown>): Promise<boolean> {
+  if (reread) {
+    void refreshStore(client);
+    return within(reread());
+  }
   const started = Date.now();
-  await refreshStore(client);
-  if (reread) return reread().then(() => true, () => false);
+  if (!(await within(refreshStore(client)))) return false;
   return !client.getQueryCache().findAll({ predicate: (q) => NOTE_KEYS.includes(String(q.queryKey[0])) })
     .some((q) => q.state.status === "error" && q.state.errorUpdatedAt >= started);
 }
 
-/** What to tell the user about a failed write. For a stale one the store is read again first, and `reread` with it. */
+/** The note a stale refusal names (`stale_revision: REF changed since revision ...`), if it names one. */
+const staleRef = (message: string) => /^stale_revision: (\S+:\S+) changed since revision/.exec(message)?.[1];
+
+/** What to tell the user about a failed write. For a stale one the store is read again first, and `reread` with it; without
+ *  a `reread`, the note the refusal names is read itself, so "reloaded" means the note that changed was read again. */
 export async function writeFailure(client: QueryClient, error: unknown, reread?: () => Promise<unknown>): Promise<string> {
   const problem = classify(error);
   if (problem.kind !== "stale") return problem.message;
-  return (await reloadAfterStale(client, reread)) ? STALE_MESSAGE : STALE_UNREAD;
+  const ref = reread ? undefined : staleRef(problem.message);
+  const reloaded = ref
+    ? (await reloadAfterStale(client)) && (await within(meta(ref)))
+    : await reloadAfterStale(client, reread);
+  return reloaded ? STALE_MESSAGE : STALE_UNREAD;
 }
 
 /** `writeFailure` as a toast: a warning for a stale write, an error for anything else. A note that could not be read again

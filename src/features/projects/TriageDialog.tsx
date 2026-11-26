@@ -9,7 +9,7 @@ import { reloadAfterStale } from "../../lib/stale";
 import { Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 import { NoteLink } from "../preview/NoteLink";
-import { assignToProject, dismiss, dismissed, suggestTriage } from "./triage";
+import { assignToProject, canAssign, choicesAfter, dismiss, dismissed, suggestTriage } from "./triage";
 import { useAllLinks, useTriageRows } from "./useProject";
 
 /** Existing notes that may belong to the project, to tag in one go. */
@@ -56,7 +56,7 @@ export function Triage({ project, onClose }: { project: Project; onClose: () => 
         const names = changed.map((r) => `“${byRef.get(r.ref)?.title ?? r.ref}”`).join(", ");
         toast(reloaded ? `${names} changed after it was suggested; reloaded. Check it, then assign again.` : `${names} changed after it was suggested, and Hivemind could not read it again. Reload, then assign again.`, reloaded ? "warn" : "error");
       }
-      setPicked({});
+      setPicked((now) => choicesAfter(now, results));
     } finally { setBusy(false); }
   };
 
@@ -94,7 +94,7 @@ export function Triage({ project, onClose }: { project: Project; onClose: () => 
         : <>{group("likely", "Likely")}{group("maybe", "Maybe")}</>}
       <div className="actions">
         <button onClick={onClose} disabled={busy}>Close</button>
-        <button className="primary" disabled={!chosen.length || busy} onClick={assign}>{busy ? "Assigning…" : `Assign selected (${chosen.length})`}</button>
+        <button className="primary" disabled={!canAssign(all.isSuccess && known.isSuccess, chosen.length, busy)} onClick={assign}>{busy ? "Assigning…" : `Assign selected (${chosen.length})`}</button>
       </div>
     </Modal>
   );

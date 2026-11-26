@@ -18,9 +18,11 @@ const { NoteMenu } = await import("./NoteMenu");
 
 const sent: string[][] = [];
 let stale = false;
+let readFails = false;
 lm.setTransport(async (_cmd, args) => {
   const argv = (args as { argv: string[] }).argv;
   // The dialog reads the note again after a stale refusal.
+  if (argv[0] === "read" && readFails) return { exit_code: 1, result: null, error: { code: "internal", message: "bridge down" } };
   if (argv[0] === "read") return { exit_code: 0, error: null, result: { id: "1", domain: "d", title: "T", type: "knowledge", status: "active", revision: shown.revision } };
   if (argv[0] !== "delete") return { exit_code: 1, result: null, error: { code: "invalid", message: "not in this test" } };
   sent.push(argv);
@@ -86,5 +88,37 @@ describe("deleting a note from its menu", () => {
     await act(async () => button("Delete").click());
     await settle();
     expect(sent[1]).toEqual(["delete", "d:1", "--domain", "d", "--expected-revision", "rev2"]);
+  });
+
+  // Codex re-review, N04: after a stale refusal, Delete waits until the note has been read again and shown. When that read
+  // fails, Retry read reads it again; Cancel works throughout.
+  it("keeps Delete disabled until the note is read again, and offers Retry read", async () => {
+    sent.length = 0;
+    shown.revision = "rev1";
+    stale = true;
+    const el = document.createElement("div");
+    document.body.append(el);
+    root = createRoot(el);
+    await act(async () => root!.render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><NoteMenu refId="d:1" /></QueryClientProvider>));
+    await settle();
+    await act(async () => el.querySelector<HTMLButtonElement>('button[aria-label="Note actions"]')!.click());
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) => b.textContent === "Delete…")!.click());
+    shown.revision = "rev2";
+    readFails = true;
+    await act(async () => button("Delete").click());
+    await settle();
+    expect(document.querySelector("[role=dialog] .error")?.textContent).toBe("This note changed, and Hivemind could not read it again. Reload, then try again.");
+    expect(button("Delete").disabled).toBe(true);
+    expect(button("Cancel").disabled).toBe(false);
+
+    readFails = false;
+    stale = false;
+    await act(async () => button("Retry read").click());
+    await settle();
+    expect(document.querySelector("[role=dialog] .error")?.textContent).toBe("This note changed; reloaded.");
+    expect(button("Retry read")).toBeUndefined();
+    await act(async () => button("Delete").click());
+    await settle();
+    expect(sent.map((a) => a[a.length - 1])).toEqual(["rev1", "rev2"]);
   });
 });

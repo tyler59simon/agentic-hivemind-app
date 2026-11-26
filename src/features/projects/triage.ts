@@ -115,6 +115,15 @@ export async function assignToProject(
   return results;
 }
 
+/** Whether Assign may run: only over suggestions from rows that loaded, so nothing is assigned from rows the dialog does not
+ *  show (Codex re-review, N05). */
+export const canAssign = (loaded: boolean, chosen: number, busy: boolean) => loaded && chosen > 0 && !busy;
+
+/** The user's choices after an assign. They stay as the user set them; a note that changed after it was suggested is
+ *  unchecked, so the user looks at it again before choosing it (Codex re-review, N05). */
+export const choicesAfter = (picked: Record<string, boolean>, results: AssignResult[]): Record<string, boolean> =>
+  ({ ...picked, ...Object.fromEntries(results.filter((r) => !r.ok && r.stale).map((r) => [r.ref, false])) });
+
 const key = (slug: string) => `hivemind.triage.dismissed.${slug}`;
 
 export function dismissed(slug: string): Set<string> {
