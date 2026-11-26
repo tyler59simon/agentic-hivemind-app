@@ -9,6 +9,8 @@ import { createRoot, type Root } from "react-dom/client";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const old = vi.hoisted(() => ({ title: "Old rule", revision: "r1" }));
+/** `read` of the old note: whether it fails, and a gate it waits on when set. */
+const reading = vi.hoisted(() => ({ fail: false, gate: null as Promise<void> | null }));
 const sent: Record<string, unknown>[] = [];
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
@@ -19,7 +21,11 @@ vi.mock("../../lib/lm", async (orig) => {
     ...real,
     domains: vi.fn(async () => ({ domains: [{ name: "d" }], aliases: {}, global_domains: [] })),
     taxonomy: vi.fn(async () => ({ tags: ["subject/project", "concern/knowledge"] })),
-    meta: vi.fn(async () => ({ id: "old", domain: "d", type: "knowledge", status: "active", tags: [], ...old })),
+    meta: vi.fn(async () => {
+      if (reading.gate) await reading.gate;
+      if (reading.fail) throw new real.LmError("internal", "bridge down", 1);
+      return { id: "old", domain: "d", type: "knowledge", status: "active", tags: [], ...old };
+    }),
     capture: vi.fn(async (_domain: string, payload: Record<string, unknown>) => {
       sent.push(payload);
       const replaces = (payload.supersedes as string[] | undefined)?.[0];
@@ -50,6 +56,7 @@ let root: Root;
 beforeEach(() => {
   sent.length = 0;
   Object.assign(old, { title: "Old rule", revision: "r1" });
+  Object.assign(reading, { fail: false, gate: null });
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -89,5 +96,40 @@ describe("saving a new note as the replacement of a note that changed", () => {
     await settle();
     expect(sent.map((p) => p.supersedes)).toEqual([undefined, ["d:old@r1"], ["d:old@r2"]]);
     expect(sent.some((p) => p.allow_similar)).toBe(false);
+  });
+
+  // Codex re-review, N06: the similar-note question is drawn from the draft as it is now, and a read that comes back after
+  // the question was closed does not open it again.
+  it("saves the draft as it is now, and drops a read that returns after the dialog closed", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const tab = { id: "t1", kind: "new-note", title: "New note", init: { domain: "d" } } as never;
+    await act(async () => root.render(<QueryClientProvider client={client}><NewNote tab={tab} /></QueryClientProvider>));
+    await settle();
+    await type(host.querySelector<HTMLInputElement>("input.title-input")!, "Plan");
+    await type(host.querySelector("textarea")!, "A summary sentence.");
+    reading.fail = true;
+    await act(async () => { host.querySelector<HTMLButtonElement>("button.primary")!.click(); });
+    await settle();
+    expect(button("Read it again")).toBeDefined();
+
+    // Read it again, then close the dialog before the read returns.
+    let open = () => {};
+    reading.gate = new Promise((r) => { open = r; });
+    reading.fail = false;
+    await act(async () => button("Read it again")!.click());
+    await act(async () => document.querySelector<HTMLButtonElement>(".modal-head button")!.click());
+    expect(document.querySelector("[role=dialog]")).toBeNull();
+    reading.gate = null;
+    await act(async () => open());
+    await settle();
+    expect(document.querySelector("[role=dialog]")).toBeNull();
+
+    // Ask again, change the draft while the question is open, and save it as a separate note.
+    await act(async () => { host.querySelector<HTMLButtonElement>("button.primary")!.click(); });
+    await settle();
+    await type(host.querySelector("textarea")!, "A summary sentence, edited.");
+    await act(async () => button("Save as a separate note")!.click());
+    await settle();
+    expect(sent[sent.length - 1]).toMatchObject({ allow_similar: true, body: "A summary sentence, edited." });
   });
 });

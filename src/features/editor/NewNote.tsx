@@ -36,6 +36,9 @@ export function NewNote({ tab }: { tab: Tab }) {
   const [version, setVersion] = useState(1);
   const [banner, setBanner] = useState<ReactNode>(null);
   const [dialog, setDialog] = useState<ReactNode>(null);
+  // The similar-note question, as data: it is drawn from the current draft, so its buttons save what the user sees now.
+  const [similar, setSimilar] = useState<{ ref?: string; title?: string; name: string; revision?: string; why?: string } | null>(null);
+  const asking = useRef(0);
   const [saving, setSaving] = useState(false);
   const titles = useTitles(domain);
   const touchedTags = useRef(false);
@@ -110,6 +113,7 @@ export function NewNote({ tab }: { tab: Tab }) {
     if (problems.length) return setBanner(<div className="banner error"><ul>{problems.map((p) => <li key={p}>{p}</li>)}</ul></div>);
     setSaving(true);
     setDialog(null);
+    closeSimilar();
     const sent = f;
     const store = currentStore();
     try {
@@ -139,24 +143,15 @@ export function NewNote({ tab }: { tab: Tab }) {
   };
 
   /** Ask what to do about the similar note `ref`. It is read first, so the dialog names it as it is now and a replacement
-   *  sends that revision. `why` says why the question comes again. */
+   *  sends that revision. `why` says why the question comes again. Only the latest ask shows: a read that comes back after
+   *  the dialog was closed, or after a newer ask, is dropped (Codex re-review, N06). */
   const askSimilar = async (ref: string | undefined, title: string | undefined, why?: string) => {
+    const ask = ++asking.current;
     const now = ref ? await meta(ref).catch(() => undefined) : undefined;
-    const name = now?.title ?? title ?? ref;
-    setDialog(
-      <Modal title={why ? "The note to replace changed" : "A similar note already exists"} onClose={() => setDialog(null)}>
-        {why && <p className="warn-text">{why}</p>}
-        <p>Living Memory found “{name}”, which looks like the same subject. Update it if the fact moved on, replace it if this supersedes it, or save a separate note if they are genuinely different.</p>
-        {ref && !now && <p className="error">Hivemind could not read “{name}”, so it cannot be replaced from here. Read it again, or open it.</p>}
-        <div className="actions">
-          <button onClick={() => { setDialog(null); if (ref) openNote(ref, { split: true, mode: "live", title: name }); }}>Open it to update</button>
-          {ref && !now && <button onClick={() => askSimilar(ref, title, why)}>Read it again</button>}
-          {ref && now && <button onClick={() => save({ supersedes: [at(ref, now.revision)] })}>Save as its replacement</button>}
-          <button className="primary" onClick={() => save({ allow_similar: true })}>Save as a separate note</button>
-        </div>
-      </Modal>,
-    );
+    if (ask !== asking.current) return;
+    setSimilar({ ref, title, name: now?.title ?? title ?? ref ?? "", revision: now?.revision, why });
   };
+  const closeSimilar = () => { asking.current += 1; setSimilar(null); };
 
   const addTags = (tags: string[]) => setDialog(
     <DirectDialog title="Add tags to the taxonomy" run={() => taxonomyAdd(tags)} applyLabel="Add tags" onClose={() => setDialog(null)}
@@ -184,6 +179,19 @@ export function NewNote({ tab }: { tab: Tab }) {
       </dl>
       {banner}
       {dialog}
+      {similar && (
+        <Modal title={similar.why ? "The note to replace changed" : "A similar note already exists"} onClose={closeSimilar}>
+          {similar.why && <p className="warn-text">{similar.why}</p>}
+          <p>Living Memory found “{similar.name}”, which looks like the same subject. Update it if the fact moved on, replace it if this supersedes it, or save a separate note if they are genuinely different.</p>
+          {similar.ref && !similar.revision && <p className="error">Hivemind could not read “{similar.name}”, so it cannot be replaced from here. Read it again, or open it.</p>}
+          <div className="actions">
+            <button onClick={() => { const s = similar; closeSimilar(); if (s.ref) openNote(s.ref, { split: true, mode: "live", title: s.name }); }}>Open it to update</button>
+            {similar.ref && !similar.revision && <button onClick={() => askSimilar(similar.ref, similar.title, similar.why)}>Read it again</button>}
+            {similar.ref && similar.revision && <button onClick={() => save({ supersedes: [at(similar.ref!, similar.revision!)] })}>Save as its replacement</button>}
+            <button className="primary" onClick={() => save({ allow_similar: true })}>Save as a separate note</button>
+          </div>
+        </Modal>
+      )}
       <MarkdownEditor doc={f.body} docVersion={version} live titles={titles} onChange={(body) => setF((x) => ({ ...x, body }))} onSave={() => save()}
         onOpenLink={() => toast("Save the note first, then Ctrl+click its links.")} />
     </article>
