@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Briefing, CaptureItem, Health, Milestone } from "../../lib/executive";
 import type { NoteRow, OpenItem, Project } from "../../lib/lm";
-import { acceptKey, acceptWrite, blocked, commitmentsNote, hasAction, itemBody, missingRevision, planWrite, replaceable, tagsFor, type Context } from "./items";
+import { acceptKey, acceptWrite, alreadyAdded, blocked, commitmentsNote, hasAction, itemBody, missingRevision, planWrite, replaceable, tagsFor, type Context } from "./items";
 import { addDays, commitmentRows, formatCommitment, parseCommitment, timing } from "./commitments";
 import { healthView, signals, suggestHealth } from "./health";
 import { attention, crossProject, portfolio } from "./portfolio";
@@ -13,7 +13,7 @@ const project = (slug: string, name: string, charter = `${slug}:c1`): Project =>
 });
 const PAY = project("pay", "PayStream");
 const row = (o: Partial<NoteRow> & Pick<NoteRow, "ref" | "title" | "type">): NoteRow => ({
-  id: o.ref.split(":")[1], domain: o.ref.split(":")[0], status: "active", tags: [], created: "", updated: "2026-11-18T10:00:00", revision: "r", path: "", ...o,
+  id: o.ref.split(":")[1], domain: o.ref.split(":")[0], status: "active", tags: [], created: "", updated: "2026-11-18T10:00:00", revision: "0a0a0a0a0a0a", path: "", ...o,
 });
 const item = (ref: string, text: string, index = 1): OpenItem => ({ ref, short_ref: ref, title: "Commitments: PayStream", type: "plan", updated: "", index, item: text });
 const milestone = (o: Partial<Milestone>): Milestone => ({ id: "m1", created: 0, updated: 0, project: "pay", title: "Beta", due: "", status: "planned", note: "", ...o });
@@ -99,11 +99,11 @@ describe("capture", () => {
   // Codex review of e30902f, R2: the revision is the one the confirmation read for the replaced note, even when the note is
   // not among the active rows the page listed.
   it("writes a note with its source, and supersedes when asked, with the revision the replaced note was confirmed at", () => {
-    const w = planWrite(extracted({ details: ["Saves a lookup"], owner: "Dana" }), ctx, { ref: "pay:old", revision: "rev-old" });
+    const w = planWrite(extracted({ details: ["Saves a lookup"], owner: "Dana" }), ctx, { ref: "pay:old", revision: "b0b0b0b0b0b0" });
     expect(w.kind).toBe("note");
     if (w.kind !== "note") return;
     expect(w.domain).toBe("pay");
-    expect(w.payload).toMatchObject({ title: "Use event IDs as keys", type: "decision", tags: ["concern/decision", "project/pay"], supersedes: ["pay:old@rev-old"] });
+    expect(w.payload).toMatchObject({ title: "Use event IDs as keys", type: "decision", tags: ["concern/decision", "project/pay"], supersedes: ["pay:old@b0b0b0b0b0b0"] });
     expect(w.payload.body).toBe('Dedupe by event ID.\n\n## Details\n- Saves a lookup\n- **Owner:** Dana\n\n## Source\nCaptured in Hivemind from "Standup" on 2026-11-19: "we agreed on event ids"');
     expect(itemBody(extracted({ quote: " " }), "Notes", TODAY)).toContain('from "Notes" on 2026-11-19.');
   });
@@ -119,7 +119,7 @@ describe("capture", () => {
     expect(first.kind === "note" && first.payload).toMatchObject({ title: "Commitments: PayStream", type: "plan", tags: ["concern/planning", "project/pay"] });
     expect(first.kind === "note" && first.payload.body).toContain("## Action items\n- [ ] Send the Q3 plan (owner: Dana, due: 2026-11-25)");
     const rows = [row({ ref: "pay:c9", title: "Commitments: PayStream", type: "plan", tags: ["project/pay"] })];
-    expect(planWrite(c, { ...ctx, rows })).toEqual({ kind: "action", ref: "pay:c9", text: "Send the Q3 plan (owner: Dana, due: 2026-11-25)", revision: "r" });
+    expect(planWrite(c, { ...ctx, rows })).toEqual({ kind: "action", ref: "pay:c9", text: "Send the Q3 plan (owner: Dana, due: 2026-11-25)", revision: "0a0a0a0a0a0a" });
     expect(commitmentsNote(rows, undefined)).toBeUndefined();
     const cross = planWrite({ ...c, project: null }, ctx);
     expect(cross.kind === "note" && cross.payload.title).toBe("Commitments: Cross-project");
@@ -154,7 +154,7 @@ describe("capture", () => {
 
   it("repeats the write an unfinished accept recorded, not one planned from later edits", () => {   // EXEC-3, Codex R3
     const item = extracted({ title: "Use event IDs as keys" });
-    const first = acceptWrite(item, () => planWrite(item, ctx, { ref: "pay:old", revision: "r-old" }, "b-i1"), "pay:old");
+    const first = acceptWrite(item, () => planWrite(item, ctx, { ref: "pay:old", revision: "c0c0c0c0c0c0" }, "b-i1"), "pay:old");
     expect(first.fresh).toBe(true);
     expect(first.superseded).toBe("pay:old");
     const edited = { ...item, title: "Use event IDs as idempotency keys", intent: { write: first.write, superseded: first.superseded } };
@@ -164,12 +164,27 @@ describe("capture", () => {
   });
 
   it("finds a recorded write that names a note without its revision", () => {   // Codex review of e30902f, R2
-    const note = planWrite(extracted({}), ctx, { ref: "pay:old", revision: "r-old" });
+    const note = planWrite(extracted({}), ctx, { ref: "pay:old", revision: "c0c0c0c0c0c0" });
     expect(missingRevision(note)).toBe(false);
     if (note.kind !== "note") return;
     expect(missingRevision({ ...note, payload: { ...note.payload, supersedes: ["pay:old"] } })).toBe(true);
     expect(missingRevision({ kind: "action", ref: "pay:c9", text: "x", revision: "" })).toBe(true);
-    expect(missingRevision({ kind: "action", ref: "pay:c9", text: "x", revision: "r" })).toBe(false);
+    expect(missingRevision({ kind: "action", ref: "pay:c9", text: "x", revision: "0123456789abcdef" })).toBe(false);
+    // Codex re-review, N07: a revision is 12 to 64 hex digits after the last @, as Living Memory writes it.
+    expect(missingRevision({ kind: "action", ref: "pay:c9", text: "x", revision: "r" })).toBe(true);
+    expect(missingRevision({ ...note, payload: { ...note.payload, supersedes: ["pay:old@"] } })).toBe(true);
+    expect(missingRevision({ ...note, payload: { ...note.payload, supersedes: ["pay:old@r-old"] } })).toBe(true);
+    expect(missingRevision({ ...note, payload: { ...note.payload, supersedes: ["pay:old@abcdef12345"] } })).toBe(true);
+    expect(missingRevision({ ...note, payload: { ...note.payload, supersedes: [`pay:old@${"f".repeat(65)}`] } })).toBe(true);
+    expect(missingRevision({ ...note, payload: { ...note.payload, supersedes: [`pay:old@${"f".repeat(64)}`] } })).toBe(false);
+  });
+
+  // Codex re-review, N07: an old recorded action write is checked against the note before it is dropped.
+  it("counts an old action write as done when the note already has the item", async () => {
+    const body = ["Commitments.", "", "## Action items", "- [ ] Send the Q3 plan (owner: Dana)"].join("\n");
+    const legacy = { kind: "action" as const, ref: "pay:c9", text: "Send the Q3 plan (owner: Dana)", revision: "" };
+    await expect(alreadyAdded(legacy, async () => body)).resolves.toBe(true);
+    await expect(alreadyAdded({ ...legacy, text: "Book the room" }, async () => body)).resolves.toBe(false);
   });
 
   it("finds an action item a note already has, open or ticked", () => {   // EXEC-3

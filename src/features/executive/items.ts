@@ -112,11 +112,22 @@ export function planWrite(item: CaptureItem, ctx: Context, supersedes?: Replaced
   return { kind: "note", domain, payload: supersedes ? { ...payload, supersedes: [at(supersedes.ref, supersedes.revision)] } : payload };
 }
 
-/** Whether a write names a note without the revision the user confirmed: an action item with none, or a replaced note sent as
- *  a bare ref. An unfinished accept recorded by an older build can hold one; Living Memory would refuse it, so it is planned
- *  and confirmed again instead. */
+/** A note revision as Living Memory writes it: 12 to 64 hex digits (its notes.py REVISION). */
+const REVISION = /^[0-9a-f]{12,64}$/i;
+
+/** Whether a write names a note without the revision the user confirmed: an action item without a well-formed one, or a
+ *  replaced note sent without one after its last @. An unfinished accept recorded by an older build can hold one; Living
+ *  Memory would refuse it, so it is planned and confirmed again instead (Codex re-review, N07). */
 export const missingRevision = (write: Write): boolean =>
-  write.kind === "action" ? !write.revision : write.kind === "note" && (write.payload.supersedes ?? []).some((ref) => !ref.includes("@"));
+  write.kind === "action" ? !REVISION.test(write.revision ?? "")
+    : write.kind === "note" && (write.payload.supersedes ?? []).some((ref) => !ref.includes("@") || !REVISION.test(ref.slice(ref.lastIndexOf("@") + 1)));
+
+/** Whether a recorded action write that `missingRevision` finds already ran: an older build may have added the item before it
+ *  stopped. Then the accept is done, and dropping it would ask the user to add the item twice (Codex re-review, N07).
+ *  `readBody` reads a note's body. */
+export async function alreadyAdded(write: Write, readBody: (ref: string) => Promise<string>): Promise<boolean> {
+  return write.kind === "action" && hasAction(await readBody(write.ref), write.text);
+}
 
 /** The write accepting `item` runs: the one an unfinished earlier accept recorded (`intent`), or a new plan. `fresh` says the
  *  plan is new and must be recorded on the item before it runs. */

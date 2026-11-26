@@ -13,7 +13,7 @@ import { setLeaveGuard, useApp } from "../../store";
 import { Confirm, Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 import { NoteLink } from "../preview/NoteLink";
-import { acceptKey, acceptWrite, blocked, hasAction, KIND_LABEL, missingRevision, pendingItems, planWrite, replaceable, type Context, type Replaced, type Write } from "./items";
+import { acceptKey, acceptWrite, alreadyAdded, blocked, hasAction, KIND_LABEL, missingRevision, pendingItems, planWrite, replaceable, type Context, type Replaced, type Write } from "./items";
 import { isoToday } from "./commitments";
 import { useNotes, useRecords, useStoreFacts } from "./useExecutive";
 
@@ -273,6 +273,11 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
       // (which finds what it already wrote) rather than one planned again from fields edited since.
       const planned = acceptWrite(item, () => planWrite(item, ctx, replace, acceptKey(stored.id, item.id)), replace?.ref);
       if (missingRevision(planned.write)) {
+        if (!planned.fresh && (await alreadyAdded(planned.write, async (ref) => (await read(ref)).body))) {
+          await saveAccepted({ ...item, intent: undefined, state: "accepted" as const, result: { ref: planned.write.kind === "action" ? planned.write.ref : "", superseded: planned.superseded } });
+          await refreshStore(client);
+          return;
+        }
         // Recorded by an older build without the revision the user confirmed: Living Memory would refuse it, so it is dropped
         // and the user accepts (and confirms a replacement) again.
         await save({ ...item, intent: undefined }).catch(() => undefined);
