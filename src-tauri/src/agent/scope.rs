@@ -496,10 +496,15 @@ const VALUE_OPTIONS: [&str; 4] = ["--root", "--domain", "--cwd", "--actor"];
 
 /// Programs that run another command given to them (`bash -c "..."`, `cmd /c ...`, `xargs alm ...`): a part they start is
 /// refused when it names Living Memory with a governed word. Any other program (`git merge --no-ff alm`) only takes words.
-const WRAPPERS: [&str; 24] = [
+/// Python environment runners (`poetry run`, `conda run`) are wrappers too (Codex re-review, F05).
+const WRAPPERS: [&str; 34] = [
     "bash", "sh", "zsh", "dash", "ksh", "fish", "cmd", "powershell", "pwsh", "wsl", "xargs", "env", "sudo", "doas", "nohup",
     "time", "timeout", "nice", "exec", "command", "eval", "start", "uv", "uvx",
+    "poetry", "pipenv", "pdm", "hatch", "rye", "pipx", "conda", "mamba", "micromamba", "pixi",
 ];
+
+/// The `proposals` options that take a value (`--reason R`), besides the global ones: their value is never a proposal ID.
+const PROPOSAL_VALUE_OPTIONS: [&str; 8] = ["--reason", "--session", "--turn", "--kind", "--status", "--notebook", "--body-file", "--expected-revision"];
 
 /// A shell command that would make a governed write to the Living Memory store. Its hook lets read and capture commands
 /// through before Hivemind is asked; these must never run from a session, whatever the user clicks.
@@ -597,7 +602,26 @@ fn governed_subcommand(sub: &str, rest: &[String]) -> bool {
         None => *command == sub,
         Some((head, action)) => head == sub && rest.iter().any(|word| word == action),
     }) || (sub == "doc" && !matches!(doc_action(rest), Some("read" | "propose")))
-        || (sub == "proposals" && settles_page(rest.iter().map(String::as_str)))
+        || (sub == "proposals" && settles_page(without_option_values(rest).into_iter()))
+}
+
+/// The words of a `proposals` command without the values of its options, so `--reason 0123456789ab` (a commit hash) is not
+/// read as a page ID (Codex re-review, F06). An option it does not know keeps the word after it, which fails closed.
+fn without_option_values(rest: &[String]) -> Vec<&str> {
+    let takes_value = |word: &str| {
+        word.len() >= 3 && !word.contains('=') && VALUE_OPTIONS.iter().chain(&PROPOSAL_VALUE_OPTIONS).any(|option| option.starts_with(word))
+    };
+    let mut words = vec![];
+    let mut index = 0;
+    while let Some(word) = rest.get(index) {
+        if word.starts_with("--") && word.contains('=') {
+            index += 1;
+            continue;
+        }
+        words.push(word.as_str());
+        index += if takes_value(word) { 2 } else { 1 };
+    }
+    words
 }
 
 /// The action of a `doc` command: its first word that is not an option or an option's value.
@@ -893,6 +917,14 @@ mod tests {
             "alm doc",
             "alm proposals accept 0123456789ab",
             "alm proposals reject 0123456789ab --reason no",
+            // Codex re-review, F06: an option value is not the ID, but the ID after one is still read.
+            "alm proposals reject 0123456789ab --reason 1a2b3c4d",
+            "alm proposals --session s1 accept 0123456789ab",
+            "alm proposals accept --rule 0123456789ab",
+            // Codex re-review, F05: Python environment runners are wrappers.
+            "poetry run alm archive x",
+            "pipenv run alm delete x",
+            "conda run -n base alm undo 1",
             // Codex re-review, N13: bash joins a line ending in a backslash to the next one.
             "python living_memory.py search x \\\ndelete",
             "alm \\\r\ndelete x",
@@ -924,6 +956,10 @@ mod tests {
             "alm --json doc propose --file notes/a.md --body-file b.md",
             "alm proposals accept 01234567",
             "alm proposals list",
+            // Codex re-review, F06: a commit hash given as the reason of a staged note's reject.
+            "alm proposals reject 1a2b3c4d --reason 0123456789ab",
+            "alm proposals reject 1a2b3c4d --reason=0123456789ab",
+            "alm proposals reject 1a2b3c4d --reas 0123456789ab",
             // Codex review of e30902f, G2: an ordinary search is decided by its subcommand, whatever its text says.
             r#"python "C:\x\living_memory.py" search "delete the cache""#,
             "alm --json --domain a search 'merge the project create notes'",
