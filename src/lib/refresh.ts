@@ -9,9 +9,21 @@ const KEEP = ["connect", "git", "diff", "architecture", "agent"];
 export const refreshStore = (client: QueryClient) =>
   client.invalidateQueries({ predicate: (q) => !KEEP.includes(String(q.queryKey[0])) });
 
+/** The reconnect in progress, which a second click joins instead of restarting again (Codex re-review, F03). */
+let pending: Promise<void> | null = null;
+
 /** Reconnect on the user's request: restart the Living Memory process, then read everything again, the connection first. A
- *  restart the bridge refused (a request still running) is reported, and the connection is read again all the same. */
-export async function reconnect(client: QueryClient, restart: () => Promise<unknown>) {
-  await restart().catch((e) => toast(e instanceof Error ? e.message : String(e), "warn"));
-  await client.resetQueries();
+ *  restart the bridge refused (a request still running) is reported, and nothing is read again: the process and its
+ *  connection are the ones already shown (Codex re-review, F01). */
+export function reconnect(client: QueryClient, restart: () => Promise<unknown>): Promise<void> {
+  pending ??= (async () => {
+    try {
+      await restart();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "warn");
+      return;
+    }
+    await client.resetQueries();
+  })().finally(() => { pending = null; });
+  return pending;
 }

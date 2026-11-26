@@ -196,9 +196,11 @@ const CONNECT_DOCTOR_LIMIT: std::time::Duration = std::time::Duration::from_secs
 #[tauri::command]
 async fn connect(app: AppHandle, state: State<'_, AppState>) -> Result<ConnectInfo, String> {
     // Resolved again on every connect: installing Living Memory meanwhile records the Python it should run under (REG-4).
+    // Settings Save switches at once; this waits for a request in progress, so a write keeps its receipt (Codex re-review, F01).
     let launch = settings::resolve(&settings::load(&state.settings_path), |k| std::env::var(k).ok());
     if launch != state.bridge.launch() {
-        state.bridge.reconfigure(launch);
+        let bridge = state.bridge.clone();
+        blocking(move || bridge.reconfigure_when_idle(launch)).await?;
     }
     // Both probes are bound to the generation reported, so a reconfigure in between fails the connect instead of pairing
     // one store's generation with another's root (Codex review of dd4c1b0, R3-D9).

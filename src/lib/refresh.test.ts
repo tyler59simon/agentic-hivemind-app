@@ -30,12 +30,29 @@ describe("reconnect", () => {
     stop();
   });
 
-  it("says why a restart was refused, and still reads the connection again", async () => {
+  // Codex re-review, F01: a refused restart changed nothing, so nothing is reset.
+  it("says why a restart was refused, and keeps what it read", async () => {
     const client = new QueryClient();
     client.setQueryData(["connect"], 1);
     await reconnect(client, () => Promise.reject("A Living Memory request is still running, so Hivemind did not restart it. Reconnect again when it finishes."));
     expect(useToasts.getState().items.map((t) => [t.kind, t.text])).toEqual([["warn", "A Living Memory request is still running, so Hivemind did not restart it. Reconnect again when it finishes."]]);
-    expect(client.getQueryState(["connect"])?.data).toBeUndefined();
+    expect(client.getQueryState(["connect"])?.data).toBe(1);
     useToasts.setState({ items: [] });
+  });
+
+  // Codex re-review, F03: a second click while one reconnect runs joins it.
+  it("restarts and reads the connection once for two clicks", async () => {
+    const client = new QueryClient();
+    let connects = 0;
+    const observer = new QueryObserver(client, { queryKey: ["connect"], staleTime: Infinity, queryFn: () => ++connects });
+    const stop = observer.subscribe(() => {});
+    await observer.refetch();
+    let restarts = 0;
+    const restart = () => new Promise((done) => setTimeout(() => { restarts += 1; done(undefined); }, 20));
+    await Promise.all([reconnect(client, restart), reconnect(client, restart)]);
+    expect([restarts, connects]).toEqual([1, 2]);
+    await reconnect(client, restart);
+    expect([restarts, connects]).toEqual([2, 3]);
+    stop();
   });
 });

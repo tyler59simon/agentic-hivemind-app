@@ -13,7 +13,7 @@ use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, TryLockError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -239,21 +239,48 @@ impl Bridge {
     /// `restart`, as asked for when `seen` restarts had been done: when another one finished since, the process it left is
     /// newer than the request, so it is kept.
     fn restart_after(&self, seen: u64) -> Result<(), String> {
-        let deadline = Instant::now() + self.limits.slow + self.limits.start;
-        let mut guard = loop {
-            match self.proc.try_lock() {
-                Ok(guard) => break guard,
-                Err(TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
-                Err(TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
-                Err(TryLockError::WouldBlock) => return Err(RESTART_BUSY.into()),
-            }
-        };
+        let mut guard = self.idle_proc()?;
         if self.restarts.load(Ordering::SeqCst) != seen {
             return Ok(());
         }
         // Dropping the process ends it and reaps it (`Proc::drop`, at most two seconds), so no exited child is left behind.
         *guard = None;
         self.restarts.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// The request lock, once the request in progress has finished: waited for up to the slow limit and a start, then
+    /// refused with RESTART_BUSY.
+    fn idle_proc(&self) -> Result<MutexGuard<'_, Option<Proc>>, String> {
+        let deadline = Instant::now() + self.limits.slow + self.limits.start;
+        loop {
+            match self.proc.try_lock() {
+                Ok(guard) => return Ok(guard),
+                Err(TryLockError::Poisoned(poisoned)) => return Ok(poisoned.into_inner()),
+                Err(TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+                Err(TryLockError::WouldBlock) => return Err(RESTART_BUSY.into()),
+            }
+        }
+    }
+
+    /// `reconfigure` for a launch that changed without the user saving Settings (installing Living Memory recorded another
+    /// Python): it waits for the request in progress like `restart`, so a write keeps its receipt, and refuses with
+    /// RESTART_BUSY when the bridge stays busy (Codex re-review, F01). A launch that is already current changes nothing.
+    pub fn reconfigure_when_idle(&self, launch: Launch) -> Result<(), String> {
+        let mut guard = self.idle_proc()?;
+        let mut pinned = self.pinned.lock().unwrap();
+        {
+            let mut current = self.launch.lock().unwrap();
+            if *current == launch {
+                return Ok(());
+            }
+            *current = launch;
+        }
+        *pinned = None;
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        drop(pinned);
+        // Dropping the process ends it and reaps it (`Proc::drop`).
+        *guard = None;
         Ok(())
     }
 
@@ -951,6 +978,45 @@ for line in sys.stdin:
         assert_eq!(bridge.restart().unwrap_err(), RESTART_BUSY);
         drop(held);
         bridge.restart().unwrap();
+    }
+
+    /// Codex re-review, F01: a launch that changed without a Settings save waits for the request in progress, which gets its
+    /// reply from the old process; the generation then moves on and the old process is gone.
+    #[test]
+    fn a_reconfigure_when_idle_waits_for_a_request_in_progress() {
+        let Some((program, args)) = python() else { return };
+        let (dir, script) = fake("reconf-idle", SLOW_ECHO);
+        let launch = Launch { program, args, script, root: None };
+        let bridge = Bridge::with_limits(launch.clone(), limits(5000, 20_000));
+        let first = pid(&bridge, "echo").unwrap();
+        let generation = bridge.generation();
+        let newer = Launch { root: Some(dir.clone()), ..launch };
+        std::thread::scope(|scope| {
+            let request = scope.spawn(|| pid(&bridge, "slow"));
+            std::thread::sleep(Duration::from_millis(300));
+            bridge.reconfigure_when_idle(newer.clone()).unwrap();
+            assert_eq!(request.join().unwrap().unwrap(), first, "the request was cut off");
+        });
+        assert_eq!((bridge.generation(), bridge.launch()), (generation + 1, newer.clone()));
+        assert!(gone(first));
+        // The same launch again changes nothing.
+        bridge.reconfigure_when_idle(newer).unwrap();
+        assert_eq!(bridge.generation(), generation + 1);
+        drop(bridge);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Codex re-review, F01: it refuses, changing nothing, while the bridge stays busy.
+    #[test]
+    fn a_reconfigure_when_idle_refuses_while_the_bridge_stays_busy() {
+        let launch = |root: &str| Launch { program: "py".into(), args: vec![], script: "no-such-living_memory.py".into(), root: Some(root.into()) };
+        let bridge = Bridge::with_limits(launch("a"), Limits { quick: Duration::from_millis(50), slow: Duration::from_millis(100), start: Duration::from_millis(50), reply: 1000 });
+        let held = bridge.proc.lock().unwrap();
+        assert_eq!(bridge.reconfigure_when_idle(launch("b")).unwrap_err(), RESTART_BUSY);
+        assert_eq!((bridge.generation(), bridge.launch()), (0, launch("a")));
+        drop(held);
+        bridge.reconfigure_when_idle(launch("b")).unwrap();
+        assert_eq!((bridge.generation(), bridge.launch()), (1, launch("b")));
     }
 
     /// A slow command gets the slow limit and an ordinary one the quick limit.
