@@ -88,7 +88,7 @@ export function MergeComposer({ source, target, onClose }: { source: NoteTarget;
     } catch (e) {
       if (classify(e).kind === "stale") {
         let now: Pair | null = null;
-        const message = await writeFailure(client, e, () => readPair().then((pair) => { now = pair; }));
+        const message = await writeFailure(client, e, (signal) => readPair().then((pair) => { if (!signal.aborted) now = pair; }));
         const pair = now as Pair | null;
         const cut = pair && cutOff(pair);
         if (cut) {

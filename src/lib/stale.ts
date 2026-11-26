@@ -18,19 +18,24 @@ const NOTE_KEYS = ["note", "meta", "review", "list"];
 /** How long a reload may take before it counts as failed: a paused query (the webview offline) must not hold a form. */
 export const RELOAD_LIMIT = 15_000;
 
-/** Whether `work` finished within RELOAD_LIMIT without an error. */
-const within = (work: Promise<unknown>) => Promise.race([
+/** A caller's own read after a stale refusal. `signal` is aborted when the read took too long and counted as failed: a
+ *  result that comes later must not change what the form shows (Codex re-review, F07). */
+export type Reread = (signal: AbortSignal) => Promise<unknown>;
+
+/** Whether `work` finished within RELOAD_LIMIT without an error. `late` is aborted when it did not finish in time. */
+const within = (work: Promise<unknown>, late?: AbortController) => Promise.race([
   work.then(() => true, () => false),
-  new Promise<boolean>((done) => setTimeout(() => done(false), RELOAD_LIMIT)),
+  new Promise<boolean>((done) => setTimeout(() => { late?.abort(); done(false); }, RELOAD_LIMIT)),
 ]);
 
 /** Read the store again after a stale refusal. `reread` reads the notes the write named (and may keep what it read for the
  *  next try): the answer is whether it worked, and the rest of the store refreshes on its own. Without one, the whole
  *  refresh is waited for and the note queries are checked, since a query refetch swallows its error (Codex re-review, N04). */
-export async function reloadAfterStale(client: QueryClient, reread?: () => Promise<unknown>): Promise<boolean> {
+export async function reloadAfterStale(client: QueryClient, reread?: Reread): Promise<boolean> {
   if (reread) {
     void refreshStore(client);
-    return within(reread());
+    const late = new AbortController();
+    return within(reread(late.signal), late);
   }
   const started = Date.now();
   if (!(await within(refreshStore(client)))) return false;
@@ -43,7 +48,7 @@ const staleRef = (message: string) => /^stale_revision: (\S+:\S+) changed since 
 
 /** What to tell the user about a failed write. For a stale one the store is read again first, and `reread` with it; without
  *  a `reread`, the note the refusal names is read itself, so "reloaded" means the note that changed was read again. */
-export async function writeFailure(client: QueryClient, error: unknown, reread?: () => Promise<unknown>): Promise<string> {
+export async function writeFailure(client: QueryClient, error: unknown, reread?: Reread): Promise<string> {
   const problem = classify(error);
   if (problem.kind !== "stale") return problem.message;
   const ref = reread ? undefined : staleRef(problem.message);
@@ -55,7 +60,7 @@ export async function writeFailure(client: QueryClient, error: unknown, reread?:
 
 /** `writeFailure` as a toast: a warning for a stale write, an error for anything else. A note that could not be read again
  *  gets a toast with Reload. */
-export async function toastWriteFailure(client: QueryClient, error: unknown, reread?: () => Promise<unknown>): Promise<void> {
+export async function toastWriteFailure(client: QueryClient, error: unknown, reread?: Reread): Promise<void> {
   const message = await writeFailure(client, error, reread);
   if (message === STALE_UNREAD) toast(message, "error", { label: "Reload", run: () => void refreshStore(client) });
   else toast(message, message === STALE_MESSAGE ? "warn" : "error");

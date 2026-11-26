@@ -4,7 +4,7 @@ import { classify } from "../../lib/errors";
 import { meta, undo, type Receipt } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
-import { reloadAfterStale, STALE_MESSAGE, STALE_UNREAD, writeFailure } from "../../lib/stale";
+import { reloadAfterStale, STALE_MESSAGE, STALE_UNREAD, writeFailure, type Reread } from "../../lib/stale";
 import { Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 
@@ -45,8 +45,8 @@ export function useDirect() {
   const [error, setError] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
   const [unread, setUnread] = useState(false);
-  const lastReread = useRef<(() => Promise<unknown>) | undefined>(undefined);
-  const recover = async (failure: unknown, reread?: () => Promise<unknown>) => {
+  const lastReread = useRef<Reread | undefined>(undefined);
+  const recover = async (failure: unknown, reread?: Reread) => {
     setReading(true);
     const message = failure !== undefined ? await writeFailure(client, failure, reread)
       : (await reloadAfterStale(client, reread)) ? STALE_MESSAGE : STALE_UNREAD;
@@ -54,7 +54,7 @@ export function useDirect() {
     setUnread(message === STALE_UNREAD);
     setReading(false);
   };
-  const go = async (write: () => Promise<Receipt>, onDone?: (receipt: Receipt) => void, reread?: () => Promise<unknown>) => {
+  const go = async (write: () => Promise<Receipt>, onDone?: (receipt: Receipt) => void, reread?: Reread) => {
     setBusy(true);
     setError(null);
     setUnread(false);
@@ -77,7 +77,7 @@ export function useDirect() {
  *  each click. After a stale refusal the button stays disabled until `reread` has read the note again; when that fails, Retry
  *  read tries again. */
 export function DirectDialog({ title, intro, run, reread, applyLabel, danger, done, onApplied, onClose }: {
-  title: string; intro: ReactNode; run: () => Promise<Receipt>; reread?: () => Promise<unknown>; applyLabel: string; danger?: boolean;
+  title: string; intro: ReactNode; run: () => Promise<Receipt>; reread?: Reread; applyLabel: string; danger?: boolean;
   /** The toast after the write, with Undo. */
   done?: string; onApplied?: (receipt: Receipt) => void; onClose: () => void;
 }) {
@@ -116,7 +116,8 @@ export function SeenDialog({ first, text, run, ...rest }: {
   applyLabel: string; danger?: boolean; onApplied?: (receipt: Receipt) => void; onClose: () => void;
 }) {
   const [seen, setSeen] = useState(first);
-  const reread = () => Promise.all(seen.map((s) => meta(s.ref)))
-    .then((fresh) => setSeen(fresh.map((m, i) => ({ ref: seen[i].ref, title: m.title, revision: m.revision }))));
+  // A read that came after the reload limit is dropped: the dialog then shows Retry read, not a title it cannot apply to.
+  const reread: Reread = (signal) => Promise.all(seen.map((s) => meta(s.ref)))
+    .then((fresh) => { if (!signal.aborted) setSeen(fresh.map((m, i) => ({ ref: seen[i].ref, title: m.title, revision: m.revision }))); });
   return <DirectDialog {...text(seen)} {...rest} run={() => run(seen)} reread={reread} />;
 }
