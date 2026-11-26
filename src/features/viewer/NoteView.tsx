@@ -9,6 +9,7 @@ import { check, read, type Note } from "../../lib/lm";
 import { actionItems, allowsActions } from "../../lib/note";
 import { useNoteTypes } from "../../lib/noteTypes";
 import { recordOperation } from "../../lib/oplog";
+import { toastWriteFailure } from "../../lib/stale";
 import { shortDate } from "../../lib/text";
 import { MermaidPre } from "../../ui/Mermaid";
 import { toast } from "../../ui/toast";
@@ -93,9 +94,9 @@ function ActionBox({ note, index, done }: { note: Note; index: number; done: boo
   const client = useQueryClient();
   const ref = `${note.domain}:${note.id}`;
   const tick = useMutation({
-    mutationFn: (next: boolean) => check(ref, index, next),
+    mutationFn: (next: boolean) => check(ref, index, next, note.revision),
     onSuccess: (r) => { recordOperation(r.operation_id); client.invalidateQueries({ queryKey: ["note", ref] }); },
-    onError: (e) => toast(classify(e).message, "error"),
+    onError: (e) => toastWriteFailure(client, e),
   });
   return (
     <input type="checkbox" className="action-box" checked={tick.isPending ? !done : done} disabled={tick.isPending}

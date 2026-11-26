@@ -8,6 +8,7 @@ import { extract, ITEM_KINDS, listRecords, putRecord, type CaptureBatch, type Ca
 import { addAction, capture, read, type Project } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
+import { writeFailure } from "../../lib/stale";
 import { setLeaveGuard, useApp } from "../../store";
 import { Confirm, Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
@@ -91,7 +92,8 @@ export async function perform(write: Write, anyway?: boolean, retry?: boolean): 
     return { ref: `milestone:${(await putRecord<Milestone>("milestone", write.record)).id}` };
   }
   if (write.kind === "action" && retry && hasAction((await read(write.ref)).body, write.text)) return { ref: write.ref };
-  const r = write.kind === "action" ? await addAction(write.ref, write.text) : await capture(write.domain, anyway ? { ...write.payload, allow_similar: true } : write.payload);
+  // An action write recorded before writes carried revisions has none: Living Memory refuses it, and the accept is planned again.
+  const r = write.kind === "action" ? await addAction(write.ref, write.text, write.revision ?? "") : await capture(write.domain, anyway ? { ...write.payload, allow_similar: true } : write.payload);
   recordOperation(r.operation_id);
   return { ref: write.kind === "action" ? write.ref : `${r.domain ?? write.domain}:${r.id}`, operation: r.operation_id };
 }
@@ -266,6 +268,13 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
       await refreshStore(client);
     } catch (e) {
       const p = classify(e);
+      if (p.kind === "stale" || p.kind === "revision-required") {
+        // Living Memory wrote nothing, so the recorded write is dropped: accepting again plans it from the notes as they are now.
+        await save({ ...item, intent: undefined }).catch(() => undefined);
+        const message = await writeFailure(client, e);
+        setProblems((all) => ({ ...all, [item.id]: message }));
+        return;
+      }
       const repeated = p.message.includes("Idempotency key has different content");
       setProblems((all) => ({ ...all, [item.id]: p.kind === "similar" ? `A similar note exists: "${p.title ?? p.ref}". Save this one anyway, or skip it.`
         : repeated ? "This item was saved to memory earlier, with the text it had then. Skip it here; the saved note is in Activity." : p.message }));

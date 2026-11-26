@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, CircleCheck, Pin, PinOff, Play, ScrollText } from "lucide-react";
 import { useState } from "react";
-import { classify } from "../../lib/errors";
 import { usePinEnabled, useRuleEnabled, useViewsEnabled } from "../../lib/connection";
 import { confirm, ruleAllowed, setPin, setRule } from "../../lib/lm";
 import { useWhitePaper } from "../../lib/paper";
 import { recordOperation } from "../../lib/oplog";
+import { toastWriteFailure } from "../../lib/stale";
 import { startSession } from "../../store";
 import { toast } from "../../ui/toast";
 import { dayMonth } from "../../ui/Page";
@@ -32,31 +32,31 @@ export function NoteTab({ tab }: { tab: Tab }) {
   const editing = mode === "live" || mode === "source";
   const n = note.data;
   const still = useMutation({
-    mutationFn: () => confirm(refId),
+    mutationFn: (revision: string) => confirm(refId, revision),
     onSuccess: (r) => {
       recordOperation(r.operation_id);
       client.invalidateQueries({ queryKey: ["note", refId] });
       toast(r.status === "unchanged" ? "Already confirmed today." : `Confirmed. Next review ${r.review_by ?? "later"}.`);
     },
-    onError: (e) => toast(classify(e).message, "error"),
+    onError: (e) => toastWriteFailure(client, e),
   });
   const pin = useMutation({
-    mutationFn: (on: boolean) => setPin(refId, on),
-    onSuccess: (r, on) => {
+    mutationFn: ({ on, revision }: { on: boolean; revision: string }) => setPin(refId, on, revision),
+    onSuccess: (r, { on }) => {
       recordOperation(r.operation_id);
       client.invalidateQueries({ queryKey: ["note", refId] });
       toast(on ? "Pinned. Maintenance will not retire this note." : "Unpinned.");
     },
-    onError: (e) => toast(classify(e).message, "error"),
+    onError: (e) => toastWriteFailure(client, e),
   });
   const rule = useMutation({
-    mutationFn: (on: boolean) => setRule(refId, on),
-    onSuccess: (r, on) => {
+    mutationFn: ({ on, revision }: { on: boolean; revision: string }) => setRule(refId, on, revision),
+    onSuccess: (r, { on }) => {
       recordOperation(r.operation_id);
       client.invalidateQueries({ queryKey: ["note", refId] });
       toast(on ? "Made a rule. It is shown in full at every session start." : "Rule removed.");
     },
-    onError: (e) => toast(classify(e).message, "error"),
+    onError: (e) => toastWriteFailure(client, e),
   });
   const viewsOn = useViewsEnabled();
   const pinOn = usePinEnabled();
@@ -71,7 +71,7 @@ export function NoteTab({ tab }: { tab: Tab }) {
           <span className="fill" />
           {n?.status === "active" && !editing && (
             <>
-              <button className="text" onClick={() => still.mutate()} disabled={still.isPending} title="Confirm this note still holds (pushes its review date out)">
+              <button className="text" onClick={() => still.mutate(n.revision)} disabled={still.isPending} title="Confirm this note still holds (pushes its review date out)">
                 <Check size="1.15em" aria-hidden />Still true
               </button>
               <button className="primary" onClick={() => { useSessionDraft.getState().addContext(refId); startSession(); }}>
@@ -80,13 +80,13 @@ export function NoteTab({ tab }: { tab: Tab }) {
             </>
           )}
           {pinOn && n?.status === "active" && !editing && (
-            <button className={`text ${n.pinned ? "on" : ""}`} aria-pressed={!!n.pinned} onClick={() => pin.mutate(!n.pinned)} disabled={pin.isPending}
+            <button className={`text ${n.pinned ? "on" : ""}`} aria-pressed={!!n.pinned} onClick={() => pin.mutate({ on: !n.pinned, revision: n.revision })} disabled={pin.isPending}
               title={n.pinned ? "Pinned: automatic maintenance never retires this note. Click to unpin." : "Pin: stop automatic maintenance from retiring this note"}>
               {n.pinned ? <PinOff size="1.15em" aria-hidden /> : <Pin size="1.15em" aria-hidden />}{n.pinned ? "Unpin" : "Pin"}
             </button>
           )}
           {ruleOn && ruleAllowed(n?.type) && n?.status === "active" && !editing && (
-            <button className={`text ${n.rule ? "on" : ""}`} aria-pressed={!!n.rule} onClick={() => rule.mutate(!n.rule)} disabled={rule.isPending}
+            <button className={`text ${n.rule ? "on" : ""}`} aria-pressed={!!n.rule} onClick={() => rule.mutate({ on: !n.rule, revision: n.revision })} disabled={rule.isPending}
               title={n.rule ? "Rule: shown in full at every session start. Click to remove the rule." : "Make rule: show this note in full at every session start"}>
               <ScrollText size="1.15em" aria-hidden />{n.rule ? "Remove rule" : "Make rule"}
             </button>

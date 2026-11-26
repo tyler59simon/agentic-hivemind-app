@@ -223,10 +223,10 @@ const ERROR_NAMES: [&str; 16] = [
 
 /// The Living Memory commands `src/lib/lm.ts` sends (the first item of an argv), with `-` written as `_` as the webview
 /// writes them. A failed command's name is kept only when it is one of these.
-const LM_COMMANDS: [&str; 36] = [
-    "apply", "archive", "capture", "check", "confirm", "delete_plan", "diff", "doc", "domains", "history", "inspect_plan", "maintenance",
-    "merge_plan", "open", "project", "projects", "proposals", "read", "recap", "reopen", "resolve", "restore", "retag_plan", "review",
-    "search", "supersede", "system", "systems", "taxonomy", "timeline", "type", "types", "undo", "update", "views", "wiki",
+const LM_COMMANDS: [&str; 34] = [
+    "archive", "capture", "check", "confirm", "delete", "diff", "doc", "domains", "history", "maintenance", "merge", "open",
+    "project", "projects", "proposals", "read", "recap", "reopen", "resolve", "restore", "retag", "review", "search", "supersede",
+    "system", "systems", "taxonomy", "timeline", "type", "types", "undo", "update", "views", "wiki",
 ];
 
 /// `/assets/index-abc.js` or `/src/main.tsx`: a file of this app's own bundle (or of its dev server), by path only.
@@ -770,7 +770,7 @@ mod tests {
 
     #[test]
     fn a_failed_command_is_named_only_when_lm_ts_sends_it() {
-        for known in ["read", "delete_plan", "doc", "search"] {
+        for known in ["read", "delete", "doc", "search"] {
             assert_eq!(format_client_event(&json!({ "kind": "lm_failure", "name": known })).1, format!("webview lm_failure name={known}"));
         }
         // An identifier that is not a command (a word from a note), and an error name sent as a command.

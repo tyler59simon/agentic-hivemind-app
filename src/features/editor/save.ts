@@ -16,8 +16,8 @@ const norm = (text: string) => text.replace(/\r\n/g, "\n").replace(/\s+$/, "");
 const sameSet = (a: string[], b: string[]) => a.length === b.length && [...a].sort().every((v, i) => v === [...b].sort()[i]);
 const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i]);
 
-export function changedPayload(base: Fields, now: Fields): UpdatePayload {
-  const p: UpdatePayload = {};
+export function changedPayload(base: Fields, now: Fields): Omit<UpdatePayload, "expected_revision"> {
+  const p: Omit<UpdatePayload, "expected_revision"> = {};
   if (now.title.trim() !== base.title.trim()) p.title = now.title.trim();
   if (norm(now.body) !== norm(base.body)) p.body = now.body;
   if (now.type !== base.type) p.type = now.type;

@@ -1,10 +1,10 @@
 // Who did what, read from Living Memory's journals. Journals carry no actor, so it is inferred:
-// Hivemind's own operation log, overlay_* kinds (Obsidian vault edits), a captured note's origin, plan kinds.
+// Hivemind's own operation log, overlay_* kinds (Obsidian vault edits), a captured note's origin, the plan kinds of older journals.
 import type { Operation } from "../../lib/lm";
 
 export const BOOKKEEPING = new Set(["overlay_state", "overlay_sync", "overlay_views", "bind_domain"]);
-// Kinds that were plan-applied before direct writes (and still are for delete, merge, bulk retag, ...). A direct operation has an ID
-// starting with "d-" and is never labelled a plan, whatever its kind.
+// Kinds older Living Memory versions applied through a reviewed plan. Living Memory has had no plans since 2026-11-26: every
+// operation is direct, with an ID starting with "d-", and is never labelled a plan. The label stays so older journals still read.
 const PLAN_KINDS = new Set(["delete", "merge", "bulk_retag",
   "reference_remap", "taxonomy_expansion", "ingest", "import", "restore", "schema_migration", "note_type_migration", "overlay_delete",
   "project_create", "project_update", "project_archive", "system_create", "system_update", "system_retire",

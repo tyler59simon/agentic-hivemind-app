@@ -96,12 +96,12 @@ describe("capture", () => {
     expect(blocked(extracted({ kind: "milestone" }))).toBeUndefined();
   });
 
-  it("writes a note with its source, and supersedes when asked", () => {
-    const w = planWrite(extracted({ details: ["Saves a lookup"], owner: "Dana" }), ctx, "pay:old");
+  it("writes a note with its source, and supersedes when asked, with the revision the replaced note is listed at", () => {
+    const w = planWrite(extracted({ details: ["Saves a lookup"], owner: "Dana" }), { ...ctx, rows: [row({ ref: "pay:old", title: "Old", type: "decision", revision: "rev-old" })] }, "pay:old");
     expect(w.kind).toBe("note");
     if (w.kind !== "note") return;
     expect(w.domain).toBe("pay");
-    expect(w.payload).toMatchObject({ title: "Use event IDs as keys", type: "decision", tags: ["concern/decision", "project/pay"], supersedes: ["pay:old"] });
+    expect(w.payload).toMatchObject({ title: "Use event IDs as keys", type: "decision", tags: ["concern/decision", "project/pay"], supersedes: ["pay:old@rev-old"] });
     expect(w.payload.body).toBe('Dedupe by event ID.\n\n## Details\n- Saves a lookup\n- **Owner:** Dana\n\n## Source\nCaptured in Hivemind from "Standup" on 2026-11-19: "we agreed on event ids"');
     expect(itemBody(extracted({ quote: " " }), "Notes", TODAY)).toContain('from "Notes" on 2026-11-19.');
   });
@@ -117,7 +117,7 @@ describe("capture", () => {
     expect(first.kind === "note" && first.payload).toMatchObject({ title: "Commitments: PayStream", type: "plan", tags: ["concern/planning", "project/pay"] });
     expect(first.kind === "note" && first.payload.body).toContain("## Action items\n- [ ] Send the Q3 plan (owner: Dana, due: 2026-11-25)");
     const rows = [row({ ref: "pay:c9", title: "Commitments: PayStream", type: "plan", tags: ["project/pay"] })];
-    expect(planWrite(c, { ...ctx, rows })).toEqual({ kind: "action", ref: "pay:c9", text: "Send the Q3 plan (owner: Dana, due: 2026-11-25)" });
+    expect(planWrite(c, { ...ctx, rows })).toEqual({ kind: "action", ref: "pay:c9", text: "Send the Q3 plan (owner: Dana, due: 2026-11-25)", revision: "r" });
     expect(commitmentsNote(rows, undefined)).toBeUndefined();
     const cross = planWrite({ ...c, project: null }, ctx);
     expect(cross.kind === "note" && cross.payload.title).toBe("Commitments: Cross-project");

@@ -2,8 +2,7 @@
 // the open action items of Living Memory work notes, read by `useTaskItems`. Ticking one writes back through `tickTask`.
 import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { classify } from "../../lib/errors";
-import { toast } from "../../ui/toast";
+import { toastWriteFailure } from "../../lib/stale";
 import { OwnerChip } from "../people/OwnerChip";
 import { refreshLists } from "./pageWrite";
 import { filterTasks, groupTasks, sortTasks, type DoneFilter, type DueFilter, type Grouping, type TaskItem } from "./taskList";
@@ -30,7 +29,7 @@ export function TasksView() {
     try {
       await tickTask(t, next);
     } catch (e) {
-      toast(classify(e).message, "error");
+      await toastWriteFailure(client, e);
     } finally {
       setBusy(null);
       refreshLists(client);

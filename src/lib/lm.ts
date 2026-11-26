@@ -27,6 +27,12 @@ export class LmError extends Error {
   get stale() { return this.exitCode === 6; }
 }
 
+/** `REF@REVISION`: how a command names another note it writes (a superseded note, a successor, a merge's notes), with the
+ *  revision the caller read. Living Memory refuses a write to an existing note without one (`revision_required`). */
+export const at = (ref: string, revision: string) => `${ref}@${revision}`;
+/** The revision of the note a command names, as Living Memory takes it. */
+const expected = (revision: string) => ["--expected-revision", revision];
+
 export type Invoke = (cmd: string, args: Record<string, unknown>) => Promise<unknown>;
 let call: Invoke = invoke as Invoke;
 /** Tests swap the transport. */
@@ -75,6 +81,8 @@ export interface Capabilities {
   systems?: { project?: number };
   /** 2: `views` also holds query views (`kinds` lists `note` and `query`); a row without `kind` is a note view. */
   views?: { version: number; kinds: string[] };
+  /** 1: every write to an existing note needs the revision the caller read (`--expected-revision`, `REF@REVISION`). */
+  revisions?: number;
   /** Folder notebook pages: `doc read --file` and `doc propose --file`, and the proposals Living Memory stages for them. */
   docs?: { version: number; max_page_bytes: number; folder_policy?: boolean | number; accept_edited?: boolean;
     /** 1: `doc read --file` and `doc propose --file` for folder notebook pages, and folder proposals in `proposals`. */
@@ -221,12 +229,16 @@ export interface WriteResult {
   ok: true; operation_id?: string; state?: string; id: string; status: string; domain?: string; ref?: string;
   quality_warnings?: string[]; similar?: { ref: string; title: string }[]; inferred_tags?: string[];
   redacted?: { kind: string; field: string }[]; warning?: string; hint?: string;
+  /** The new revision of each note the write changed, by `domain:id`. */
+  revisions?: Record<string, string>;
 }
 
 /** Fields `update` accepts; send only the ones that changed. */
 export interface UpdatePayload {
   title?: string; body?: string; tags?: string[]; type?: NoteType; context?: string;
-  review_by?: string | null; files?: string[]; expected_revision?: string;
+  review_by?: string | null; files?: string[];
+  /** The revision of the note the change was made on; Living Memory refuses the write without it. */
+  expected_revision: string;
 }
 /** `at`: the bridge generation the note's base was read in; Rust refuses the write if the bridge has switched stores since. */
 export const update = (ref: string, payload: UpdatePayload, opts: { redact?: boolean; at?: number } = {}) =>
@@ -234,7 +246,9 @@ export const update = (ref: string, payload: UpdatePayload, opts: { redact?: boo
 
 export interface CapturePayload {
   title: string; body: string; tags: string[]; type: NoteType; context?: string; review_by?: string;
-  files?: string[]; supersedes?: string[]; allow_similar?: boolean; origin?: string;
+  files?: string[];
+  /** Notes this one replaces, each as `REF@REVISION` (`at`). */
+  supersedes?: string[]; allow_similar?: boolean; origin?: string;
   /** The same key, title and body again returns the first note (`status: "existing"`) instead of a second one. */
   idempotency_key?: string;
 }
@@ -259,29 +273,44 @@ export const proposalAcceptWith = (id: string, note: { title: string; body: stri
   run<WriteResult>(["capture", "--from-proposal", id, "--type", note.type ?? "knowledge", "--concern", concern, note.title, note.body]);
 export const proposalReject = (id: string, reason?: string) => run<{ ok: boolean }>(["proposals", "reject", id, ...(reason ? ["--reason", reason] : [])]);
 
-export const check = (ref: string, index: number, done: boolean) =>
-  run<WriteResult & { item: string; index: number; done: boolean; open: number }>(
-    ["check", ref, "--index", String(index), "--domain", domainOf(ref), ...(done ? [] : ["--undo"])]);
+// Every write to an existing note below takes `revision`: the revision of the note as the UI shows it. A note changed since
+// fails with `stale` (exit 6); the caller reads it again and lets the user repeat the action (`lib/stale.ts`).
 
-export const confirm = (ref: string) =>
-  run<WriteResult & { confirmed?: string[]; review_by?: string }>(["confirm", ref, "--domain", domainOf(ref)]);
+export const check = (ref: string, index: number, done: boolean, revision: string) =>
+  run<WriteResult & { item: string; index: number; done: boolean; open: number }>(
+    ["check", ref, "--index", String(index), "--domain", domainOf(ref), ...(done ? [] : ["--undo"]), ...expected(revision)]);
+
+export const confirm = (ref: string, revision: string) =>
+  run<WriteResult & { confirmed?: string[]; review_by?: string }>(["confirm", ref, "--domain", domainOf(ref), ...expected(revision)]);
 
 /** Append one open Action Item; the rest of the body is kept. */
-export const addAction = (ref: string, text: string) =>
-  run<WriteResult>(["update", ref, "--domain", domainOf(ref), "--add-action", text]);
+export const addAction = (ref: string, text: string, revision: string) =>
+  run<WriteResult>(["update", ref, "--domain", domainOf(ref), "--add-action", text, ...expected(revision)]);
 
-// ---- Direct writes: one journaled step, no plan. The receipt names the operation, so it can be undone. ----
+// ---- Direct writes: one journaled step. The receipt names the operation, so it can be undone. ----
 
 /** `kind` and `summary` are absent from the receipt of a note write such as archive. */
-export interface Receipt { ok: true; operation_id: string; state: string; kind?: string; summary?: Record<string, unknown>; undo: string; warnings?: string[] }
+export interface Receipt {
+  ok: true; operation_id: string; state: string; kind?: string; summary?: Record<string, unknown>; undo: string; warnings?: string[];
+  /** The new revision of each note the write changed, by `domain:id`. */
+  revisions?: Record<string, string>;
+}
 
 const direct = (argv: string[], payload?: object) => run<Receipt>(argv, payload ? JSON.stringify(payload) : undefined);
 
-export const archiveNote = (ref: string) => direct(["archive", ref, "--domain", domainOf(ref)]);
-export const resolveNote = (ref: string) => direct(["resolve", ref, "--domain", domainOf(ref)]);
-export const reopenNote = (ref: string) => direct(["reopen", ref, "--domain", domainOf(ref)]);
-/** `by` is the ID or ref of a note in the same domain. */
-export const supersedeNote = (ref: string, by: string) => direct(["supersede", ref, "--by", by, "--domain", domainOf(ref)]);
+export const archiveNote = (ref: string, revision: string) => direct(["archive", ref, "--domain", domainOf(ref), ...expected(revision)]);
+export const resolveNote = (ref: string, revision: string) => direct(["resolve", ref, "--domain", domainOf(ref), ...expected(revision)]);
+export const reopenNote = (ref: string, revision: string) => direct(["reopen", ref, "--domain", domainOf(ref), ...expected(revision)]);
+/** `by` is a note in the same domain, with the revision it was picked at. */
+export const supersedeNote = (ref: string, revision: string, by: { ref: string; revision: string }) =>
+  direct(["supersede", ref, "--by", at(by.ref, by.revision), "--domain", domainOf(ref), ...expected(revision)]);
+/** Delete a note file. Journaled, so `undo` brings it back. */
+export const deleteNote = (ref: string, revision: string) => direct(["delete", ref, "--domain", domainOf(ref), ...expected(revision)]);
+/** `target` takes `body`; the `sources` are superseded by it. Each note is `REF@REVISION` (`at`). */
+export interface MergePayload { target: string; sources: string[]; body: string }
+export const merge = (payload: MergePayload) => direct(["merge"], payload);
+/** Rename tags in every domain, `{ "old/tag": "new/tag" }`. A bulk retag needs no note revisions. */
+export const retag = (mappings: Record<string, string>) => direct(["retag"], mappings);
 export const taxonomyAdd = (tags: string[]) => direct(["taxonomy", "add", ...tags]);
 
 export interface NoteTypeCreate {
@@ -292,25 +321,8 @@ export type NoteTypeUpdate = Partial<Omit<NoteTypeCreate, "name">> & { name: str
 export const typeWrite = (action: "create" | "update" | "retire", payload: NoteTypeCreate | NoteTypeUpdate | { name: string }) =>
   direct(["type", action], payload);
 
-// ---- Plans (delete, merge, bulk retag and the kept kinds): make, inspect (as a diff), apply with the digest. ----
-
-export interface Plan { ok: true; plan_id: string; digest: string; kind: string; summary: Record<string, unknown> }
-export interface PlanEffect { path: string; expected_revision: string | null; action: "write" | "delete"; diff: string; truncated: boolean }
-export interface PlanInspection extends Plan { effects: PlanEffect[] }
-
-export function deletePlan(ref: string): Promise<Plan> {
-  return run<Plan>(["delete-plan", ref, "--domain", domainOf(ref)]);
-}
-export const mergePlan = (payload: { target: string; sources: string[]; body: string }) =>
-  run<Plan>(["merge-plan"], JSON.stringify(payload));
-export const retagPlan = (renames: Record<string, string>) => run<Plan>(["retag-plan"], JSON.stringify(renames));
-/** Undoing a direct write returns a receipt at once; an operation of a kept plan kind (merge, delete, ...) returns a plan. */
-export const undo = (operationId: string) => run<Receipt | Plan>(["undo", operationId]);
-export const isPlan = (r: Receipt | Plan): r is Plan => "plan_id" in r;
-export const inspectPlan = (planId: string) => run<PlanInspection>(view(["inspect-plan", planId]));
-export const applyPlan = (p: Pick<Plan, "plan_id" | "digest">) =>
-  run<{ ok: true; operation_id: string; state: string; idempotent: boolean; warnings?: string[] }>(
-    ["apply", p.plan_id, "--expected-plan-sha256", p.digest]);
+/** Undo one operation: one more direct, journaled step. Refused when the files were edited again since. */
+export const undo = (operationId: string) => run<Receipt>(["undo", operationId]);
 
 // ---- History and links (read-only). ----
 
@@ -359,7 +371,7 @@ function scopeArgs(name: string, o: ScopeOptions): string[] {
   return view(argv);
 }
 
-export interface OpenItem { kind?: "note" | "page"; ref: string; short_ref: string; title: string; type: NoteType; updated: string; index: number; item: string }
+export interface OpenItem { kind?: "note" | "page"; ref: string; short_ref: string; title: string; type: NoteType; updated: string; index: number; item: string; revision?: string }
 export interface OpenWork { ok: boolean; domain: string | null; notes: number; count: number; items: OpenItem[]; hint?: string }
 export interface OpenOptions extends ScopeOptions { pages?: "none" | "injectable" | "searchable" }
 export const openArgs = (o: OpenOptions) => {
@@ -377,7 +389,7 @@ export interface ReviewRow {
 }
 export const REVIEW_KINDS = ["stale", "due", "interim", "duplicate", "warned", "noisy"] as const;
 export type ReviewKind = (typeof REVIEW_KINDS)[number];
-export type ReviewAction = "confirm" | "update" | "supersede" | "resolve" | "merge-plan" | "archive";
+export type ReviewAction = "confirm" | "update" | "supersede" | "resolve" | "merge" | "archive";
 export interface ReviewResult {
   ok: boolean; domain: string | null; due: number; notes: ReviewRow[]; hint?: string;
   counts?: Record<ReviewKind, number>;
@@ -540,11 +552,13 @@ export const maintenanceEnable = (domain: string) =>
 export const maintenanceDisable = () => run<MaintenanceStatus & { operation_id?: string }>(["maintenance", "disable"]);
 
 /** Bring an archived note back to active; LM pins it so maintenance does not retire it again at once. */
-export const restoreNote = (ref: string) => run<WriteResult>(["restore", ref, "--domain", domainOf(ref)]);
-export const setPin = (ref: string, on: boolean) => run<WriteResult>(["update", ref, "--domain", domainOf(ref), on ? "--pin" : "--unpin"]);
+export const restoreNote = (ref: string, revision: string) => run<WriteResult>(["restore", ref, "--domain", domainOf(ref), ...expected(revision)]);
+export const setPin = (ref: string, on: boolean, revision: string) =>
+  run<WriteResult>(["update", ref, "--domain", domainOf(ref), on ? "--pin" : "--unpin", ...expected(revision)]);
 /** A rule note is shown in full at every session start. LM refuses the flag on types other than policy and preference. */
 export const ruleAllowed = (type: string | undefined) => type === "policy" || type === "preference";
-export const setRule = (ref: string, on: boolean) => run<WriteResult>(["update", ref, "--domain", domainOf(ref), on ? "--rule" : "--no-rule"]);
+export const setRule = (ref: string, on: boolean, revision: string) =>
+  run<WriteResult>(["update", ref, "--domain", domainOf(ref), on ? "--rule" : "--no-rule", ...expected(revision)]);
 
 /** The domain wiki (`wiki --format json`): every note as an article, grouped into projects, sections and a code-folder tree.
  *  Notes carry their id; `ref` is the 8-character prefix used in page addresses; folder ids are `c-` plus a hash of project and path, stable across rebuilds. */

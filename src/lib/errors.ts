@@ -11,11 +11,16 @@ export type Problem =
   | { kind: "ambiguous"; message: string }
   | { kind: "private"; message: string }
   | { kind: "undo-conflict"; message: string }
+  /** Hivemind sent a write without the note's revision: a bug in Hivemind, never the user's doing. */
+  | { kind: "revision-required"; message: string }
   | { kind: "other"; message: string };
 
 export function classify(error: unknown): Problem {
   const message = error instanceof LmError ? error.message : error instanceof Error ? error.message : String(error);
   if (/^(stale_revision|Stale revision)/.test(message)) return { kind: "stale", message };
+  if (/^revision_required/.test(message)) {
+    return { kind: "revision-required", message: `Hivemind sent this change without the note's revision, so Living Memory refused it. This is a bug in Hivemind; please report it. (${message})` };
+  }
   if (/^possible_duplicate/.test(message)) {
     const m = /similar to (\S+) "([^"]*)"/.exec(message);
     return { kind: "similar", message, ref: m?.[1], title: m?.[2] };

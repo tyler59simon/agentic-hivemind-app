@@ -11,7 +11,7 @@ use std::time::Duration;
 const TOOL_SUMMARY: usize = 300;
 const RESULT_SUMMARY: usize = 500;
 const APPROVAL_INPUT: usize = 4000;
-pub(crate) const GOVERNED: &str = "Hivemind does not let agent sessions run Living Memory plan, apply or undo commands, or its direct writes (archive, rewrite, remap, promote, taxonomy add, source, project, system, change). Describe the change and let the user apply it.";
+pub(crate) const GOVERNED: &str = "Hivemind does not let agent sessions run Living Memory delete, merge, retag or undo commands, or its other governed writes (archive, rewrite, remap, promote, migrate, import, ingest, backup restore, taxonomy add, source, project, system). Describe the change and let the user make it.";
 const DECLINED: &str = "The user declined this action in Hivemind.";
 /// What the CLI's accept-edits mode allows, as the label of an always-allow that has no rule to show.
 const EDITS_LABEL: &str = "file edits and simple file commands in the worktree";
@@ -183,7 +183,7 @@ impl Adapter for ClaudeCode {
         if let Some(root) = &spec.memory_root {
             command.env("LIVING_MEMORY_ROOT", root);
         }
-        // Living Memory's hook and CLI refuse their plan, apply and direct-write commands while this is set: the second guard
+        // Living Memory's hook and CLI refuse its governed commands while this is set: the second guard
         // beside the deny rules.
         command.env("HIVEMIND_SESSION", &spec.session_id);
         command
@@ -692,7 +692,7 @@ mod tests {
     // Verbatim from the spike (section 5.1 B of the Phase 2 document).
     const WRITE_REQUEST: &str = r#"{"type":"control_request","request_id":"a09f3229-53c0-4a3d-9b4b-bfa4cb890730","request":{"subtype":"can_use_tool","tool_name":"Write","display_name":"Write","input":{"file_path":"<SCRATCH>\\spike-claude\\a.txt","content":"x"},"description":"a.txt","permission_suggestions":[{"type":"setMode","mode":"acceptEdits","destination":"session"}],"tool_use_id":"toolu_01JDdQ12vozJ8B3vPpSdHovj"}}"#;
     const BASH_REQUEST: &str = r#"{"type":"control_request","request_id":"6c738ff4-3b35-4894-acec-1b2806f0b2f4","request":{"subtype":"can_use_tool","tool_name":"Bash","display_name":"Bash","input":{"command":"mkdir spike_dir_1","description":"Create directory spike_dir_1"},"description":"Create directory spike_dir_1","permission_suggestions":[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"mkdir spike_dir_1"}],"behavior":"allow","destination":"localSettings"},{"type":"addDirectories","directories":["<SCRATCH>\\spike-claude"],"destination":"session"},{"type":"setMode","mode":"acceptEdits","destination":"session"}],"blocked_path":"<SCRATCH>\\spike-claude\\spike_dir_1","tool_use_id":"toolu_01BaUp77S1XfWQ94cYZZXe5W"}}"#;
-    const GOVERNED_REQUEST: &str = r#"{"type":"control_request","request_id":"r-gov","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"python living_memory.py apply x --expected-plan-sha256 y"},"permission_suggestions":[]}}"#;
+    const GOVERNED_REQUEST: &str = r#"{"type":"control_request","request_id":"r-gov","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"python living_memory.py delete x --expected-revision y"},"permission_suggestions":[]}}"#;
 
     fn json_of(line: &str) -> Value {
         serde_json::from_str(line).unwrap()

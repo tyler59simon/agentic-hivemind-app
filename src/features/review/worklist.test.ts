@@ -27,9 +27,9 @@ describe("review worklist", () => {
     expect(primaryAction({ action: "update" })).toEqual({ kind: "open", label: "Open" });
     expect(primaryAction({ action: "resolve" })).toEqual({ kind: "resolve", label: "Resolve…" });
     expect(primaryAction({ action: "archive" })).toEqual({ kind: "archive", label: "Archive…" });
-    expect(primaryAction({ action: "merge-plan", pair })).toEqual({ kind: "merge", label: "Merge…" });
+    expect(primaryAction({ action: "merge", pair })).toEqual({ kind: "merge", label: "Merge…" });
     expect(primaryAction({ action: "supersede", pair })).toEqual({ kind: "merge", label: "Merge…" });
-    expect(primaryAction({ action: "merge-plan" })).toEqual({ kind: "open", label: "Open" });
+    expect(primaryAction({ action: "merge" })).toEqual({ kind: "open", label: "Open" });
   });
 });
 

@@ -2,14 +2,15 @@
 // the project's commitments note (made on first use); a milestone becomes a Hivemind record. Nothing here writes: the review
 // dialog runs the plan when the user accepts the item.
 import type { CaptureItem, Milestone } from "../../lib/executive";
-import type { CapturePayload, NoteRow, NoteType, Project } from "../../lib/lm";
+import { at, type CapturePayload, type NoteRow, type NoteType, type Project } from "../../lib/lm";
 import { actionItems, HEADINGS } from "../../lib/note";
 import { commitmentsTitle, formatCommitment } from "./commitments";
 
 export type Write =
   | { kind: "note"; domain: string; payload: CapturePayload }
-  /** `key` marks a captured item's write, which may be a retry: an open action item with the same text is not added again. */
-  | { kind: "action"; ref: string; text: string; key?: string }
+  /** `key` marks a captured item's write, which may be a retry: an open action item with the same text is not added again.
+   *  `revision` is the commitments note's revision when the write was planned. */
+  | { kind: "action"; ref: string; text: string; revision: string; key?: string }
   | { kind: "milestone"; record: Partial<Milestone> };
 
 export interface Context {
@@ -93,7 +94,10 @@ export function planWrite(item: CaptureItem, ctx: Context, supersedes?: string, 
   if (item.kind === "commitment") {
     const text = formatCommitment({ task: item.title, owner: item.owner, due: item.due });
     const existing = commitmentsNote(ctx.rows, project);
-    if (existing) return key ? { kind: "action", ref: existing.ref, text, key } : { kind: "action", ref: existing.ref, text };
+    if (existing) {
+      const write = { kind: "action" as const, ref: existing.ref, text, revision: existing.revision };
+      return key ? { ...write, key } : write;
+    }
     const name = project?.name ?? "Cross-project";
     const body = `Commitments made in meetings and conversations${project ? ` for ${name}` : " that belong to no single project"}. Hivemind adds to this list when you accept a captured commitment.\n\n## ${HEADINGS.actions}\n- [ ] ${text}`;
     return { kind: "note", domain: domainOf(project, ctx.defaultDomain), payload: { title: commitmentsTitle(name), body, type: "plan", tags: tagsFor("plan", project, ctx.known), ...keyed } };
@@ -101,7 +105,9 @@ export function planWrite(item: CaptureItem, ctx: Context, supersedes?: string, 
   const type = NOTE_TYPE[item.kind] ?? "knowledge";
   const domain = destination(item, ctx);
   const payload: CapturePayload = { title: item.title.trim(), body: itemBody(item, ctx.sourceLabel, ctx.today), type, tags: tagsFor(type, project, ctx.known), ...keyed };
-  return { kind: "note", domain, payload: supersedes ? { ...payload, supersedes: [supersedes] } : payload };
+  // The replaced note goes with the revision the review lists it at (Living Memory refuses it without one).
+  const replaced = supersedes && ctx.rows.find((r) => r.ref === supersedes);
+  return { kind: "note", domain, payload: supersedes ? { ...payload, supersedes: [replaced ? at(supersedes, replaced.revision) : supersedes] } : payload };
 }
 
 /** The write accepting `item` runs: the one an unfinished earlier accept recorded (`intent`), or a new plan. `fresh` says the

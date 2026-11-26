@@ -7,7 +7,7 @@ import type { Milestone } from "../../lib/executive";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const tickTask = vi.fn(async () => undefined);
+const tickTask = vi.fn(async (): Promise<{ state: "saved" | "unsaved"; revision?: string }> => ({ state: "saved", revision: "rev2" }));
 vi.mock("../notes/useTaskItems", () => ({ tickTask, openSource: vi.fn() }));
 vi.mock("../notes/pageWrite", () => ({ refreshLists: vi.fn() }));
 
@@ -63,7 +63,8 @@ describe("Home's open list", () => {
     expect(toast.text).toBe("Done: Late");
     await act(async () => { toast.action!.run(); });
     expect(tickTask).toHaveBeenCalledTimes(2);
-    expect(tickTask.mock.calls[1]).toEqual([expect.objectContaining({ line: 1, done: true, sha256: undefined }), false]);
+    // An action item's Undo carries the revision the tick left.
+    expect(tickTask.mock.calls[1]).toEqual([expect.objectContaining({ line: 1, done: true, sha256: undefined, revision: "rev2" }), false]);
     expect(useToasts.getState().items.length).toBe(1);
   });
 

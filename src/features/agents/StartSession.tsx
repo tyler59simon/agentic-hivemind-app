@@ -42,21 +42,21 @@ const TERMINAL_APPROVALS = "The program asks for approvals itself, in the termin
 function toolLines(engine: Engine, face: Interface): string[] {
   if (face === "terminal") {
     return engine === "claude"
-      ? [TERMINAL_APPROVALS, "Never: Living Memory plan, apply and undo commands. Claude Code is started with rules that deny them.", "Loaded from your own Claude Code setup: settings, hooks, plugins and MCP servers."]
-      : [TERMINAL_APPROVALS, "Never: applying or undoing Living Memory plans. Living Memory's own hook in your Codex setup refuses them in Hivemind terminals.", "Loaded from your own Codex setup: its configuration, AGENTS.md, plugins and MCP servers."];
+      ? [TERMINAL_APPROVALS, "Never: Living Memory delete, merge, retag, undo and its other governed writes. Claude Code is started with rules that deny them.", "Loaded from your own Claude Code setup: settings, hooks, plugins and MCP servers."]
+      : [TERMINAL_APPROVALS, "Never: Living Memory delete, merge, retag, undo and its other governed writes. Living Memory refuses them in Hivemind terminals.", "Loaded from your own Codex setup: its configuration, AGENTS.md, plugins and MCP servers."];
   }
   return engine === "claude"
     ? [
       "Without asking: reading files in the worktree; Living Memory's search, read and capture commands (allowed by its own hook); and anything your own Claude Code settings already allow.",
       "With “Accept edits”, also without asking: file edits in the worktree and simple file commands there, such as creating a folder.",
       "Asks you first: everything else, such as other shell commands, reading or writing outside the worktree, and file edits under “Review edits”.",
-      "Never: Living Memory plan, apply and undo commands, even if a setting allows them.",
+      "Never: Living Memory delete, merge, retag, undo and its other governed writes, even if a setting allows them.",
       "Loaded from your Claude Code setup: settings, hooks, plugins and MCP servers. The first line of the session lists the plugins that loaded.",
     ]
     : [
       "With “Review edits”: every file edit, and every command Codex does not trust as read-only, asks you first.",
       "With “Accept edits”: file edits and commands in the worktree run without asking; Codex asks before it goes outside its sandbox.",
-      "Never: Living Memory plan, apply and undo commands.",
+      "Never: Living Memory delete, merge, retag, undo and its other governed writes.",
       "Loaded from your Codex setup: its configuration, AGENTS.md, plugins and MCP servers.",
     ];
 }

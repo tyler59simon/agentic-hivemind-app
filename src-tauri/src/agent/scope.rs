@@ -153,7 +153,7 @@ pub fn rule_path(path: &str) -> String {
 
 /// The only things a passport session may do beyond reading. Provisional until verified against
 /// a real Architecture Suite run. Living Memory's own hook allows its read and capture commands;
-/// its plan and apply commands must stay denied, so nothing here may match them.
+/// its governed commands must stay denied, so nothing here may match them.
 fn passport_rules(architecture: &Path) -> Vec<String> {
     vec![
         format!("Edit({}/**)", rule_path(&architecture.display().to_string())),
@@ -471,19 +471,21 @@ pub fn for_session(bridge: &Bridge, saved: &Settings, info: &SessionInfo) -> Res
     }
 }
 
-/// The Living Memory commands only the user may run, through Hivemind's own dialogs: applying, undoing and recovering a
-/// plan, and every direct write (archive, rewrite, remap, promote, taxonomy add and the source, project and system
-/// registries), since a user allow rule would let any one missing here run without a question. Writing a plan (merge-plan,
-/// delete-plan, ...) is the agent's way to propose such a change, so it is allowed; Living Memory's own guard agrees. A
-/// phrase such as `project create` keeps a search for the word "project" from matching.
-const GOVERNED_COMMANDS: [&str; 17] = [
-    "apply", "undo", "recover",
+/// The Living Memory commands only the user may run, through Hivemind's own dialogs: undo and recover, delete, merge and bulk
+/// retag, the store-wide writes (migrate, backup restore, import, ingest, overlay teardown) and every other direct write
+/// (archive, rewrite, remap, promote, taxonomy add and the source, project and system registries), since a user allow rule
+/// would let any one missing here run without a question. Living Memory has had no plans since 2026-11-26, so an agent
+/// describes such a change and the user makes it. A phrase such as `project create` keeps a search for the word "project"
+/// from matching.
+const GOVERNED_COMMANDS: [&str; 24] = [
+    "undo", "recover", "delete", "merge", "retag",
+    "migrate", "backup restore", "import", "ingest", "overlay-teardown",
     "archive", "rewrite", "remap", "promote", "taxonomy add", "source add", "source remove", "source implicit",
     "project create", "project update", "project archive", "system create", "system update", "system retire",
 ];
 
-/// A shell command that would apply or undo a plan or make a direct write to the Living Memory store. Its hook lets read,
-/// capture and plan commands through before Hivemind is asked; these must never run from a session, whatever the user clicks.
+/// A shell command that would make a governed write to the Living Memory store. Its hook lets read and capture commands
+/// through before Hivemind is asked; these must never run from a session, whatever the user clicks.
 pub fn governed_memory_command(command: &str) -> bool {
     let text = command.to_lowercase();
     (text.contains("living_memory") && names_governed(&text)) || alm_segments(&text).iter().any(|words| names_governed(&words.join(" ")))
@@ -533,9 +535,9 @@ fn alm_segments(text: &str) -> Vec<Vec<String>> {
 
 /// Deny rules for the same commands, for the CLI's own rule engine: they hold even where the user's settings allow the
 /// call, so it never becomes a question Hivemind could refuse. They name the script only. `*alm*` rules would refuse every
-/// memory search that mentions archive or apply, and would double a command line that terminal sessions pass through
+/// memory search that mentions archive or delete, and would double a command line that terminal sessions pass through
 /// cmd.exe's 8191-character limit; the `alm` launcher is refused by Living Memory itself while HIVEMIND_SESSION is set
-/// (apply, undo, recover and the direct writes), and by `governed_memory_command` when a session asks.
+/// (undo, recover and the direct writes), and by `governed_memory_command` when a session asks.
 pub fn governed_rules() -> Vec<String> {
     ["Bash", "PowerShell"]
         .into_iter()
@@ -687,17 +689,23 @@ mod tests {
     #[test]
     fn governed_memory_commands_are_recognised() {
         for command in [
-            r#"python "C:\x\living_memory.py" apply abc --expected-plan-sha256 d"#,
-            // `plan archive` writes a plan, but the word `archive` is there; a refused plan is the safe side.
-            r#"python "C:\x\living_memory.py" --domain a plan archive x"#,
+            r#"python "C:\x\living_memory.py" --domain a delete a:x --expected-revision abc"#,
+            r#"python "C:\x\living_memory.py" merge --payload-file m.json"#,
+            r#"python "C:\x\living_memory.py" retag --payload-file r.json"#,
+            r#"python "C:\x\living_memory.py" backup restore b.zip"#,
+            r#"python "C:\x\living_memory.py" overlay-teardown"#,
             r#"python "C:\x\living_memory.py" --domain a archive x"#,
             r#"python "C:\x\living_memory.py" project create --payload-file p.json"#,
             r#"python "C:\x\living_memory.py" taxonomy add concern/security"#,
             r#"python "C:\x\LIVING_MEMORY.PY" undo 123"#,
-            // The word `apply` is there even inside a search; a refused search is the safe side.
-            r#"python "C:\x\living_memory.py" search "apply the plan""#,
+            // The word `delete` is there even inside a search; a refused search is the safe side.
+            r#"python "C:\x\living_memory.py" search "delete the cache""#,
             // The launcher: bare, by path, and with its Windows extensions.
-            "alm --json --domain a apply abc --expected-plan-sha256 d",
+            "alm --json --domain a delete a:x --expected-revision abc",
+            "alm --json merge --payload-file m.json",
+            "alm --json migrate",
+            "alm import bundle.zip",
+            "alm --json ingest --source x",
             r#""C:\Users\u\.local\bin\alm.exe" recover op-1"#,
             r"C:\Users\u\.local\bin\ALM.CMD undo 123",
             "/home/u/.local/bin/alm --domain a archive x",
@@ -710,25 +718,21 @@ mod tests {
         }
         for command in [
             r#"python "C:\x\living_memory.py" search retries"#,
-            r#"python "C:\x\living_memory.py" inspect-plan abc"#,
-            // Writing a plan is how an agent proposes a merge or delete for the user to apply.
-            r#"python "C:\x\living_memory.py" merge-plan a b"#,
-            r#"python "C:\x\living_memory.py" project-plan create"#,
+            // A hyphenated word is one word: a name that only starts like a governed command is not one.
             "alm --json --domain a delete-plan a:x",
-            "alm future-plan x",
+            r#"python "C:\x\living_memory.py" backup"#,
             r#"python "C:\x\living_memory.py" taxonomy"#,
             r#"python "C:\x\living_memory.py" projects --status active"#,
             r#"python "C:\x\living_memory.py" search "project change""#,
             r#"python "C:\x\living_memory.py" capture --title x"#,
-            "git apply patch.diff",
+            "git merge main",
             "alm --json --domain a search retries",
-            "alm --json --domain a inspect-plan abc",
             // A word that only contains alm is not the launcher, and nor is a file named alm given to another program.
-            "palm apply x",
+            "palm delete x",
             "realm.exe undo 1",
-            "git apply --check alm",
+            "git merge --no-ff alm",
             r#"echo "example; alm archive x""#,
-            "alm --json --domain a search x && git apply patch.diff",
+            "alm --json --domain a search x && git merge main",
         ] {
             assert!(!governed_memory_command(command), "{command}");
         }
@@ -737,19 +741,21 @@ mod tests {
     #[test]
     fn governed_rules_cover_every_command_for_both_shells() {
         let rules = governed_rules();
-        assert_eq!(rules.len(), 68);
-        assert_eq!(rules.iter().collect::<std::collections::HashSet<_>>().len(), 68, "all different");
+        assert_eq!(rules.len(), 96);
+        assert_eq!(rules.iter().collect::<std::collections::HashSet<_>>().len(), 96, "all different");
         for rule in [
-            "Bash(*living_memory.py* apply *)",
-            "Bash(*living_memory.py* apply)",
+            "Bash(*living_memory.py* delete *)",
+            "Bash(*living_memory.py* merge)",
             "PowerShell(*living_memory.py* undo *)",
             "PowerShell(*living_memory.py* recover)",
+            "Bash(*living_memory.py* backup restore *)",
             "Bash(*living_memory.py* project create *)",
             "PowerShell(*living_memory.py* archive)",
         ] {
             assert!(rules.iter().any(|r| r == rule), "{rule}");
         }
-        assert_eq!(&rules[..2], ["Bash(*living_memory.py* apply *)", "Bash(*living_memory.py* apply)"]);
+        assert!(!rules.iter().any(|r| r.contains(" apply")), "Living Memory has no apply command any more");
+        assert_eq!(&rules[..2], ["Bash(*living_memory.py* undo *)", "Bash(*living_memory.py* undo)"]);
         for rule in &rules {
             assert!(rule.starts_with("Bash(*living_memory.py* ") || rule.starts_with("PowerShell(*living_memory.py* "), "{rule}");
             for word in ["-plan", "search", "read", "capture"] {
@@ -880,7 +886,7 @@ mod tests {
     #[test]
     fn every_session_is_denied_destructive_git() {
         let rules = deny_rules();
-        assert_eq!(&rules[..68], governed_rules().as_slice());
+        assert_eq!(&rules[..96], governed_rules().as_slice());
         for rule in ["Bash(*git push*)", "PowerShell(*git reset --hard*)", "Bash(*git clean*)", "PowerShell(*git branch -D*)"] {
             assert!(rules.iter().any(|r| r == rule), "{rule}");
         }

@@ -9,6 +9,8 @@ import { createRoot, type Root } from "react-dom/client";
 
 const calls: { cmd: string; args: Record<string, unknown> }[] = [];
 const files = new Map<string, string>();
+/** The revision `open` lists the action item's note at, and whether `check` answers that the note changed since. */
+const lm = { revision: "rev1", stale: false };
 const pad = (n: number) => String(n).padStart(2, "0");
 const day = (offset: number) => { const d = new Date(); d.setDate(d.getDate() + offset); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 const sha = (raw: string) => `sha-${raw}`;
@@ -41,8 +43,9 @@ vi.mock("@tauri-apps/api/core", () => ({
       }
       case "lm": {
         const argv = args.argv as string[];
-        if (argv[0] === "open") return { exit_code: 0, error: null, result: { ok: true, domain: null, notes: 1, count: 1, items: [{ ref: "demo:abc", short_ref: "abc", title: "Release work", type: "plan", updated: "", index: 1, item: "write the notes" }] } };
-        if (argv[0] === "check") return { exit_code: 0, error: null, result: { ok: true, item: "write the notes", index: 1, done: true, open: 0 } };
+        if (argv[0] === "open") return { exit_code: 0, error: null, result: { ok: true, domain: null, notes: 1, count: 1, items: [{ ref: "demo:abc", short_ref: "abc", title: "Release work", type: "plan", updated: "", index: 1, item: "write the notes", revision: lm.revision }] } };
+        if (argv[0] === "check" && lm.stale) return { exit_code: 6, result: null, error: { code: "stale", message: "stale_revision: demo:abc changed since revision rev1; read it again and redo the change" } };
+        if (argv[0] === "check") return { exit_code: 0, error: null, result: { ok: true, item: "write the notes", index: 1, done: true, open: 0, revisions: { "demo:abc": "rev2" } } };
         return { exit_code: 0, error: null, result: {} };
       }
     }
@@ -82,6 +85,7 @@ async function mount() {
 beforeEach(() => {
   calls.length = 0;
   files.clear();
+  Object.assign(lm, { revision: "rev1", stale: false });
   files.set("Plan.md", "# Plan\n- [ ] pay the bill ⏫ 📅 " + day(-2) + "\n- [ ] call Ana 📅 " + day(0) + "\n- [ ] no date at all\n- [x] already finished\n");
   useToasts.setState({ items: [] });
   useWorkspace.setState({ panes: [{ id: "p0", tabs: [], active: null }], focused: "p0", dirty: {}, reveal: null });
@@ -162,7 +166,8 @@ describe("the Tasks view", () => {
     await mount();
     await act(async () => tickBox("write the notes").click());
     await settle();
-    expect(calls.find((c) => c.cmd === "lm" && (c.args.argv as string[])[0] === "check")!.args.argv).toEqual(["check", "demo:abc", "--index", "1", "--domain", "demo"]);
+    expect(calls.find((c) => c.cmd === "lm" && (c.args.argv as string[])[0] === "check")!.args.argv)
+      .toEqual(["check", "demo:abc", "--index", "1", "--domain", "demo", "--expected-revision", "rev1"]);
     await act(async () => [...document.querySelectorAll<HTMLButtonElement>(".task-page")].find((b) => b.textContent === "Release work")!.click());
     expect(useWorkspace.getState().panes[0].tabs).toEqual([expect.objectContaining({ kind: "note", ref: "demo:abc" })]);
     expect(useApp.getState().route).toEqual({ page: "notes" });
@@ -170,5 +175,23 @@ describe("the Tasks view", () => {
     await act(async () => [...document.querySelectorAll<HTMLButtonElement>(".task-page")].find((b) => b.textContent === "Plan")!.click());
     expect(useWorkspace.getState().panes[0].tabs[1]).toMatchObject({ kind: "file", file: { notebook: "nb-1", path: "Plan.md" } });
     expect(useApp.getState().route).toEqual({ page: "notes" });
+  });
+
+  it("reads the action items again when a tick finds the note changed, and the repeated tick sends the new revision", async () => {
+    await mount();
+    lm.stale = true;
+    lm.revision = "rev2";
+    const opens = () => calls.filter((c) => c.cmd === "lm" && (c.args.argv as string[])[0] === "open").length;
+    const before = opens();
+    await act(async () => tickBox("write the notes").click());
+    await settle();
+    const checks = () => calls.filter((c) => c.cmd === "lm" && (c.args.argv as string[])[0] === "check").map((c) => c.args.argv as string[]);
+    expect(checks()).toHaveLength(1);   // never retried for the user
+    expect(useToasts.getState().items.map((t) => [t.kind, t.text])).toEqual([["warn", "This note changed; reloaded."]]);
+    expect(opens()).toBeGreaterThan(before);
+    lm.stale = false;
+    await act(async () => tickBox("write the notes").click());
+    await settle();
+    expect(checks()[1]).toEqual(["check", "demo:abc", "--index", "1", "--domain", "demo", "--expected-revision", "rev2"]);
   });
 });

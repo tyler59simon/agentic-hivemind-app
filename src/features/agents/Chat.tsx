@@ -8,7 +8,7 @@ import { startSession, useApp } from "../../store";
 import { Confirm } from "../../ui/Modal";
 import { ArrowLink } from "../../ui/Page";
 import { toast } from "../../ui/toast";
-import { DiffView } from "../plans/PlanDialog";
+import { DiffView } from "../../components/DiffView";
 import { NotePicker } from "../plans/NotePicker";
 import { projectsQuery } from "../projects/useProject";
 import { noteQuery } from "../viewer/NoteView";

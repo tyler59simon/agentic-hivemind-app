@@ -36,7 +36,7 @@ export function useTaskItems(done: DoneFilter) {
     }, t.due));
     for (const a of actions.data?.items ?? []) {
       if (a.kind === "page" || !a.ref) continue;
-      out.push(itemOf({ id: `${a.ref}:${a.index}`, kind: "action", notebook: domainOf(a.ref), notebookTitle: `${domainOf(a.ref)} · action items`, path: a.title, title: a.title, line: a.index, done: false, text: a.item, ref: a.ref, index: a.index, updated: a.updated }, null));
+      out.push(itemOf({ id: `${a.ref}:${a.index}`, kind: "action", notebook: domainOf(a.ref), notebookTitle: `${domainOf(a.ref)} · action items`, path: a.title, title: a.title, line: a.index, done: false, text: a.item, ref: a.ref, index: a.index, revision: a.revision, updated: a.updated }, null));
     }
     return out;
   }, [folder.data, actions.data, folders.data]);
@@ -48,20 +48,25 @@ export function useTaskItems(done: DoneFilter) {
   return { items, problems, loading: folder.isLoading || actions.isLoading, folders: folders.data ?? [], actionsOn };
 }
 
-/** Tick (or clear) one task: an action item through `check`, a page line through a checked save of that line. Says so when the
- *  line is in an open page with unsaved edits, which stays unsaved. Throws when the write is refused; the caller shows it and
- *  asks the lists to read again. */
-export async function tickTask(t: TaskItem, next: boolean): Promise<"saved" | "unsaved"> {
+/** What a tick did: `unsaved` when it went into an open page with unsaved edits. `revision` is an action item's note revision
+ *  after the tick, for its Undo. */
+export interface Ticked { state: "saved" | "unsaved"; revision?: string }
+
+/** Tick (or clear) one task: an action item through `check` with the note revision it was listed at, a page line through a
+ *  checked save of that line. Says so when the line is in an open page with unsaved edits, which stays unsaved. Throws when the
+ *  write is refused (a note changed since it was listed is `stale`); the caller shows it and asks the lists to read again. */
+export async function tickTask(t: TaskItem, next: boolean): Promise<Ticked> {
   if (t.kind === "action") {
-    recordOperation((await check(t.ref!, t.index!, next)).operation_id);
-    return "saved";
+    const r = await check(t.ref!, t.index!, next, t.revision ?? "");
+    recordOperation(r.operation_id);
+    return { state: "saved", revision: r.revisions?.[t.ref!] };
   }
   const res = await setTaskDone({ notebook: t.notebook, path: t.path, line: t.line, done: t.done, text: t.text, sha256: t.sha256 }, next);
   if (res === "unsaved") {
     toast("Ticked in the open page. It has unsaved edits, so save the page to keep the change.", "info");
-    return "unsaved";
+    return { state: "unsaved" };
   }
-  return "saved";
+  return { state: "saved" };
 }
 
 /** Open the page (or note) a task is in. */

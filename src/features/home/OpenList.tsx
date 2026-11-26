@@ -3,9 +3,9 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Flag } from "lucide-react";
 import { useState } from "react";
-import { classify } from "../../lib/errors";
 import type { Milestone } from "../../lib/executive";
 import { refreshStore } from "../../lib/refresh";
+import { toastWriteFailure } from "../../lib/stale";
 import { toast } from "../../ui/toast";
 import { OwnerChip } from "../people/OwnerChip";
 import { refreshLists } from "../notes/pageWrite";
@@ -31,16 +31,17 @@ export function useTick() {
     update(setBusy, t.id, true);
     if (!next) update(setTicked, t.id, false);
     try {
-      const state = await tickTask(t, next);
+      const { state, revision } = await tickTask(t, next);
       if (next) {
         update(setTicked, t.id, true);
         setTimeout(() => update(setTicked, t.id, false), 1500);
       }
-      // The line is ticked now, in a page whose hash has changed: undo checks the line, not the hash it was listed at.
-      if (next && state !== "unsaved") toast(`Done: ${displayText(t.text)}`, "info", { label: "Undo", run: () => void tick({ ...t, done: true, sha256: undefined }, false) });
+      // The line is ticked now, in a page whose hash has changed: undo checks the line, not the hash it was listed at. An action
+      // item's undo carries the note revision the tick left.
+      if (next && state !== "unsaved") toast(`Done: ${displayText(t.text)}`, "info", { label: "Undo", run: () => void tick({ ...t, done: true, sha256: undefined, revision }, false) });
     } catch (e) {
       update(setTicked, t.id, false);
-      toast(classify(e).message, "error");
+      await toastWriteFailure(client, e);
     } finally {
       update(setBusy, t.id, false);
       refreshLists(client);

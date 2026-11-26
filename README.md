@@ -20,7 +20,7 @@ It runs on Tauri 2 with React and TypeScript, on Windows, macOS and Linux. It is
   - a properties form, `[[` title autocomplete, and Ctrl+S to save
   - unsaved edits kept as drafts that survive a crash
   - a three-way merge when an agent saved the same note meanwhile
-- **Lifecycle:** archive, resolve, reopen and supersede apply at once and can be undone from Activity; merge and delete are reviewed Living Memory plans whose diff you see before they apply.
+- **Lifecycle:** archive, resolve, reopen, supersede, merge and delete are direct Living Memory writes: each is confirmed in a dialog, applies at once and can be undone from the toast or from Activity. Every write to an existing note carries the revision Hivemind read; if the note changed since, Hivemind reads it again, says so, and you repeat the action (the note editor offers a three-way merge instead).
 - **Action items:** tick them in reading view.
 - **Renames:** a renamed note offers to rewrite `[[Old Title]]` links elsewhere.
 - **Graph** (Ctrl+G, under Memory): every note and link, coloured by type, with filters.

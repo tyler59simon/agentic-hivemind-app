@@ -921,11 +921,13 @@ mod tests {
         let staged = stage(&lm, &store, &answer, Source { kind: "paste".into(), label: "Sync".into(), session: None, upto: None }, Some("pay"), "notes", None, 1).unwrap().unwrap();
         assert_eq!(staged["items"][0]["similar"][0]["ref"], json!(old), "the repeat is found");
 
-        // What accepting does (lib/executive items.ts): the decision replaces the old one, the commitment joins the list.
+        // What accepting does (lib/executive items.ts): the decision replaces the old one, the commitment joins the list. Each
+        // note written goes with the revision the review read.
+        let revision = |r: &str| text(&call(&["read", r, "--metadata-only", "--actor", "viewer"], None), "revision");
         let body = "Dedupe by event ID, kept for 30 days.\n\n## Source\nCaptured in Hivemind from \"Sync\" on 2026-11-19: \"keep event ids for 30 days\"";
         let new = call(&["capture", "--domain", "pay"], Some(&json!({"title": "Use event IDs as the idempotency keys", "type": "decision", "tags": tags, "body": body,
-            "supersedes": [old], "origin": "hivemind:local"}).to_string()));
-        call(&["update", &plan_ref, "--domain", "pay", "--add-action", "Review the retention window (owner: Sam, due: 2026-12-01)"], None);
+            "supersedes": [format!("{old}@{}", revision(&old))], "origin": "hivemind:local"}).to_string()));
+        call(&["update", &plan_ref, "--domain", "pay", "--add-action", "Review the retention window (owner: Sam, due: 2026-12-01)", "--expected-revision", &revision(&plan_ref)], None);
         let replaced = call(&["read", &old, "--domain", "pay", "--actor", "viewer"], None);
         assert_eq!(text(&replaced, "status"), "superseded");
         let open = call(&["open", "--all-domains", "--tag", "project/pay", "--actor", "viewer"], None);

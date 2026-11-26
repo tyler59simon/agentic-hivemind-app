@@ -266,7 +266,7 @@ function InteractiveRail({ info, onReview }: { info: SessionInfo; onReview?: () 
         {info.profile
           ? <Row icon={<ShieldCheck size="1.3em" aria-hidden />} meta={isUnattended(info) ? "unattended" : undefined}>{PROFILE_LABELS[info.profile]}: {PROFILE_HELP[info.profile]}</Row>
           : (isCodex(info) ? codexPermissionLines : permissionLines)(info.policy).map((line) => <Row key={line} icon={<ShieldCheck size="1.3em" aria-hidden />}>{line}</Row>)}
-        <Row>Living Memory plans are never applied</Row>
+        <Row>Living Memory's governed writes (delete, merge, retag, undo and the rest) are never run</Row>
         <p className="muted small">{isCodex(info) ? CODEX_ALLOWED_NOTE : ALLOWED_NOTE}</p>
       </Section>
       <Section title="Changes">

@@ -1,9 +1,10 @@
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import { classify } from "../../lib/errors";
-import { isPlan, undo, type Receipt } from "../../lib/lm";
+import { undo, type Receipt } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
+import { writeFailure } from "../../lib/stale";
 import { Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 
@@ -14,13 +15,12 @@ export async function finishDirect(client: QueryClient, receipt: Receipt) {
   await refreshStore(client);
 }
 
-/** A toast with Undo for a direct write. A kept plan kind would return a plan, which a toast cannot review: that case points to Activity. */
+/** A toast with Undo for a direct write. */
 export function undoToast(client: QueryClient, text: string, receipt: Receipt) {
   toast(text, "info", {
     label: "Undo",
     run: () => undo(receipt.operation_id)
       .then(async (r) => {
-        if (isPlan(r)) { toast("This change needs a reviewed undo. Open it in Activity.", "warn"); return; }
         await finishDirect(client, r);
         toast("Undone.");
       })
@@ -31,11 +31,11 @@ export function undoToast(client: QueryClient, text: string, receipt: Receipt) {
 export function explain(e: unknown): string {
   const p = classify(e);
   if (p.kind === "undo-conflict") return "This change can't be undone automatically: it was edited again afterwards. Undo the later change first, or edit it by hand.";
-  if (/^stale plan|^Stale revision/.test(p.message)) return "The note changed in the meantime. Close this and try again.";
   return p.message;
 }
 
-/** Runs a direct write for a form: `go` reports busy and error state, refreshes the store and calls `onDone` with the receipt. */
+/** Runs a direct write for a form: `go` reports busy and error state, refreshes the store and calls `onDone` with the receipt.
+ *  A write refused because the note changed since it was read reads the store again and says so; the user may then repeat it. */
 export function useDirect() {
   const client = useQueryClient();
   const [busy, setBusy] = useState(false);
@@ -48,14 +48,15 @@ export function useDirect() {
       await finishDirect(client, receipt);
       onDone?.(receipt); // runs even when the refresh unmounted the form: the toast and the parent's cleanup still belong to this write
     } catch (e) {
-      setError(explain(e));
+      setError(classify(e).kind === "stale" ? await writeFailure(client, e) : explain(e));
       setBusy(false);
     }
   };
   return { busy, error, go };
 }
 
-/** A short confirm for a direct write (no plan to review): the write runs when the user says so, and the toast offers Undo. */
+/** A short confirm for a direct write: the write runs when the user says so, and the toast offers Undo. `run` is called on
+ *  each click, so after a stale refusal it should read the revision the note has on screen now. */
 export function DirectDialog({ title, intro, run, applyLabel, danger, done, onApplied, onClose }: {
   title: string; intro: ReactNode; run: () => Promise<Receipt>; applyLabel: string; danger?: boolean;
   /** The toast after the write, with Undo. */

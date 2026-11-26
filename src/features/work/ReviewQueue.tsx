@@ -1,11 +1,10 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { archiveNote, confirm, LmError, meta, resolveNote, update, type ReviewRow } from "../../lib/lm";
-import { classify } from "../../lib/errors";
+import { archiveNote, confirm, resolveNote, update, type ReviewRow } from "../../lib/lm";
 import { typeClass } from "../../lib/noteTypes";
 import { recordOperation } from "../../lib/oplog";
+import { toastWriteFailure } from "../../lib/stale";
 import { shortDate } from "../../lib/text";
-import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
 import { MergeComposer } from "../plans/MergeComposer";
 import { DirectDialog } from "../plans/DirectDialog";
@@ -15,16 +14,10 @@ import { snoozeDate } from "./work";
 
 const SNOOZES = [7, 30, 90];
 
-async function snooze(row: ReviewRow, days: number) {
-  const review_by = snoozeDate(days);
-  const send = async (rev?: string) => update(row.ref, { review_by, expected_revision: rev ?? (await meta(row.ref)).revision });
-  try {
-    return await send(row.revision);
-  } catch (e) {
-    if (e instanceof LmError && e.stale) return send();
-    throw e;
-  }
-}
+/** Every write here carries the revision the row was listed at; a note changed since is read again, and the user repeats. */
+const revisionOf = (row: ReviewRow) => row.revision ?? "";
+
+const snooze = (row: ReviewRow, days: number) => update(row.ref, { review_by: snoozeDate(days), expected_revision: revisionOf(row) });
 
 function ReviewItem({ row, snooze: snoozing = true }: { row: ReviewRow; snooze?: boolean }) {
   const client = useQueryClient();
@@ -34,14 +27,14 @@ function ReviewItem({ row, snooze: snoozing = true }: { row: ReviewRow; snooze?:
     for (const key of [["review"], ["list"], ["note", row.ref], ["meta", row.ref]]) client.invalidateQueries({ queryKey: key });
   };
   const still = useMutation({
-    mutationFn: () => confirm(row.ref),
+    mutationFn: () => confirm(row.ref, revisionOf(row)),
     onSuccess: (r) => done(r.operation_id),
-    onError: (e) => toast(classify(e).message, "error"),
+    onError: (e) => toastWriteFailure(client, e),
   });
   const snoozed = useMutation({
     mutationFn: (days: number) => snooze(row, days),
     onSuccess: (r) => done(r.operation_id),
-    onError: (e) => toast(classify(e).message, "error"),
+    onError: (e) => toastWriteFailure(client, e),
   });
   const busy = still.isPending || snoozed.isPending;
   const primary = primaryAction(row);
@@ -74,12 +67,12 @@ function ReviewItem({ row, snooze: snoozing = true }: { row: ReviewRow; snooze?:
         {primary.kind !== "archive" && <button disabled={busy} onClick={() => setDialog("archive")}>Archive…</button>}
       </div>
       {dialog === "archive" && (
-        <DirectDialog title={`Archive “${row.title}”`} run={() => archiveNote(row.ref)} applyLabel="Archive" danger
+        <DirectDialog title={`Archive “${row.title}”`} run={() => archiveNote(row.ref, revisionOf(row))} applyLabel="Archive" danger
           done={`Archived “${row.title}”.`} onApplied={(r) => done(r.operation_id)} onClose={() => setDialog(null)}
           intro={<p>The note moves to the archive. Undoing this change restores it.</p>} />
       )}
       {dialog === "resolve" && (
-        <DirectDialog title={`Resolve “${row.title}”`} run={() => resolveNote(row.ref)} applyLabel="Resolve"
+        <DirectDialog title={`Resolve “${row.title}”`} run={() => resolveNote(row.ref, revisionOf(row))} applyLabel="Resolve"
           done={`Resolved “${row.title}”.`} onApplied={(r) => done(r.operation_id)} onClose={() => setDialog(null)}
           intro={<p>The note is marked resolved and moves to the archive.</p>} />
       )}

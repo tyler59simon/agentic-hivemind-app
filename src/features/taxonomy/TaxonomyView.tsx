@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState, type ReactNode } from "react";
 import { useConnection, useNoteTypesEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
-import { retagPlan, taxonomy, taxonomyAdd } from "../../lib/lm";
+import { retag, taxonomy, taxonomyAdd } from "../../lib/lm";
 import { folderOf, notebooksQuery, pageTitle } from "../../lib/notebooks";
 import { INDEX_KEY, indexSearch, tagsQuery } from "../../lib/noteindex";
 import { typeClass } from "../../lib/noteTypes";
@@ -11,21 +11,20 @@ import { useApp } from "../../store";
 import { useWorkspace } from "../../workspace/store";
 import { openPage } from "../notes/actions";
 import { listMemoryNotes } from "../notes/MemoryTree";
-import { finishDirect, undoToast } from "../plans/DirectDialog";
-import { PlanDialog } from "../plans/PlanDialog";
+import { DirectDialog, finishDirect, undoToast } from "../plans/DirectDialog";
 import { useNotesSearch } from "../search/store";
 import { NoteTypesSection } from "./NoteTypesSection";
 import { facetsOf, formatTagCounts, parseTags, tagUsage, type TagUsage } from "./taxonomy";
 
-/** Rename a tag everywhere, or fold it into another existing tag (LM's retag-plan, across every domain). */
+/** Rename a tag everywhere, or fold it into another existing tag (LM's `retag`, across every domain). */
 function RenameTag({ from, taxonomyTags, onClose }: { from: TagUsage; taxonomyTags: string[]; onClose: () => void }) {
   const [to, setTo] = useState("");
   const [ready, setReady] = useState(false);
   const target = parseTags(to).tags[0];
   if (ready && target) {
     return (
-      <PlanDialog title={`${from.tag} → ${target}`} make={() => retagPlan({ [from.tag]: target })} applyLabel="Retag" onClose={onClose}
-        intro={<p>Every note tagged <code>{from.tag}</code> ({from.count}) gets <code>{target}</code> instead, in every domain, and the taxonomy is updated.</p>} />
+      <DirectDialog title={`${from.tag} → ${target}`} run={() => retag({ [from.tag]: target })} applyLabel="Retag" onClose={onClose}
+        done={`Retagged ${from.tag} as ${target}.`} intro={<p>Every note tagged <code>{from.tag}</code> ({from.count}) gets <code>{target}</code> instead, in every domain, and the taxonomy is updated.</p>} />
     );
   }
   return (
@@ -34,7 +33,7 @@ function RenameTag({ from, taxonomyTags, onClose }: { from: TagUsage; taxonomyTa
       <input autoFocus list="retag-targets" value={to} placeholder="facet/name" onChange={(e) => setTo(e.target.value)} />
       <datalist id="retag-targets">{taxonomyTags.filter((t) => t !== from.tag).map((t) => <option key={t} value={t} />)}</datalist>
       {to && !target && <p className="error small">Use subject/, concern/, platform/ or technology/ followed by a name.</p>}
-      <div className="actions"><button onClick={onClose}>Cancel</button><button className="primary" disabled={!target || target === from.tag} onClick={() => setReady(true)}>Review plan…</button></div>
+      <div className="actions"><button onClick={onClose}>Cancel</button><button className="primary" disabled={!target || target === from.tag} onClick={() => setReady(true)}>Continue…</button></div>
     </Modal>
   );
 }

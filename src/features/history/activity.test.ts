@@ -45,6 +45,12 @@ describe("activity", () => {
 
   it("labels a direct write by its ID, not its kind", () => {
     expect(actorOf({ operation_id: "d-1", kind: "project_create" }, new Set()).label).toBe("Agent or CLI");
+    // Delete, merge and bulk retag are direct since Living Memory removed plans: only an older journal reads as a plan.
+    for (const kind of ["delete", "merge", "bulk_retag"]) {
+      expect(actorOf({ operation_id: "d-2", kind }, new Set()).kind).toBe("agent");
+      expect(actorOf({ operation_id: "d-2", kind }, new Set(["d-2"])).label).toBe("You · Hivemind");
+      expect(actorOf({ operation_id: "0f3a", kind }, new Set()).label).toBe("Approved plan");
+    }
   });
 
   it("knows project plan kinds", () => {

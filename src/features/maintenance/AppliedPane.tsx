@@ -1,13 +1,12 @@
 // One change maintenance made in the last week, as the Inbox shows it: what it did, why, and the two ways to answer. Undo reverses
-// the change (a merge or delete opens its plan first); Looks right removes it from the Inbox on this computer.
+// the change; Looks right removes it from the Inbox on this computer.
 import { useQueryClient } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
-import { isPlan, undo } from "../../lib/lm";
+import { useState } from "react";
+import { undo } from "../../lib/lm";
 import { openSettings } from "../../store";
 import { ArrowLink } from "../../ui/Page";
 import { toast } from "../../ui/toast";
 import { explain, finishDirect } from "../plans/DirectDialog";
-import { PlanDialog } from "../plans/PlanDialog";
 import { NoteLink } from "../preview/NoteLink";
 import { reasonText, resultText, type AppliedItem } from "./maintenance";
 import { useSeen } from "./seen";
@@ -15,7 +14,6 @@ import { useSeen } from "./seen";
 export function AppliedPane({ item, title }: { item: AppliedItem; title?: string }) {
   const client = useQueryClient();
   const markSeen = useSeen((s) => s.markSeen);
-  const [dialog, setDialog] = useState<ReactNode>(null);
   const [busy, setBusy] = useState(false);
   const d = item.decision;
   const what = resultText(d);
@@ -25,13 +23,6 @@ export function AppliedPane({ item, title }: { item: AppliedItem; title?: string
     setBusy(true);
     undo(item.key)
       .then(async (r) => {
-        if (isPlan(r)) {
-          setDialog(
-            <PlanDialog title={`Undo: ${what.toLowerCase()}`} applyLabel="Undo" intro={<p>This reverses the change below. It is refused if the note was edited again afterwards.</p>}
-              make={() => Promise.resolve(r)} onApplied={settle} onClose={() => setDialog(null)} />,
-          );
-          return;
-        }
         await finishDirect(client, r);
         toast(`Undid: ${what.toLowerCase()}.`);
         settle();
@@ -50,7 +41,6 @@ export function AppliedPane({ item, title }: { item: AppliedItem; title?: string
         <button onClick={reverse} disabled={busy}>{busy ? "Undoing…" : "Undo"}</button>
         <ArrowLink onClick={() => openSettings("maintenance")}>Open Maintenance</ArrowLink>
       </div>
-      {dialog}
     </>
   );
 }

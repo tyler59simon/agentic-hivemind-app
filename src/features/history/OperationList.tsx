@@ -1,11 +1,11 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState, type ReactNode } from "react";
-import { diff, isPlan, list, meta, undo, type NoteRow, type Operation } from "../../lib/lm";
+import { useMemo, useState } from "react";
+import { DiffView } from "../../components/DiffView";
+import { diff, list, meta, undo, type NoteRow, type Operation } from "../../lib/lm";
 import { myOperations } from "../../lib/oplog";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
 import { explain, finishDirect } from "../plans/DirectDialog";
-import { DiffView, PlanDialog } from "../plans/PlanDialog";
 import { HoverPreview } from "../preview/HoverPreview";
 import { actorOf, dayLabel, noteIdsOf, serverActor, verbOf, type Actor } from "./activity";
 
@@ -34,22 +34,16 @@ function OperationDiff({ id }: { id: string }) {
   return <>{shown.map((c) => <div key={c.path}><div className="muted small">{c.path.split("/").pop()}</div><DiffView text={c.diff} /></div>)}</>;
 }
 
-/** Operations grouped by day, each with who, what, which notes, its diff and an Undo plan. */
+/** Operations grouped by day, each with who, what, which notes, its diff and Undo. */
 export function OperationList({ ops, notes, actorFor, showNotes = true }: {
   ops: Operation[]; notes: Map<string, NoteRow>; actorFor: (op: Operation) => Actor; showNotes?: boolean;
 }) {
   const openNote = useWorkspace((s) => s.openNote);
   const [open, setOpen] = useState<string | null>(null);
-  const [dialog, setDialog] = useState<ReactNode>(null);
   const client = useQueryClient();
   const undoOp = (op: Operation) => {
     undo(op.operation_id)
       .then(async (r) => {
-        if (isPlan(r)) {
-          setDialog(<PlanDialog title={`Undo: ${verbOf(op.kind)}`} make={() => Promise.resolve(r)} applyLabel="Undo"
-            intro={<p>This reverses the change below. It is refused if the files were edited again afterwards.</p>} onClose={() => setDialog(null)} />);
-          return;
-        }
         await finishDirect(client, r);
         toast(`Undid: ${verbOf(op.kind)}.`);
       })
@@ -57,7 +51,6 @@ export function OperationList({ ops, notes, actorFor, showNotes = true }: {
   };
   let lastDay = "";
   return (
-    <>
     <ol className="ops">
       {ops.map((op) => {
         const day = dayLabel(op.created);
@@ -80,7 +73,7 @@ export function OperationList({ ops, notes, actorFor, showNotes = true }: {
               {showNotes && !touched.length && !op.files.some((f) => f.endsWith(".md")) && <span className="muted small">{op.files.filter((f) => !f.endsWith(".derived-dirty")).join(", ")}</span>}
               <span className="tabbar-fill" />
               <button className="ghost small" onClick={() => setOpen(open === op.operation_id ? null : op.operation_id)}>{open === op.operation_id ? "Hide changes" : "Changes"}</button>
-              <button className="ghost small" title="Reverse this change. It is refused if the files were edited again afterwards. A merge or delete opens a plan to review first."
+              <button className="ghost small" title="Reverse this change. It is refused if the files were edited again afterwards."
                 onClick={() => undoOp(op)}>
                 Undo
               </button>
@@ -90,7 +83,5 @@ export function OperationList({ ops, notes, actorFor, showNotes = true }: {
         ];
       })}
     </ol>
-    {dialog}
-    </>
   );
 }

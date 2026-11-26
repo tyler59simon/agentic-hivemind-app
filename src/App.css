@@ -745,8 +745,6 @@ input[type="checkbox"] { accent-color: var(--success); }
 .diff-line.del { background: var(--diff-del); }
 .diff-line.hunk { color: var(--accent); }
 .diff-line.meta { color: var(--muted); }
-.effects details { border: 1px solid var(--border); border-radius: .45rem; padding: var(--sp-8) var(--sp-14); margin-bottom: var(--sp-8); }
-.effects summary { cursor: pointer; }
 .merge-head { display: grid; grid-template-columns: 1fr 1fr; font-size: .86rem; color: var(--muted); align-items: center; }
 .merge-head .row { display: flex; gap: var(--sp-8); align-items: center; border: none; padding: 0; }
 .merge-head .small { padding: 1px var(--sp-10); }

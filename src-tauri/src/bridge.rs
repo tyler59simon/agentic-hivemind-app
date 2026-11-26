@@ -28,13 +28,12 @@ const STDERR_TAIL: usize = 4096;
 /// What a request that gets no reply in time fails with. The process was ended, so trying again starts a new one.
 pub const NO_ANSWER: &str = "Living Memory isn't answering, so Hivemind restarted it. Try again.";
 
-/// Commands that read or rewrite a whole store (indexes, plans, backups, imports and exports, the wiki, model work). They
-/// get the slow limit; every other command is quick.
-const SLOW: [&str; 33] = [
-    "rebuild", "doctor", "backup", "export", "import-plan", "ingest-plan", "ingest-scan", "source-sync", "apply", "restore-plan",
-    "migration-plan", "note-type-plan", "baseline-plan", "retag-plan", "merge-plan", "rebaseline", "semantic", "validate",
-    "maintenance", "wiki", "sync", "overlay-build", "overlay-sync-all", "overlay-teardown-plan", "recover", "remap", "promote",
-    "rewrite", "undo", "batch", "ask", "stats", "query",
+/// Commands that read or rewrite a whole store (indexes, merges and retags, backups, imports and exports, the wiki, model
+/// work). They get the slow limit; every other command is quick.
+const SLOW: [&str; 29] = [
+    "rebuild", "doctor", "backup", "export", "import", "ingest", "ingest-scan", "source-sync", "migrate", "retag", "merge",
+    "rebaseline", "semantic", "validate", "maintenance", "wiki", "sync", "overlay-build", "overlay-sync-all", "overlay-teardown",
+    "recover", "remap", "promote", "rewrite", "undo", "batch", "ask", "stats", "query",
 ];
 
 /// How long a request may wait for its reply.
@@ -638,8 +637,10 @@ mod tests {
         let payload = format!(r#"{{"body":"The cache is rebuilt nightly.","expected_revision":"{}"}}"#, note["revision"].as_str().unwrap());
         let updated = ok(call(&["update", &cache, "--domain", "demo"], Some(&payload)));
         assert_eq!(updated["status"], "update");
-        // check --index counts ticked items too: item 2 is "ship".
-        let ticked = ok(call(&["check", &rollout, "--index", "2", "--domain", "demo"], None));
+        // check --index counts ticked items too: item 2 is "ship". Every write to an existing note carries the revision read.
+        let revision_of = |r: &str| ok(call(&["read", r, "--metadata-only", "--actor", "viewer"], None))["revision"].as_str().unwrap().to_string();
+        assert_eq!(call(&["check", &rollout, "--index", "2", "--domain", "demo"], None).error["code"], "revision_required");
+        let ticked = ok(call(&["check", &rollout, "--index", "2", "--domain", "demo", "--expected-revision", &revision_of(&rollout)], None));
         assert_eq!((ticked["item"].as_str(), ticked["open"].as_i64()), (Some("ship"), Some(0)));
 
         let links = ok(call(&["search", "--links", "--domain", "demo", "--actor", "viewer"], None));
@@ -647,7 +648,7 @@ mod tests {
         assert_eq!(links["edges"][0]["to"], cache.as_str());
 
         // Archive is a direct write: one journaled step, a receipt and no plan.
-        let archived = ok(call(&["archive", &rollout, "--domain", "demo"], None));
+        let archived = ok(call(&["archive", &rollout, "--domain", "demo", "--expected-revision", &revision_of(&rollout)], None));
         assert!(archived.get("plan_id").is_none(), "{archived}");
         let archive_op = archived["operation_id"].as_str().unwrap().to_string();
         assert_eq!(ok(call(&["read", &rollout, "--actor", "viewer"], None))["status"], "archived");
@@ -717,7 +718,8 @@ mod tests {
 
         let open = ok(call(&["open", "--all-domains", "--tag", "project/app", "--actor", "viewer"], None));
         assert_eq!((open["domain"].is_null(), open["count"].as_i64()), (true, Some(1)));
-        ok(call(&["check", &rollout, "--index", "2"], None));
+        let revision = ok(call(&["read", &rollout, "--metadata-only", "--actor", "viewer"], None))["revision"].as_str().unwrap().to_string();
+        ok(call(&["check", &rollout, "--index", "2", "--expected-revision", &revision], None));
         assert_eq!(ok(call(&["open", "--all-domains", "--tag", "project/app", "--actor", "viewer"], None))["count"], 0);
         assert_eq!(ok(call(&["review", "--all-domains", "--tag", "project/app", "--actor", "viewer"], None))["domain"], Value::Null);
 
@@ -822,7 +824,7 @@ for line in sys.stdin:
         let argv = |c: &str| vec![c.to_string()];
         assert_eq!(l.for_argv(&argv("read")), l.quick);
         assert_eq!(l.for_argv(&argv("doc")), l.quick);
-        for slow in ["rebuild", "doctor", "wiki", "export", "import-plan", "semantic", "apply"] {
+        for slow in ["rebuild", "doctor", "wiki", "export", "import", "semantic", "merge", "retag"] {
             assert_eq!(l.for_argv(&argv(slow)), l.slow, "{slow}");
         }
         assert!(l.quick < l.slow && l.start <= l.quick);

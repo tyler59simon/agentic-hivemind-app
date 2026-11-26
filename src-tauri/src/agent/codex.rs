@@ -748,7 +748,7 @@ pub(super) mod tests {
     #[test]
     fn a_governed_memory_command_is_declined_without_asking() {
         let mut d = running();
-        let request = r#"{"method":"item/commandExecution/requestApproval","id":7,"params":{"itemId":"exec-1","command":"python living_memory.py apply --plan p.json","cwd":"C:\\work\\codex-check","commandActions":[]}}"#;
+        let request = r#"{"method":"item/commandExecution/requestApproval","id":7,"params":{"itemId":"exec-1","command":"python living_memory.py merge --payload-file p.json","cwd":"C:\\work\\codex-check","commandActions":[]}}"#;
         let step = d.read(request);
         assert_eq!(step.events, vec![RunEvent::Denied { tool: "Shell".into(), summary: GOVERNED.into() }]);
         assert_eq!(step.write, vec![r#"{"id":7,"result":{"decision":"decline"}}"#.to_string()]);

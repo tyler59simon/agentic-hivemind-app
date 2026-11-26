@@ -9,6 +9,7 @@ import {
   type MaintenanceDecision, type MaintenanceRun, type MaintenanceStatus,
 } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
+import { toastWriteFailure } from "../../lib/stale";
 import { refreshStore } from "../../lib/refresh";
 import { toast } from "../../ui/toast";
 import { useWorkspace } from "../../workspace/store";
@@ -89,12 +90,13 @@ function StatusCard({ s }: { s: MaintenanceStatus }) {
 }
 
 function Decision({ d, restoreOn, onDone }: { d: MaintenanceDecision; restoreOn: boolean; onDone: () => void }) {
+  const client = useQueryClient();
   const note = useQuery({ queryKey: ["maintenance", "note", d.ref], queryFn: () => meta(d.ref), retry: false });
   const archivedNow = note.data?.status === "archived";
   const restore = useMutation({
-    mutationFn: () => restoreNote(d.ref),
+    mutationFn: (revision: string) => restoreNote(d.ref, revision),
     onSuccess: (r) => { recordOperation(r.operation_id); toast("Restored. The note is active and pinned."); onDone(); },
-    onError: (e) => toast(classify(e).message, "error"),
+    onError: (e) => toastWriteFailure(client, e),
   });
   const reason = [d.rule, d.reason].filter(Boolean).join(": ");
   return (
@@ -104,7 +106,7 @@ function Decision({ d, restoreOn, onDone }: { d: MaintenanceDecision; restoreOn:
         <NoteLink refId={d.ref} title={note.data?.title} />
         {note.data && note.data.status !== "active" && <span className="muted small">now {note.data.status}</span>}
         {wasArchived(d) && restoreOn && archivedNow && (
-          <button className="text" onClick={() => restore.mutate()} disabled={restore.isPending}>Restore</button>
+          <button className="text" onClick={() => restore.mutate(note.data!.revision)} disabled={restore.isPending}>Restore</button>
         )}
       </div>
       {reason && <div className="muted small">{reason}</div>}

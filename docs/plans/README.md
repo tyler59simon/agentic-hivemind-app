@@ -75,7 +75,7 @@ Stack: Tauri 2 (Rust) + React 19 + TypeScript 6 + Vite 8; Zustand 5 for client s
 | `src/features/systems/useSystem.ts` | `useSystem(slug)`, `useSystemProposals`, `useDiagram`. | `export function useSystemProposals` |
 | `src/features/library/MemoryPage.tsx`, `library.ts` | Memory: library with search, type tabs and Status / Scope / Tag filters; sub-views Graph, Activity, Tags; hosts the note workspace. | `function Library()` |
 | `src/features/editor/NoteTab.tsx` | The note page (mock 09): header, Reading / Source / History tabs. | `export function NoteTab` |
-| `src/features/plans/PlanDialog.tsx` | The reviewed-plan dialog: make a Living Memory plan, show its diff, apply it. Use it for every plan-based write. | `export function PlanDialog` |
+| `src/features/plans/DirectDialog.tsx` | The confirm dialog for a direct Living Memory write, with Undo in the toast that follows. Living Memory removed plans on 2026-11-26, so `PlanDialog` is gone; the phase documents that name it predate that. | `export function DirectDialog` |
 
 Routes today (`src/store.ts`):
 
@@ -133,7 +133,7 @@ Living Memory is a separate Python project (`agentic-living-memory`; the install
 
 - Reads go through `view(...)` in `src/lib/lm.ts`, which adds `--actor viewer`.
 - A note edit is `update` with `expected_revision` and only the changed fields. A stale revision (exit code 6) opens the three-way merge.
-- Lifecycle and registry changes are **plans**: make the plan, show its diff with `inspect-plan`, apply it with `apply --expected-plan-sha256`. `PlanDialog` does all three. Never apply a plan the user has not seen, except where a phase document names a one-click action and says the plan is applied at once.
+- Lifecycle and registry changes (delete, merge and retag included) are **direct writes**: one journaled step that returns a receipt with an `undo` command. `DirectDialog` confirms the write and offers Undo. Every write to an existing note sends the revision the UI shows (`--expected-revision`, or `REF@REVISION` for the other notes it writes); a stale one (exit code 6) reads the note again and lets the user repeat it (`src/lib/stale.ts`), and is never retried automatically.
 - Never open `search.sqlite3`, and never write a file under the store.
 - **Never test against the user's real store.** Build a throwaway one (section 6).
 - Changing Living Memory itself (Phase 3 only) is done in its source checkout, as its own branch and pull request there, then deployed with its `install.py --plan` and `--apply-plan`. The user applies install plans; ask before deploying.

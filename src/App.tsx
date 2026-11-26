@@ -325,7 +325,7 @@ export default function App() {
               {closable && <button className="icon-button" aria-label="Close Settings" title="Close Settings (Esc)" onClick={() => setSettings(false)}><X size="1.2em" aria-hidden /></button>}
             </div>
             {link.error && <p className="error">{String(link.error)}</p>}
-            {outdated && <p className="error">This version of Living Memory is too old: Hivemind needs one with direct writes and unified proposals (<code>alm version</code> lists <code>direct_writes</code> and <code>proposals</code> under capabilities). Update Living Memory, then reconnect.</p>}
+            {outdated && <p className="error">This version of Living Memory is too old: Hivemind needs one with direct delete, merge and retag, note revisions and unified proposals (<code>alm version</code> lists <code>direct_writes</code> 2, <code>revisions</code> and <code>proposals</code> under capabilities). Update Living Memory, then reconnect.</p>}
             <SettingsForm onSaved={reconnect} />
             <ShortcutsSection />
             <HelpRow />

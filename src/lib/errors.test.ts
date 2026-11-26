@@ -29,4 +29,10 @@ describe("classify", () => {
     expect(classify(new Error("boom"))).toEqual({ kind: "other", message: "boom" });
     expect(classify("plain")).toEqual({ kind: "other", message: "plain" });
   });
+
+  it("calls a write without a revision a Hivemind bug, never a stale note", () => {
+    const p = classify(err("revision_required: demo:abc needs the revision you read; run read demo:abc and pass --expected-revision REVISION", 2, "revision_required"));
+    expect(p.kind).toBe("revision-required");
+    expect(p.message).toMatch(/^Hivemind sent this change without the note's revision.*bug in Hivemind/);
+  });
 });

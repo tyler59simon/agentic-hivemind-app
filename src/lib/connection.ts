@@ -73,6 +73,7 @@ export const useRuleEnabled = () => useConnection((s) => (s.capabilities?.rule ?
 /** Whether `open` supports `--pages none` (CON-2: `items.fields >= 2`). */
 export const useOpenPagesFlag = () => useConnection((s) => (s.capabilities?.items?.fields ?? 0) >= 2);
 
-/** Hivemind writes archive, project, system and taxonomy edits as direct commands and settles proposals through `proposals`. */
+/** Hivemind makes every write a direct command (delete, merge and retag too, `direct_writes` 2), sends the revision it read
+ *  with each write to an existing note (`revisions` 1) and settles proposals through `proposals`. */
 export const needsLmUpdate = (v: { capabilities?: Capabilities }) =>
-  (v.capabilities?.direct_writes ?? 0) < 1 || (v.capabilities?.proposals ?? 0) < 1;
+  (v.capabilities?.direct_writes ?? 0) < 2 || (v.capabilities?.revisions ?? 0) < 1 || (v.capabilities?.proposals ?? 0) < 1;

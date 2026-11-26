@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { LmError, addAction, archiveNote, isPlan, supersedeNote, taxonomyAdd, undo, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, ruleAllowed, setPin, setRule, list, listArgs, openArgs, writeProject, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setTransport, writeSystem, systemsArgs, update, setBridgeGeneration, noteTypes, typeWrite, timelineArgs, links, deletePlan, wikiModel, agentWikiModel, type Invoke } from "./lm";
+import { LmError, addAction, archiveNote, at, capture, check, confirm, deleteNote, merge, reopenNote, resolveNote, retag, supersedeNote, taxonomyAdd, undo, maintenanceDisable, maintenanceEnable, maintenanceHistory, maintenanceRun, maintenanceStatus, restoreNote, ruleAllowed, setPin, setRule, list, listArgs, openArgs, writeProject, projects, projectsArgs, read, recapArgs, reviewArgs, run, searchArgs, setTransport, writeSystem, systemsArgs, update, setBridgeGeneration, noteTypes, typeWrite, timelineArgs, links, wikiModel, agentWikiModel, type Invoke } from "./lm";
 
 const core = vi.hoisted(() => ({ invoke: vi.fn(async (_cmd: string, _args?: unknown): Promise<unknown> => undefined) }));
 vi.mock("@tauri-apps/api/core", () => core);
@@ -56,8 +56,8 @@ describe("run", () => {
   it("logs a command name with a hyphen as an identifier, and a code that is not one as other", async () => {
     inApp(true);
     fake({ exit_code: 1, result: null, error: { code: 'quoted "note text"', message: "x" } });
-    await expect(run(["retag-plan"])).rejects.toBeInstanceOf(LmError);
-    expect(sent()).toEqual([{ kind: "lm_failure", name: "retag_plan", code: "other", exit: 1 }]);
+    await expect(run(["overlay-teardown"])).rejects.toBeInstanceOf(LmError);
+    expect(sent()).toEqual([{ kind: "lm_failure", name: "overlay_teardown", code: "other", exit: 1 }]);
   });
 
   it("logs nothing for a command that succeeds, or outside the app", async () => {
@@ -129,22 +129,63 @@ describe("run", () => {
     expect(systemsArgs()).toEqual(["systems", "--actor", "viewer"]);
   });
 
-  it("addAction appends one action item with no stdin", async () => {
+  it("addAction appends one action item with no stdin, against the revision read", async () => {
     const calls = fake({ exit_code: 0, result: { ok: true }, error: null });
-    await addAction("demo:abc", "Ship it");
-    expect(calls[0]).toEqual(["lm", { argv: ["update", "demo:abc", "--domain", "demo", "--add-action", "Ship it"], stdin: null }]);
+    await addAction("demo:abc", "Ship it", "rev1");
+    expect(calls[0]).toEqual(["lm", { argv: ["update", "demo:abc", "--domain", "demo", "--add-action", "Ship it", "--expected-revision", "rev1"], stdin: null }]);
   });
 
-  it("lifecycle and taxonomy writes are direct commands, and undo may return a plan", async () => {
+  it("lifecycle, delete, merge, retag and taxonomy writes are direct commands, and undo returns a receipt", async () => {
     const calls = fake({ exit_code: 0, result: { ok: true, operation_id: "d-1" }, error: null });
-    await archiveNote("demo:abc");
-    await supersedeNote("demo:abc", "xyz");
+    await archiveNote("demo:abc", "rev1");
+    await resolveNote("demo:abc", "rev1");
+    await reopenNote("demo:abc", "rev1");
+    await supersedeNote("demo:abc", "rev1", { ref: "demo:xyz", revision: "rev2" });
+    await deleteNote("demo:abc", "rev1");
     await taxonomyAdd(["concern/security"]);
+    await retag({ "concern/old": "concern/new" });
+    await merge({ target: at("demo:abc", "rev1"), sources: [at("demo:xyz", "rev2")], body: "Both." });
+    const sentOf = (c: unknown) => (c as [string, { argv: string[]; stdin: string | null }])[1];
+    expect(calls.map((c) => sentOf(c).argv)).toEqual([
+      ["archive", "demo:abc", "--domain", "demo", "--expected-revision", "rev1"],
+      ["resolve", "demo:abc", "--domain", "demo", "--expected-revision", "rev1"],
+      ["reopen", "demo:abc", "--domain", "demo", "--expected-revision", "rev1"],
+      ["supersede", "demo:abc", "--by", "demo:xyz@rev2", "--domain", "demo", "--expected-revision", "rev1"],
+      ["delete", "demo:abc", "--domain", "demo", "--expected-revision", "rev1"],
+      ["taxonomy", "add", "concern/security"],
+      ["retag"],
+      ["merge"]]);
+    expect(JSON.parse(sentOf(calls[6]).stdin!)).toEqual({ "concern/old": "concern/new" });
+    expect(JSON.parse(sentOf(calls[7]).stdin!)).toEqual({ target: "demo:abc@rev1", sources: ["demo:xyz@rev2"], body: "Both." });
+    const undone = fake({ exit_code: 0, result: { ok: true, operation_id: "d-2", state: "committed", undo: "undo d-2" }, error: null });
+    await expect(undo("d-1")).resolves.toMatchObject({ operation_id: "d-2" });
+    expect(sentOf(undone[0]).argv).toEqual(["undo", "d-1"]);
+  });
+
+  it("check and confirm send the revision of the note they name", async () => {
+    const calls = fake({ exit_code: 0, result: { ok: true }, error: null });
+    await check("demo:abc", 2, true, "rev1");
+    await check("demo:abc", 2, false, "rev1");
+    await confirm("demo:abc", "rev1");
     expect(calls.map((c) => (c as [string, { argv: string[] }])[1].argv)).toEqual([
-      ["archive", "demo:abc", "--domain", "demo"], ["supersede", "demo:abc", "--by", "xyz", "--domain", "demo"], ["taxonomy", "add", "concern/security"]]);
-    expect(isPlan(await undo("op"))).toBe(false);
-    fake({ exit_code: 0, result: { ok: true, plan_id: "p", digest: "d", kind: "undo", summary: {} }, error: null });
-    expect(isPlan(await undo("op"))).toBe(true);
+      ["check", "demo:abc", "--index", "2", "--domain", "demo", "--expected-revision", "rev1"],
+      ["check", "demo:abc", "--index", "2", "--domain", "demo", "--undo", "--expected-revision", "rev1"],
+      ["confirm", "demo:abc", "--domain", "demo", "--expected-revision", "rev1"]]);
+  });
+
+  it("a capture that supersedes names each note it retires with its revision", async () => {
+    const calls = fake({ exit_code: 0, result: { ok: true, id: "new" }, error: null });
+    await capture("demo", { title: "T", body: "B", tags: [], type: "decision", supersedes: [at("demo:old", "rev1")] });
+    const { argv, stdin } = (calls[0] as [string, { argv: string[]; stdin: string }])[1];
+    expect(argv).toEqual(["capture", "--domain", "demo"]);
+    expect(JSON.parse(stdin).supersedes).toEqual(["demo:old@rev1"]);
+  });
+
+  it("a missing revision is a revision_required error, not a stale one", async () => {
+    fake({ exit_code: 2, result: null, error: { code: "revision_required", message: "revision_required: demo:abc needs the revision you read" } });
+    const error = (await confirm("demo:abc", "").catch((e) => e)) as LmError;
+    expect(error.code).toBe("revision_required");
+    expect(error.stale).toBe(false);
   });
 
   it("recap covers every domain, narrowed by project and days", () => {
@@ -163,27 +204,27 @@ describe("maintenance, restore, pin and rule argv", () => {
     expect(argvOf(calls, 2)).toEqual(["maintenance", "history", "--limit", "5", "--actor", "viewer"]);
     expect(argvOf(calls, 3)).toEqual(["maintenance", "history", "--run", "r1", "--actor", "viewer"]);
   });
-  it("enable, disable, restore and pin are plain writes", async () => {
+  it("enable, disable, restore and pin are plain writes; restore and pin send the note's revision", async () => {
     const calls = fake({ exit_code: 0, result: { ok: true }, error: null });
     await maintenanceEnable("demo"); await maintenanceEnable("other"); await maintenanceDisable();
-    await restoreNote("demo:abc"); await setPin("demo:abc", true); await setPin("demo:abc", false);
+    await restoreNote("demo:abc", "rev1"); await setPin("demo:abc", true, "rev1"); await setPin("demo:abc", false, "rev1");
     expect(argvOf(calls, 0)).toEqual(["maintenance", "enable", "--domain", "demo"]);
     expect(argvOf(calls, 1)).toEqual(["maintenance", "enable", "--domain", "other"]);
     expect(argvOf(calls, 2)).toEqual(["maintenance", "disable"]);
-    expect(argvOf(calls, 3)).toEqual(["restore", "demo:abc", "--domain", "demo"]);
-    expect(argvOf(calls, 4)).toEqual(["update", "demo:abc", "--domain", "demo", "--pin"]);
-    expect(argvOf(calls, 5)).toEqual(["update", "demo:abc", "--domain", "demo", "--unpin"]);
+    expect(argvOf(calls, 3)).toEqual(["restore", "demo:abc", "--domain", "demo", "--expected-revision", "rev1"]);
+    expect(argvOf(calls, 4)).toEqual(["update", "demo:abc", "--domain", "demo", "--pin", "--expected-revision", "rev1"]);
+    expect(argvOf(calls, 5)).toEqual(["update", "demo:abc", "--domain", "demo", "--unpin", "--expected-revision", "rev1"]);
   });
   it("rule is a plain write, offered on policy and preference notes only", async () => {
     const calls = fake({ exit_code: 0, result: { ok: true }, error: null });
-    await setRule("demo:abc", true); await setRule("demo:abc", false);
-    expect(argvOf(calls, 0)).toEqual(["update", "demo:abc", "--domain", "demo", "--rule"]);
-    expect(argvOf(calls, 1)).toEqual(["update", "demo:abc", "--domain", "demo", "--no-rule"]);
+    await setRule("demo:abc", true, "rev1"); await setRule("demo:abc", false, "rev1");
+    expect(argvOf(calls, 0)).toEqual(["update", "demo:abc", "--domain", "demo", "--rule", "--expected-revision", "rev1"]);
+    expect(argvOf(calls, 1)).toEqual(["update", "demo:abc", "--domain", "demo", "--no-rule", "--expected-revision", "rev1"]);
     expect(["policy", "preference", "decision", "knowledge", undefined].map(ruleAllowed)).toEqual([true, true, false, false, false]);
   });
   it("a rule on the wrong note type comes back as an LM error", async () => {
     fake({ exit_code: 2, result: null, error: { code: "invalid", message: "Only policy and preference notes can be rules" } });
-    await expect(setRule("demo:abc", true)).rejects.toBeInstanceOf(LmError);
+    await expect(setRule("demo:abc", true, "rev1")).rejects.toBeInstanceOf(LmError);
   });
 });
 
@@ -219,8 +260,8 @@ describe("a note save and the bridge generation (Codex review of 7320d7f, LM-2)"
   it("is bound to the generation its base was read in, not the current one", async () => {
     const calls = fake({ exit_code: 0, result: { ok: true }, error: null });
     setBridgeGeneration(5);
-    await update("demo:abc", { title: "New" }, { at: 3 });
-    await update("demo:abc", { title: "New" });
+    await update("demo:abc", { title: "New", expected_revision: "rev1" }, { at: 3 });
+    await update("demo:abc", { title: "New", expected_revision: "rev1" });
     expect(calls[0]).toMatchObject(["lm", { argv: ["update", "demo:abc", "--domain", "demo"], generation: 3 }]);
     expect((calls[1] as [string, Record<string, unknown>])[1]).not.toHaveProperty("generation");
   });
@@ -228,12 +269,6 @@ describe("a note save and the bridge generation (Codex review of 7320d7f, LM-2)"
 
 describe("one search command", () => {
   const argvOf = (calls: unknown[], n = 0) => ((calls[n] as [string, { argv: string[] }])[1]).argv;
-
-  it("deletePlan runs delete-plan with the note's domain", async () => {
-    const calls = fake({ exit_code: 0, result: { ok: true, plan_id: "p", digest: "d", kind: "delete", summary: {} }, error: null });
-    await deletePlan("demo:abc");
-    expect(argvOf(calls)).toEqual(["delete-plan", "demo:abc", "--domain", "demo"]);
-  });
 
   it("links is search --links, as viewer", async () => {
     const calls = fake({ exit_code: 0, result: { nodes: [], edges: [], unresolved: [] }, error: null });
