@@ -28,6 +28,9 @@ const hide = () => getCurrentWindow().hide();
 
 /** Why a memory capture is refused: the same requirement as the main window's. */
 export const OUTDATED = "This version of Living Memory is too old for Hivemind. Update Living Memory, then reconnect from the main window. Capture to a page meanwhile.";
+/** Why a memory capture waits, or is refused, when the version is not known (Codex re-review, N08). */
+export const CHECKING = "Checking the Living Memory version…";
+export const UNCHECKED = "Hivemind could not check the Living Memory version, so it does not save to memory. Check again, or capture to a page.";
 
 /** Today's page keeps what the window captures under this heading. */
 export const CAPTURE_HEADING = "## Captured";
@@ -79,9 +82,11 @@ export function QuickCapture() {
   const notebook = books.some((b) => b.id === target.notebook) ? target.notebook : books[0]?.id ?? "";
   const toPage = target.kind !== "memory";
   // The main window refuses a Living Memory without the capabilities Hivemind needs; so does a memory capture here (Codex
-  // review of e30902f, C1). A page capture does not go through Living Memory and stays available.
+  // review of e30902f, C1). It needs a version answer that passes: none yet, or a failed check, refuses it too (Codex
+  // re-review, N08). A page capture does not go through Living Memory and stays available.
   const version = useQuery({ queryKey: ["version"], queryFn: lmVersion, retry: false });
   const outdated = !!version.data && needsLmUpdate(version.data);
+  const compatible = version.isSuccess && !outdated;
   const [project, setProject] = useState(prefs.captureProject() ?? "");
   const [domain, setDomain] = useState(prefs.captureDomain() ?? "");
   const [type, setType] = useState<NoteType>("knowledge");
@@ -132,7 +137,7 @@ export function QuickCapture() {
 
   const save = async (extra: Partial<CapturePayload> = {}) => {
     if (toPage) { await saveToPage(); return; }
-    if (outdated) return;
+    if (!compatible) return;
     if (!title.trim() || !summary.trim() || !domain) {
       setProblem({ kind: "other", message: "A domain, a title and a summary are needed." });
       return;
@@ -141,6 +146,9 @@ export function QuickCapture() {
     setBusy(true);
     setProblem(null);
     try {
+      // Checked again just before the write: Living Memory may have been replaced since the window last asked.
+      const now = await client.fetchQuery({ queryKey: ["version"], queryFn: lmVersion, retry: false, staleTime: 0 }).catch(() => null);
+      if (!now || needsLmUpdate(now)) return;
       const r = await capture(domain, { title: title.trim(), body: captureBody(summary, details), tags: mergeTags(tags, chosen ? [chosen.tag] : []), type, ...extra });
       recordOperation(r.operation_id);
       prefs.setCaptureDomain(domain);
@@ -190,6 +198,8 @@ export function QuickCapture() {
       <textarea id={`${ids}-details`} rows={3} value={details} placeholder={toPage ? "Details (optional, one per line)" : "Key details (optional, one per line)"} onChange={(e) => setDetails(e.target.value)} />
       {!toPage && <TagPicker tags={tags} taxonomy={tax.data?.tags ?? []} onChange={(t) => { setTagsTouched(true); setTags(t); }} />}
       {!toPage && outdated && <div className="banner error">{OUTDATED}</div>}
+      {!toPage && version.isPending && <div className="banner">{CHECKING}</div>}
+      {!toPage && version.isError && <div className="banner error">{UNCHECKED}<div className="actions"><button onClick={() => void version.refetch()}>Check again</button></div></div>}
       {!toPage && problem?.kind === "similar" ? (
         <div className="banner warn">
           A similar note exists: “{problem.title}”.
@@ -204,7 +214,7 @@ export function QuickCapture() {
         <span className="muted small">Ctrl+Enter saves · Esc hides</span>
         <span className="tabbar-fill" />
         <button onClick={() => hide()}>Close</button>
-        <button className="primary" disabled={busy || (!toPage && outdated)} onClick={() => save()}>{busy ? "Saving…" : "Save"}</button>
+        <button className="primary" disabled={busy || (!toPage && !compatible)} onClick={() => save()}>{busy ? "Saving…" : "Save"}</button>
       </div>
     </main>
   );

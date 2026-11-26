@@ -13,13 +13,17 @@ vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn(async () => {}), listen: v
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ hide: async () => {}, onFocusChanged: async () => () => {} }) }));
 
 const lm = await import("../../lib/lm");
-const { QuickCapture, OUTDATED } = await import("./QuickCapture");
+const { QuickCapture, OUTDATED, CHECKING, UNCHECKED } = await import("./QuickCapture");
 
 const sent: string[][] = [];
 let capabilities: Record<string, unknown> = {};
+/** How `version` answers: as usual, never, or with an error. */
+let versionAnswer: "ok" | "never" | "fail" = "ok";
 lm.setTransport(async (_cmd, args) => {
   const argv = (args as { argv: string[] }).argv;
   sent.push(argv);
+  if (argv[0] === "version" && versionAnswer === "never") return new Promise(() => {});
+  if (argv[0] === "version" && versionAnswer === "fail") return { exit_code: 1, result: null, error: { code: "internal", message: "bridge down" } };
   if (argv[0] === "version") return { exit_code: 0, error: null, result: { api: 3, python: "3.12", commands: ["capture"], capabilities } };
   if (argv[0] === "capture") return { exit_code: 0, error: null, result: { ok: true, id: "n1", status: "created", domain: "work", operation_id: "c-1" } };
   return { exit_code: 1, result: null, error: { code: "invalid", message: "not in this test" } };
@@ -49,7 +53,10 @@ async function mount() {
   await type(document.querySelectorAll("textarea")[0], "One sentence.");
 }
 
-beforeEach(() => { localStorage.clear(); sent.length = 0; });
+beforeEach(() => { localStorage.clear(); sent.length = 0; versionAnswer = "ok"; });
+const ctrlEnter = () => act(async () => {
+  document.querySelector("main.quick-capture")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }));
+});
 afterEach(async () => { await act(async () => root?.unmount()); root = null; document.body.innerHTML = ""; });
 
 describe("quick capture to memory", () => {
@@ -61,6 +68,34 @@ describe("quick capture to memory", () => {
     await act(async () => save().click());
     await settle();
     expect(sent.some((a) => a[0] === "capture")).toBe(false);
+  });
+
+  // Codex re-review, N08: no version answer yet, or a failed check, is not a pass.
+  it("does not capture to memory before the version check passes", async () => {
+    capabilities = { direct_writes: 2, revisions: 1, proposals: 1 };
+    versionAnswer = "never";
+    await mount();
+    expect(document.body.textContent).toContain(CHECKING);
+    expect(save().disabled).toBe(true);
+    await ctrlEnter();
+    await settle();
+    expect(sent.some((a) => a[0] === "capture")).toBe(false);
+    await act(async () => root?.unmount());
+    root = null;
+    document.body.innerHTML = "";
+
+    versionAnswer = "fail";
+    await mount();
+    expect(document.body.textContent).toContain(UNCHECKED);
+    expect(save().disabled).toBe(true);
+    await ctrlEnter();
+    await settle();
+    expect(sent.some((a) => a[0] === "capture")).toBe(false);
+
+    // A page capture does not need Living Memory.
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((b) => b.textContent?.includes("Today"))!.click());
+    expect(document.body.textContent).not.toContain(UNCHECKED);
+    expect(save().disabled).toBe(false);
   });
 
   it("captures with a current Living Memory", async () => {
