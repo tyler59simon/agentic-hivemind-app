@@ -30,8 +30,8 @@ pub const NO_ANSWER: &str = "Living Memory isn't answering, so Hivemind restarte
 
 /// Commands that read or rewrite a whole store (indexes, merges and retags, backups, imports and exports, the wiki, model
 /// work). They get the slow limit; every other command is quick.
-const SLOW: [&str; 29] = [
-    "rebuild", "doctor", "backup", "export", "import", "ingest", "ingest-scan", "source-sync", "migrate", "retag", "merge",
+const SLOW: [&str; 30] = [
+    "rebuild", "doctor", "backup", "restore-backup", "export", "import", "ingest", "ingest-scan", "source-sync", "migrate", "retag", "merge",
     "rebaseline", "semantic", "validate", "maintenance", "wiki", "sync", "overlay-build", "overlay-sync-all", "overlay-teardown",
     "recover", "remap", "promote", "rewrite", "undo", "batch", "ask", "stats", "query",
 ];

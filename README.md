@@ -59,7 +59,7 @@ py -3 install.py        # Windows
 python3 install.py      # macOS and Linux
 ```
 
-That copies Living Memory to its per-user app folder (below) and records the Python it ran under. Then wire each coding agent you use, as `install.py` prints: run `integrations/setup.py claude --hooks` (or `codex`, `copilot`, `factory`) from the installed copy and apply the plan it prints with `--apply-plan ID --expected-plan-sha256 DIGEST`. Hivemind itself needs only the installed copy. See `INSTALLATION.md` in that repository for the details.
+That copies Living Memory to its per-user app folder (below) and records the Python it ran under. Then wire each coding agent you use, as `install.py` prints: run `integrations/setup.py claude --hooks` (or `codex`, `copilot`, `factory`) from the installed copy; it writes the harness files directly, and the `alm undo` command it prints puts them back. Hivemind itself needs only the installed copy. See `INSTALLATION.md` in that repository for the details.
 
 ## Configuration
 
