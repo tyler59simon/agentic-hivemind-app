@@ -1,5 +1,6 @@
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
+import { useToasts } from "../ui/toast";
 import { reconnect, refreshStore } from "./refresh";
 
 describe("refreshStore", () => {
@@ -23,15 +24,18 @@ describe("reconnect", () => {
     const observer = new QueryObserver(client, { queryKey: ["connect"], staleTime: Infinity, queryFn: () => { connects += 1; order.push("connect"); return connects; } });
     const stop = observer.subscribe(() => {});
     await observer.refetch();
-    await reconnect(client, async () => { order.push("restart"); });
+    await reconnect(client, () => new Promise((done) => setTimeout(() => { order.push("restart"); done(undefined); }, 20)));
     expect(order).toEqual(["connect", "restart", "connect"]);
     expect(client.getQueryData(["connect"])).toBe(2);
     stop();
   });
 
-  it("still reconnects when the restart fails", async () => {
+  it("says why a restart was refused, and still reads the connection again", async () => {
     const client = new QueryClient();
     client.setQueryData(["connect"], 1);
-    await expect(reconnect(client, () => Promise.reject(new Error("unknown command")))).resolves.toBeUndefined();
+    await reconnect(client, () => Promise.reject("A Living Memory request is still running, so Hivemind did not restart it. Reconnect again when it finishes."));
+    expect(useToasts.getState().items.map((t) => [t.kind, t.text])).toEqual([["warn", "A Living Memory request is still running, so Hivemind did not restart it. Reconnect again when it finishes."]]);
+    expect(client.getQueryState(["connect"])?.data).toBeUndefined();
+    useToasts.setState({ items: [] });
   });
 });

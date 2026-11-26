@@ -13,7 +13,7 @@ use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, TryLockError, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -175,12 +175,17 @@ pub struct Bridge {
     /// Counts reconfigures. `call_at` checks it under the `proc` lock, so a request made for one store never runs in the
     /// next (Codex re-review of 75ce884, R2-D1); a process started for an earlier generation is dropped, not reused.
     generation: AtomicU64,
+    /// Counts restarts, so restarts asked for while one waits end the process once (`restart_after`).
+    restarts: AtomicU64,
     /// The store root `connect` verified for this generation. A process started later in the same generation is given it
     /// with `--root`, so a default store that changed meanwhile (Living Memory's setup picked another) is never served
     /// under the old generation (Codex review of dd4c1b0, R3-D7). Cleared by `reconfigure`, which holds this lock while it
     /// changes the launch and the generation, so the three always change together.
     pinned: Mutex<Option<PathBuf>>,
 }
+
+/// Why a restart was refused: a request kept the bridge busy past the slow limit.
+pub const RESTART_BUSY: &str = "A Living Memory request is still running, so Hivemind did not restart it. Reconnect again when it finishes.";
 
 /// The error of a request made before the bridge switched stores.
 pub const STORE_CHANGED: &str = "Living Memory switched to another store while this request waited, so Hivemind did not send it";
@@ -197,6 +202,7 @@ impl Bridge {
             running: Mutex::new(Weak::new()),
             limits,
             generation: AtomicU64::new(0),
+            restarts: AtomicU64::new(0),
             pinned: Mutex::new(None),
         }
     }
@@ -221,11 +227,34 @@ impl Bridge {
         }
     }
 
-    /// End the process and start the next request in a new one with the same launch: an explicit reconnect, so a Living
-    /// Memory upgraded in place (same interpreter, script and store) is the one that answers (Codex review of e30902f, C2).
-    /// Like `reconfigure`, it starts a new generation.
-    pub fn restart(&self) {
-        self.reconfigure(self.launch());
+    /// End the process so the next request starts a new one with the same launch: an explicit reconnect, so a Living Memory
+    /// upgraded in place (same interpreter, script and store) is the one that answers (Codex review of e30902f, C2). It takes
+    /// the request lock, so it waits for a request in progress (a write keeps its receipt) and ends only the process that
+    /// request used; it refuses when the bridge stays busy past the slow limit. The launch, the pinned root and the generation
+    /// stay as they are (Codex re-review, N09 to N11).
+    pub fn restart(&self) -> Result<(), String> {
+        self.restart_after(self.restarts.load(Ordering::SeqCst))
+    }
+
+    /// `restart`, as asked for when `seen` restarts had been done: when another one finished since, the process it left is
+    /// newer than the request, so it is kept.
+    fn restart_after(&self, seen: u64) -> Result<(), String> {
+        let deadline = Instant::now() + self.limits.slow + self.limits.start;
+        let mut guard = loop {
+            match self.proc.try_lock() {
+                Ok(guard) => break guard,
+                Err(TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
+                Err(TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+                Err(TryLockError::WouldBlock) => return Err(RESTART_BUSY.into()),
+            }
+        };
+        if self.restarts.load(Ordering::SeqCst) != seen {
+            return Ok(());
+        }
+        // Dropping the process ends it and reaps it (`Proc::drop`, at most two seconds), so no exited child is left behind.
+        *guard = None;
+        self.restarts.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
 
     /// Keep `root` as the store of `generation` (when that is still the current one and Settings name no root).
@@ -847,8 +876,8 @@ for line in sys.stdin:
         std::fs::remove_dir_all(dir).ok();
     }
 
-    /// Codex review of e30902f, C2: a restart ends the running process and starts a new generation with the same launch, so
-    /// the next request reaches a new process (an in-place upgrade of Living Memory is then the one that answers).
+    /// Codex review of e30902f, C2, and the re-review's N11: a restart ends and reaps the idle process at once, keeps the
+    /// launch and the generation, and the next request reaches a new process.
     #[test]
     fn a_restart_ends_the_process_and_the_next_call_starts_a_new_one() {
         let Some((program, args)) = python() else { return };
@@ -856,14 +885,72 @@ for line in sys.stdin:
         let launch = Launch { program, args, script, root: None };
         let bridge = Bridge::with_limits(launch.clone(), limits(5000, 20_000));
         let first = pid(&bridge, "echo").unwrap();
-        let before = bridge.generation();
-        bridge.restart();
-        assert_eq!(bridge.generation(), before + 1);
-        assert_eq!(bridge.launch(), launch);
+        let generation = bridge.generation();
+        bridge.restart().unwrap();
+        assert_eq!((bridge.generation(), bridge.launch()), (generation, launch));
+        assert!(bridge.proc.lock().unwrap().is_none(), "the old process is still in the slot");
         assert!(gone(first), "the old server is still running");
         assert_ne!(pid(&bridge, "echo").unwrap(), first);
         drop(bridge);
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    const SLOW_ECHO: &str = r#"
+for line in sys.stdin:
+    req = json.loads(line)
+    if req["argv"][0] == "slow":
+        time.sleep(1)
+    reply(req["id"], VERSION if req["argv"][0] == "version" else {"pid": os.getpid()})
+"#;
+
+    /// Codex re-review, N09 and N10: a restart asked for while a request runs waits for its reply instead of ending the
+    /// process under it, and two restarts asked for together end the process once.
+    #[test]
+    fn a_restart_waits_for_a_request_in_progress_and_concurrent_restarts_are_one() {
+        let Some((program, args)) = python() else { return };
+        let (dir, script) = fake("restart-busy", SLOW_ECHO);
+        let bridge = Bridge::with_limits(Launch { program, args, script, root: None }, limits(5000, 20_000));
+        let first = pid(&bridge, "echo").unwrap();
+        std::thread::scope(|scope| {
+            let request = scope.spawn(|| pid(&bridge, "slow"));
+            std::thread::sleep(Duration::from_millis(300));
+            let restarts = [scope.spawn(|| bridge.restart()), scope.spawn(|| bridge.restart())];
+            assert_eq!(request.join().unwrap().unwrap(), first, "the request was cut off");
+            for restart in restarts {
+                restart.join().unwrap().unwrap();
+            }
+        });
+        assert_eq!(bridge.restarts.load(Ordering::SeqCst), 1);
+        assert!(gone(first));
+        drop(bridge);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Codex re-review, N10: a restart that waited while another one finished keeps the process started since.
+    #[test]
+    fn a_restart_overtaken_by_another_keeps_the_newer_process() {
+        let Some((program, args)) = python() else { return };
+        let (dir, script) = fake("restart-newer", ECHO_OR_STALL);
+        let bridge = Bridge::with_limits(Launch { program, args, script, root: None }, limits(5000, 20_000));
+        pid(&bridge, "echo").unwrap();
+        let seen = bridge.restarts.load(Ordering::SeqCst);
+        bridge.restart().unwrap();
+        let newer = pid(&bridge, "echo").unwrap();
+        bridge.restart_after(seen).unwrap();
+        assert_eq!(pid(&bridge, "echo").unwrap(), newer);
+        drop(bridge);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Codex re-review, N09: a restart refuses, with a message, when a request keeps the bridge busy past its wait.
+    #[test]
+    fn a_restart_refuses_while_the_bridge_stays_busy() {
+        let launch = Launch { program: "py".into(), args: vec![], script: "no-such-living_memory.py".into(), root: None };
+        let bridge = Bridge::with_limits(launch, Limits { quick: Duration::from_millis(50), slow: Duration::from_millis(100), start: Duration::from_millis(50), reply: 1000 });
+        let held = bridge.proc.lock().unwrap();
+        assert_eq!(bridge.restart().unwrap_err(), RESTART_BUSY);
+        drop(held);
+        bridge.restart().unwrap();
     }
 
     /// A slow command gets the slow limit and an ordinary one the quick limit.

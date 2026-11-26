@@ -182,10 +182,11 @@ fn store_identity(root: &str) -> String {
 }
 
 /// End the Living Memory process on the user's Reconnect; the `connect` that follows starts a new one and checks it again
-/// (Codex review of e30902f, C2). Never waits for a request in progress.
+/// (Codex review of e30902f, C2). A request in progress finishes first (`Bridge::restart`).
 #[tauri::command]
-fn bridge_restart(state: State<'_, AppState>) {
-    state.bridge.restart();
+async fn bridge_restart(state: State<'_, AppState>) -> Result<(), String> {
+    let bridge = state.bridge.clone();
+    blocking(move || bridge.restart()).await
 }
 
 /// How long `connect` waits for `doctor`, which checks the whole store, before it shows the connection error.

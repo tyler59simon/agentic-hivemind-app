@@ -277,9 +277,18 @@ function SettingsTitle() {
   return null;
 }
 
+/** What Settings' Save and Reconnect do. Save reads everything again: `save_settings` already starts a new Living Memory when
+ *  the interpreter, script or store changed, and a restart here would cut off a write another window has running (Codex
+ *  re-review, N09). Only an explicit Reconnect restarts the process, so one upgraded in place answers (C2). */
+export function useReconnect() {
+  const client = useQueryClient();
+  const settingsSaved = useCallback(() => { closeSettings(); client.resetQueries(); }, [client]);
+  const reconnect = useCallback(() => { closeSettings(); void reconnectBridge(client, restartBridge); }, [client]);
+  return { reconnect, settingsSaved };
+}
+
 export default function App() {
   const app = useApp();
-  const client = useQueryClient();
   const settings = useSettingsScroll();
   const setSettings = (open: boolean) => (open ? openSettings() : closeSettings());
   const link = useQuery({ queryKey: ["connect"], queryFn: connect, retry: false, staleTime: Infinity });
@@ -307,8 +316,7 @@ export default function App() {
     if (first) app.setDomain(first.name);
   }, [known.data, app]);
 
-  // An explicit reconnect restarts Living Memory, so one upgraded in place is the one that answers (Codex review of e30902f, C2).
-  const reconnect = useCallback(() => { closeSettings(); void reconnectBridge(client, restartBridge); }, [client]);
+  const { reconnect, settingsSaved } = useReconnect();
 
   // The dialogs belong to every branch: tray Quit must show its dialog while Settings is open or the connection has failed.
   const dialogs = <>{closeGuard}{quitDialog}{folderOffer}<ShortcutsDialog /><AboutDialog /></>;
@@ -328,7 +336,7 @@ export default function App() {
             {link.error && <p className="error">{String(link.error)}</p>}
             {outdated && <p className="error">This version of Living Memory is too old: Hivemind needs one with direct delete, merge and retag, note revisions and unified proposals (<code>alm version</code> lists <code>direct_writes</code> 2, <code>revisions</code> and <code>proposals</code> under capabilities). Update Living Memory, then reconnect.</p>}
             {outdated && <button onClick={reconnect}>Reconnect</button>}
-            <SettingsForm onSaved={reconnect} />
+            <SettingsForm onSaved={settingsSaved} />
             <ShortcutsSection />
             <HelpRow />
             {link.isSuccess && !outdated && <><SchedulesSection /><MaintenanceSection /></>}
