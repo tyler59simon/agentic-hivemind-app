@@ -1,6 +1,6 @@
 // Suggest existing notes that probably belong to a project, and tag them (through LM's update) on request.
 import { classify } from "../../lib/errors";
-import { LmError, meta, update } from "../../lib/lm";
+import { update } from "../../lib/lm";
 import type { DomainInfo, LinkGraph, NoteRow, Project } from "../../lib/lm";
 
 export interface Suggestion {
@@ -90,31 +90,26 @@ export function suggestTriage(input: {
 
 export const withProjectTag = (tags: string[], tag: string): string[] => [...new Set([...tags, tag])].sort();
 
-export type AssignResult = { ref: string; ok: true; operation_id?: string } | { ref: string; ok: false; error: string };
+/** `stale`: the note changed after it was suggested, so nothing was written to it; the user checks it and assigns again. */
+export type AssignResult = { ref: string; ok: true; operation_id?: string } | { ref: string; ok: false; error: string; stale?: true };
 interface AssignDeps {
   update: (ref: string, payload: { tags: string[]; expected_revision: string }) => Promise<{ operation_id?: string }>;
-  meta: (ref: string) => Promise<{ tags: string[]; revision: string }>;
 }
 
-/** Add the project tag to each note, one at a time; a stale revision is re-read and retried once. */
+/** Add the project tag to each note, one at a time, with the revision it was suggested at. A note that changed since is not
+ *  written: its result says stale, and the other notes go on (Codex review of e30902f, S2). */
 export async function assignToProject(
   rows: Pick<NoteRow, "ref" | "title" | "tags" | "revision">[], tag: string,
-  deps: AssignDeps = { update, meta },
+  deps: AssignDeps = { update },
 ): Promise<AssignResult[]> {
   const results: AssignResult[] = [];
   for (const row of rows) {
     try {
-      let res;
-      try {
-        res = await deps.update(row.ref, { tags: withProjectTag(row.tags, tag), expected_revision: row.revision });
-      } catch (e) {
-        if (!(e instanceof LmError && e.stale)) throw e;
-        const fresh = await deps.meta(row.ref);
-        res = await deps.update(row.ref, { tags: withProjectTag(fresh.tags, tag), expected_revision: fresh.revision });
-      }
+      const res = await deps.update(row.ref, { tags: withProjectTag(row.tags, tag), expected_revision: row.revision });
       results.push({ ref: row.ref, ok: true, operation_id: res?.operation_id });
     } catch (e) {
-      results.push({ ref: row.ref, ok: false, error: classify(e).message });
+      const problem = classify(e);
+      results.push(problem.kind === "stale" ? { ref: row.ref, ok: false, error: problem.message, stale: true } : { ref: row.ref, ok: false, error: problem.message });
     }
   }
   return results;

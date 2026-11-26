@@ -127,24 +127,35 @@ export function NewNote({ tab }: { tab: Tab }) {
       else { toast("Living Memory already has this note; showing it.", "warn"); finish(ref, payload.title, "reading"); }
     } catch (e) {
       const p = classify(e);
-      if (p.kind === "similar") {
-        // Replacing the note it names sends that note's revision as it is now; without one it can only be opened or kept.
-        const revision = p.ref ? await meta(p.ref).then((m) => m.revision, () => undefined) : undefined;
-        setDialog(
-          <Modal title="A similar note already exists" onClose={() => setDialog(null)}>
-            <p>Living Memory found “{p.title}”, which looks like the same subject. Update it if the fact moved on, replace it if this supersedes it, or save a separate note if they are genuinely different.</p>
-            <div className="actions">
-              <button onClick={() => { setDialog(null); if (p.ref) openNote(p.ref, { split: true, mode: "live", title: p.title }); }}>Open it to update</button>
-              {p.ref && revision && <button onClick={() => save({ supersedes: [at(p.ref!, revision)] })}>Save as its replacement</button>}
-              <button className="primary" onClick={() => save({ allow_similar: true })}>Save as a separate note</button>
-            </div>
-          </Modal>,
-        );
-      } else if (p.kind === "stale") {
-        // The note this one was to replace changed since the dialog read it. Saving again asks once more, with its new revision.
-        setBanner(<div className="banner error">The note this one replaces changed after it was read. Save again to choose what to do with it.</div>);
+      if (p.kind === "similar") await askSimilar(p.ref, p.title);
+      else if (p.kind === "stale") {
+        // The note this one was to replace changed after the user chose it. The draft stays; the note is read again and the
+        // user chooses again. Nothing is saved without that choice (Codex review of e30902f, S3).
+        const replaced = extra.supersedes?.[0];
+        if (replaced) await askSimilar(replaced.slice(0, replaced.lastIndexOf("@")), undefined, "The note this one replaces changed after you chose it. It is shown here as it is now; choose again.");
+        else setBanner(<div className="banner error">{p.message}</div>);
       } else setBanner(<ProblemBanner problem={p} onRedact={() => save(extra, true)} onAddTags={addTags} />);
     } finally { setSaving(false); }
+  };
+
+  /** Ask what to do about the similar note `ref`. It is read first, so the dialog names it as it is now and a replacement
+   *  sends that revision. `why` says why the question comes again. */
+  const askSimilar = async (ref: string | undefined, title: string | undefined, why?: string) => {
+    const now = ref ? await meta(ref).catch(() => undefined) : undefined;
+    const name = now?.title ?? title ?? ref;
+    setDialog(
+      <Modal title={why ? "The note to replace changed" : "A similar note already exists"} onClose={() => setDialog(null)}>
+        {why && <p className="warn-text">{why}</p>}
+        <p>Living Memory found “{name}”, which looks like the same subject. Update it if the fact moved on, replace it if this supersedes it, or save a separate note if they are genuinely different.</p>
+        {ref && !now && <p className="error">Hivemind could not read “{name}”, so it cannot be replaced from here. Read it again, or open it.</p>}
+        <div className="actions">
+          <button onClick={() => { setDialog(null); if (ref) openNote(ref, { split: true, mode: "live", title: name }); }}>Open it to update</button>
+          {ref && !now && <button onClick={() => askSimilar(ref, title, why)}>Read it again</button>}
+          {ref && now && <button onClick={() => save({ supersedes: [at(ref, now.revision)] })}>Save as its replacement</button>}
+          <button className="primary" onClick={() => save({ allow_similar: true })}>Save as a separate note</button>
+        </div>
+      </Modal>,
+    );
   };
 
   const addTags = (tags: string[]) => setDialog(

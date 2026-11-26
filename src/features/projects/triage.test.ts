@@ -123,34 +123,24 @@ describe("assignToProject", () => {
     const calls: unknown[] = [];
     const res = await assignToProject(rows, "project/x", {
       update: async (ref, p) => { calls.push([ref, p]); return { operation_id: "op1" }; },
-      meta: async () => { throw new Error("unused"); },
     });
     expect(res).toEqual([{ ref: "d:1", ok: true, operation_id: "op1" }]);
     expect(calls).toEqual([["d:1", { tags: ["b", "project/x"], expected_revision: "r1" }]]);
   });
-  it("retries once on a stale revision using fresh tags", async () => {
+  // Codex review of e30902f, S2: a note that changed after it was suggested is not tagged by the same click.
+  it("does not retry a stale note, and goes on with the rest", async () => {
     const seen: unknown[] = [];
-    const res = await assignToProject(rows, "project/x", {
-      update: async (_r, p) => { seen.push(p); if (seen.length === 1) throw stale(); return { operation_id: "op2" }; },
-      meta: async () => ({ tags: ["b", "c"], revision: "r2" }),
+    const res = await assignToProject([...rows, { ref: "d:2", title: "Two", tags: [], revision: "r" }], "project/x", {
+      update: async (ref, p) => { seen.push([ref, p]); if (ref === "d:1") throw stale(); return { operation_id: "op2" }; },
     });
-    expect(res[0]).toEqual({ ref: "d:1", ok: true, operation_id: "op2" });
-    expect(seen[1]).toEqual({ tags: ["b", "c", "project/x"], expected_revision: "r2" });
-  });
-  it("reports a second stale failure", async () => {
-    let calls = 0;
-    const res = await assignToProject(rows, "project/x", {
-      update: async () => { calls++; throw stale(); },
-      meta: async () => ({ tags: [], revision: "r2" }),
-    });
-    expect(calls).toBe(2);
-    expect(res[0]).toMatchObject({ ref: "d:1", ok: false });
+    expect(seen).toEqual([["d:1", { tags: ["b", "project/x"], expected_revision: "r1" }], ["d:2", { tags: ["project/x"], expected_revision: "r" }]]);
+    expect(res[0]).toMatchObject({ ref: "d:1", ok: false, stale: true });
+    expect(res[1]).toEqual({ ref: "d:2", ok: true, operation_id: "op2" });
   });
   it("reports other errors without retrying, and continues", async () => {
     let calls = 0;
     const res = await assignToProject([...rows, { ref: "d:2", title: "Two", tags: [], revision: "r" }], "project/x", {
       update: async (ref) => { calls++; if (ref === "d:1") throw new LmError("x", "Unknown tags require an approved taxonomy plan: project/x", 2); return {}; },
-      meta: async () => { throw new Error("unused"); },
     });
     expect(calls).toBe(2);
     expect(res[0]).toEqual({ ref: "d:1", ok: false, error: "Unknown tags require an approved taxonomy plan: project/x" });

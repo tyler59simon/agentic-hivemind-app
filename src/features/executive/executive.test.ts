@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Briefing, CaptureItem, Health, Milestone } from "../../lib/executive";
 import type { NoteRow, OpenItem, Project } from "../../lib/lm";
-import { acceptKey, acceptWrite, blocked, commitmentsNote, hasAction, itemBody, planWrite, replaceable, tagsFor, type Context } from "./items";
+import { acceptKey, acceptWrite, blocked, commitmentsNote, hasAction, itemBody, missingRevision, planWrite, replaceable, tagsFor, type Context } from "./items";
 import { addDays, commitmentRows, formatCommitment, parseCommitment, timing } from "./commitments";
 import { healthView, signals, suggestHealth } from "./health";
 import { attention, crossProject, portfolio } from "./portfolio";
@@ -96,8 +96,10 @@ describe("capture", () => {
     expect(blocked(extracted({ kind: "milestone" }))).toBeUndefined();
   });
 
-  it("writes a note with its source, and supersedes when asked, with the revision the replaced note is listed at", () => {
-    const w = planWrite(extracted({ details: ["Saves a lookup"], owner: "Dana" }), { ...ctx, rows: [row({ ref: "pay:old", title: "Old", type: "decision", revision: "rev-old" })] }, "pay:old");
+  // Codex review of e30902f, R2: the revision is the one the confirmation read for the replaced note, even when the note is
+  // not among the active rows the page listed.
+  it("writes a note with its source, and supersedes when asked, with the revision the replaced note was confirmed at", () => {
+    const w = planWrite(extracted({ details: ["Saves a lookup"], owner: "Dana" }), ctx, { ref: "pay:old", revision: "rev-old" });
     expect(w.kind).toBe("note");
     if (w.kind !== "note") return;
     expect(w.domain).toBe("pay");
@@ -152,13 +154,22 @@ describe("capture", () => {
 
   it("repeats the write an unfinished accept recorded, not one planned from later edits", () => {   // EXEC-3, Codex R3
     const item = extracted({ title: "Use event IDs as keys" });
-    const first = acceptWrite(item, () => planWrite(item, ctx, "pay:old", "b-i1"), "pay:old");
+    const first = acceptWrite(item, () => planWrite(item, ctx, { ref: "pay:old", revision: "r-old" }, "b-i1"), "pay:old");
     expect(first.fresh).toBe(true);
     expect(first.superseded).toBe("pay:old");
     const edited = { ...item, title: "Use event IDs as idempotency keys", intent: { write: first.write, superseded: first.superseded } };
     const again = acceptWrite(edited, () => planWrite(edited, ctx, undefined, "b-i1"));
     expect(again).toEqual({ write: first.write, superseded: "pay:old", fresh: false });
     expect(acceptWrite({ ...edited, intent: undefined }, () => planWrite(edited, ctx, undefined, "b-i1")).write).not.toEqual(first.write);
+  });
+
+  it("finds a recorded write that names a note without its revision", () => {   // Codex review of e30902f, R2
+    const note = planWrite(extracted({}), ctx, { ref: "pay:old", revision: "r-old" });
+    expect(missingRevision(note)).toBe(false);
+    if (note.kind !== "note") return;
+    expect(missingRevision({ ...note, payload: { ...note.payload, supersedes: ["pay:old"] } })).toBe(true);
+    expect(missingRevision({ kind: "action", ref: "pay:c9", text: "x", revision: "" })).toBe(true);
+    expect(missingRevision({ kind: "action", ref: "pay:c9", text: "x", revision: "r" })).toBe(false);
   });
 
   it("finds an action item a note already has, open or ticked", () => {   // EXEC-3

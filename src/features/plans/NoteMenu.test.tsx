@@ -20,6 +20,8 @@ const sent: string[][] = [];
 let stale = false;
 lm.setTransport(async (_cmd, args) => {
   const argv = (args as { argv: string[] }).argv;
+  // The dialog reads the note again after a stale refusal.
+  if (argv[0] === "read") return { exit_code: 0, error: null, result: { id: "1", domain: "d", title: "T", type: "knowledge", status: "active", revision: shown.revision } };
   if (argv[0] !== "delete") return { exit_code: 1, result: null, error: { code: "invalid", message: "not in this test" } };
   sent.push(argv);
   if (stale) return { exit_code: 6, result: null, error: { code: "stale", message: "stale_revision: d:1 changed since revision rev1; read it again and redo the change" } };
@@ -43,6 +45,38 @@ describe("deleting a note from its menu", () => {
 
     stale = true;
     shown.revision = "rev2";
+    await act(async () => button("Delete").click());
+    await settle();
+    expect(sent).toEqual([["delete", "d:1", "--domain", "d", "--expected-revision", "rev1"]]);
+    expect(document.querySelector(".modal .error, [role=dialog] .error")?.textContent).toBe("This note changed; reloaded.");
+
+    stale = false;
+    await act(async () => button("Delete").click());
+    await settle();
+    expect(sent[1]).toEqual(["delete", "d:1", "--domain", "d", "--expected-revision", "rev2"]);
+  });
+
+  // Codex review of e30902f, R1: a background refresh while the dialog is open must not move the write to a revision the
+  // user never saw. The write sends the revision shown at open, is refused as stale, and the next click sends the new one.
+  it("keeps the revision shown when the dialog opened, even after a background refresh", async () => {
+    sent.length = 0;
+    shown.revision = "rev1";
+    stale = false;
+    const client = new QueryClient();
+    const el = document.createElement("div");
+    document.body.append(el);
+    root = createRoot(el);
+    await act(async () => root!.render(<QueryClientProvider client={client}><NoteMenu refId="d:1" /></QueryClientProvider>));
+    await settle();
+    await act(async () => el.querySelector<HTMLButtonElement>('button[aria-label="Note actions"]')!.click());
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) => b.textContent === "Delete…")!.click());
+
+    // An agent edits the note; the watcher refreshes the page's query to rev2 while the dialog is open.
+    shown.revision = "rev2";
+    await act(async () => { await client.refetchQueries({ queryKey: ["note", "d:1"] }); });
+    await settle();
+    expect(client.getQueryData<{ revision: string }>(["note", "d:1"])?.revision).toBe("rev2");
+    stale = true;
     await act(async () => button("Delete").click());
     await settle();
     expect(sent).toEqual([["delete", "d:1", "--domain", "d", "--expected-revision", "rev1"]]);

@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState, type ReactNode } from "react";
 import { useRestoreEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
-import { archiveNote, deleteNote, domainOf, meta, reopenNote, resolveNote, restoreNote, supersedeNote, type Note, type NoteRow } from "../../lib/lm";
+import { archiveNote, deleteNote, domainOf, reopenNote, resolveNote, restoreNote, supersedeNote, type NoteRow, type Receipt } from "../../lib/lm";
 import { resolvable, useNoteTypes } from "../../lib/noteTypes";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
@@ -15,7 +15,7 @@ import { useWorkspace } from "../../workspace/store";
 import { noteQuery } from "../viewer/NoteView";
 import { MergeComposer } from "./MergeComposer";
 import { NotePicker } from "./NotePicker";
-import { DirectDialog } from "./DirectDialog";
+import { SeenDialog, type Seen } from "./DirectDialog";
 
 /** Lifecycle actions for a note: direct, journaled writes, each confirmed in a dialog and undoable from the toast or Activity. */
 export function NoteMenu({ refId, paper }: { refId: string; paper?: { white: boolean; flip: () => void } }) {
@@ -24,8 +24,9 @@ export function NoteMenu({ refId, paper }: { refId: string; paper?: { white: boo
   const client = useQueryClient();
   const types = useNoteTypes();
   const [dialog, setDialog] = useState<ReactNode>(null);
-  /** A successor's revision read again after a stale refusal, by ref. */
-  const successors = useRef(new Map<string, string>());
+  // The note as the page shows it now, for the supersede dialog the picker opens.
+  const shown = useRef(note.data);
+  shown.current = note.data;
   const closeTabsOf = (ref: string) => {
     const ws = useWorkspace.getState();
     for (const p of ws.panes) for (const t of p.tabs) if (t.ref === ref) ws.closeTab(p.id, t.id);
@@ -34,39 +35,35 @@ export function NoteMenu({ refId, paper }: { refId: string; paper?: { white: boo
   if (!n) return null;
   const canResolve = resolvable(n.type, types.def(n.type));
   const close = () => setDialog(null);
-  // The revision of the note as the page shows it now: a dialog stays open while a stale refusal reads the note again, and
-  // the user's second click must carry the new revision.
-  const revision = () => client.getQueryData<Note>(noteQuery(refId).queryKey)?.revision ?? n.revision;
+  // Each dialog keeps the note as it was when the dialog opened and writes that revision (Codex review of e30902f, R1).
+  const seen = (): Seen => ({ ref: refId, title: n.title, revision: n.revision });
   const restore = () => {
-    restoreNote(refId, revision()).then((r) => { recordOperation(r.operation_id); refreshStore(client); toast("Restored. The note is active and pinned."); })
+    restoreNote(refId, n.revision).then((r) => { recordOperation(r.operation_id); refreshStore(client); toast("Restored. The note is active and pinned."); })
       .catch((e) => toastWriteFailure(client, e));
   };
-  // The successor is written too, with the revision the picker listed it at. A stale refusal reads it again (the page's own
-  // note is read again by the dialog), so the user's next click sends both notes as they are now.
-  const supersede = (t: NoteRow) => {
-    const by = { ref: t.ref, revision: successors.current.get(t.ref) ?? t.revision };
-    return supersedeNote(refId, revision(), by).catch(async (e) => {
-      if (classify(e).kind === "stale") await meta(t.ref).then((m) => successors.current.set(t.ref, m.revision), () => undefined);
-      throw e;
-    });
-  };
   const run = (node: ReactNode) => setDialog(node);
+  /** The confirm for one write to this note. */
+  const confirm = (applyLabel: string, write: (ref: string, revision: string) => Promise<Receipt>,
+    text: (title: string) => { title: string; intro: ReactNode; done: string }, extra: { danger?: boolean; onApplied?: () => void } = {}) =>
+    run(<SeenDialog first={[seen()]} applyLabel={applyLabel} onClose={close} {...extra} text={([s]) => text(s.title)} run={([s]) => write(s.ref, s.revision)} />);
+  // The successor is written too, with the revision the picker listed it at; a stale refusal reads both notes again.
+  const supersede = (t: NoteRow) => {
+    const page = shown.current ?? n;
+    run(<SeenDialog first={[{ ref: refId, title: page.title, revision: page.revision }, { ref: t.ref, title: t.title, revision: t.revision }]}
+      applyLabel="Supersede" onClose={close} run={([s, by]) => supersedeNote(s.ref, s.revision, by)}
+      text={([s, by]) => ({ title: `“${by.title}” replaces “${s.title}”`, done: `Superseded “${s.title}”.`,
+        intro: <p>“{s.title}” is marked superseded and moves to the archive; “{by.title}” records that it replaces it.</p> })} />);
+  };
   const items: { label: string; show: boolean; act: () => void; danger?: boolean }[] = [
-    { label: "Archive…", show: n.status === "active", act: () => run(
-      <DirectDialog title={`Archive “${n.title}”`} run={() => archiveNote(refId, revision())} applyLabel="Archive" done={`Archived “${n.title}”.`} onClose={close}
-        intro={<p>The note moves to the archive. It stays searchable with the archived filter and can be restored {restoreOn ? "from its page with Restore" : "by undoing this change"}.</p>} />) },
+    { label: "Archive…", show: n.status === "active", act: () => confirm("Archive", archiveNote, (title) => ({ title: `Archive “${title}”`, done: `Archived “${title}”.`,
+      intro: <p>The note moves to the archive. It stays searchable with the archived filter and can be restored {restoreOn ? "from its page with Restore" : "by undoing this change"}.</p> })) },
     { label: "Restore", show: restoreOn && n.status === "archived", act: restore },
-    { label: `Resolve ${n.type}…`, show: canResolve && n.status === "active", act: () => run(
-      <DirectDialog title={`Resolve “${n.title}”`} run={() => resolveNote(refId, revision())} applyLabel="Resolve" done={`Resolved “${n.title}”.`} onClose={close}
-        intro={<p>The {n.type} is marked resolved and moves to the archive.</p>} />) },
-    { label: `Reopen ${n.type}…`, show: canResolve && n.status === "resolved", act: () => run(
-      <DirectDialog title={`Reopen “${n.title}”`} run={() => reopenNote(refId, revision())} applyLabel="Reopen" done={`Reopened “${n.title}”.`} onClose={close}
-        intro={<p>The {n.type} becomes active again.</p>} />) },
+    { label: `Resolve ${n.type}…`, show: canResolve && n.status === "active", act: () => confirm("Resolve", resolveNote, (title) => ({ title: `Resolve “${title}”`, done: `Resolved “${title}”.`,
+      intro: <p>The {n.type} is marked resolved and moves to the archive.</p> })) },
+    { label: `Reopen ${n.type}…`, show: canResolve && n.status === "resolved", act: () => confirm("Reopen", reopenNote, (title) => ({ title: `Reopen “${title}”`, done: `Reopened “${title}”.`,
+      intro: <p>The {n.type} becomes active again.</p> })) },
     { label: "Superseded by…", show: n.status === "active", act: () => run(
-      <NotePicker title="Which note replaces this one?" domain={n.domain} exclude={refId} onClose={close}
-        onPick={(t) => setDialog(<DirectDialog title={`“${t.title}” replaces “${n.title}”`} applyLabel="Supersede" onClose={close}
-          run={() => supersede(t)} done={`Superseded “${n.title}”.`}
-          intro={<p>“{n.title}” is marked superseded and moves to the archive; “{t.title}” records that it replaces it.</p>} />)} />) },
+      <NotePicker title="Which note replaces this one?" domain={n.domain} exclude={refId} onClose={close} onPick={supersede} />) },
     { label: "Merge into…", show: n.status === "active", act: () => run(
       <NotePicker title="Merge this note into…" domain={n.domain} exclude={refId} onClose={close}
         onPick={(t) => setDialog(<MergeComposer source={{ ref: refId, title: n.title }} target={t} onClose={close} />)} />) },
@@ -78,10 +75,8 @@ export function NoteMenu({ refId, paper }: { refId: string; paper?: { white: boo
     } },
     { label: paper?.white ? "Theme background" : "White background", show: !!paper, act: () => { paper?.flip(); } },
     { label: "Copy reference", show: true, act: () => { navigator.clipboard.writeText(refId).then(() => toast(`Copied ${refId}`)); } },
-    { label: "Delete…", show: true, danger: true, act: () => run(
-      <DirectDialog title={`Delete “${n.title}”`} run={() => deleteNote(refId, revision())} applyLabel="Delete" danger onClose={close}
-        done={`Deleted “${n.title}”.`} onApplied={() => closeTabsOf(refId)}
-        intro={<p>The note file is removed.</p>} />) },
+    { label: "Delete…", show: true, danger: true, act: () => confirm("Delete", deleteNote, (title) => ({ title: `Delete “${title}”`, done: `Deleted “${title}”.`,
+      intro: <p>The note file is removed.</p> }), { danger: true, onApplied: () => closeTabsOf(refId) }) },
   ];
   return (
     <>

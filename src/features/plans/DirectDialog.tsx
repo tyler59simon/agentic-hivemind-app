@@ -1,7 +1,7 @@
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import { classify } from "../../lib/errors";
-import { undo, type Receipt } from "../../lib/lm";
+import { meta, undo, type Receipt } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
 import { writeFailure } from "../../lib/stale";
@@ -35,12 +35,13 @@ export function explain(e: unknown): string {
 }
 
 /** Runs a direct write for a form: `go` reports busy and error state, refreshes the store and calls `onDone` with the receipt.
- *  A write refused because the note changed since it was read reads the store again and says so; the user may then repeat it. */
+ *  A write refused because the note changed since it was read reads the store again (and `reread`, before the form can be
+ *  used again) and says so; the user may then repeat it. */
 export function useDirect() {
   const client = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const go = async (write: () => Promise<Receipt>, onDone?: (receipt: Receipt) => void) => {
+  const go = async (write: () => Promise<Receipt>, onDone?: (receipt: Receipt) => void, reread?: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);
     try {
@@ -48,7 +49,7 @@ export function useDirect() {
       await finishDirect(client, receipt);
       onDone?.(receipt); // runs even when the refresh unmounted the form: the toast and the parent's cleanup still belong to this write
     } catch (e) {
-      setError(classify(e).kind === "stale" ? await writeFailure(client, e) : explain(e));
+      setError(classify(e).kind === "stale" ? await writeFailure(client, e, reread) : explain(e));
       setBusy(false);
     }
   };
@@ -56,9 +57,9 @@ export function useDirect() {
 }
 
 /** A short confirm for a direct write: the write runs when the user says so, and the toast offers Undo. `run` is called on
- *  each click, so after a stale refusal it should read the revision the note has on screen now. */
-export function DirectDialog({ title, intro, run, applyLabel, danger, done, onApplied, onClose }: {
-  title: string; intro: ReactNode; run: () => Promise<Receipt>; applyLabel: string; danger?: boolean;
+ *  each click. After a stale refusal `reread` runs before the button is enabled again. */
+export function DirectDialog({ title, intro, run, reread, applyLabel, danger, done, onApplied, onClose }: {
+  title: string; intro: ReactNode; run: () => Promise<Receipt>; reread?: () => Promise<unknown>; applyLabel: string; danger?: boolean;
   /** The toast after the write, with Undo. */
   done?: string; onApplied?: (receipt: Receipt) => void; onClose: () => void;
 }) {
@@ -68,7 +69,7 @@ export function DirectDialog({ title, intro, run, applyLabel, danger, done, onAp
     if (done) undoToast(client, done, receipt);
     onApplied?.(receipt);
     onClose();
-  });
+  }, reread);
   return (
     <Modal title={title} onClose={onClose} locked={busy}>
       {intro}
@@ -80,4 +81,23 @@ export function DirectDialog({ title, intro, run, applyLabel, danger, done, onAp
       </div>
     </Modal>
   );
+}
+
+/** A note as a dialog shows it. */
+export interface Seen { ref: string; title: string; revision: string }
+
+/** A confirm for a write to the notes in `first`, sent with the revisions the dialog shows. A background refresh does not
+ *  change them, so a note that changed while the dialog was open is refused as stale instead of written unseen; the notes
+ *  are then read again and shown, and the user confirms again (Codex review of e30902f, R1). */
+export function SeenDialog({ first, text, run, ...rest }: {
+  first: Seen[];
+  /** The dialog's wording for the notes as shown. */
+  text: (seen: Seen[]) => { title: string; intro: ReactNode; done?: string };
+  run: (seen: Seen[]) => Promise<Receipt>;
+  applyLabel: string; danger?: boolean; onApplied?: (receipt: Receipt) => void; onClose: () => void;
+}) {
+  const [seen, setSeen] = useState(first);
+  const reread = () => Promise.all(seen.map((s) => meta(s.ref)))
+    .then((fresh) => setSeen(fresh.map((m, i) => ({ ref: seen[i].ref, title: m.title, revision: m.revision }))));
+  return <DirectDialog {...text(seen)} {...rest} run={() => run(seen)} reread={reread} />;
 }

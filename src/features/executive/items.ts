@@ -82,9 +82,13 @@ export function acceptKey(batch: string, item: string): string | undefined {
  *  write: the earlier attempt may have added the item, and the user may have ticked it since. */
 export const hasAction = (body: string, text: string) => actionItems(body).some((a) => a.text === text.trim());
 
-/** What accepting `item` writes. `supersedes` is set when the user chose to replace an existing note. With `key`
- *  (`acceptKey`), a milestone gets that id and a note that idempotency key, so repeating the write finds the first one. */
-export function planWrite(item: CaptureItem, ctx: Context, supersedes?: string, key?: string): Write {
+/** A note to replace, with the revision the user confirmed it at. */
+export interface Replaced { ref: string; revision: string }
+
+/** What accepting `item` writes. `supersedes` is set when the user chose to replace an existing note: it is sent with the
+ *  revision the confirmation showed, read for that note on its own (Codex review of e30902f, R2). With `key` (`acceptKey`), a
+ *  milestone gets that id and a note that idempotency key, so repeating the write finds the first one. */
+export function planWrite(item: CaptureItem, ctx: Context, supersedes?: Replaced, key?: string): Write {
   const project = ctx.projects.find((p) => p.slug === item.project);
   const keyed = key ? { idempotency_key: `hivemind-capture-${key}` } : {};
   if (item.kind === "milestone") {
@@ -105,10 +109,14 @@ export function planWrite(item: CaptureItem, ctx: Context, supersedes?: string, 
   const type = NOTE_TYPE[item.kind] ?? "knowledge";
   const domain = destination(item, ctx);
   const payload: CapturePayload = { title: item.title.trim(), body: itemBody(item, ctx.sourceLabel, ctx.today), type, tags: tagsFor(type, project, ctx.known), ...keyed };
-  // The replaced note goes with the revision the review lists it at (Living Memory refuses it without one).
-  const replaced = supersedes && ctx.rows.find((r) => r.ref === supersedes);
-  return { kind: "note", domain, payload: supersedes ? { ...payload, supersedes: [replaced ? at(supersedes, replaced.revision) : supersedes] } : payload };
+  return { kind: "note", domain, payload: supersedes ? { ...payload, supersedes: [at(supersedes.ref, supersedes.revision)] } : payload };
 }
+
+/** Whether a write names a note without the revision the user confirmed: an action item with none, or a replaced note sent as
+ *  a bare ref. An unfinished accept recorded by an older build can hold one; Living Memory would refuse it, so it is planned
+ *  and confirmed again instead. */
+export const missingRevision = (write: Write): boolean =>
+  write.kind === "action" ? !write.revision : write.kind === "note" && (write.payload.supersedes ?? []).some((ref) => !ref.includes("@"));
 
 /** The write accepting `item` runs: the one an unfinished earlier accept recorded (`intent`), or a new plan. `fresh` says the
  *  plan is new and must be recorded on the item before it runs. */

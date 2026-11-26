@@ -5,6 +5,7 @@ import { domains, search, type Project } from "../../lib/lm";
 import { typeClass } from "../../lib/noteTypes";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
+import { reloadAfterStale } from "../../lib/stale";
 import { Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 import { NoteLink } from "../preview/NoteLink";
@@ -45,10 +46,16 @@ export function Triage({ project, onClose }: { project: Project; onClose: () => 
     try {
       const results = await assignToProject(chosen.map((s) => byRef.get(s.ref)!).filter(Boolean), project.tag);
       for (const r of results) if (r.ok) recordOperation(r.operation_id);
-      await refreshStore(client);
+      // A note that changed after it was suggested is read again and left for the user to assign again.
+      const changed = results.filter((r) => !r.ok && r.stale);
+      const reloaded = changed.length ? await reloadAfterStale(client, () => all.refetch({ throwOnError: true })) : (await refreshStore(client), true);
       const ok = results.filter((r) => r.ok).length;
       if (ok) toast(`Added ${ok} note${ok > 1 ? "s" : ""} to ${project.name}`);
-      for (const r of results) if (!r.ok) toast(`${byRef.get(r.ref)?.title ?? r.ref}: ${r.error}`, "error");
+      for (const r of results) if (!r.ok && !r.stale) toast(`${byRef.get(r.ref)?.title ?? r.ref}: ${r.error}`, "error");
+      if (changed.length) {
+        const names = changed.map((r) => `“${byRef.get(r.ref)?.title ?? r.ref}”`).join(", ");
+        toast(reloaded ? `${names} changed after it was suggested; reloaded. Check it, then assign again.` : `${names} changed after it was suggested, and Hivemind could not read it again. Reload, then assign again.`, reloaded ? "warn" : "error");
+      }
       setPicked({});
     } finally { setBusy(false); }
   };

@@ -5,7 +5,7 @@ import { Check, LoaderCircle, Sparkles, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { classify } from "../../lib/errors";
 import { extract, ITEM_KINDS, listRecords, putRecord, type CaptureBatch, type CaptureItem, type ItemKind, type Milestone } from "../../lib/executive";
-import { addAction, capture, read, type Project } from "../../lib/lm";
+import { addAction, capture, meta, read, type Project } from "../../lib/lm";
 import { recordOperation } from "../../lib/oplog";
 import { refreshStore } from "../../lib/refresh";
 import { writeFailure } from "../../lib/stale";
@@ -13,7 +13,7 @@ import { setLeaveGuard, useApp } from "../../store";
 import { Confirm, Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
 import { NoteLink } from "../preview/NoteLink";
-import { acceptKey, acceptWrite, blocked, hasAction, KIND_LABEL, pendingItems, planWrite, replaceable, type Context, type Write } from "./items";
+import { acceptKey, acceptWrite, blocked, hasAction, KIND_LABEL, missingRevision, pendingItems, planWrite, replaceable, type Context, type Replaced, type Write } from "./items";
 import { isoToday } from "./commitments";
 import { useNotes, useRecords, useStoreFacts } from "./useExecutive";
 
@@ -201,7 +201,8 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   // Closing loses what only this dialog knows: which items memory has but the batch does not.
   const close = () => { leave.current = null; if (Object.keys(unsaved).length) setClosing(true); else onClose(); };
-  const [replacing, setReplacing] = useState<{ item: CaptureItem; ref: string } | null>(null);
+  // The note to replace as read when the user chose it: the confirm shows it and the write sends its revision.
+  const [replacing, setReplacing] = useState<{ item: CaptureItem; ref: string; title: string; revision: string } | null>(null);
   const [showText, setShowText] = useState(false);
   // Back (Alt+Left), the palette and the page shortcuts leave through the same check as Close: not while an item is being
   // written, and not past unrecorded accepts without the confirm, which then finishes the move that was stopped.
@@ -252,13 +253,32 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
     try { await saveAccepted(unsaved[id]); } finally { setBusy(null); }
   };
 
-  const accept = async (item: CaptureItem, replace?: string, anyway?: boolean) => {
+  /** Read the note the user chose to replace, on its own (the active list may not have it, or may be older), and ask. */
+  const chooseReplace = async (item: CaptureItem, ref: string) => {
+    setBusy(item.id);
+    setProblems((p) => ({ ...p, [item.id]: "" }));
+    try {
+      const note = await meta(ref);
+      setReplacing({ item, ref, title: note.title, revision: note.revision });
+    } catch (e) {
+      setProblems((all) => ({ ...all, [item.id]: `Hivemind could not read the note to replace: ${classify(e).message}` }));
+    } finally { setBusy(null); }
+  };
+
+  const accept = async (item: CaptureItem, replace?: Replaced, anyway?: boolean) => {
     setBusy(item.id);
     setProblems((p) => ({ ...p, [item.id]: "" }));
     try {
       // The exact write goes into the batch before it runs, so a retry after a crash or a closed dialog repeats that write
       // (which finds what it already wrote) rather than one planned again from fields edited since.
-      const planned = acceptWrite(item, () => planWrite(item, ctx, replace, acceptKey(stored.id, item.id)), replace);
+      const planned = acceptWrite(item, () => planWrite(item, ctx, replace, acceptKey(stored.id, item.id)), replace?.ref);
+      if (missingRevision(planned.write)) {
+        // Recorded by an older build without the revision the user confirmed: Living Memory would refuse it, so it is dropped
+        // and the user accepts (and confirms a replacement) again.
+        await save({ ...item, intent: undefined }).catch(() => undefined);
+        setProblems((all) => ({ ...all, [item.id]: "This accept was started before Hivemind recorded note revisions. Accept it again to confirm it." }));
+        return;
+      }
       const { superseded: replaced } = planned;
       // "Save anyway" is part of the recorded write, so a resumed accept does not ask again.
       const write = anyway && planned.write.kind === "note" ? { ...planned.write, payload: { ...planned.write.payload, allow_similar: true } } : planned.write;
@@ -300,7 +320,7 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
           <ItemCard key={item.id} item={item} projects={projects} ctx={ctx} busy={!!busy} problem={problems[item.id] || undefined} unsaved={!!unsaved[item.id]}
             onRetrySave={() => retrySave(item.id)}
             onChange={(next) => setEdits((e) => ({ ...e, [item.id]: next }))}
-            onAccept={(replace, anyway) => (replace ? setReplacing({ item, ref: replace }) : accept(item, undefined, anyway))}
+            onAccept={(replace, anyway) => (replace ? chooseReplace(item, replace) : accept(item, undefined, anyway))}
             onReject={() => reject(item)} />
         ))}
         <button className="link small" onClick={() => setShowText(!showText)}>{showText ? "Hide" : "Show"} the captured text</button>
@@ -324,8 +344,8 @@ export function ReviewDialog({ id, projects, onClose }: { id: string; projects: 
       )}
       {replacing && (
         <Confirm title="Replace the existing note?" action="Replace"
-          message={`The new note supersedes "${replacing.item.similar.find((s) => s.ref === replacing.ref)?.title}". The old note is kept as superseded, and the change can be undone from Activity.`}
-          onAnswer={(yes) => { const r = replacing; setReplacing(null); if (yes) accept(r.item, r.ref); }} />
+          message={`The new note supersedes "${replacing.title}". The old note is kept as superseded, and the change can be undone from Activity.`}
+          onAnswer={(yes) => { const r = replacing; setReplacing(null); if (yes) accept(r.item, { ref: r.ref, revision: r.revision }); }} />
       )}
     </Modal>
   );
