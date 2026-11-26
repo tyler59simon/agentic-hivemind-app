@@ -99,7 +99,7 @@ export function sessionBriefing(input: BriefingInput): string {
   const memory = [
     "## Living Memory",
     `- Record decisions and gotchas with \`--project ${project.slug}\`${domain ? ` \`--domain ${domain}\`` : ""}.`,
-    "- Do not run its delete, merge, retag or undo commands, its setup or upgrade, or its archive, rewrite, remap, promote, migrate, import, ingest, restore-backup, sync, overlay-build, overlay-sync-all, taxonomy add, source, project, system or type writes; describe the change and the user will make it.",
+    "- Do not run its delete, merge, retag or undo commands, its setup or upgrade, or its archive, rewrite, remap, promote, migrate, import, ingest, restore-backup, sync, overlay-build, overlay-sync-all, taxonomy add, source, project, system or type writes, its folder notebook writes (doc undo, doc folder) or accept and reject for page proposals; stage a page edit with doc propose, and for the rest describe the change and the user will make it.",
   ].join("\n");
   return [
     `# Session briefing: ${project.name}`,
