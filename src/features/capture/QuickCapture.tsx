@@ -3,7 +3,8 @@ import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useId, useRef, useState } from "react";
 import { classify, type Problem } from "../../lib/errors";
-import { capture, domains, projects, showMain, taxonomy, type CapturePayload, type NoteType } from "../../lib/lm";
+import { needsLmUpdate } from "../../lib/connection";
+import { capture, domains, lmVersion, projects, showMain, taxonomy, type CapturePayload, type NoteType } from "../../lib/lm";
 import { notebooksQuery } from "../../lib/notebooks";
 import { defaultTags, HEADINGS } from "../../lib/note";
 import { NOT_CAPTURED, typeOptions, useNoteTypes } from "../../lib/noteTypes";
@@ -24,6 +25,9 @@ export function captureBody(summary: string, details: string): string {
 }
 
 const hide = () => getCurrentWindow().hide();
+
+/** Why a memory capture is refused: the same requirement as the main window's. */
+export const OUTDATED = "This version of Living Memory is too old for Hivemind. Update Living Memory, then reconnect from the main window. Capture to a page meanwhile.";
 
 /** Today's page keeps what the window captures under this heading. */
 export const CAPTURE_HEADING = "## Captured";
@@ -74,6 +78,10 @@ export function QuickCapture() {
   const books = (folderBooks.data ?? []).map((n) => ({ id: n.id, label: n.title }));
   const notebook = books.some((b) => b.id === target.notebook) ? target.notebook : books[0]?.id ?? "";
   const toPage = target.kind !== "memory";
+  // The main window refuses a Living Memory without the capabilities Hivemind needs; so does a memory capture here (Codex
+  // review of e30902f, C1). A page capture does not go through Living Memory and stays available.
+  const version = useQuery({ queryKey: ["version"], queryFn: lmVersion, retry: false });
+  const outdated = !!version.data && needsLmUpdate(version.data);
   const [project, setProject] = useState(prefs.captureProject() ?? "");
   const [domain, setDomain] = useState(prefs.captureDomain() ?? "");
   const [type, setType] = useState<NoteType>("knowledge");
@@ -98,6 +106,7 @@ export function QuickCapture() {
       if (!focused) return;
       titleRef.current?.focus();
       client.invalidateQueries({ queryKey: ["types"] });
+      client.invalidateQueries({ queryKey: ["version"] }); // Living Memory may have been updated meanwhile
     });
     return () => { stop.then((u) => u()); };
   }, [client]);
@@ -123,6 +132,7 @@ export function QuickCapture() {
 
   const save = async (extra: Partial<CapturePayload> = {}) => {
     if (toPage) { await saveToPage(); return; }
+    if (outdated) return;
     if (!title.trim() || !summary.trim() || !domain) {
       setProblem({ kind: "other", message: "A domain, a title and a summary are needed." });
       return;
@@ -179,6 +189,7 @@ export function QuickCapture() {
       <label className="visually-hidden" htmlFor={`${ids}-details`}>{toPage ? "Details" : "Key details"}</label>
       <textarea id={`${ids}-details`} rows={3} value={details} placeholder={toPage ? "Details (optional, one per line)" : "Key details (optional, one per line)"} onChange={(e) => setDetails(e.target.value)} />
       {!toPage && <TagPicker tags={tags} taxonomy={tax.data?.tags ?? []} onChange={(t) => { setTagsTouched(true); setTags(t); }} />}
+      {!toPage && outdated && <div className="banner error">{OUTDATED}</div>}
       {!toPage && problem?.kind === "similar" ? (
         <div className="banner warn">
           A similar note exists: “{problem.title}”.
@@ -193,7 +204,7 @@ export function QuickCapture() {
         <span className="muted small">Ctrl+Enter saves · Esc hides</span>
         <span className="tabbar-fill" />
         <button onClick={() => hide()}>Close</button>
-        <button className="primary" disabled={busy} onClick={() => save()}>{busy ? "Saving…" : "Save"}</button>
+        <button className="primary" disabled={busy || (!toPage && outdated)} onClick={() => save()}>{busy ? "Saving…" : "Save"}</button>
       </div>
     </main>
   );

@@ -7,3 +7,10 @@ const KEEP = ["connect", "git", "diff", "architecture", "agent"];
 /** Refetch everything that reads the store, except the connection and git queries. */
 export const refreshStore = (client: QueryClient) =>
   client.invalidateQueries({ predicate: (q) => !KEEP.includes(String(q.queryKey[0])) });
+
+/** Reconnect on the user's request: restart the Living Memory process, then read everything again, the connection first. A
+ *  Hivemind without the restart command still reconnects. */
+export async function reconnect(client: QueryClient, restart: () => Promise<unknown>) {
+  await restart().catch(() => undefined);
+  await client.resetQueries();
+}

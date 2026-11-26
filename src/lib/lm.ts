@@ -125,6 +125,11 @@ export interface Settings {
 export interface CaptureStatus { shortcut: string | null; error: string | null; close_to_tray: boolean }
 
 export const connect = () => call("connect", {}) as Promise<ConnectInfo>;
+/** End the Living Memory process, so the next request starts a new one: an explicit reconnect then reaches a Living Memory
+ *  upgraded in place (same interpreter, script and store), which `connect` alone would not restart (Codex review of e30902f, C2). */
+export const restartBridge = () => call("bridge_restart", {}) as Promise<void>;
+/** What the connected Living Memory reports about itself, for a window that has no connection of its own (quick capture). */
+export const lmVersion = () => run<ConnectInfo["version"]>(["version"]);
 export const getSettings = () => call("get_settings", {}) as Promise<Settings>;
 export const saveSettings = (value: Settings) => call("save_settings", { value }) as Promise<void>;
 export const captureStatus = () => call("capture_status", {}) as Promise<CaptureStatus>;

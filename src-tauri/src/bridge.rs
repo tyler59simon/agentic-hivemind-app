@@ -29,9 +29,10 @@ const STDERR_TAIL: usize = 4096;
 pub const NO_ANSWER: &str = "Living Memory isn't answering, so Hivemind restarted it. Try again.";
 
 /// Commands that read or rewrite a whole store (indexes, merges and retags, backups, imports and exports, the wiki, model
-/// work). They get the slow limit; every other command is quick.
-const SLOW: [&str; 30] = [
-    "rebuild", "doctor", "backup", "restore-backup", "export", "import", "ingest", "ingest-scan", "source-sync", "migrate", "retag", "merge",
+/// work). They get the slow limit; every other command is quick. `delete` is here because Living Memory reconciles the domain
+/// (an inventory and an index rebuild) after it commits, and a reply cut off there would lose the receipt Undo needs.
+const SLOW: [&str; 31] = [
+    "rebuild", "doctor", "backup", "restore-backup", "export", "import", "ingest", "ingest-scan", "source-sync", "migrate", "retag", "merge", "delete",
     "rebaseline", "semantic", "validate", "maintenance", "wiki", "sync", "overlay-build", "overlay-sync-all", "overlay-teardown",
     "recover", "remap", "promote", "rewrite", "undo", "batch", "ask", "stats", "query",
 ];
@@ -218,6 +219,13 @@ impl Bridge {
         if let Some(old) = old {
             old.kill();
         }
+    }
+
+    /// End the process and start the next request in a new one with the same launch: an explicit reconnect, so a Living
+    /// Memory upgraded in place (same interpreter, script and store) is the one that answers (Codex review of e30902f, C2).
+    /// Like `reconfigure`, it starts a new generation.
+    pub fn restart(&self) {
+        self.reconfigure(self.launch());
     }
 
     /// Keep `root` as the store of `generation` (when that is still the current one and Settings name no root).
@@ -817,6 +825,47 @@ for line in sys.stdin:
         std::fs::remove_dir_all(dir).ok();
     }
 
+    /// Codex review of e30902f, G3: a delete whose reply comes after the quick limit (Living Memory reconciles the domain after
+    /// it commits) still gets its receipt, while the same delay on a quick command ends the process.
+    #[test]
+    fn a_delayed_delete_reply_is_waited_for() {
+        let Some((program, args)) = python() else { return };
+        let body = r#"
+for line in sys.stdin:
+    req = json.loads(line)
+    command = req["argv"][0]
+    if command != "version":
+        time.sleep(1.2)
+    reply(req["id"], VERSION if command == "version" else {"ok": True, "operation_id": "d-1"})
+"#;
+        let (dir, script) = fake("slow-delete", body);
+        let bridge = Bridge::with_limits(Launch { program, args, script, root: None }, limits(600, 20_000));
+        let reply = bridge.call(&["delete".into(), "d:x".into()], None).unwrap();
+        assert_eq!(reply.result["operation_id"], "d-1");
+        assert_eq!(bridge.call(&["read".into(), "d:x".into()], None).unwrap_err(), NO_ANSWER);
+        drop(bridge);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Codex review of e30902f, C2: a restart ends the running process and starts a new generation with the same launch, so
+    /// the next request reaches a new process (an in-place upgrade of Living Memory is then the one that answers).
+    #[test]
+    fn a_restart_ends_the_process_and_the_next_call_starts_a_new_one() {
+        let Some((program, args)) = python() else { return };
+        let (dir, script) = fake("restart", ECHO_OR_STALL);
+        let launch = Launch { program, args, script, root: None };
+        let bridge = Bridge::with_limits(launch.clone(), limits(5000, 20_000));
+        let first = pid(&bridge, "echo").unwrap();
+        let before = bridge.generation();
+        bridge.restart();
+        assert_eq!(bridge.generation(), before + 1);
+        assert_eq!(bridge.launch(), launch);
+        assert!(gone(first), "the old server is still running");
+        assert_ne!(pid(&bridge, "echo").unwrap(), first);
+        drop(bridge);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
     /// A slow command gets the slow limit and an ordinary one the quick limit.
     #[test]
     fn a_slow_command_waits_longer_than_a_quick_one() {
@@ -824,7 +873,7 @@ for line in sys.stdin:
         let argv = |c: &str| vec![c.to_string()];
         assert_eq!(l.for_argv(&argv("read")), l.quick);
         assert_eq!(l.for_argv(&argv("doc")), l.quick);
-        for slow in ["rebuild", "doctor", "wiki", "export", "import", "semantic", "merge", "retag"] {
+        for slow in ["rebuild", "doctor", "wiki", "export", "import", "semantic", "merge", "retag", "delete", "restore-backup"] {
             assert_eq!(l.for_argv(&argv(slow)), l.slow, "{slow}");
         }
         assert!(l.quick < l.slow && l.start <= l.quick);

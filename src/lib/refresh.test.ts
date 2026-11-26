@@ -1,6 +1,6 @@
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
-import { refreshStore } from "./refresh";
+import { reconnect, refreshStore } from "./refresh";
 
 describe("refreshStore", () => {
   it("invalidates store queries but not connect, git or diff", async () => {
@@ -10,5 +10,28 @@ describe("refreshStore", () => {
     await refreshStore(client);
     const stale = (k: string[]) => client.getQueryState(k)!.isInvalidated;
     expect(keys.filter(stale).map((k) => k[0])).toEqual(["list", "projects", "note"]);
+  });
+});
+
+// Codex review of e30902f, C2: Reconnect restarts Living Memory before the connection is read again, so a Living Memory
+// upgraded in place answers the new connect.
+describe("reconnect", () => {
+  it("restarts the bridge, then reads the connection again", async () => {
+    const order: string[] = [];
+    const client = new QueryClient();
+    let connects = 0;
+    const observer = new QueryObserver(client, { queryKey: ["connect"], staleTime: Infinity, queryFn: () => { connects += 1; order.push("connect"); return connects; } });
+    const stop = observer.subscribe(() => {});
+    await observer.refetch();
+    await reconnect(client, async () => { order.push("restart"); });
+    expect(order).toEqual(["connect", "restart", "connect"]);
+    expect(client.getQueryData(["connect"])).toBe(2);
+    stop();
+  });
+
+  it("still reconnects when the restart fails", async () => {
+    const client = new QueryClient();
+    client.setQueryData(["connect"], 1);
+    await expect(reconnect(client, () => Promise.reject(new Error("unknown command")))).resolves.toBeUndefined();
   });
 });

@@ -181,6 +181,13 @@ fn store_identity(root: &str) -> String {
     text.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(text)
 }
 
+/// End the Living Memory process on the user's Reconnect; the `connect` that follows starts a new one and checks it again
+/// (Codex review of e30902f, C2). Never waits for a request in progress.
+#[tauri::command]
+fn bridge_restart(state: State<'_, AppState>) {
+    state.bridge.restart();
+}
+
 /// How long `connect` waits for `doctor`, which checks the whole store, before it shows the connection error.
 const CONNECT_DOCTOR_LIMIT: std::time::Duration = std::time::Duration::from_secs(120);
 
@@ -2183,7 +2190,7 @@ pub fn run() {
             exec_session_capture,
             exec_export,
             diagnostics::app_info, diagnostics::diagnostics, diagnostics::open_logs_folder, diagnostics::open_issue_page, diagnostics::log_client,
-            lm, connect, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, ui_zoom, ui_zoom_set, appearance_get, appearance_set, appearance_init, shortcuts_get, shortcuts_set, shortcuts_reset, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
+            lm, connect, bridge_restart, git_activity, system_architecture, system_diagram, system_diagram_source, get_settings, save_settings, ui_zoom, ui_zoom_set, appearance_get, appearance_set, appearance_init, shortcuts_get, shortcuts_set, shortcuts_reset, capture_status, show_main, app_quit, quit_ack, term_seen, notify_tray, draft_put, draft_get, draft_delete, draft_list,
             agent_available, agent_roles, learning_status, learning_review, skills_list, skill_proposals, skill_decide, skill_action, skill_version, skill_history,
             skills_upkeep, skill_from_note, skills_sync, skill_link, skill_unlink, skill_resolve, uninstall_skills, uninstall_remove_skills,
             automation_list, automation_put, automation_delete, automation_spend, automation_act, architecture_drift, architecture_rules_set, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, uninstall_inventory, uninstall_remove_worktree, uninstall_delete_branch, repo_branches,

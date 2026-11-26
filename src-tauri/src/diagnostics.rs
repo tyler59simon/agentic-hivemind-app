@@ -213,7 +213,7 @@ pub fn install_panic_hook() {
 }
 
 /// The error codes Living Memory sends (`error_code` and `serve` in its core/cli.py).
-const LM_CODES: [&str; 6] = ["busy", "hivemind", "stale", "conflict", "invalid", "internal"];
+const LM_CODES: [&str; 7] = ["busy", "hivemind", "revision_required", "stale", "conflict", "invalid", "internal"];
 /// The names of the JavaScript and DOM errors a webview can throw, plus Hivemind's own.
 const ERROR_NAMES: [&str; 16] = [
     "Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError", "URIError", "EvalError", "AggregateError",
@@ -223,10 +223,10 @@ const ERROR_NAMES: [&str; 16] = [
 
 /// The Living Memory commands `src/lib/lm.ts` sends (the first item of an argv), with `-` written as `_` as the webview
 /// writes them. A failed command's name is kept only when it is one of these.
-const LM_COMMANDS: [&str; 34] = [
+const LM_COMMANDS: [&str; 35] = [
     "archive", "capture", "check", "confirm", "delete", "diff", "doc", "domains", "history", "maintenance", "merge", "open",
     "project", "projects", "proposals", "read", "recap", "reopen", "resolve", "restore", "retag", "review", "search", "supersede",
-    "system", "systems", "taxonomy", "timeline", "type", "types", "undo", "update", "views", "wiki",
+    "system", "systems", "taxonomy", "timeline", "type", "types", "undo", "update", "version", "views", "wiki",
 ];
 
 /// `/assets/index-abc.js` or `/src/main.tsx`: a file of this app's own bundle (or of its dev server), by path only.
@@ -766,6 +766,9 @@ mod tests {
         });
         assert_eq!(format_client_event(&event), (log::Level::Error, "webview render_error name=TypeError code=invalid exit=2 at /assets/index-abc.js:10:20 /src/main.tsx:1:2 in Bomb>ErrorBoundary>div".into()));
         assert_eq!(format_client_event(&json!({ "kind": "lm_failure", "name": "read", "code": "stale", "exit": 6 })), (log::Level::Warn, "webview lm_failure name=read code=stale exit=6".into()));
+        // Codex review of e30902f, G4: a write sent without its revision keeps its own code, apart from other invalid writes.
+        assert_eq!(format_client_event(&json!({ "kind": "lm_failure", "name": "archive", "code": "revision_required", "exit": 2 })),
+            (log::Level::Warn, "webview lm_failure name=archive code=revision_required exit=2".into()));
     }
 
     #[test]
