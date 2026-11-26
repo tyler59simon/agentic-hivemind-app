@@ -472,14 +472,14 @@ pub fn for_session(bridge: &Bridge, saved: &Settings, info: &SessionInfo) -> Res
 }
 
 /// The Living Memory commands only the user may run, through Hivemind's own dialogs: undo and recover, delete, merge and bulk
-/// retag, the store-wide writes (migrate, backup restore, import, ingest, overlay teardown) and every other direct write
+/// retag, the store-wide writes (migrate, restore-backup, import, ingest, overlay-teardown) and every other direct write
 /// (archive, rewrite, remap, promote, taxonomy add and the source, project and system registries), since a user allow rule
 /// would let any one missing here run without a question. Living Memory has had no plans since 2026-11-26, so an agent
 /// describes such a change and the user makes it. A phrase such as `project create` keeps a search for the word "project"
 /// from matching.
 const GOVERNED_COMMANDS: [&str; 24] = [
     "undo", "recover", "delete", "merge", "retag",
-    "migrate", "backup restore", "import", "ingest", "overlay-teardown",
+    "migrate", "restore-backup", "import", "ingest", "overlay-teardown",
     "archive", "rewrite", "remap", "promote", "taxonomy add", "source add", "source remove", "source implicit",
     "project create", "project update", "project archive", "system create", "system update", "system retire",
 ];
@@ -692,7 +692,7 @@ mod tests {
             r#"python "C:\x\living_memory.py" --domain a delete a:x --expected-revision abc"#,
             r#"python "C:\x\living_memory.py" merge --payload-file m.json"#,
             r#"python "C:\x\living_memory.py" retag --payload-file r.json"#,
-            r#"python "C:\x\living_memory.py" backup restore b.zip"#,
+            r#"python "C:\x\living_memory.py" restore-backup b.zip"#,
             r#"python "C:\x\living_memory.py" overlay-teardown"#,
             r#"python "C:\x\living_memory.py" --domain a archive x"#,
             r#"python "C:\x\living_memory.py" project create --payload-file p.json"#,
@@ -748,7 +748,7 @@ mod tests {
             "Bash(*living_memory.py* merge)",
             "PowerShell(*living_memory.py* undo *)",
             "PowerShell(*living_memory.py* recover)",
-            "Bash(*living_memory.py* backup restore *)",
+            "Bash(*living_memory.py* restore-backup *)",
             "Bash(*living_memory.py* project create *)",
             "PowerShell(*living_memory.py* archive)",
         ] {

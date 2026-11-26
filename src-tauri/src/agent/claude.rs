@@ -11,7 +11,7 @@ use std::time::Duration;
 const TOOL_SUMMARY: usize = 300;
 const RESULT_SUMMARY: usize = 500;
 const APPROVAL_INPUT: usize = 4000;
-pub(crate) const GOVERNED: &str = "Hivemind does not let agent sessions run Living Memory delete, merge, retag or undo commands, or its other governed writes (archive, rewrite, remap, promote, migrate, import, ingest, backup restore, taxonomy add, source, project, system). Describe the change and let the user make it.";
+pub(crate) const GOVERNED: &str = "Hivemind does not let agent sessions run Living Memory delete, merge, retag or undo commands, or its other governed writes (archive, rewrite, remap, promote, migrate, import, ingest, restore-backup, taxonomy add, source, project, system). Describe the change and let the user make it.";
 const DECLINED: &str = "The user declined this action in Hivemind.";
 /// What the CLI's accept-edits mode allows, as the label of an always-allow that has no rule to show.
 const EDITS_LABEL: &str = "file edits and simple file commands in the worktree";

@@ -99,7 +99,7 @@ export function sessionBriefing(input: BriefingInput): string {
   const memory = [
     "## Living Memory",
     `- Record decisions and gotchas with \`--project ${project.slug}\`${domain ? ` \`--domain ${domain}\`` : ""}.`,
-    "- Do not run its delete, merge, retag or undo commands, or its archive, rewrite, remap, promote, migrate, import, ingest, backup restore, taxonomy add, source, project or system writes; describe the change and the user will make it.",
+    "- Do not run its delete, merge, retag or undo commands, or its archive, rewrite, remap, promote, migrate, import, ingest, restore-backup, taxonomy add, source, project or system writes; describe the change and the user will make it.",
   ].join("\n");
   return [
     `# Session briefing: ${project.name}`,
