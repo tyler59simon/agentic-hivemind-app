@@ -471,66 +471,158 @@ pub fn for_session(bridge: &Bridge, saved: &Settings, info: &SessionInfo) -> Res
     }
 }
 
-/// The Living Memory commands only the user may run, through Hivemind's own dialogs: undo and recover, delete, merge and bulk
-/// retag, the store-wide writes (migrate, restore-backup, import, ingest, overlay-teardown) and every other direct write
-/// (archive, rewrite, remap, promote, taxonomy add and the source, project and system registries), since a user allow rule
-/// would let any one missing here run without a question. Living Memory has had no plans since 2026-11-26, so an agent
-/// describes such a change and the user makes it. A phrase such as `project create` keeps a search for the word "project"
-/// from matching.
-const GOVERNED_COMMANDS: [&str; 24] = [
-    "undo", "recover", "delete", "merge", "retag",
-    "migrate", "restore-backup", "import", "ingest", "overlay-teardown",
+/// The Living Memory commands only the user may run, through Hivemind's own dialogs: undo and recover, setup and upgrade,
+/// delete, merge and bulk retag, the store-wide writes (migrate, restore-backup, import, ingest, overlay-teardown), the manual
+/// vault syncs (sync, overlay-build, overlay-sync-all, which apply vault deletions) and every other direct write (archive,
+/// rewrite, remap, promote, taxonomy add and the source, project, system and type registries), since a user allow rule would
+/// let any one missing here run without a question. It is Living Memory's own governed set (`HIVEMIND_GOVERNED` in its
+/// core/runtime.py). Living Memory has had no plans since 2026-11-26, so an agent describes such a change and the user makes
+/// it. A phrase is a subcommand and the action that makes it a write: `taxonomy` alone only reads, and the phrase keeps the
+/// deny rules from refusing a search for the word "project".
+const GOVERNED_COMMANDS: [&str; 32] = [
+    "undo", "recover", "setup", "upgrade", "delete", "merge", "retag",
+    "migrate", "restore-backup", "import", "ingest", "overlay-teardown", "sync", "overlay-build", "overlay-sync-all",
     "archive", "rewrite", "remap", "promote", "taxonomy add", "source add", "source remove", "source implicit",
     "project create", "project update", "project archive", "system create", "system update", "system retire",
+    "type create", "type update", "type retire",
 ];
+
+/// Living Memory's global options that take a value (`--root DIR`), as argparse reads them: also abbreviated (`--dom`).
+const VALUE_OPTIONS: [&str; 4] = ["--root", "--domain", "--cwd", "--actor"];
 
 /// A shell command that would make a governed write to the Living Memory store. Its hook lets read and capture commands
 /// through before Hivemind is asked; these must never run from a session, whatever the user clicks.
+///
+/// Each part of a command line that runs Living Memory (`living_memory.py` under Python, or the `alm` launcher) is decided by
+/// its subcommand, so `search "delete the cache"` is a search (Codex review of e30902f, G2). Any other part, and a command
+/// line that cannot be read cleanly, is refused when it names Living Memory together with a governed word: a wrapper
+/// (`bash -c "alm archive x"`, `cmd /c alm undo 1`) runs it all the same.
 pub fn governed_memory_command(command: &str) -> bool {
     let text = command.to_lowercase();
-    (text.contains("living_memory") && names_governed(&text)) || alm_segments(&text).iter().any(|words| names_governed(&words.join(" ")))
+    match shell_parts(&text) {
+        Some(parts) => parts.iter().any(|words| governed_part(words)),
+        None => names_memory_and_governed(&text),
+    }
 }
 
-/// Whether a lower-cased command names a governed command as whole words.
-fn names_governed(text: &str) -> bool {
-    let words: Vec<&str> = text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_')).collect();
-    GOVERNED_COMMANDS.iter().any(|command| {
-        let parts: Vec<&str> = command.split(' ').collect();
-        words.windows(parts.len()).any(|window| window == parts.as_slice())
+/// One part of a command line, as words.
+fn governed_part(words: &[String]) -> bool {
+    let Some(args) = memory_args(words) else { return names_memory_and_governed(&words.join(" ")) };
+    match subcommand(args) {
+        Ok(Some((sub, rest))) => governed_subcommand(sub, rest),
+        Ok(None) => false,
+        // An option before the subcommand that Living Memory's global options do not have: read the words instead.
+        Err(()) => names_memory_and_governed(&words.join(" ")),
+    }
+}
+
+/// The arguments after the script or the launcher, when this part runs Living Memory. The program is the first word after
+/// `call` and `NAME=value` settings: the launcher when its file name is `alm`, `alm.exe` or `alm.cmd`, or a Python whose
+/// script (a later word) is `living_memory.py`.
+fn memory_args(words: &[String]) -> Option<&[String]> {
+    let start = words.iter().position(|word| word != "call" && !(word.contains('=') && !word.starts_with('-')))?;
+    let name = |word: &str| word.rsplit(['/', '\\']).next().unwrap_or(word).to_string();
+    let program = name(&words[start]);
+    if matches!(program.as_str(), "alm" | "alm.exe" | "alm.cmd") {
+        return Some(&words[start + 1..]);
+    }
+    let python = program.strip_suffix(".exe").unwrap_or(&program);
+    let python = python.strip_prefix("python").or_else(|| python.strip_prefix("py"))?;
+    if !python.trim_end_matches('w').chars().all(|c| c.is_ascii_digit() || c == '.') {
+        return None;
+    }
+    let script = words[start + 1..].iter().position(|word| matches!(name(word).as_str(), "living_memory.py" | "living_memory"))?;
+    Some(&words[start + 2 + script..])
+}
+
+/// The subcommand and the words after it, skipping `--json` and the global options with their values. Err for any other
+/// option before it.
+fn subcommand(args: &[String]) -> Result<Option<(&str, &[String])>, ()> {
+    let mut index = 0;
+    while let Some(word) = args.get(index) {
+        if !word.starts_with('-') {
+            return Ok(Some((word, &args[index + 1..])));
+        }
+        let (name, value) = word.split_once('=').map_or((word.as_str(), false), |(name, _)| (name, true));
+        let takes_value = name.len() >= 3 && VALUE_OPTIONS.iter().any(|option| option.starts_with(name));
+        if takes_value {
+            index += if value { 1 } else { 2 };
+        } else if !value && name.len() >= 4 && "--json".starts_with(name) {
+            index += 1;
+        } else {
+            return Err(());
+        }
+    }
+    Ok(None)
+}
+
+/// Whether a subcommand is governed. For a phrase, the action may come anywhere after the subcommand, as argparse allows
+/// (`project --payload-file p.json create`).
+fn governed_subcommand(sub: &str, rest: &[String]) -> bool {
+    GOVERNED_COMMANDS.iter().any(|command| match command.split_once(' ') {
+        None => *command == sub,
+        Some((head, action)) => head == sub && rest.iter().any(|word| word == action),
     })
 }
 
-/// The words of each part of a lower-cased command line whose program is the `alm` launcher. Parts end at ; & | and line
-/// breaks outside quotes, and a quoted word (a path with spaces) is one word. The program is the first word after `call`
-/// and `NAME=value` settings; it is the launcher when its file name is `alm`, `alm.exe` or `alm.cmd`. A file named alm given
-/// to another program (`git apply alm`), or a quoted mention (`echo "x; alm archive"`), is not the launcher.
-fn alm_segments(text: &str) -> Vec<Vec<String>> {
-    let (mut segments, mut words, mut word, mut quote) = (vec![], vec![], String::new(), None::<char>);
-    let end_word = |word: &mut String, words: &mut Vec<String>| {
-        if !word.is_empty() {
-            words.push(std::mem::take(word));
-        }
-    };
-    for c in text.chars() {
+/// The fail-closed reading of a lower-cased text: it names Living Memory (a word `alm`, or one ending in `living_memory`) and a
+/// governed command (a phrase's two words anywhere). Quotes and escapes (\ ^) are also read as removed, since shells join
+/// `a"lm"` and `al\m` into `alm`.
+fn names_memory_and_governed(text: &str) -> bool {
+    let joined: String = text.chars().filter(|c| !matches!(c, '"' | '\'' | '\\' | '^' | '`')).collect();
+    [text, joined.as_str()].iter().any(|text| {
+        let words: Vec<&str> = text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_')).filter(|w| !w.is_empty()).collect();
+        let names_memory = words.iter().any(|word| *word == "alm" || word.ends_with("living_memory"));
+        names_memory && GOVERNED_COMMANDS.iter().any(|command| command.split(' ').all(|part| words.contains(&part)))
+    })
+}
+
+/// A lower-cased command line as words, in parts split at ; & | and line breaks, read the way bash and PowerShell agree on.
+/// A quoted stretch is part of the word it is in. None when the line uses what they read differently or what runs other
+/// text: an unclosed quote, `$` or a backtick outside single quotes, a backslash before a closing double quote, redirections,
+/// brackets, or cmd's `^` and `%`.
+fn shell_parts(text: &str) -> Option<Vec<Vec<String>>> {
+    let (mut parts, mut words, mut word, mut quote, mut in_word) = (vec![], vec![], String::new(), None::<char>, false);
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
         match quote {
-            Some(q) if c == q => quote = None,
+            Some('\'') if c == '\'' => quote = None,
+            Some('\'') => word.push(c),
+            Some(_) if c == '"' => quote = None,
+            Some(_) if c == '$' || c == '`' || (c == '\\' && chars.peek() == Some(&'"')) => return None,
             Some(_) => word.push(c),
-            None if c == '"' || c == '\'' => quote = Some(c),
-            None if matches!(c, '\n' | ';' | '&' | '|') => {
-                end_word(&mut word, &mut words);
-                segments.push(std::mem::take(&mut words));
-            }
-            None if c.is_whitespace() || "(){}".contains(c) => end_word(&mut word, &mut words),
-            None => word.push(c),
+            None => match c {
+                '\'' | '"' => {
+                    quote = Some(c);
+                    in_word = true;
+                }
+                '\n' | ';' | '&' | '|' => {
+                    if std::mem::take(&mut in_word) {
+                        words.push(std::mem::take(&mut word));
+                    }
+                    parts.push(std::mem::take(&mut words));
+                }
+                c if c.is_whitespace() => {
+                    if std::mem::take(&mut in_word) {
+                        words.push(std::mem::take(&mut word));
+                    }
+                }
+                '$' | '`' | '<' | '>' | '(' | ')' | '{' | '}' | '^' | '%' => return None,
+                c => {
+                    word.push(c);
+                    in_word = true;
+                }
+            },
         }
     }
-    end_word(&mut word, &mut words);
-    segments.push(words);
-    segments.retain(|words| {
-        let program = words.iter().find(|word| *word != "call" && !(word.contains('=') && !word.starts_with('-')));
-        program.is_some_and(|word| matches!(word.rsplit(['/', '\\']).next().unwrap_or(word), "alm" | "alm.exe" | "alm.cmd"))
-    });
-    segments
+    if quote.is_some() {
+        return None;
+    }
+    if in_word {
+        words.push(word);
+    }
+    parts.push(words);
+    Some(parts)
 }
 
 /// Deny rules for the same commands, for the CLI's own rule engine: they hold even where the user's settings allow the
@@ -698,8 +790,6 @@ mod tests {
             r#"python "C:\x\living_memory.py" project create --payload-file p.json"#,
             r#"python "C:\x\living_memory.py" taxonomy add concern/security"#,
             r#"python "C:\x\LIVING_MEMORY.PY" undo 123"#,
-            // The word `delete` is there even inside a search; a refused search is the safe side.
-            r#"python "C:\x\living_memory.py" search "delete the cache""#,
             // The launcher: bare, by path, and with its Windows extensions.
             "alm --json --domain a delete a:x --expected-revision abc",
             "alm --json merge --payload-file m.json",
@@ -713,6 +803,32 @@ mod tests {
             r#"& "C:\Users\u\.local\bin\alm.exe" undo 1"#,
             r#""C:\Program Files\alm\alm.exe" --domain a rewrite --payload-file r.json"#,
             "LIVING_MEMORY_ROOT=x alm archive a:b",
+            // Codex review of e30902f, G2: whitespace, abbreviated or `=` global options, and options before a phrase's action.
+            "alm  project   create --payload-file p.json",
+            "alm project --payload-file p.json create",
+            "python  living_memory.py\tdelete x",
+            "py -3 living_memory.py --dom a delete x",
+            "alm --domain=a --actor main delete x",
+            "alm --json --domain a setup --location x",
+            "alm upgrade",
+            "alm --json type create --payload-file t.json",
+            "alm sync",
+            "alm overlay-build",
+            // What cannot be read cleanly is refused when it names Living Memory and a governed word.
+            "alm --weird delete x",
+            r#"alm search "$(alm delete x)""#,
+            "alm search delete > out.txt",
+            "alm (delete x)",
+            r#"alm "delete x"#,
+            // Wrappers run Living Memory too, so a part naming it with a governed word is refused (a quoted mention as well).
+            r#"bash -c "alm archive x""#,
+            "cmd /c alm undo 1",
+            "xargs alm delete",
+            r#"echo "example; alm archive x""#,
+            "git merge --no-ff alm",
+            // Shells join quoted and escaped letters into one word.
+            r#"a"lm" delete x"#,
+            r"al\m delete x",
         ] {
             assert!(governed_memory_command(command), "{command}");
         }
@@ -727,12 +843,17 @@ mod tests {
             r#"python "C:\x\living_memory.py" capture --title x"#,
             "git merge main",
             "alm --json --domain a search retries",
-            // A word that only contains alm is not the launcher, and nor is a file named alm given to another program.
+            // A word that only contains alm is not the launcher.
             "palm delete x",
             "realm.exe undo 1",
-            "git merge --no-ff alm",
-            r#"echo "example; alm archive x""#,
             "alm --json --domain a search x && git merge main",
+            // Codex review of e30902f, G2: an ordinary search is decided by its subcommand, whatever its text says.
+            r#"python "C:\x\living_memory.py" search "delete the cache""#,
+            "alm --json --domain a search 'merge the project create notes'",
+            "alm search x > out.txt",
+            "alm types",
+            "alm source-sync",
+            "alm --json taxonomy",
         ] {
             assert!(!governed_memory_command(command), "{command}");
         }
@@ -741,8 +862,8 @@ mod tests {
     #[test]
     fn governed_rules_cover_every_command_for_both_shells() {
         let rules = governed_rules();
-        assert_eq!(rules.len(), 96);
-        assert_eq!(rules.iter().collect::<std::collections::HashSet<_>>().len(), 96, "all different");
+        assert_eq!(rules.len(), 128);
+        assert_eq!(rules.iter().collect::<std::collections::HashSet<_>>().len(), 128, "all different");
         for rule in [
             "Bash(*living_memory.py* delete *)",
             "Bash(*living_memory.py* merge)",
@@ -751,6 +872,11 @@ mod tests {
             "Bash(*living_memory.py* restore-backup *)",
             "Bash(*living_memory.py* project create *)",
             "PowerShell(*living_memory.py* archive)",
+            "Bash(*living_memory.py* setup *)",
+            "PowerShell(*living_memory.py* upgrade)",
+            "Bash(*living_memory.py* type create *)",
+            "Bash(*living_memory.py* sync *)",
+            "PowerShell(*living_memory.py* overlay-sync-all *)",
         ] {
             assert!(rules.iter().any(|r| r == rule), "{rule}");
         }
@@ -766,6 +892,28 @@ mod tests {
             assert!(governed_memory_command(&format!("python living_memory.py {command} x")), "{command}");
             assert!(governed_memory_command(&format!("alm --json {command} x")), "{command}");
         }
+        // The harness reads a rule as a glob (`*` is any text). Extra spaces around the subcommand still match; extra spaces
+        // inside a phrase cannot be written as one, and `governed_memory_command` refuses those.
+        let matches = |rule: &str, command: &str| {
+            let pattern = rule.split_once('(').unwrap().1.strip_suffix(')').unwrap();
+            let pattern = format!("^{}$", pattern.split('*').map(regex::escape).collect::<Vec<_>>().join("(?s:.*)"));
+            regex::Regex::new(&pattern).unwrap().is_match(command)
+        };
+        let denied = |command: &str| rules.iter().any(|rule| rule.starts_with("Bash(") && matches(rule, command));
+        for command in [
+            r#"python "C:\x\living_memory.py" delete d:x --expected-revision r"#,
+            r#"python  "C:\x\living_memory.py"   delete   d:x"#,
+            "python living_memory.py --json --domain a delete d:x",
+            "python living_memory.py delete",
+            "python living_memory.py project create --payload-file p.json",
+            "python living_memory.py setup",
+        ] {
+            assert!(denied(command), "{command}");
+        }
+        for command in ["python living_memory.py search retries", "python living_memory.py projects", "python living_memory.py taxonomy"] {
+            assert!(!denied(command), "{command}");
+        }
+        assert!(!denied("python living_memory.py project  create") && governed_memory_command("python living_memory.py project  create"));
     }
 
     #[test]
@@ -886,7 +1034,7 @@ mod tests {
     #[test]
     fn every_session_is_denied_destructive_git() {
         let rules = deny_rules();
-        assert_eq!(&rules[..96], governed_rules().as_slice());
+        assert_eq!(&rules[..128], governed_rules().as_slice());
         for rule in ["Bash(*git push*)", "PowerShell(*git reset --hard*)", "Bash(*git clean*)", "PowerShell(*git branch -D*)"] {
             assert!(rules.iter().any(|r| r == rule), "{rule}");
         }

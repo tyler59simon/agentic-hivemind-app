@@ -40,7 +40,7 @@ See [docs/engineering-workspace.md](docs/engineering-workspace.md) for how the a
 Living Memory stays the only writer, and Hivemind never touches the store's files itself.
 - **Bridge:** the app starts one `living_memory.py serve --stdio` process and sends it JSON-lines commands (`src-tauri/src/bridge.rs`).
 - **Reads** run as `--actor viewer`. They are read-only and don't count as usage in Living Memory's stats.
-- **Writes** go through `update --expected-revision` and send only the fields that changed. Living Memory journals every write, so it can be undone. Archive, resolve, reopen, supersede and new tags are direct writes. Delete, merge, tag renames and undoing those go through Living Memory's plan, inspect and apply flow (`src/features/plans/PlanDialog.tsx`).
+- **Writes** are direct: each is one journaled step that Living Memory can undo, and each write to an existing note sends the revision the user saw (`--expected-revision`, or `REF@REVISION` for the other notes it names). A note edit is `update` with only the changed fields. Archive, resolve, reopen, supersede, delete, merge and tag renames are confirmed in a dialog (`src/features/plans/DirectDialog.tsx`, `MergeComposer.tsx`) and offer Undo in the toast and in Activity. A note that changed since the dialog read it is refused as stale, read again and shown, and the user confirms again (`src/lib/stale.ts`).
 - **Live refresh:** a file watcher on `domains/*/notes|archive` refreshes the UI when agents write (`src-tauri/src/watcher.rs`). It never opens `search.sqlite3`.
 - **Drafts and preferences:** drafts live in the app's data folder (`src-tauri/src/drafts.rs`). The open notes, the picked project and page, the default editor mode and Hivemind's own operation log stay on this device.
 
