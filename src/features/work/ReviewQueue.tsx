@@ -21,7 +21,7 @@ const snooze = (row: ReviewRow, days: number) => update(row.ref, { review_by: sn
 
 /** A dialog opened from a row. It keeps the row as it was when it opened: the queue may refresh, drop the row's duplicate pair
  *  or drop the row while it is open (Codex review of e30902f, R1 and S1). */
-type Opened =
+export type Opened =
   | { kind: "archive" | "resolve"; note: Seen }
   | { kind: "merge"; source: { ref: string; title: string }; target: { ref: string; title: string } };
 
@@ -80,7 +80,7 @@ function ReviewItem({ row, snooze: snoozing = true, onOpen }: { row: ReviewRow; 
 }
 
 /** The open dialog, apart from the rows. */
-function OpenedDialog({ opened, onClose }: { opened: Opened; onClose: () => void }) {
+export function OpenedDialog({ opened, onClose }: { opened: Opened; onClose: () => void }) {
   const client = useQueryClient();
   if (opened.kind === "merge") return <MergeComposer source={opened.source} target={opened.target} onClose={onClose} />;
   const archive = opened.kind === "archive";
@@ -94,10 +94,18 @@ function OpenedDialog({ opened, onClose }: { opened: Opened; onClose: () => void
   );
 }
 
-/** Notes due for re-confirmation. Snoozing sets a review date and does not confirm, so a caller listing unconfirmed notes turns it off. */
-export function ReviewQueue({ rows, snooze }: { rows: ReviewRow[]; snooze?: boolean }) {
+/** Notes due for re-confirmation. Snoozing sets a review date and does not confirm, so a caller listing unconfirmed notes turns it off.
+ *  A caller that may unmount the queue while a dialog is open (the Inbox's selected card) passes `onOpen` and shows
+ *  `OpenedDialog` itself (Codex re-review, N03). */
+export function ReviewQueue({ rows, snooze, onOpen }: { rows: ReviewRow[]; snooze?: boolean; onOpen?: (opened: Opened) => void }) {
   const [opened, setOpened] = useState<Opened | null>(null);
   const dialog = opened && <OpenedDialog opened={opened} onClose={() => setOpened(null)} />;
-  if (!rows.length) return <><p className="muted pad">Nothing is due for review</p>{dialog}</>;
-  return <div className="work-list">{rows.map((r) => <ReviewItem key={r.ref} row={r} snooze={snooze} onOpen={setOpened} />)}{dialog}</div>;
+  // One shape whether or not rows are left, so an open dialog stays mounted when the last row goes.
+  return (
+    <>
+      {rows.length ? <div className="work-list">{rows.map((r) => <ReviewItem key={r.ref} row={r} snooze={snooze} onOpen={onOpen ?? setOpened} />)}</div>
+        : <p className="muted pad">Nothing is due for review</p>}
+      {dialog}
+    </>
+  );
 }

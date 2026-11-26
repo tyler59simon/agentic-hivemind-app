@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ago, fuzzy, highlight, terms } from "./text";
+import { ago, fuzzy, highlight, lineDiff, terms } from "./text";
 
 describe("fuzzy", () => {
   it("matches subsequences and rejects others", () => {
@@ -40,5 +40,14 @@ describe("ago", () => {
     expect(ago("2026-01-02T03:00:00Z", now)).toBe("2026-01-02");
     expect(ago(Date.parse("2026-01-02T03:00:00Z"), now)).toBe("2026-01-02");
     expect(ago(Number.NaN, now)).toBe("");
+  });
+});
+
+// Codex re-review, N01: the merge composer shows what changed in a note as these lines.
+describe("lineDiff", () => {
+  it("shows the changed lines with one unchanged line on each side", () => {
+    expect(lineDiff("a\nb\nc\nd", "a\nb\nC\nX\nd")).toBe(" b\n-c\n+C\n+X\n d");
+    expect(lineDiff("same", "same")).toBe("");
+    expect(lineDiff("", "new")).toBe("-\n+new");
   });
 });

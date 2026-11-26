@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { classify } from "../../lib/errors";
 import { at, LM_READ_LIMIT, merge, read, type Note } from "../../lib/lm";
 import { sections } from "../../lib/note";
+import { lineDiff } from "../../lib/text";
+import { DiffView } from "../../components/DiffView";
 import { STALE_MESSAGE, writeFailure } from "../../lib/stale";
 import { Modal } from "../../ui/Modal";
 import { toast } from "../../ui/toast";
@@ -24,6 +26,23 @@ export function cutOff({ target, source }: Pair): string | null {
   return `${long.join(" and ")} ${long.length > 1 ? "are" : "is"} longer than the ${LM_READ_LIMIT.toLocaleString("en-US")} characters Hivemind can read, so merged text made here would drop the rest. Shorten the note first.`;
 }
 
+/** What changed in each note between two reads, shown before the user keeps their text over it (Codex re-review, N01). */
+function Changes({ before, after }: { before: Pair; after: Pair }) {
+  const notes = (["target", "source"] as const).map((k) => ({ k, title: after[k].title, diff: lineDiff(before[k].body, after[k].body) }));
+  const changed = notes.filter((n) => n.diff);
+  if (!changed.length) return <p className="muted small">Neither note's text changed; only their properties did.</p>;
+  return (
+    <div className="merge-changes">
+      {changed.map((n) => (
+        <div key={n.k}>
+          <div className="muted small">Changes in “{n.title}” since you opened this</div>
+          <DiffView text={n.diff} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** Merge one note into another: the target keeps its ID and takes the merged text; the source is superseded and archived.
  *  One direct, journaled write, sent with the revisions the merged text was made from. A stale refusal keeps the user's text:
  *  they merge it over the notes as they are now, or make it again from them (Codex review of e30902f, S1). */
@@ -33,6 +52,8 @@ export function MergeComposer({ source, target, onClose }: { source: NoteTarget;
   // The text as made from the notes: a body still equal to it holds nothing of the user's.
   const [made, setMade] = useState<string | null>(null);
   const [revisions, setRevisions] = useState<{ target: string; source: string } | null>(null);
+  // The notes the revisions belong to: what the user saw when the text was made or kept.
+  const [base, setBase] = useState<Pair | null>(null);
   // The notes as read again after a stale refusal, until the user keeps their text or makes it again.
   const [fresh, setFresh] = useState<Pair | null>(null);
   const [blocked, setBlocked] = useState<string | null>(null);
@@ -44,6 +65,7 @@ export function MergeComposer({ source, target, onClose }: { source: NoteTarget;
     setBody(text);
     setMade(text);
     setRevisions({ target: pair.target.revision, source: pair.source.revision });
+    setBase(pair);
     setFresh(null);
   };
   useEffect(() => {
@@ -78,7 +100,7 @@ export function MergeComposer({ source, target, onClose }: { source: NoteTarget;
           setError(`${message} The merged text below was made again from the notes as they are now.`);
         } else if (pair) {
           setFresh(pair);
-          setError(`${message} Your merged text is kept. Merge it over the notes as they are now, or make it again from them.`);
+          setError(`${message} Your merged text is kept. The changes since you opened this are shown below: keep your text over them, or make it again from the notes as they are now.`);
         } else setError(message);
       } else setError(explain(e));
       setBusy(false);
@@ -88,6 +110,7 @@ export function MergeComposer({ source, target, onClose }: { source: NoteTarget;
   const keep = () => {
     if (!fresh) return;
     setRevisions({ target: fresh.target.revision, source: fresh.source.revision });
+    setBase(fresh);
     setFresh(null);
     setError(null);
   };
@@ -105,6 +128,7 @@ export function MergeComposer({ source, target, onClose }: { source: NoteTarget;
         : <textarea className="merge-body" aria-label="Merged text" value={body} disabled={busy} onChange={(e) => setBody(e.target.value)} />}
       <p className="muted small">Living Memory journals the change, so it can be undone from the toast or from Activity.</p>
       {error && <p className={error.startsWith(STALE_MESSAGE) ? "warn-text" : "error"}>{error}</p>}
+      {fresh && base && <Changes before={base} after={fresh} />}
       <div className="actions">
         <button onClick={onClose} disabled={busy}>Cancel</button>
         {fresh && <button onClick={remake}>Make it again</button>}

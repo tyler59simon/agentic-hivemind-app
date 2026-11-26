@@ -24,7 +24,7 @@ import { reasonText, resultText, type AppliedItem } from "../maintenance/mainten
 import { ProposedFields } from "../systems/ProposedFields";
 import { projectsQuery } from "../projects/useProject";
 import { noteQuery } from "../viewer/NoteView";
-import { ReviewQueue } from "../work/ReviewQueue";
+import { OpenedDialog, ReviewQueue, type Opened } from "../work/ReviewQueue";
 import { FilePane, ReviewBar, SessionPane } from "./CodeReview";
 import { dueNotes } from "./memory";
 import { afterDecision, baseName, fileKey, reviewLabel, reviewVersion, step } from "./review";
@@ -54,14 +54,14 @@ type Item =
   | { key: string; type: "skill-sync"; skill: Skill };
 
 /** A Memory item: the existing card, and the note's Executive Summary under it. */
-function MemoryCard({ row, due, why }: { row: ReviewRow; due: boolean; why?: string }) {
+function MemoryCard({ row, due, why, onOpen }: { row: ReviewRow; due: boolean; why?: string; onOpen: (opened: Opened) => void }) {
   const note = useQuery(noteQuery(row.ref));
   const summary = note.data ? sections(note.data.body).summary : undefined;
   return (
     <>
       {!due && <p className="muted">An agent captured this note. Nobody has confirmed it yet.</p>}
       {due && why !== undefined && <p className="muted">Maintenance did not decide this note{why ? `: ${why.replace(/[.\s]+$/, "")}` : ""}.</p>}
-      <ReviewQueue rows={[row]} snooze={due} />
+      <ReviewQueue rows={[row]} snooze={due} onOpen={onOpen} />
       {summary && <div className="markdown"><Markdown>{summary}</Markdown></div>}
     </>
   );
@@ -92,6 +92,9 @@ export function InboxPage() {
   const [kinds, setKinds] = useState<ReviewKind[]>([]);
   const [reviewing, setReviewing] = useState<{ system: System; update: SystemUpdate } | null>(null);
   const [capturing, setCapturing] = useState<string | null>(null);
+  // A memory card's dialog (a merge with its draft included) lives here, not in the card: a refresh can remove the selected
+  // item or empty the Inbox while it is open (Codex re-review, N03).
+  const [opened, setOpened] = useState<Opened | null>(null);
   const kind: Kind = shownKind(routed.kind ?? "all", counts);
 
   // Memory: the unfiltered result gives the counts and the chips; picked kinds are asked of the store so its 100-row limit applies to them.
@@ -263,7 +266,7 @@ export function InboxPage() {
               : selected?.type === "session" ? <SessionPane key={selected.info.id} info={selected.info} />
               : selected ? (
                 <div className="review-pane">
-                  {selected.type === "memory" && <MemoryCard row={selected.row} due={selected.due} why={selected.why} />}
+                  {selected.type === "memory" && <MemoryCard row={selected.row} due={selected.due} why={selected.why} onOpen={setOpened} />}
                   {selected.type === "draft" && <MemoryProposalCard key={selected.proposal.id} proposal={selected.proposal} run={selected.run} onDone={done} />}
                   {selected.type === "skill" && <SkillProposalCard key={selected.proposal.id} proposal={selected.proposal} onDone={done} />}
                   {selected.type === "skill-sync" && <SkillSyncCard key={selected.skill.name} skill={selected.skill} onDone={done} />}
@@ -315,6 +318,7 @@ export function InboxPage() {
             }} />}
           </>
         )}
+      {opened && <OpenedDialog opened={opened} onClose={() => setOpened(null)} />}
       {capturing && <ReviewDialog key={capturing} id={capturing} projects={projects.data?.projects ?? []} onClose={() => setCapturing(null)} />}
       {reviewing && (
         <DirectDialog title={`Update system ${reviewing.system.name}`} applyLabel="Update system"

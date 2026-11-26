@@ -63,6 +63,9 @@ describe("the merge composer after a stale refusal", () => {
     expect(textarea()!.value).toBe("My own merged paragraph.");
     expect(button("Merge")!.disabled).toBe(true);
     expect(document.querySelector(".warn-text")?.textContent).toMatch(/^This note changed; reloaded\. Your merged text is kept\./);
+    // Codex re-review, N01: what the agent changed is shown before the user keeps their text over it.
+    expect([...document.querySelectorAll(".diff .diff-line.del")].map((l) => l.textContent?.trim())).toEqual(["-Target body."]);
+    expect([...document.querySelectorAll(".diff .diff-line.add")].map((l) => l.textContent?.trim())).toEqual(["+Target body, edited by an agent."]);
 
     stale = false;
     await act(async () => button("Keep my text")!.click());

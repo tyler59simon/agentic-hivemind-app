@@ -43,3 +43,36 @@ export function ago(when: string | number, now = Date.now()): string {
   if (days === 1) return "yesterday";
   return days < 60 ? `${days} days ago` : typeof when === "string" ? shortDate(when) : new Date(at).toISOString().slice(0, 10);
 }
+
+/** The lines of `after` against `before` as a unified diff body for DiffView: removed lines start with -, added ones with +, and
+ *  the unchanged line on each side of the changed stretch with a space. Empty when the texts are the same. Texts too long to
+ *  compare line by line are shown whole, removed then added. */
+export function lineDiff(before: string, after: string): string {
+  if (before === after) return "";
+  const a = before.split("\n"), b = after.split("\n");
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start++;
+  let endA = a.length, endB = b.length;
+  while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) { endA--; endB--; }
+  const x = a.slice(start, endA), y = b.slice(start, endB);
+  const out: string[] = start > 0 ? [` ${a[start - 1]}`] : [];
+  const width = y.length + 1;
+  if (x.length * y.length > 4_000_000) out.push(...x.map((l) => `-${l}`), ...y.map((l) => `+${l}`));
+  else {
+    // The longest common subsequence of the changed stretch, from the end.
+    const common = new Uint32Array((x.length + 1) * width);
+    for (let i = x.length - 1; i >= 0; i--) {
+      for (let j = y.length - 1; j >= 0; j--) {
+        common[i * width + j] = x[i] === y[j] ? common[(i + 1) * width + j + 1] + 1 : Math.max(common[(i + 1) * width + j], common[i * width + j + 1]);
+      }
+    }
+    let i = 0, j = 0;
+    while (i < x.length || j < y.length) {
+      if (i < x.length && j < y.length && x[i] === y[j]) { out.push(` ${x[i]}`); i++; j++; }
+      else if (i < x.length && (j >= y.length || common[(i + 1) * width + j] >= common[i * width + j + 1])) { out.push(`-${x[i]}`); i++; }
+      else { out.push(`+${y[j]}`); j++; }
+    }
+  }
+  if (endA < a.length) out.push(` ${a[endA]}`);
+  return out.join("\n");
+}
