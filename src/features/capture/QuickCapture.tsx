@@ -84,7 +84,8 @@ export function QuickCapture() {
   // The main window refuses a Living Memory without the capabilities Hivemind needs; so does a memory capture here (Codex
   // review of e30902f, C1). It needs a version answer that passes: none yet, or a failed check, refuses it too (Codex
   // re-review, N08). A page capture does not go through Living Memory and stays available.
-  const version = useQuery({ queryKey: ["version"], queryFn: lmVersion, retry: false });
+  // networkMode always: Living Memory runs on this machine, so a laptop without a network still checks it (Codex review of 38bff9b, F04).
+  const version = useQuery({ queryKey: ["version"], queryFn: lmVersion, retry: false, networkMode: "always" });
   const outdated = !!version.data && needsLmUpdate(version.data);
   const compatible = version.isSuccess && !outdated;
   const [project, setProject] = useState(prefs.captureProject() ?? "");
@@ -147,7 +148,7 @@ export function QuickCapture() {
     setProblem(null);
     try {
       // Checked again just before the write: Living Memory may have been replaced since the window last asked.
-      const now = await client.fetchQuery({ queryKey: ["version"], queryFn: lmVersion, retry: false, staleTime: 0 }).catch(() => null);
+      const now = await client.fetchQuery({ queryKey: ["version"], queryFn: lmVersion, retry: false, staleTime: 0, networkMode: "always" }).catch(() => null);
       if (!now || needsLmUpdate(now)) return;
       const r = await capture(domain, { title: title.trim(), body: captureBody(summary, details), tags: mergeTags(tags, chosen ? [chosen.tag] : []), type, ...extra });
       recordOperation(r.operation_id);

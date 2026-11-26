@@ -335,7 +335,8 @@ export default function App() {
             </div>
             {link.error && <p className="error">{String(link.error)}</p>}
             {outdated && <p className="error">This version of Living Memory is too old: Hivemind needs one with direct delete, merge and retag, note revisions and unified proposals (<code>alm version</code> lists <code>direct_writes</code> 2, <code>revisions</code> and <code>proposals</code> under capabilities). Update Living Memory, then reconnect.</p>}
-            {outdated && <button onClick={reconnect}>Reconnect</button>}
+            {/* Also when connecting failed: Settings Save only reads again, and a Living Memory fixed in place needs a new process (Codex review of 38bff9b, F02). */}
+            {(outdated || !!link.error) && <button onClick={reconnect}>Reconnect</button>}
             <SettingsForm onSaved={settingsSaved} />
             <ShortcutsSection />
             <HelpRow />

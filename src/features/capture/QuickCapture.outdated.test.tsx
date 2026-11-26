@@ -98,6 +98,20 @@ describe("quick capture to memory", () => {
     expect(save().disabled).toBe(false);
   });
 
+  it("captures while the computer is offline, since Living Memory is local", async () => {
+    const { onlineManager } = await import("@tanstack/react-query");
+    capabilities = { direct_writes: 2, revisions: 1, proposals: 1 };
+    onlineManager.setOnline(false);
+    try {
+      await mount();
+      await act(async () => save().click());
+      await settle();
+      expect(sent.some((a) => a[0] === "capture")).toBe(true);
+    } finally {
+      onlineManager.setOnline(true);
+    }
+  });
+
   it("captures with a current Living Memory", async () => {
     capabilities = { direct_writes: 2, revisions: 1, proposals: 1 };
     await mount();
