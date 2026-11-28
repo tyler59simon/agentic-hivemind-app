@@ -15,6 +15,11 @@ describe("the print rules", () => {
     expect(rules).toContain(".print-root { display: block;");
   });
 
+  it("wrap what scrolls sideways on screen (Codex review of f38e4c3, P2)", () => {
+    expect(rules).toContain(".print-root .query-board { overflow: visible; flex-wrap: wrap; }");
+    expect(rules).toContain(".print-root pre { white-space: pre-wrap; overflow-wrap: anywhere; }");
+  });
+
   it("let the page run over as many sheets as it needs", () => {
     expect(rules).toContain("html, body { background: #fff !important; height: auto !important; overflow: visible !important; }");
     expect(rules).toMatch(/\.print-root pre, .*\{ break-inside: avoid; \}/);

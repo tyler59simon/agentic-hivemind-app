@@ -46,6 +46,7 @@ import type { IndexProgress } from "./lib/noteindex";
 import { draftsPending, flushAllDrafts, onDraftLost, setLmStore } from "./documents/store";
 import { useOpenRequests } from "./features/notes/opening";
 import { ComparePicker } from "./features/power/ComparePicker";
+import { PrintHost } from "./features/notes/printPage";
 import { newPageHere } from "./features/notes/actions";
 import type { FilesChanged } from "./lib/notebooks";
 import { modalOpen } from "./ui/layers";
@@ -362,6 +363,7 @@ export default function App() {
         <Shell info={link.data!} onSettings={() => setSettings(true)} onReconnect={reconnect} />
         <Palette onSettings={() => setSettings(true)} onReconnect={reconnect} />
         <ComparePicker />
+        <PrintHost />
       </ErrorBoundary>
       <Toasts />
       <ZoomBadge />

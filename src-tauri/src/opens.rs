@@ -354,9 +354,10 @@ pub async fn file_save_bytes_as(app: AppHandle, req: tauri::ipc::Request<'_>) ->
 
 /// Export the calling webview as a PDF where the user picks with the native save dialog (DOCOS-1A). The webview has
 /// already arranged what its print rules show. WebView2 writes into a temporary file, which then goes through the same
-/// guards and history as any other Save As. Returns the saved file's name, or None when the user cancelled.
+/// guards and history as any other Save As. Returns how the webview names the saved file, or None when the user
+/// cancelled.
 #[tauri::command]
-pub async fn page_export_pdf(app: AppHandle, webview: tauri::Webview, suggested: String) -> Result<Option<String>, String> {
+pub async fn page_export_pdf(app: AppHandle, webview: tauri::Webview, suggested: String) -> Result<Option<OpenRef>, String> {
     use crate::platform::print::{Native, PdfOptions, PrintBackend};
     use tauri_plugin_dialog::DialogExt;
     let handle = app.clone();
@@ -368,14 +369,23 @@ pub async fn page_export_pdf(app: AppHandle, webview: tauri::Webview, suggested:
         let protected = protected(&state);
         may_save_as(&protected, &path)?;
         let temp = std::env::temp_dir().join(format!("hivemind-print-{}.pdf", uuid::Uuid::new_v4()));
-        let printed = Native
-            .print_to_pdf(&webview, &temp, &PdfOptions::default())
-            .and_then(|()| std::fs::read(&temp).map_err(|e| format!("Hivemind could not read the PDF it printed: {e}")));
+        let printed = Native.print_to_pdf(&webview, &temp, &PdfOptions::default()).and_then(|()| read_printed(&temp));
         let _ = std::fs::remove_file(&temp);
         write_bytes_as_checked(&protected, &state.history_dir, &path, &printed?)?;
-        Ok(Some(path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned())))
+        let opened = ref_for(&state, &path, &now())?;
+        crate::studio::indexed(&state, &opened);
+        Ok(Some(opened))
     })
     .await
+}
+
+/// The PDF the webview printed, refused before it is read when it is over the save limit (Codex review of f38e4c3, P3).
+fn read_printed(path: &Path) -> Result<Vec<u8>, String> {
+    let unreadable = |e: std::io::Error| format!("Hivemind could not read the PDF it printed: {e}");
+    if std::fs::metadata(path).map_err(unreadable)?.len() > files::MAX_READ {
+        return Err("The PDF is over the 64 MB save limit".into());
+    }
+    std::fs::read(path).map_err(unreadable)
 }
 
 /// Whether Save As may write `path`: never into the store, a managed vault, Hivemind's own folders or a reserved folder.
@@ -702,6 +712,20 @@ mod tests {
         let git_path = dir.join(".git").join("out.bin");
         assert!(write_bytes_as_checked(&open, &hist, &git_path, v1).unwrap_err().contains(".git"));
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_printed_pdf_over_the_save_limit_is_refused_before_it_is_read() {
+        // Codex review of f38e4c3, P3: the size is checked on disk, not after reading the whole file.
+        let dir = scratch();
+        let small = dir.join("small.pdf");
+        std::fs::write(&small, b"%PDF-1.4\n%%EOF\n").unwrap();
+        assert_eq!(read_printed(&small).unwrap(), b"%PDF-1.4\n%%EOF\n");
+        let big = dir.join("big.pdf");
+        std::fs::File::create(&big).unwrap().set_len(files::MAX_READ + 1).unwrap();
+        assert_eq!(read_printed(&big).unwrap_err(), "The PDF is over the 64 MB save limit");
+        assert!(read_printed(&dir.join("missing.pdf")).unwrap_err().starts_with("Hivemind could not read the PDF it printed"));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

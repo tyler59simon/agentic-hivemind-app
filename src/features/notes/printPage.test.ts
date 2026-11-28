@@ -19,6 +19,10 @@ describe("stillDrawing", () => {
     expect(stillDrawing(box('<div class="mermaid-diagram"><svg></svg></div><span class="math-inline"><span class="katex"></span></span><p class="muted">No page is named X.</p>'))).toBeNull();
   });
 
+  it("does not wait for TeX that KaTeX draws as an error (Codex review of f38e4c3, P2)", () => {
+    expect(stillDrawing(box('<span class="math-inline"><span class="katex-error">x^</span></span>'))).toBeNull();
+  });
+
   it("does not wait for a diagram that cannot be drawn, which shows a note after its source", () => {
     expect(stillDrawing(box('<pre><code class="language-mermaid">nonsense</code></pre><p class="muted">Diagram did not render.</p>'))).toBeNull();
   });
