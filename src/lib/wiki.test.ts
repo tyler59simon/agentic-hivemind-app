@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
-const { exportTheme, exportWiki } = await import("./wiki");
+const { exportTheme, exportWiki, pickBrandLogo } = await import("./wiki");
 const { useConnection } = await import("./connection");
 
 describe("the theme of an exported wiki", () => {
@@ -21,5 +21,15 @@ describe("the theme of an exported wiki", () => {
     useConnection.setState({ capabilities: { wiki_agent: { version: 1 } } });
     await exportWiki("demo", false, { agent: true, project: "core" });
     expect(invoke).toHaveBeenLastCalledWith("wiki_export", { domain: "demo", archived: false, agent: true, project: "core", theme: "purple" });
+  });
+});
+
+describe("the brand logo picker", () => {
+  it("asks Rust for a project's or the default brand's logo and resolves with the receipt", async () => {
+    invoke.mockResolvedValue(null);
+    expect(await pickBrandLogo("core", "Core")).toBeNull();
+    expect(invoke).toHaveBeenLastCalledWith("brand_logo", { owner: "core", name: "Core" });
+    await pickBrandLogo(null);
+    expect(invoke).toHaveBeenLastCalledWith("brand_logo", { owner: null, name: null });
   });
 });

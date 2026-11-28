@@ -1595,7 +1595,7 @@ const WIKI_THEMES: [&str; 3] = ["purple", "emerald", "emerald-light"];
 
 /// The `wiki` argv that writes the page to `path`, starting in `theme` when one is given (the page sends it only when the connected
 /// Living Memory has `--theme`; an older one rejects the flag). It runs as the main actor: a viewer may not write files.
-/// `agent` exports the agent-written edition (of one project when `project` is set); `archived` only applies to the structured one.
+/// `agent` exports the agent-written edition; `project` narrows either edition to one project; `archived` only applies to the structured one.
 fn wiki_export_argv(domain: &str, path: &str, archived: bool, agent: bool, project: Option<&str>, theme: Option<&str>) -> Result<Vec<String>, String> {
     if let Some(theme) = theme.filter(|t| !WIKI_THEMES.contains(t)) {
         return Err(format!("Unknown theme {theme:?}"));
@@ -1603,11 +1603,11 @@ fn wiki_export_argv(domain: &str, path: &str, archived: bool, agent: bool, proje
     let mut argv: Vec<String> = ["wiki", "--domain", domain, "--out", path].map(String::from).into();
     if agent {
         argv.push("--agent".into());
-        if let Some(project) = project {
-            argv.extend(["--project".into(), project.into()]);
-        }
     } else if archived {
         argv.push("--archived".into());
+    }
+    if let Some(project) = project {
+        argv.extend(["--project".into(), project.into()]);
     }
     if let Some(theme) = theme {
         argv.extend(["--theme".into(), theme.into()]);
@@ -1618,7 +1618,7 @@ fn wiki_export_argv(domain: &str, path: &str, archived: bool, agent: bool, proje
 /// The save dialog's suggested name: the domain (and project) with anything but letters, digits, `-`, `_` and `.` replaced.
 fn wiki_file_name(domain: &str, agent: bool, project: Option<&str>) -> String {
     let safe = |s: &str| -> String { s.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '_' }).collect() };
-    let project = project.filter(|_| agent).map(|p| format!("-{}", safe(p))).unwrap_or_default();
+    let project = project.map(|p| format!("-{}", safe(p))).unwrap_or_default();
     format!("{}{project}-{}wiki.html", safe(domain), if agent { "agent-" } else { "" })
 }
 
@@ -1643,6 +1643,50 @@ async fn wiki_export(app: AppHandle, state: State<'_, AppState>, domain: String,
         }
         app.opener().open_path(&path, None::<&str>).map_err(|e| format!("Saved {path}, but could not open it: {e}"))?;
         Ok(Some(path))
+    })
+    .await
+}
+
+/// The Living Memory call that stores `logo` (a file path) as a brand: a project's when `owner` is a slug, else the store default.
+/// A project edit keeps its name when `name` is empty (a missing `name` there means none); the default brand needs a name.
+fn brand_logo_call(owner: Option<&str>, name: Option<&str>, logo: &str) -> Result<(Vec<String>, Option<String>), String> {
+    let name = name.map(str::trim).filter(|n| !n.is_empty());
+    match owner {
+        Some(slug) => {
+            let mut brand = serde_json::json!({ "logo": logo });
+            if let Some(name) = name {
+                brand["name"] = name.into();
+            }
+            Ok((vec!["project".into(), "update".into()], Some(serde_json::json!({ "slug": slug, "brand": brand }).to_string())))
+        }
+        None => {
+            let name = name.ok_or("The default brand needs a name before it can have a logo")?;
+            Ok((["config", "set", "brand"].map(String::from).into_iter().chain([serde_json::json!({ "name": name, "logo": logo }).to_string()]).collect(), None))
+        }
+    }
+}
+
+/// Pick a logo image with a native dialog (so the webview never supplies a path) and store it as a brand through Living Memory,
+/// which checks and copies the file. `owner` is a project slug, None the default brand. None when the dialog was cancelled;
+/// otherwise Living Memory's receipt.
+#[tauri::command]
+async fn brand_logo(app: AppHandle, state: State<'_, AppState>, owner: Option<String>, name: Option<String>) -> Result<Option<Value>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let bridge = state.bridge.clone();
+    blocking(move || {
+        // Refuse a default brand without a name before asking for a file.
+        brand_logo_call(owner.as_deref(), name.as_deref(), "")?;
+        let Some(picked) = app.dialog().file().add_filter("Image", &["png", "jpg", "jpeg", "gif", "webp", "svg"]).blocking_pick_file() else {
+            return Ok(None);
+        };
+        let path = picked.into_path().map_err(|e| e.to_string())?.to_string_lossy().into_owned();
+        let (argv, stdin) = brand_logo_call(owner.as_deref(), name.as_deref(), &path)?;
+        let reply = bridge.call(&argv, stdin.as_deref())?;
+        if reply.exit_code != 0 {
+            let message = reply.error.get("message").and_then(Value::as_str).map(String::from);
+            return Err(message.unwrap_or_else(|| format!("Living Memory exited with code {}", reply.exit_code)));
+        }
+        Ok(Some(reply.result))
     })
     .await
 }
@@ -2198,7 +2242,7 @@ pub fn run() {
             skills_upkeep, skill_from_note, skills_sync, skill_link, skill_unlink, skill_resolve, uninstall_skills, uninstall_remove_skills,
             automation_list, automation_put, automation_delete, automation_spend, automation_act, architecture_drift, architecture_rules_set, agent_start, agent_send, agent_answer, agent_interrupt, agent_end, agent_files, agent_set_policy, agent_rename, agent_remove_worktree, uninstall_inventory, uninstall_remove_worktree, uninstall_delete_branch, repo_branches,
             agent_cancel, agent_sessions, agent_session, agent_transcript, agent_usage, review_files, review_file, review_approve, review_stop_and_approve, review_ask_codex, review_request_changes, review_request_terminal_changes, review_dismiss, review_discard, review_tool_output, review_refresh,
-            system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export, wiki_agent_build, wiki_agent_cancel, wiki_agent_running,
+            system_staleness, system_snapshots, system_snapshot, term_open, term_login, term_shell, term_write, term_resize, term_close, term_list, agent_engines, agent_models, folder_pick, folder_forget, cli_history, agent_import, agent_auth_status, wiki_export, brand_logo, wiki_agent_build, wiki_agent_cancel, wiki_agent_running,
             studio::notebooks_list, studio::notebook_add, studio::notebook_remove, studio::notebook_rename, studio::notebook_tree, studio::notebook_meta_get,
             studio::notebook_meta_set, studio::notebook_append, studio::obsidian_setting, studio::file_read, studio::file_reopen, studio::file_save, studio::file_create, studio::file_mkdir, studio::file_rename, studio::file_delete,
             studio::file_reveal, studio::asset_base, studio::notebook_add_dropped, studio::file_attach_bytes, studio::file_attach_dropped, opens::open_dropped, opens::claim_drop, opens::unclaimed_drops, studio::notebook_reach_record, lm_body, opens::open_dialog, opens::open_pending, opens::open_recent,
@@ -2364,8 +2408,11 @@ mod tests {
             ["wiki", "--domain", "demo", "--out", "C:/x/demo-wiki.html", "--agent", "--project", "core", "--theme", "emerald-light"]
         );
         assert_eq!(argv(false, true, None, Some("purple")).unwrap().iter().filter(|a| *a == "--agent").count(), 1);
-        // A project only narrows the agent edition.
-        assert!(!argv(false, false, Some("core"), Some("purple")).unwrap().iter().any(|a| a == "--project"));
+        // A project narrows the structured edition too, and keeps --archived.
+        assert_eq!(
+            wiki_export_argv("demo", "p.html", true, false, Some("core"), None).unwrap(),
+            ["wiki", "--domain", "demo", "--out", "p.html", "--archived", "--project", "core"]
+        );
         for theme in ["", "sepia", "Purple", "--out"] {
             assert!(argv(false, false, None, Some(theme)).is_err(), "{theme}");
         }
@@ -2376,6 +2423,24 @@ mod tests {
         assert_eq!(wiki_file_name("a b/c", false, None), "a_b_c-wiki.html");
         assert_eq!(wiki_file_name("sandbox", true, None), "sandbox-agent-wiki.html");
         assert_eq!(wiki_file_name("sandbox", true, Some("core x")), "sandbox-core_x-agent-wiki.html");
+        assert_eq!(wiki_file_name("sandbox", false, Some("hivemind")), "sandbox-hivemind-wiki.html");
+    }
+
+    #[test]
+    fn a_brand_logo_is_stored_through_project_update_or_config_set() {
+        let (argv, stdin) = brand_logo_call(Some("core"), Some(" Core "), "C:/x/logo.png").unwrap();
+        assert_eq!(argv, ["project", "update"]);
+        let payload: Value = serde_json::from_str(&stdin.unwrap()).unwrap();
+        assert_eq!(payload, serde_json::json!({ "slug": "core", "brand": { "name": "Core", "logo": "C:/x/logo.png" } }));
+        // No name: the key is absent, so the project keeps showing its own name.
+        let (_, stdin) = brand_logo_call(Some("core"), None, "C:/x/logo.png").unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&stdin.unwrap()).unwrap(), serde_json::json!({ "slug": "core", "brand": { "logo": "C:/x/logo.png" } }));
+        let (argv, stdin) = brand_logo_call(None, Some("Acme"), "C:/x/logo.png").unwrap();
+        assert_eq!(&argv[..3], ["config", "set", "brand"]);
+        assert_eq!(serde_json::from_str::<Value>(&argv[3]).unwrap(), serde_json::json!({ "name": "Acme", "logo": "C:/x/logo.png" }));
+        assert!(stdin.is_none());
+        assert!(brand_logo_call(None, Some("  "), "").is_err());
+        assert!(brand_logo_call(None, None, "").is_err());
     }
 
     #[test]

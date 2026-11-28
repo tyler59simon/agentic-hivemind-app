@@ -73,6 +73,8 @@ const view = (argv: string[]) => [...argv, "--actor", "viewer"];
 export interface Capabilities {
   direct_writes?: number; history?: number; restore?: number; pin?: number; rule?: number; maintenance?: { version: number; actions: string[] };
   wiki_agent?: { version: number }; note_types?: number;
+  /** 1: project brands (`project update` takes `brand`) and the store default brand (`config set brand`). */
+  brand?: number;
   /** 1: `proposals` lists, shows, accepts and rejects staged notes and page edits (it replaced `doc proposals`, `doc accept` and `doc reject`). */
   proposals?: number;
   /** 2: `open` supports `--pages none|injectable|searchable` and returns `kind: "note" | "page"`. */
@@ -346,9 +348,12 @@ export const links = (o: { domain?: string; allDomains?: boolean; status?: "acti
 // ---- Projects, open work, review and timeline (LM api 2). ----
 
 export type ProjectStatus = "active" | "paused" | "archived";
+/** A wiki brand. A written `name` of none means the project's own name; `logo` is a file path in a write and a store path in a read. */
+export interface Brand { name?: string; logo?: string }
 export interface Project {
   slug: string; name: string; status: ProjectStatus; repos: string[]; aliases: string[]; description: string;
   charter: string | null; created: string; updated: string; tag: string; tag_registered: boolean;
+  brand?: Brand;
 }
 export interface ProjectsResult { ok: boolean; projects: Project[]; warnings: string[] }
 export const projectsArgs = (o: { status?: ProjectStatus | "any" } = {}) => view(["projects", ...(o.status ? ["--status", o.status] : [])]);
@@ -361,9 +366,16 @@ export interface ProjectCreate {
 export interface ProjectUpdate {
   slug: string; name?: string; repos?: string[]; aliases?: string[]; description?: string;
   status?: ProjectStatus; charter?: string;
+  /** Missing `name` is no name, missing `logo` keeps the logo, `logo: null` removes it and `brand: null` removes the whole brand. */
+  brand?: (Omit<Brand, "logo"> & { logo?: string | null }) | null;
 }
 export const writeProject = (action: "create" | "update" | "archive", payload: ProjectCreate | ProjectUpdate | { slug: string }) =>
   direct(["project", action], payload);
+
+/** The store default brand, or null when none is set. */
+export const defaultBrand = async () => (await run<{ settings: { brand: { value: Brand | null } } }>(view(["config", "get", "brand"]))).settings.brand.value;
+/** Set the default brand (it needs a name; a logo is kept unless `logo: null`), or remove it with null. */
+export const setDefaultBrand = (brand: (Omit<Brand, "logo"> & { logo?: string | null }) | null) => run<Receipt>(["config", "set", "brand", JSON.stringify(brand)]);
 
 interface ScopeOptions { domain?: string; allDomains?: boolean; tags?: string[]; limit?: number; kind?: string[] }
 function scopeArgs(name: string, o: ScopeOptions): string[] {

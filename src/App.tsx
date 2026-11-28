@@ -14,6 +14,7 @@ import { MaintenanceSection } from "./features/maintenance/MaintenanceSection";
 import { AboutDialog } from "./features/help/AboutDialog";
 import { HelpRow } from "./features/help/HelpRow";
 import { ShortcutsDialog, useShortcutsDialog } from "./features/shortcuts/ShortcutsDialog";
+import { BrandSection } from "./features/settings/BrandSection";
 import { ShortcutsSection } from "./features/shortcuts/ShortcutsSection";
 import { agentSessions } from "./lib/agent";
 import { captureStatus, connect, domains, restartBridge, setBridgeGeneration } from "./lib/lm";
@@ -340,7 +341,7 @@ export default function App() {
             <SettingsForm onSaved={settingsSaved} />
             <ShortcutsSection />
             <HelpRow />
-            {link.isSuccess && !outdated && <><SchedulesSection /><MaintenanceSection /></>}
+            {link.isSuccess && !outdated && <><SchedulesSection /><MaintenanceSection /><BrandSection /></>}
             <BeforeUninstall
               onOpenReview={link.isSuccess && !outdated ? (id) => { setSettings(false); openInbox(id); } : undefined}
               onOpenSession={link.isSuccess && !outdated ? (id) => { setSettings(false); openSession(id); } : undefined} />

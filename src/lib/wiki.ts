@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useConnection } from "./connection";
-import type { Capabilities } from "./lm";
+import type { Capabilities, Receipt } from "./lm";
 import { currentTheme, type Theme } from "./theme";
 
 /** The theme an exported page starts in, or null when the connected Living Memory would reject `--theme`: the flag ships with
@@ -8,10 +8,14 @@ import { currentTheme, type Theme } from "./theme";
 export const exportTheme = (capabilities: Capabilities | undefined, theme: Theme): Theme | null => ((capabilities?.wiki_agent?.version ?? 0) >= 1 ? theme : null);
 
 /** Save a domain's wiki as one HTML file: Rust asks where with a native dialog, has Living Memory write it, and opens it.
- *  `agent` exports the agent-written edition (of `project` when given). The file starts in the app's current theme where Living
+ *  `agent` exports the agent-written edition; `project` narrows either edition to one project. The file starts in the app's current theme where Living
  *  Memory supports that. Resolves with the saved path, or null when the dialog was cancelled. */
 export const exportWiki = (domain: string, archived: boolean, o: { agent?: boolean; project?: string } = {}) =>
   invoke<string | null>("wiki_export", { domain, archived, agent: !!o.agent, project: o.project ?? null, theme: exportTheme(useConnection.getState().capabilities, currentTheme()) });
+
+/** Pick a logo image with a native dialog and store it as a brand: a project's (`owner` is its slug) or the default (null, which
+ *  needs a `name`). Resolves with Living Memory's receipt, or null when the dialog was cancelled. */
+export const pickBrandLogo = (owner: string | null, name?: string) => invoke<Receipt | null>("brand_logo", { owner, name: name ?? null });
 
 /** What a dry run of `wiki --agent --build` reports: the calls it would make and the budget cap; it spends nothing.
  *  `calls.pages` is null on a first build, before the outline call has planned the pages. */

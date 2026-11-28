@@ -223,8 +223,8 @@ const ERROR_NAMES: [&str; 16] = [
 
 /// The Living Memory commands `src/lib/lm.ts` sends (the first item of an argv), with `-` written as `_` as the webview
 /// writes them. A failed command's name is kept only when it is one of these.
-const LM_COMMANDS: [&str; 35] = [
-    "archive", "capture", "check", "confirm", "delete", "diff", "doc", "domains", "history", "maintenance", "merge", "open",
+const LM_COMMANDS: [&str; 36] = [
+    "archive", "capture", "check", "config", "confirm", "delete", "diff", "doc", "domains", "history", "maintenance", "merge", "open",
     "project", "projects", "proposals", "read", "recap", "reopen", "resolve", "restore", "retag", "review", "search", "supersede",
     "system", "systems", "taxonomy", "timeline", "type", "types", "undo", "update", "version", "views", "wiki",
 ];

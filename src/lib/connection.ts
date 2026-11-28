@@ -52,6 +52,9 @@ export const useFolderProposalsEnabled = () => useConnection(folderProposalsOn);
 /** The agent-written wiki edition needs the `wiki_agent` capability and the `wiki` command. */
 export const useAgentWikiEnabled = () => useConnection((s) => (s.capabilities?.wiki_agent?.version ?? 0) >= 1 && s.commands.includes("wiki"));
 
+/** Brands in Settings and a project export of the structured wiki need the `brand` capability. */
+export const useBrandEnabled = () => useConnection((s) => (s.capabilities?.brand ?? 0) >= 1);
+
 /** The `history` capability level: 2 adds `log` summaries, 3 adds summary and actor to `history` rows. */
 export const useHistoryLevel = () => useConnection((s) => s.capabilities?.history ?? 0);
 

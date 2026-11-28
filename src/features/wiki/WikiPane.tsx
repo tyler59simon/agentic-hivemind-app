@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Clock, Download, House, List, ListTree, Package, RefreshCw, Search } from "lucide-react";
 import { Fragment, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
-import { useAgentWikiEnabled, useWikiEnabled } from "../../lib/connection";
+import { useAgentWikiEnabled, useBrandEnabled, useWikiEnabled } from "../../lib/connection";
 import { classify } from "../../lib/errors";
 import { realProject } from "../../lib/folders";
 import { domains } from "../../lib/lm";
@@ -93,6 +93,8 @@ function Body({ view, query, hits, agent }: { view: WikiView; query: string; hit
 export function WikiPane() {
   const enabled = useWikiEnabled();
   const agentEnabled = useAgentWikiEnabled();
+  // An older Living Memory has no `--project` for the structured wiki.
+  const brandOn = useBrandEnabled();
   const client = useQueryClient();
   const building = useWikiBuild((s) => s.running);
   const route = useApp((s) => (s.route.page === "notes" && s.route.view === "wiki" ? s.route : null));
@@ -146,12 +148,15 @@ export function WikiPane() {
     open({ agent: next === "agent" });
   };
 
+  // With a project picked, the file holds that project's pages only, so the button and toast name it.
+  const exportProject = agentMode || brandOn ? scope || undefined : undefined;
+  const exportName = exportProject ? project?.name ?? exportProject : domain;
   const exportHtml = async () => {
     if (!domain) return;
     setExporting(true);
     try {
-      const path = await exportWiki(domain, archived, { agent: agentMode, project: agentMode ? scope || undefined : undefined });
-      if (path) toast(`Saved the ${domain} wiki to ${path}`);
+      const path = await exportWiki(domain, archived, { agent: agentMode, project: exportProject });
+      if (path) toast(`Saved the ${exportName} wiki to ${path}`);
     } catch (e) { toast(classify(e).message, "error"); }
     finally { setExporting(false); }
   };
@@ -189,7 +194,7 @@ export function WikiPane() {
               <RefreshCw size="1.1em" aria-hidden />Refresh
             </button>
           )}
-          <button className="outline" onClick={exportHtml} disabled={!domain || exporting || noEdition || noNotes} title="Save this wiki as one HTML file that opens offline">
+          <button className="outline" onClick={exportHtml} disabled={!domain || exporting || noEdition || noNotes} title={`Save the ${exportName ?? ""} wiki as one HTML file that opens offline`}>
             <Download size="1.1em" aria-hidden />{exporting ? "Exporting…" : "Export HTML…"}
           </button>
         </div>

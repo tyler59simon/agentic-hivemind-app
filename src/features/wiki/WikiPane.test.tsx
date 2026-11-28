@@ -127,4 +127,26 @@ describe("Notes > Wiki", () => {
     expect(el.querySelector("select[aria-label=Scope]")).toBeNull();
     expect(el.querySelector("select[aria-label=Domain]")).toBeNull();
   });
+
+  it("exports a picked project's structured wiki with its project only when Living Memory has brands", async () => {
+    const exported = async (caps: object) => {
+      vi.mocked(invoke).mockClear();
+      useConnection.setState({ capabilities: caps });
+      useApp.setState({ project: "core" });
+      const el = await mount();
+      await click(buttons(el).find((b) => text(b).includes("Export"))!);
+      const call = vi.mocked(invoke).mock.calls.find((c) => c[0] === "wiki_export");
+      titles.push(buttons(el).find((b) => text(b).includes("Export"))!.title);
+      await act(async () => root?.unmount());
+      root = null;
+      document.body.innerHTML = "";
+      return (call?.[1] as { project: string | null } | undefined)?.project;
+    };
+    const titles: string[] = [];
+    expect(await exported({ wiki_agent: { version: 1 }, brand: 1 })).toBe("core");
+    expect(await exported({ wiki_agent: { version: 1 } })).toBeNull();
+    // The button names what the file holds: the project, or the whole domain.
+    expect(titles[0]).not.toContain("demo");
+    expect(titles[1]).toContain("demo");
+  });
 });
