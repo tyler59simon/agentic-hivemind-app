@@ -384,7 +384,7 @@ pub fn other_folder(saved: &Settings, path: &str) -> Result<PathBuf, String> {
 /// Living Memory's read commands, which the executive chat may run without asking.
 const MEMORY_READS: [&str; 9] = ["search", "ask", "read", "open", "recap", "log", "timeline", "projects", "history"];
 /// Living Memory's writes the executive chat may not run: what it learns reaches memory only through the user's review.
-const MEMORY_WRITES: [&str; 12] = ["capture", "update", "propose", "check", "confirm", "resolve", "reopen", "supersede", "restore", "batch", "distinct", "proposals"];
+const MEMORY_WRITES: [&str; 14] = ["capture", "update", "propose", "check", "confirm", "resolve", "reopen", "supersede", "restore", "batch", "distinct", "proposals", "config", "maintenance"];
 
 /// Deny rules only: a rule matches the CLI's name anywhere in the command, which over-denies (the safe side) and would
 /// over-allow. Allow rules are exact command prefixes (`memory_reads`).
@@ -772,7 +772,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hivemind-agent-scope-deny-{}", std::process::id()));
         let scope = executive(&dir, "Executive: Hi".into(), &["pay".into()]).unwrap();
         // Listed here, not read from MEMORY_WRITES, so dropping a verb there fails this test.
-        let writes = ["capture", "update", "propose", "check", "confirm", "resolve", "reopen", "supersede", "restore", "batch", "distinct", "proposals"];
+        let writes = ["capture", "update", "propose", "check", "confirm", "resolve", "reopen", "supersede", "restore", "batch", "distinct", "proposals", "config", "maintenance"];
         for verb in writes {
             for tool in ["Bash", "PowerShell"] {
                 for cli in ["*alm*", "*living_memory.py*"] {

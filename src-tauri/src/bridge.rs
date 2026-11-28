@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 
 /// Oldest `serve` API this app speaks (Living Memory's `version` reports it).
 pub const MIN_API: u64 = 3;
+/// Newest `serve` API this app was built against; a newer one may have changed what Hivemind sends or reads (REG-5).
+pub const MAX_API: u64 = 4;
 const REQUIRED: [&str; 4] = ["serve", "search", "domains", "version"];
 /// The longest request line Living Memory's `serve` reads (its SERVE_LIMIT); a longer one is never sent (NS-2C, C2).
 pub const SERVE_LIMIT: usize = 2 * 1024 * 1024;
@@ -507,6 +509,9 @@ pub fn check_version(reply: &Reply) -> Result<(), String> {
     let missing: Vec<&str> = REQUIRED.iter().copied().filter(|c| !commands.contains(c)).collect();
     if api < MIN_API || !missing.is_empty() {
         return Err(format!("Living Memory is too old for Hivemind (api {api}, needs {MIN_API}; missing: {})", missing.join(", ")));
+    }
+    if api > MAX_API {
+        return Err(format!("Living Memory is newer than this Hivemind supports (api {api}, supports up to {MAX_API}). Update Hivemind."));
     }
     Ok(())
 }
@@ -1128,5 +1133,13 @@ for line in sys.stdin:
         let older = reply(json!({"api": 2, "commands": REQUIRED}));
         assert!(check_version(&older).unwrap_err().contains("api 2, needs 3"));
         assert!(check_version(&reply(json!({"commands": REQUIRED}))).is_err());
+    }
+
+    #[test]
+    fn version_check_refuses_a_newer_api() {   // REG-5
+        assert!(check_version(&reply(json!({"api": MAX_API, "commands": REQUIRED}))).is_ok());
+        let newer = reply(json!({"api": MAX_API + 1, "commands": REQUIRED}));
+        let message = check_version(&newer).unwrap_err();
+        assert!(message.contains(&format!("api {}, supports up to {MAX_API}", MAX_API + 1)) && message.contains("Update Hivemind"), "{message}");
     }
 }
