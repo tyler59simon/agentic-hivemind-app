@@ -2,6 +2,7 @@
 //! because it makes one tall page with no page breaks. Compiled by the macOS workflow but not yet run on a Mac
 //! (backlog PRINT-MAC).
 use super::{Done, PdfOptions};
+use objc2::AnyThread;
 use objc2::runtime::AnyObject;
 use objc2_app_kit::{NSPaperOrientation, NSPrintHeaderAndFooter, NSPrintInfo, NSPrintJobSavingURL, NSPrintSaveJob, NSPrintingPaginationMode};
 use objc2_foundation::{NSNumber, NSSize, NSString, NSURL};
