@@ -49,6 +49,16 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 [target.'cfg(windows)'.dependencies]
 tauri-winrt-notification = "=0.8.1"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# Print to PDF (platform/print/win.rs), pinned to the versions Tauri itself uses so its webview types match.
+webview2-com = "=0.39.1"
+windows = "=0.62.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Print to PDF (platform/print/mac.rs), the versions Tauri itself uses.
+objc2 = "0.6"
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "NSDictionary", "NSGeometry", "NSObject", "NSString", "NSURL", "NSValue"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "NSPrintInfo", "NSPrintOperation", "NSResponder", "NSView"] }
+objc2-web-kit = { version = "=0.3.2", default-features = false, features = ["std", "objc2-app-kit", "WKPreferences", "WKWebView", "WKWebViewConfiguration"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

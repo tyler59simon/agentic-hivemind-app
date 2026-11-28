@@ -25,6 +25,9 @@ export const saveBytesAs = (bytes: Uint8Array, suggested: string) =>
   invoke<FileRef | null>("file_save_bytes_as", bytes, {
     headers: { suggested: encodeURIComponent(suggested) },
   });
+/** Export what the webview shows for print as a PDF where the user picks; the saved file's name, or null when they
+ *  cancelled (DOCOS-1A). */
+export const exportPagePdf = (suggested: string) => invoke<string | null>("page_export_pdf", { suggested });
 /** The URL prefix pictures beside the page load from. */
 export const assetBase = (notebook: string, path: string) => invoke<string>("asset_base", { notebook, path });
 /** Add a folder dropped on the window as a notebook, by the token Rust gave for it. */

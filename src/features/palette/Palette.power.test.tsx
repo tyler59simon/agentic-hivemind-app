@@ -29,6 +29,7 @@ const { useWorkspace } = await import("../../workspace/store");
 const { setEditor } = await import("../power/registry");
 const { useRecorder } = await import("../power/macros");
 const { useComparePicker } = await import("../power/ComparePicker");
+const { usePrintIntent } = await import("../notes/printPage");
 
 let root: Root | null = null;
 let view: EditorView | null = null;
@@ -99,6 +100,30 @@ describe("the command palette", () => {
     await open("Lines:");
     expect(labels().filter((l) => l.startsWith("Lines:"))).toEqual([]);
     expect(labels().filter((l) => l.startsWith("Macro:"))).toEqual([]);
+  });
+
+  it("offers Export to PDF for a Markdown page on the Notes page, and asks that tab to export (DOCOS-1A)", async () => {
+    usePrintIntent.setState({ tabId: null });
+    useApp.setState({ route: { page: "notes" } });
+    useWorkspace.setState({ panes: [{ id: "p0", tabs: [{ id: "tab-1", kind: "file", file: { notebook: "nb-1", path: "a.md" }, mode: "reading" }], active: "tab-1" }] });
+    await open("Export to PDF");
+    expect(labels()).toEqual(["Export to PDF…"]);
+    await act(async () => { document.querySelector<HTMLButtonElement>(".palette li button")!.click(); });
+    expect(usePrintIntent.getState().tabId).toBe("tab-1");
+    expect(document.querySelector(".palette")).toBeNull();
+  });
+
+  it("does not offer Export to PDF for a text file, or away from the Notes page", async () => {
+    useApp.setState({ route: { page: "notes" } });
+    useWorkspace.setState({ panes: [{ id: "p0", tabs: [{ id: "tab-1", kind: "file", file: { notebook: "nb-1", path: "a.txt" }, mode: "source" }], active: "tab-1" }] });
+    await open("Export to PDF");
+    expect(labels()).not.toContain("Export to PDF…");
+    await act(async () => root?.unmount());
+    root = null;
+    useApp.setState({ route: { page: "home" } });
+    useWorkspace.setState({ panes: [{ id: "p0", tabs: [{ id: "tab-1", kind: "file", file: { notebook: "nb-1", path: "a.md" }, mode: "reading" }], active: "tab-1" }] });
+    await open("Export to PDF");
+    expect(labels()).not.toContain("Export to PDF…");
   });
 
   it("offers Copy diagnostics and Open logs folder, and Copy diagnostics copies", async () => {

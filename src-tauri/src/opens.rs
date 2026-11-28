@@ -352,6 +352,32 @@ pub async fn file_save_bytes_as(app: AppHandle, req: tauri::ipc::Request<'_>) ->
     .await
 }
 
+/// Export the calling webview as a PDF where the user picks with the native save dialog (DOCOS-1A). The webview has
+/// already arranged what its print rules show. WebView2 writes into a temporary file, which then goes through the same
+/// guards and history as any other Save As. Returns the saved file's name, or None when the user cancelled.
+#[tauri::command]
+pub async fn page_export_pdf(app: AppHandle, webview: tauri::Webview, suggested: String) -> Result<Option<String>, String> {
+    use crate::platform::print::{Native, PdfOptions, PrintBackend};
+    use tauri_plugin_dialog::DialogExt;
+    let handle = app.clone();
+    blocking(move || {
+        let dialog = handle.dialog().file().add_filter("PDF", &["pdf"]).set_file_name(&suggested);
+        let Some(picked) = dialog.blocking_save_file() else { return Ok(None) };
+        let path = picked.into_path().map_err(|e| e.to_string())?;
+        let state = handle.state::<AppState>();
+        let protected = protected(&state);
+        may_save_as(&protected, &path)?;
+        let temp = std::env::temp_dir().join(format!("hivemind-print-{}.pdf", uuid::Uuid::new_v4()));
+        let printed = Native
+            .print_to_pdf(&webview, &temp, &PdfOptions::default())
+            .and_then(|()| std::fs::read(&temp).map_err(|e| format!("Hivemind could not read the PDF it printed: {e}")));
+        let _ = std::fs::remove_file(&temp);
+        write_bytes_as_checked(&protected, &state.history_dir, &path, &printed?)?;
+        Ok(Some(path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned())))
+    })
+    .await
+}
+
 /// Whether Save As may write `path`: never into the store, a managed vault, Hivemind's own folders or a reserved folder.
 fn may_save_as(protected: &crate::files::guard::Protected, path: &Path) -> Result<(), String> {
     protected.check(path)?;

@@ -9,12 +9,13 @@ import { useMaintenanceEnabled, useProjectsEnabled, useSystemsEnabled, useWikiEn
 import { copyDiagnostics, openLogsFolder, reportProblem } from "../../lib/diagnostics";
 import { useAboutDialog } from "../help/AboutDialog";
 import { domains, list } from "../../lib/lm";
-import { folderOf, notebooksQuery, pageTitle, treeQuery } from "../../lib/notebooks";
+import { folderOf, isMarkdown, notebooksQuery, pageTitle, treeQuery } from "../../lib/notebooks";
 import { pagesQuery } from "../../lib/noteindex";
 import { recentQuery, recentRef } from "../../lib/opens";
 import { openFromDisk } from "../notes/opening";
 import { currentNotebook, firstNotebook, newPageHere, openPage } from "../notes/actions";
 import { openToday } from "../notes/dailyActions";
+import { usePrintIntent } from "../notes/printPage";
 import { useTemplateIntent } from "../notes/DailyViews";
 import { useAddNotebook } from "../notes/NotesPage";
 import { refreshStore } from "../../lib/refresh";
@@ -118,6 +119,9 @@ export function Palette({ onSettings, onReconnect }: { onSettings: () => void; o
       { key: "macro-play", label: "Macro: play the last one", detail: format("editor.macro-play"), run: () => { close(); void playMacro(editor as unknown as Target, macro.steps, 1); editor.focus(); } },
       { key: "macro-end", label: "Macro: play to the end of the file", run: () => { close(); void playMacro(editor as unknown as Target, macro.steps, "end"); editor.focus(); } },
     ] : [];
+    // Export to PDF (DOCOS-1A) when a Markdown page is the tab on screen; the tab runs it.
+    const pageOnScreen = tab?.kind === "file" && !!tab.file && isMarkdown(tab.file.path) && railHere;
+    if (pageOnScreen) power.push({ key: "export-pdf", label: "Export to PDF…", run: () => { close(); usePrintIntent.getState().request(tab.id); } });
     const all: Entry[] = [
       { key: "go", label: "Go to note…", detail: format("palette.notes"), run: () => app.setPalette("notes") },
       { key: "new", label: "New note", detail: format("note.new"), run: () => { close(); ws.openTab({ kind: "new-note" }); } },

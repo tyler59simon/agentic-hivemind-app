@@ -29,6 +29,7 @@ import { convertToRich, movePath, openPage, renamed, saveBothVersions, saveCopy,
 import { DeleteConfirm } from "./DeleteConfirm";
 import { forgetRecent } from "./opening";
 import { PageView } from "./PageView";
+import { PrintPage, usePrintIntent } from "./printPage";
 import { PropertiesPanel } from "./PropertiesPanel";
 import { useRichPage } from "./richPage";
 import { RICH_LIMIT } from "../editor/rich/context";
@@ -363,6 +364,15 @@ function TextFileTab({ tab }: { tab: Tab }) {
   const rich = useRichPage({ ref, files, base: pictures.data, loose, follow, takesLink });
   const richStamp = useMemo(() => ({}), [pictures.data, files]); // eslint-disable-line react-hooks/exhaustive-deps
   const pictureFiles = useMemo(() => files.filter(isPicture), [files]);
+  // Export to PDF (DOCOS-1A): from the page actions menu, or from the palette through the print intent.
+  const [printing, setPrinting] = useState(false);
+  const askedToPrint = usePrintIntent((s) => s.tabId === tab.id);
+  const printable = markdown && !!doc && doc.status !== "loading" && doc.status !== "error";
+  useEffect(() => {
+    if (!askedToPrint) return;
+    usePrintIntent.getState().clear();
+    if (printable) setPrinting(true);
+  }, [askedToPrint, printable]);
   const remove = () => setDialog(
     <DeleteConfirm notebook={ref.notebook} path={ref.path} section={false}
       onAnswer={(yes) => {
@@ -440,6 +450,8 @@ function TextFileTab({ tab }: { tab: Tab }) {
   );
   return (
     <div className="note-page file-page">
+      {printing && <PrintPage text={doc.text} tabId={tab.id} path={ref.path} onLink={follow} onDone={() => setPrinting(false)}
+        pictures={{ base: pictures.data, folder: loose ? "" : folderOf(ref.path), files }} embed={loose ? undefined : rich.readEmbed} />}
       <DocumentHeader modes={markdown ? MODES : richDoc ? RICH_MODES : canvas || drawio ? CANVAS_MODES : svg ? SVG_MODES : mermaid ? MERMAID_MODES : TEXT_MODES}
         mode={!markdown && !canvas && !drawio && !svg && !mermaid && mode !== "history" ? (richDoc ? "live" : "source") : mode === "board" && (canvasIssue || (drawio && drawioIssue)) ? "source" : mode}
         label="Page view" onMode={(v) => updateTab(tab.id, { mode: v })} top={<>
@@ -468,6 +480,7 @@ function TextFileTab({ tab }: { tab: Tab }) {
                   {item("Hex view", () => updateTab(tab.id, { mode: "hex" }))}
                   {!loose && markdown && item("Convert to rich page", () => convertToRich(client, ref, doc.text).catch((e) => toast(classify(e).message, "error")))}
                   {!loose && richDoc && item("Export to Markdown…", () => runExport(client, ref, setDialog, doc.text))}
+                  {markdown && item("Export to PDF…", () => setPrinting(true))}
                   {paper}
                   {!loose && item("Delete page…", remove, "danger-text")}
                 </>

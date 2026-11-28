@@ -28,9 +28,9 @@ export interface Pictures { base?: string; folder: string; files?: string[] }
 
 /** The page `![[Page]]` names, drawn read-only inside the page. Its own embeds show as links, so a page that embeds
  *  itself shows once. */
-function Embed({ target, heading, read, onLink, pictures }: {
+function Embed({ target, heading, read, onLink, pictures, eager }: {
   target: string; heading?: string; read: (target: string) => Promise<EmbedPage | null>;
-  onLink: Follow; pictures?: Pictures;
+  onLink: Follow; pictures?: Pictures; eager?: boolean;
 }) {
   const [page, setPage] = useState<EmbedPage | null | undefined>(undefined);
   useEffect(() => {
@@ -50,7 +50,7 @@ function Embed({ target, heading, read, onLink, pictures }: {
         : !page ? <p className="muted">No page is named {target}.</p>
           : text === null ? <p className="muted">{page.title} has no heading {heading}.</p>
             : <PageView text={text} tabId={`embed-${target}`} onLink={(t, split) => onLink(t, split, page.path)}
-              pictures={pictures && { ...pictures, folder: folderOf(page.path) }} nested />}
+              pictures={pictures && { ...pictures, folder: folderOf(page.path) }} nested eager={eager} />}
     </div>
   );
 }
@@ -58,10 +58,11 @@ function Embed({ target, heading, read, onLink, pictures }: {
 /** A Markdown page as it reads. `[[links]]` call `onLink`; web links open in the browser; nothing else navigates the app.
  *  Pictures beside the page load through `hmfile` from `pictures.base` (the grant's prefix), relative to `folder`.
  *  Callouts, highlights, math, picture widths and `![[embeds]]` render as in Live (NS-3A); `embed` reads an embedded
- *  page, and without it an embed shows as a link. */
-export function PageView({ text, tabId, onLink, pictures, embed, nested }: {
+ *  page, and without it an embed shows as a link. `eager` loads every picture at once instead of as it scrolls into view,
+ *  for a copy drawn off screen to print. */
+export function PageView({ text, tabId, onLink, pictures, embed, nested, eager }: {
   text: string; tabId: string; onLink: Follow;
-  pictures?: Pictures; embed?: (target: string) => Promise<EmbedPage | null>; nested?: boolean;
+  pictures?: Pictures; embed?: (target: string) => Promise<EmbedPage | null>; nested?: boolean; eager?: boolean;
 }) {
   const reveal = useWorkspace((s) => s.reveal);
   useEffect(() => {
@@ -100,7 +101,7 @@ export function PageView({ text, tabId, onLink, pictures, embed, nested }: {
           url = found ? pictureUrl(found, pictures?.base, "") : null;
         } else url = pictureUrl(raw, pictures?.base, pictures?.folder ?? "");
         return url
-          ? <img src={url} alt={label} loading="lazy" width={width} height={height} />
+          ? <img src={url} alt={label} loading={eager ? "eager" : "lazy"} width={width} height={height} />
           : <span className="muted" title={raw}>[{label || "image"}]{webImageNote(raw) ? ` ${webImageNote(raw)}` : ""}</span>;
       },
       code: ({ node: _node, className, children, ...rest }) => {
@@ -127,11 +128,11 @@ export function PageView({ text, tabId, onLink, pictures, embed, nested }: {
         if (!embed || nested) {
           return <p><a href="#" className="wikilink" onClick={(e) => { e.preventDefault(); onLink(target, e.ctrlKey || e.metaKey); }}>{heading ? `${target} › ${heading}` : target}</a></p>;
         }
-        return <Embed target={target} heading={heading} read={embed} onLink={onLink} pictures={pictures} />;
+        return <Embed target={target} heading={heading} read={embed} onLink={onLink} pictures={pictures} eager={eager} />;
       },
       h1: heading("h1"), h2: heading("h2"), h3: heading("h3"), h4: heading("h4"), h5: heading("h5"), h6: heading("h6"),
     };
-  }, [tabId, onLink, base, folder, files, embed, nested]);
+  }, [tabId, onLink, base, folder, files, embed, nested, eager]);
   const body = text.trim()
     ? <Markdown remarkPlugins={PLUGINS} components={components} urlTransform={keepUrl}>{prepared.text}</Markdown>
     : nested ? null : <p className="muted">This page is empty. Press <kbd>Ctrl</kbd>+<kbd>E</kbd> to write.</p>;

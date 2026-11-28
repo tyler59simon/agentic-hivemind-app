@@ -2269,3 +2269,16 @@ button.owner-chip { cursor: pointer; }
 .about-list .about-row { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-16); padding: var(--sp-5) 0; border-bottom: 1px solid var(--border); }
 .about-list dt { flex: none; }
 .about-list dd { margin: 0; min-width: 0; text-align: right; overflow-wrap: anywhere; }
+
+/* Export to PDF (DOCOS-1A): the page drawn for print (features/notes/printPage.tsx) is hidden on screen, and when the
+   webview prints it is all that shows: on white, at full width, with no break inside a block or right after a heading. */
+.print-root { display: none; }
+@media print {
+  body > :not(.print-root) { display: none !important; }
+  html, body { background: #fff !important; height: auto !important; overflow: visible !important; }
+  .print-root { display: block; background: #fff; color: #000; }
+  .print-root .note.page-view { max-width: none; padding: 0; }
+  .print-root pre, .print-root tr, .print-root img, .print-root .mermaid-diagram, .print-root .math-display, .print-root .callout, .print-root .page-embed { break-inside: avoid; }
+  .print-root h1, .print-root h2, .print-root h3, .print-root h4, .print-root h5, .print-root h6 { break-after: avoid; }
+  .print-root .page-embed-head button { display: none; }
+}

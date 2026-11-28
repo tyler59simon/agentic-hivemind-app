@@ -19,8 +19,8 @@ These rules come from the Codex review of the design ([reviews/ns0-codex-review.
 - Paste: sanitise with `dompurify` (no scripts, no event handlers, no styles beyond a small allowlist), then `turndown` with `turndown-plugin-gfm` for Markdown; ProseMirror's `DOMParser` for rich editors. Word's `mso-` list markup is normalised before conversion.
 - HTML export renders pages with the same React Markdown pipeline as Reading view into a static string (no scripts), inlines images through Rust reads (containment-checked), and saves through a save dialog with an atomic write.
 - DOCX export builds a document with the `docx` package (lazy) from the mdast or `.hmdoc` tree.
-- PDF export: render the HTML in a hidden window and call WebView2 `PrintToPdf` through `webview2-com` (pinned to the version Tauri already uses) from `with_webview`, per spike S8.
-- `src-tauri/src/export.rs` holds save dialogs, image inlining and the PDF call.
+- PDF export goes through `platform::print::PrintBackend` (`src-tauri/src/platform/print.rs`, DOCOS-1A): WebView2 `PrintToPdf` on Windows, a WKWebView print operation that saves to a file on macOS. It prints the calling webview, so the page is drawn into `.print-root`, the only thing the `@media print` rules in `App.css` show, rather than into a hidden window.
+- `src-tauri/src/export.rs` holds save dialogs and image inlining for HTML and DOCX; the PDF call is `PrintBackend`.
 
 ## 3. Tests and exit
 
@@ -28,4 +28,4 @@ vitest: paste conversion fixtures (browser article, Word list, table), DOCX tree
 
 ## 4. Shipped
 
-(Filled in when the phase lands.)
+- **DOCOS-1A (2026-11-28):** Export to PDF for Markdown pages, from the page's actions menu and the command palette. `features/notes/printPage.tsx` draws the page's Reading view into `.print-root` with pictures loaded at once, waits until embeds, queries, diagrams, math and pictures have drawn, then calls `page_export_pdf` (`src-tauri/src/opens.rs`), which asks where to save, prints to a temporary file and writes it through the Save As guards and history. A4 portrait with 0.4 inch margins; no options yet. The rest of this phase (vault settings, paste, HTML and DOCX export, print) is DOCOS-1E.
